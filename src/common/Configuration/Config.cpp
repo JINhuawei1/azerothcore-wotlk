@@ -234,6 +234,14 @@ namespace
         for (std::size_t i = 0; i < n; ++i)
         {
             curr = str[i];
+            
+            // 跳过非 ASCII 字符（如中文字符），避免触发 isupper/toupper 断言
+            if (static_cast<unsigned char>(curr) > 127)
+            {
+                result += curr;
+                continue;
+            }
+            
             if (curr == ' ' || curr == '.' || curr == '-')
             {
                 result += '_';
@@ -243,12 +251,14 @@ namespace
             isEnd = i == n - 1;
             if (!isEnd)
             {
-                nextIsUpper = isupper(str[i + 1]);
+                // 检查下一个字符是否在有效范围内
+                unsigned char nextChar = static_cast<unsigned char>(str[i + 1]);
+                nextIsUpper = (nextChar <= 127) ? isupper(nextChar) : false;
 
                 // handle "aB" to "A_B"
-                if (!isupper(curr) && nextIsUpper)
+                if (!isupper(static_cast<unsigned char>(curr)) && nextIsUpper)
                 {
-                    result += static_cast<char>(std::toupper(curr));
+                    result += static_cast<char>(std::toupper(static_cast<unsigned char>(curr)));
                     result += '_';
                     continue;
                 }
@@ -259,7 +269,7 @@ namespace
                 // handle "a1" to "a_1"
                 if (!currIsNumeric && nextIsNumeric)
                 {
-                    result += static_cast<char>(std::toupper(curr));
+                    result += static_cast<char>(std::toupper(static_cast<unsigned char>(curr)));
                     result += '_';
                     continue;
                 }
@@ -267,13 +277,13 @@ namespace
                 // handle "1a" to "1_a"
                 if (currIsNumeric && !nextIsNumeric)
                 {
-                    result += static_cast<char>(std::toupper(curr));
+                    result += static_cast<char>(std::toupper(static_cast<unsigned char>(curr)));
                     result += '_';
                     continue;
                 }
             }
 
-            result += static_cast<char>(std::toupper(curr));
+            result += static_cast<char>(std::toupper(static_cast<unsigned char>(curr)));
         }
         return result;
     }

@@ -17,6 +17,7 @@
 
 #include "Config.h"
 #include "Creature.h"
+#include "DatabaseEnv.h"
 #include "Pet.h"
 #include "Player.h"
 #include "ScriptMgr.h"
@@ -70,6 +71,43 @@ void Unit::UpdateDamagePhysical(WeaponAttackType attType)
         totalMax += tmpMax;
     }
 
+    // Apply damage limits from database
+    {
+        Player* player = ToPlayer();
+        if (player)
+        {
+            QueryResult result;
+            switch (attType)
+            {
+                case BASE_ATTACK:
+                    result = WorldDatabase.Query("SELECT `主手伤害上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
+                    break;
+                case OFF_ATTACK:
+                    result = WorldDatabase.Query("SELECT `副手伤害上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
+                    break;
+                case RANGED_ATTACK:
+                    result = WorldDatabase.Query("SELECT `远程伤害上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
+                    break;
+            }
+
+            if (result)
+            {
+                Field* fields = result->Fetch();
+                float damageLimit = fields[0].Get<float>();
+
+                if (damageLimit > 0.0f)
+                {
+                    if (totalMin > damageLimit)
+                        totalMin = damageLimit;
+                    if (totalMax > damageLimit)
+                        totalMax = damageLimit;
+                }
+            }
+        }
+    }
+
+
+
     switch (attType)
     {
         case BASE_ATTACK:
@@ -101,6 +139,46 @@ bool Player::UpdateStats(Stats stat)
 
     // value = ((base_value * base_pct) + total_value) * total_pct
     float value  = GetTotalStatValue(stat);
+
+    // Apply attribute limits from database
+    {
+        Player* player = ToPlayer();
+        if (player)
+        {
+            QueryResult result = WorldDatabase.Query("SELECT * FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
+            if (result)
+            {
+                Field* fields = result->Fetch();
+                float limit = 0.0f;
+
+                switch (stat)
+                {
+                    case STAT_STRENGTH:
+                        limit = fields[14].Get<uint32>(); // 力量上限
+                        break;
+                    case STAT_AGILITY:
+                        limit = fields[17].Get<uint32>(); // 敏捷上限
+                        break;
+                    case STAT_STAMINA:
+                        limit = fields[26].Get<uint32>(); // 耐力上限
+                        break;
+                    case STAT_INTELLECT:
+                        limit = fields[20].Get<uint32>(); // 智力上限
+                        break;
+                    case STAT_SPIRIT:
+                        limit = fields[23].Get<uint32>(); // 精神上限
+                        break;
+                }
+
+                if (limit > 0.0f && value > limit)
+                {
+                    value = limit;
+                }
+            }
+        }
+    }
+
+
 
     SetStat(stat, int32(value));
 
@@ -268,6 +346,24 @@ void Player::UpdateArmor()
 
     value *= GetModifierValue(unitMod, TOTAL_PCT);
 
+    // Apply armor limit from database
+    {
+        Player* player = ToPlayer();
+        if (player)
+        {
+            QueryResult result = WorldDatabase.Query("SELECT `护甲上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
+            if (result)
+            {
+                Field* fields = result->Fetch();
+                float armorLimit = fields[0].Get<uint32>();
+                if (armorLimit > 0.0f && value > armorLimit)
+                {
+                    value = armorLimit;
+                }
+            }
+        }
+    }
+
     SetArmor(int32(value));
 
     UpdateAttackPowerAndDamage();                           // armor dependent auras update for SPELL_AURA_MOD_ATTACK_POWER_OF_ARMOR
@@ -280,7 +376,16 @@ float Player::GetHealthBonusFromStamina()
     float baseStam = stamina < 20 ? stamina : 20;
     float moreStam = stamina - baseStam;
 
-    return baseStam + (moreStam * 10.0f);
+    // Apply stamina to health conversion rate from database
+    float staminaToHealthRate = 1.0f; // Default 100% conversion rate
+    QueryResult result = WorldDatabase.Query("SELECT `耐力转生命转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `耐力转生命转换率` > 0 ORDER BY `class_` DESC LIMIT 1", getClass());
+    if (result)
+    {
+        Field* fields = result->Fetch();
+        staminaToHealthRate = fields[0].Get<float>() / 100.0f; // Convert percentage to decimal
+    }
+
+    return baseStam + (moreStam * 10.0f * staminaToHealthRate);
 }
 
 float Player::GetManaBonusFromIntellect()
@@ -290,7 +395,16 @@ float Player::GetManaBonusFromIntellect()
     float baseInt = intellect < 20 ? intellect : 20;
     float moreInt = intellect - baseInt;
 
-    return baseInt + (moreInt * 15.0f);
+    // Apply intellect to mana conversion rate from database
+    float intellectToManaRate = 1.0f; // Default 100% conversion rate
+    QueryResult result = WorldDatabase.Query("SELECT `智力转法力转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `智力转法力转换率` > 0 ORDER BY `class_` DESC LIMIT 1", getClass());
+    if (result)
+    {
+        Field* fields = result->Fetch();
+        intellectToManaRate = fields[0].Get<float>() / 100.0f; // Convert percentage to decimal
+    }
+
+    return baseInt + (moreInt * 15.0f * intellectToManaRate);
 }
 
 void Player::UpdateMaxHealth()
@@ -301,6 +415,25 @@ void Player::UpdateMaxHealth()
     value *= GetModifierValue(unitMod, BASE_PCT);
     value += GetModifierValue(unitMod, TOTAL_VALUE) + GetHealthBonusFromStamina();
     value *= GetModifierValue(unitMod, TOTAL_PCT);
+
+    // Apply health limit from database
+    QueryResult result = WorldDatabase.Query("SELECT `血量上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+    if (result)
+    {
+        Field* fields = result->Fetch();
+        float healthLimit = fields[0].Get<uint32>();
+        LOG_DEBUG("entities.player", "UpdateMaxHealth: Found health limit {} for class {}, current value: {}", healthLimit, getClass(), value);
+
+        if (healthLimit > 0.0f && value > healthLimit)
+        {
+            value = healthLimit;
+            LOG_DEBUG("entities.player", "UpdateMaxHealth: Applied health limit, new value: {}", value);
+        }
+    }
+    else
+    {
+        LOG_DEBUG("entities.player", "UpdateMaxHealth: No health limit found for class {}", getClass());
+    }
 
     sScriptMgr->OnPlayerAfterUpdateMaxHealth(this, value);
     SetMaxHealth((uint32)value);
@@ -316,6 +449,28 @@ void Player::UpdateMaxPower(Powers power)
     value *= GetModifierValue(unitMod, BASE_PCT);
     value += GetModifierValue(unitMod, TOTAL_VALUE) +  bonusPower;
     value *= GetModifierValue(unitMod, TOTAL_PCT);
+
+    // Apply mana limit from database (only for mana power type)
+    if (power == POWER_MANA)
+    {
+        QueryResult result = WorldDatabase.Query("SELECT `法力上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+        if (result)
+        {
+            Field* fields = result->Fetch();
+            float manaLimit = fields[0].Get<uint32>();
+            LOG_DEBUG("entities.player", "UpdateMaxPower: Found mana limit {} for class {}, current value: {}", manaLimit, getClass(), value);
+
+            if (manaLimit > 0.0f && value > manaLimit)
+            {
+                value = manaLimit;
+                LOG_DEBUG("entities.player", "UpdateMaxPower: Applied mana limit, new value: {}", value);
+            }
+        }
+        else
+        {
+            LOG_DEBUG("entities.player", "UpdateMaxPower: No mana limit found for class {}", getClass());
+        }
+    }
 
     sScriptMgr->OnPlayerAfterUpdateMaxPower(this, power, value);
     SetMaxPower(power, uint32(value));
@@ -346,13 +501,22 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
         index_mod = UNIT_FIELD_RANGED_ATTACK_POWER_MODS;
         index_mult = UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER;
 
+        // Get agility to attack power conversion rate from database
+        float agilityToAPRate = 1.0f; // Default 100% conversion rate
+        QueryResult result = WorldDatabase.Query("SELECT `敏捷转攻强转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `敏捷转攻强转换率` > 0 ORDER BY `class_` DESC LIMIT 1", getClass());
+        if (result)
+        {
+            Field* fields = result->Fetch();
+            agilityToAPRate = fields[0].Get<float>() / 100.0f; // Convert percentage to decimal
+        }
+
         if (IsClass(CLASS_HUNTER, CLASS_CONTEXT_STATS))
         {
-            val2 = level * 2.0f + GetStat(STAT_AGILITY) - 10.0f;
+            val2 = level * 2.0f + (GetStat(STAT_AGILITY) * agilityToAPRate) - 10.0f;
         }
         else if (IsClass(CLASS_ROGUE, CLASS_CONTEXT_STATS) || IsClass(CLASS_WARRIOR, CLASS_CONTEXT_STATS))
         {
-            val2 = level + GetStat(STAT_AGILITY) - 10.0f;
+            val2 = level + (GetStat(STAT_AGILITY) * agilityToAPRate) - 10.0f;
         }
         else if (IsClass(CLASS_DRUID, CLASS_CONTEXT_STATS))
         {
@@ -364,24 +528,42 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
                 val2 = 0.0f;
                 break;
             default:
-                val2 = GetStat(STAT_AGILITY) - 10.0f;
+                val2 = (GetStat(STAT_AGILITY) * agilityToAPRate) - 10.0f;
                 break;
             }
         }
         else
         {
-            val2 = GetStat(STAT_AGILITY) - 10.0f;
+            val2 = (GetStat(STAT_AGILITY) * agilityToAPRate) - 10.0f;
         }
     }
     else
     {
+        // Get strength to attack power conversion rate from database
+        float strengthToAPRate = 1.0f; // Default 100% conversion rate
+        QueryResult strengthResult = WorldDatabase.Query("SELECT `力量转攻强转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `力量转攻强转换率` > 0 ORDER BY `class_` DESC LIMIT 1", getClass());
+        if (strengthResult)
+        {
+            Field* fields = strengthResult->Fetch();
+            strengthToAPRate = fields[0].Get<float>() / 100.0f; // Convert percentage to decimal
+        }
+
+        // Get agility to attack power conversion rate from database (for melee)
+        float agilityToAPRate = 1.0f; // Default 100% conversion rate
+        QueryResult agilityResult = WorldDatabase.Query("SELECT `敏捷转攻强转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `敏捷转攻强转换率` > 0 ORDER BY `class_` DESC LIMIT 1", getClass());
+        if (agilityResult)
+        {
+            Field* fields = agilityResult->Fetch();
+            agilityToAPRate = fields[0].Get<float>() / 100.0f; // Convert percentage to decimal
+        }
+
         if (IsClass(CLASS_PALADIN, CLASS_CONTEXT_STATS) || IsClass(CLASS_DEATH_KNIGHT, CLASS_CONTEXT_STATS) || IsClass(CLASS_WARRIOR, CLASS_CONTEXT_STATS))
         {
-            val2 = level * 3.0f + GetStat(STAT_STRENGTH) * 2.0f - 20.0f;
+            val2 = level * 3.0f + (GetStat(STAT_STRENGTH) * strengthToAPRate) * 2.0f - 20.0f;
         }
         else if (IsClass(CLASS_HUNTER, CLASS_CONTEXT_STATS) || IsClass(CLASS_SHAMAN, CLASS_CONTEXT_STATS) || IsClass(CLASS_ROGUE, CLASS_CONTEXT_STATS))
         {
-            val2 = level * 2.0f + GetStat(STAT_STRENGTH) + GetStat(STAT_AGILITY) - 20.0f;
+            val2 = level * 2.0f + (GetStat(STAT_STRENGTH) * strengthToAPRate) + (GetStat(STAT_AGILITY) * agilityToAPRate) - 20.0f;
         }
         else if (IsClass(CLASS_DRUID, CLASS_CONTEXT_STATS))
         {
@@ -500,7 +682,48 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
     float attPowerMultiplier = GetModifierValue(unitMod, TOTAL_PCT) - 1.0f;
 
     sScriptMgr->OnPlayerAfterUpdateAttackPowerAndDamage(this, level, base_attPower, attPowerMod, attPowerMultiplier, ranged);
-    SetInt32Value(index, (uint32)base_attPower);            //UNIT_FIELD_(RANGED)_ATTACK_POWER field
+
+    // Calculate final attack power
+    float finalAttackPower = base_attPower;
+
+    // Apply ClassAttributes attack power multiplier first
+    {
+        QueryResult result;
+        if (ranged)
+        {
+            result = WorldDatabase.Query("SELECT `远程攻强倍率`, `远程攻强上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+        }
+        else
+        {
+            result = WorldDatabase.Query("SELECT `攻强倍率`, `攻强上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+        }
+
+        if (result)
+        {
+            Field* fields = result->Fetch();
+            float apMultiplier = fields[0].Get<float>();
+            uint32 apLimit = fields[1].Get<uint32>();
+            float originalAP = finalAttackPower;
+
+            // Apply multiplier
+            if (apMultiplier != 100.0f && apMultiplier > 0.0f)
+            {
+                finalAttackPower = finalAttackPower * apMultiplier / 100.0f;
+            }
+
+            // Apply limit
+            if (apLimit > 0 && finalAttackPower > apLimit)
+            {
+                finalAttackPower = apLimit;
+            }
+        }
+    }
+
+
+
+
+
+    SetInt32Value(index, (uint32)finalAttackPower);            //UNIT_FIELD_(RANGED)_ATTACK_POWER field
     SetInt32Value(index_mod, (uint32)attPowerMod);          //UNIT_FIELD_(RANGED)_ATTACK_POWER_MODS field
     SetFloatValue(index_mult, attPowerMultiplier);          //UNIT_FIELD_(RANGED)_ATTACK_POWER_MULTIPLIER field
 
@@ -626,14 +849,53 @@ void Player::UpdateBlockPercentage()
         // Increase from SPELL_AURA_MOD_BLOCK_PERCENT aura
         value += GetTotalAuraModifier(SPELL_AURA_MOD_BLOCK_PERCENT);
         // Increase from rating
-        value += GetRatingBonusValue(CR_BLOCK);
+        float blockRating = GetRatingBonusValue(CR_BLOCK);
 
-        if (sConfigMgr->GetOption<bool>("Stats.Limits.Enable", false))
+        // Check for custom block rating conversion rate
         {
-            value = value > sConfigMgr->GetOption<float>("Stats.Limits.Block", 95.0f) ? sConfigMgr->GetOption<float>("Stats.Limits.Block", 95.0f) : value;
+            QueryResult result = WorldDatabase.Query("SELECT `格挡等级转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+            if (result)
+            {
+                Field* fields = result->Fetch();
+                float customRate = fields[0].Get<float>();
+                if (customRate > 0.0f)
+                {
+                    // Use custom conversion rate: rating / customRate = percentage
+                    float ratingValue = float(GetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + CR_BLOCK));
+                    blockRating = ratingValue / customRate;
+
+                }
+            }
         }
 
+        value += blockRating;
         value = value < 0.0f ? 0.0f : value;
+    }
+
+    // Apply block limits with priority: Database > Config file
+    bool limitApplied = false;
+
+    // First try database limits
+    QueryResult result = WorldDatabase.Query("SELECT `格挡几率上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+    if (result)
+    {
+        Field* fields = result->Fetch();
+        float blockLimit = fields[0].Get<float>();
+        if (blockLimit > 0.0f && value > blockLimit)
+        {
+            value = blockLimit;
+            limitApplied = true;
+        }
+    }
+
+    // If no database limit was applied, try config file limits
+    if (!limitApplied && sConfigMgr->GetOption<bool>("Stats.Limits.Enable", false))
+    {
+        float blockLimit = sConfigMgr->GetOption<float>("Stats.Limits.Block", 95.0f);
+        if (blockLimit > 0.0f && value > blockLimit)
+        {
+            value = blockLimit;
+        }
     }
     SetStatFloatValue(PLAYER_BLOCK_PERCENTAGE, value);
 }
@@ -668,10 +930,38 @@ void Player::UpdateCritPercentage(WeaponAttackType attType)
     // Modify crit from weapon skill and maximized defense skill of same level victim difference
     value += (int32(GetWeaponSkillValue(attType)) - int32(GetMaxSkillValueForLevel())) * 0.04f;
 
-    if (sConfigMgr->GetOption<bool>("Stats.Limits.Enable", false))
+    // Apply crit limits with priority: Database > Config file
+    bool limitApplied = false;
     {
-        value = value > sConfigMgr->GetOption<float>("Stats.Limits.Crit", 95.0f) ? sConfigMgr->GetOption<float>("Stats.Limits.Crit", 95.0f) : value;
+        Player* player = ToPlayer();
+        if (player)
+        {
+            // First try database limits
+            QueryResult result = WorldDatabase.Query("SELECT `暴击几率上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
+            if (result)
+            {
+                Field* fields = result->Fetch();
+                float critLimit = fields[0].Get<float>();
+                if (critLimit > 0.0f && value > critLimit)
+                {
+                    value = critLimit;
+                    limitApplied = true;
+                }
+            }
+
+            // If no database limit was applied, try config file limits
+            if (!limitApplied && sConfigMgr->GetOption<bool>("Stats.Limits.Enable", false))
+            {
+                float critLimit = sConfigMgr->GetOption<float>("Stats.Limits.Crit", 95.0f);
+                if (critLimit > 0.0f && value > critLimit)
+                {
+                    value = critLimit;
+                }
+            }
+        }
     }
+
+
 
     value = value < 0.0f ? 0.0f : value;
     SetStatFloatValue(index, value);
@@ -758,6 +1048,22 @@ void Player::UpdateParryPercentage()
         float nondiminishing  = 5.0f;
         // Parry from rating
         float diminishing = GetRatingBonusValue(CR_PARRY);
+
+        // Check for custom parry rating conversion rate
+        {
+            QueryResult result = WorldDatabase.Query("SELECT `招架等级转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+            if (result)
+            {
+                Field* fields = result->Fetch();
+                float customRate = fields[0].Get<float>();
+                if (customRate > 0.0f)
+                {
+                    // Use custom conversion rate: rating / customRate = percentage
+                    float ratingValue = float(GetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + CR_PARRY));
+                    diminishing = ratingValue / customRate;
+                }
+            }
+        }
         // Modify value from defense skill (only bonus from defense rating diminishes)
         nondiminishing += (GetSkillValue(SKILL_DEFENSE) - GetMaxSkillValueForLevel()) * 0.04f;
         diminishing += (int32(GetRatingBonusValue(CR_DEFENSE_SKILL))) * 0.04f;
@@ -767,11 +1073,33 @@ void Player::UpdateParryPercentage()
         m_realParry = nondiminishing + diminishing * parry_cap[pclass] / (diminishing + parry_cap[pclass] * m_diminishing_k[pclass]);
         m_realParry = m_realParry < 0.0f ? 0.0f : m_realParry;
 
-        value = std::max(diminishing + nondiminishing, 0.0f);
+        // Use the diminished value for limit checking, not the raw sum
+        value = m_realParry;
 
-        if (sConfigMgr->GetOption<bool>("Stats.Limits.Enable", false))
+        // Apply parry limits with priority: Database > Config file
+        bool limitApplied = false;
+
+        // First try database limits
+        QueryResult result = WorldDatabase.Query("SELECT `招架几率上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+        if (result)
         {
-            value = value > sConfigMgr->GetOption<float>("Stats.Limits.Parry", 95.0f) ? sConfigMgr->GetOption<float>("Stats.Limits.Parry", 95.0f) : value;
+            Field* fields = result->Fetch();
+            float parryLimit = fields[0].Get<float>();
+            if (parryLimit > 0.0f && value > parryLimit)
+            {
+                value = parryLimit;
+                limitApplied = true;
+            }
+        }
+
+        // If no database limit was applied, try config file limits
+        if (!limitApplied && sConfigMgr->GetOption<bool>("Stats.Limits.Enable", false))
+        {
+            float parryLimit = sConfigMgr->GetOption<float>("Stats.Limits.Parry", 95.0f);
+            if (parryLimit > 0.0f && value > parryLimit)
+            {
+                value = parryLimit;
+            }
         }
     }
 
@@ -809,12 +1137,45 @@ void Player::UpdateDodgePercentage()
     m_realDodge = nondiminishing + (diminishing * dodge_cap[pclass] / (diminishing + dodge_cap[pclass] * m_diminishing_k[pclass]));
 
     m_realDodge = m_realDodge < 0.0f ? 0.0f : m_realDodge;
-    float value = std::max(diminishing + nondiminishing, 0.0f);
+    // Use the diminished value for limit checking, not the raw sum
+    float value = m_realDodge;
 
-    if (sConfigMgr->GetOption<bool>("Stats.Limits.Enable", false))
+    // Apply dodge limits with priority: Database > Config file
+    bool limitApplied = false;
+    LOG_DEBUG("entities.player", "UpdateDodgePercentage: Checking dodge limit for class {}", getClass());
+
+    // First try database limits
+    QueryResult result = WorldDatabase.Query("SELECT `闪避几率上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+    if (result)
     {
-        value = value > sConfigMgr->GetOption<float>("Stats.Limits.Dodge", 95.0f) ? sConfigMgr->GetOption<float>("Stats.Limits.Dodge", 95.0f) : value;
+        Field* fields = result->Fetch();
+        float dodgeLimit = fields[0].Get<float>();
+        LOG_DEBUG("entities.player", "UpdateDodgePercentage: Found database dodge limit {} for value {}", dodgeLimit, value);
+        if (dodgeLimit > 0.0f && value > dodgeLimit)
+        {
+            value = dodgeLimit;
+            limitApplied = true;
+            LOG_DEBUG("entities.player", "UpdateDodgePercentage: Applied database dodge limit, new value {}", value);
+        }
     }
+    else
+    {
+        LOG_DEBUG("entities.player", "UpdateDodgePercentage: No database dodge limit found for class {}", getClass());
+    }
+
+    // If no database limit was applied, try config file limits
+    if (!limitApplied && sConfigMgr->GetOption<bool>("Stats.Limits.Enable", false))
+    {
+        float dodgeLimit = sConfigMgr->GetOption<float>("Stats.Limits.Dodge", 95.0f);
+        LOG_DEBUG("entities.player", "UpdateDodgePercentage: Found config dodge limit {} for value {}", dodgeLimit, value);
+        if (dodgeLimit > 0.0f && value > dodgeLimit)
+        {
+            value = dodgeLimit;
+            LOG_DEBUG("entities.player", "UpdateDodgePercentage: Applied config dodge limit, new value {}", value);
+        }
+    }
+
+
 
     SetStatFloatValue(PLAYER_DODGE_PERCENTAGE, value);
 }
@@ -840,6 +1201,35 @@ void Player::UpdateSpellCritChance(uint32 school)
     // Increase crit from spell crit ratings
     crit += GetRatingBonusValue(CR_CRIT_SPELL);
 
+    // Apply spell crit limits with priority: Database > Config file
+    bool limitApplied = false;
+    {
+        // First try database limits
+        QueryResult result = WorldDatabase.Query("SELECT `暴击几率上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+        if (result)
+        {
+            Field* fields = result->Fetch();
+            float critLimit = fields[0].Get<float>();
+            if (critLimit > 0.0f && crit > critLimit)
+            {
+                crit = critLimit;
+                limitApplied = true;
+            }
+        }
+
+        // If no database limit was applied, try config file limits
+        if (!limitApplied && sConfigMgr->GetOption<bool>("Stats.Limits.Enable", false))
+        {
+            float critLimit = sConfigMgr->GetOption<float>("Stats.Limits.Crit", 95.0f);
+            if (critLimit > 0.0f && crit > critLimit)
+            {
+                crit = critLimit;
+            }
+        }
+    }
+
+
+
     // Store crit value
     SetFloatValue(PLAYER_SPELL_CRIT_PERCENTAGE1 + school, crit);
 }
@@ -853,19 +1243,69 @@ void Player::UpdateArmorPenetration(int32 amount)
 void Player::UpdateMeleeHitChances()
 {
     m_modMeleeHitChance = (float)GetTotalAuraModifier(SPELL_AURA_MOD_HIT_CHANCE);
-    m_modMeleeHitChance += GetRatingBonusValue(CR_HIT_MELEE);
+
+    // Check for custom hit rating conversion rate
+    float hitRating = GetRatingBonusValue(CR_HIT_MELEE);
+    QueryResult result = WorldDatabase.Query("SELECT `命中等级转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+    if (result)
+    {
+        Field* fields = result->Fetch();
+        float customRate = fields[0].Get<float>();
+        if (customRate > 0.0f)
+        {
+            // Use custom conversion rate: rating / customRate = percentage
+            float ratingValue = float(GetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + CR_HIT_MELEE));
+            hitRating = ratingValue / customRate;
+        }
+    }
+
+    m_modMeleeHitChance += hitRating;
 }
 
 void Player::UpdateRangedHitChances()
 {
     m_modRangedHitChance = (float)GetTotalAuraModifier(SPELL_AURA_MOD_HIT_CHANCE);
-    m_modRangedHitChance += GetRatingBonusValue(CR_HIT_RANGED);
+
+    // Check for custom hit rating conversion rate
+    float hitRating = GetRatingBonusValue(CR_HIT_RANGED);
+
+    QueryResult result = WorldDatabase.Query("SELECT `命中等级转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+    if (result)
+    {
+        Field* fields = result->Fetch();
+        float customRate = fields[0].Get<float>();
+
+        if (customRate > 0.0f)
+        {
+            // Use custom conversion rate: rating / customRate = percentage
+            float ratingValue = float(GetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + CR_HIT_RANGED));
+            hitRating = ratingValue / customRate;
+        }
+    }
+
+    m_modRangedHitChance += hitRating;
 }
 
 void Player::UpdateSpellHitChances()
 {
     m_modSpellHitChance = (float)GetTotalAuraModifier(SPELL_AURA_MOD_SPELL_HIT_CHANCE);
-    m_modSpellHitChance += GetRatingBonusValue(CR_HIT_SPELL);
+
+    // Check for custom hit rating conversion rate
+    float hitRating = GetRatingBonusValue(CR_HIT_SPELL);
+    QueryResult result = WorldDatabase.Query("SELECT `命中等级转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+    if (result)
+    {
+        Field* fields = result->Fetch();
+        float customRate = fields[0].Get<float>();
+        if (customRate > 0.0f)
+        {
+            // Use custom conversion rate: rating / customRate = percentage
+            float ratingValue = float(GetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + CR_HIT_SPELL));
+            hitRating = ratingValue / customRate;
+        }
+    }
+
+    m_modSpellHitChance += hitRating;
 }
 
 void Player::UpdateAllSpellCritChances()

@@ -736,7 +736,7 @@ Logger.spells.scripts=2,Console Errors
 #Logger.entities.player.items=4,Console Server
 #Logger.entities.player.loading=4,Console Server
 #Logger.entities.player.skills=4,Console Server
-#Logger.entities.player=4,Console Server
+Logger.entities.player=1,Console Server
 #Logger.entities.transport=4,Console Server
 #Logger.entities.unit.ai=4,Console Server
 #Logger.entities.unit=4,Console Server
@@ -2276,7 +2276,7 @@ OffhandCheckAtSpellUnlearn = 1
 #        Default:     0 - Disabled
 #                     1 - Enabled
 
-Stats.Limits.Enable = 0
+Stats.Limits.Enable = 1
 
 #
 #    Stats.Limit.[STAT]
@@ -2286,8 +2286,19 @@ Stats.Limits.Enable = 0
 Stats.Limits.Dodge = 95.0
 Stats.Limits.Parry = 95.0
 Stats.Limits.Block = 95.0
-Stats.Limits.Crit  = 95.0
+Stats.Limits.Crit = 95.0
 
+#
+# Note: Attribute limits support two methods:
+# 1. Configuration file method (above settings) - for global unified settings
+# 2. Database method (Class Attributes module) - for class-specific differentiated settings
+#
+# Priority: Database settings > Configuration file settings
+# If a class has specific settings in the database, use database settings; otherwise use config file settings
+#
+# Database setup method:
+# 1. Set attribute limits for each class in the `属性调整_职业` database table
+# 2. Use GM command `.职业属性 重载` to reload configuration after database changes
 #
 ###################################################################################################
 

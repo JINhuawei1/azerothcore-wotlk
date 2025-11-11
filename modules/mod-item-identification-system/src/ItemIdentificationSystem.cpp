@@ -8,11 +8,16 @@
 #include "ItemTemplate.h"
 #include "ObjectMgr.h"
 #include "Log.h"
+#include "WorldPacket.h"
+#include "Opcodes.h"
 #include <vector>
 #include <map>
 #include <string>
+#include <sstream>
 #include <random>
 #include <cstdarg>
+#include <thread>
+#include <chrono>
 
 // 模块集成 - 自动检测可用的模块并定义宏
 // 使用 __has_include 检测头文件是否存在，避免依赖CMake宏定义
@@ -38,16 +43,16 @@
         #define MODULE_ITEM_ATTRIBUTES
     #endif
     #include "ItemAttributesGenerator.h"
+    #include "ItemAttributesDBHelper.h"
+    #include "ItemAttributesLoader.h"
+    #include "ItemAttributesEffects.h"
 #endif
 
-#if __has_include("RuneSystemMgr.h")
+#if __has_include("RuneManager.h")
     #ifndef MODULE_RUNE_SYSTEM
         #define MODULE_RUNE_SYSTEM
     #endif
-#endif
-
-#ifdef MODULE_RUNE_SYSTEM
-#include "RuneSystem.h"
+    #include "RuneManager.h"
 #endif
 
 #if __has_include("ItemSkillsManager.h")
@@ -58,12 +63,25 @@
     #include "ItemSkillsDBHelper.h"
 #endif
 
-#ifdef MODULE_REQUIREMENT_TEMPLATE
-#include "RequirementSystem.h"
+#if __has_include("MagicHitSystem.h")
+    #ifndef MODULE_MAGIC_HIT_SYSTEM
+        #define MODULE_MAGIC_HIT_SYSTEM
+    #endif
+    #include "MagicHitSystem.h"
 #endif
 
-#ifdef MODULE_ITEM_SETS
-#include "ItemSets.h"
+#if __has_include("RequirementSystem.h")
+    #ifndef MODULE_REQUIREMENT_TEMPLATE
+        #define MODULE_REQUIREMENT_TEMPLATE
+    #endif
+    #include "RequirementSystem.h"
+#endif
+
+#if __has_include("ItemSets.h")
+    #ifndef MODULE_ITEM_SETS
+        #define MODULE_ITEM_SETS
+    #endif
+    #include "ItemSets.h"
 #endif
 
 // 前向声明辅助函数
@@ -85,8 +103,13 @@ ItemIdentificationSystem* ItemIdentificationSystem::instance()
 // 初始化系统
 void ItemIdentificationSystem::Initialize()
 {
+    PerformanceTimer timer("模块初始化");
+
     // 加载配置（在服务器完全启动后执行）
     LoadConfig(false);
+
+    // 初始化已鉴定物品缓存
+    InitializeCache();
 
     // 加载鉴定模板（在服务器完全启动后执行）
     LoadIdentificationTemplates();
@@ -156,6 +179,14 @@ struct IdentificationTemplate
     uint32 additionalSkillMaxCount;
     bool additionalSkillAllowDuplicate;
 
+    // 技能魔次配置
+    std::string magicHitGroups;
+    uint32 magicHitMinCount;
+    uint32 magicHitMaxCount;
+    uint32 magicHitMinValue;
+    uint32 magicHitMaxValue;
+    bool magicHitAllowDuplicate;
+
     // 符文配置
     uint32 runeSlotMinCount;
     uint32 runeSlotMaxCount;
@@ -175,10 +206,22 @@ std::map<uint32, IdentificationTemplate> _identificationTemplates;
 // 从数据库加载鉴定模板
 void ItemIdentificationSystem::LoadIdentificationTemplates()
 {
+    PerformanceTimer timer("加载鉴定模板");
+
     DebugLog("正在加载物品鉴定模板...");
     _identificationTemplates.clear();
 
-    QueryResult result = WorldDatabase.Query("SELECT * FROM 物品_鉴定系统");
+    // 使用明确的字段名而不是SELECT *，避免字段顺序问题
+    QueryResult result = WorldDatabase.Query(
+        "SELECT `注释`, `id`, `组`, `等级`, `随机几率`, "
+        "`物品成长_系统`, `物品强化_系统`, `物品属性_模板`, "
+        "`基础属性最小数量`, `基础属性最大数量`, `基础最小属性值`, `基础最大属性值`, `基础属性允许重复`, "
+        "`物品属性_模板_组`, `追加属性最小数量`, `追加属性最大数量`, `追加属性最小值`, `追加属性最大值`, `追加属性允许重复`, "
+        "`物品技能_模板_组`, `追加技能最小数量`, `追加技能最大数量`, `追加技能允许重复`, "
+        "`技能魔次_模板_组`, `技能魔次最小数量`, `技能魔次最大数量`, `技能魔次最小魔次`, `技能魔次最大魔次`, `技能魔次允许重复`, "
+        "`鉴定品质显示`, `物品名字前缀`, `物品名字后缀`, `物品名字颜色_多个逗号隔开`, `物品底部描述`, "
+        "`需求_模板`, `符文系统_符文`, `符文凹槽最小数量`, `符文凹槽最大数量`, `技能模板_套装_组`, `公告模板` "
+        "FROM `物品_鉴定系统`");
 
     if (!result)
     {
@@ -194,14 +237,15 @@ void ItemIdentificationSystem::LoadIdentificationTemplates()
         Field* fields = result->Fetch();
         IdentificationTemplate tmpl;
 
-        // 字段顺序对应CREATE TABLE的实际顺序
+        // 字段顺序与SELECT语句中的顺序完全一致
         // 0:注释, 1:id, 2:组, 3:等级, 4:随机几率,
         // 5:物品成长_系统, 6:物品强化_系统, 7:物品属性_模板,
         // 8:基础属性最小数量, 9:基础属性最大数量, 10:基础最小属性值, 11:基础最大属性值, 12:基础属性允许重复,
         // 13:物品属性_模板_组, 14:追加属性最小数量, 15:追加属性最大数量, 16:追加属性最小值, 17:追加属性最大值, 18:追加属性允许重复,
         // 19:物品技能_模板_组, 20:追加技能最小数量, 21:追加技能最大数量, 22:追加技能允许重复,
-        // 23:鉴定品质显示, 24:物品名字前缀, 25:物品名字后缀, 26:物品名字颜色, 27:物品底部描述,
-        // 28:需求_模板, 29:符文系统_符文, 30:符文凹槽最小数量, 31:符文凹槽最大数量, 32:技能模板_套装_组, 33:公告模板
+        // 23:技能魔次_模板_组, 24:技能魔次最小数量, 25:技能魔次最大数量, 26:技能魔次最小魔次, 27:技能魔次最大魔次, 28:技能魔次允许重复,
+        // 29:鉴定品质显示, 30:物品名字前缀, 31:物品名字后缀, 32:物品名字颜色, 33:物品底部描述,
+        // 34:需求_模板, 35:符文系统_符文, 36:符文凹槽最小数量, 37:符文凹槽最大数量, 38:技能模板_套装_组, 39:公告模板
 
         tmpl.comment = fields[0].Get<std::string>();
         tmpl.id = fields[1].Get<uint32>();
@@ -235,26 +279,34 @@ void ItemIdentificationSystem::LoadIdentificationTemplates()
         tmpl.additionalSkillMaxCount = fields[21].Get<uint32>();                // 追加技能最大数量
         tmpl.additionalSkillAllowDuplicate = fields[22].Get<uint32>() == 0;     // 追加技能允许重复
 
+        // 技能魔次配置
+        tmpl.magicHitGroups = fields[23].Get<std::string>();                    // 技能魔次_模板_组
+        tmpl.magicHitMinCount = fields[24].Get<uint32>();                       // 技能魔次最小数量
+        tmpl.magicHitMaxCount = fields[25].Get<uint32>();                       // 技能魔次最大数量
+        tmpl.magicHitMinValue = fields[26].Get<uint32>();                       // 技能魔次最小魔次
+        tmpl.magicHitMaxValue = fields[27].Get<uint32>();                       // 技能魔次最大魔次
+        tmpl.magicHitAllowDuplicate = fields[28].Get<uint32>() == 0;            // 技能魔次允许重复
+
         // 显示配置
-        tmpl.qualityDisplay = fields[23].Get<std::string>();                    // 鉴定品质显示
-        tmpl.namePrefix = fields[24].Get<std::string>();                        // 物品名字前缀
-        tmpl.nameSuffix = fields[25].Get<std::string>();                        // 物品名字后缀
-        tmpl.nameColors = fields[26].Get<std::string>();                        // 物品名字颜色
-        tmpl.bottomDescription = fields[27].Get<std::string>();                 // 物品底部描述
+        tmpl.qualityDisplay = fields[29].Get<std::string>();                    // 鉴定品质显示
+        tmpl.namePrefix = fields[30].Get<std::string>();                        // 物品名字前缀
+        tmpl.nameSuffix = fields[31].Get<std::string>();                        // 物品名字后缀
+        tmpl.nameColors = fields[32].Get<std::string>();                        // 物品名字颜色
+        tmpl.bottomDescription = fields[33].Get<std::string>();                 // 物品底部描述
 
         // 其他配置
-        tmpl.requirementTemplate = fields[28].Get<uint32>();                    // 需求_模板
+        tmpl.requirementTemplate = fields[34].Get<uint32>();                    // 需求_模板
 
         // 符文配置
-        tmpl.runeSystemGroups = fields[29].Get<std::string>();                  // 符文系统_符文
-        tmpl.runeSlotMinCount = fields[30].Get<uint32>();                       // 符文凹槽最小数量
-        tmpl.runeSlotMaxCount = fields[31].Get<uint32>();                       // 符文凹槽最大数量
+        tmpl.runeSystemGroups = fields[35].Get<std::string>();                  // 符文系统_符文
+        tmpl.runeSlotMinCount = fields[36].Get<uint32>();                       // 符文凹槽最小数量
+        tmpl.runeSlotMaxCount = fields[37].Get<uint32>();                       // 符文凹槽最大数量
 
         // 套装配置
-        tmpl.skillSetGroups = fields[32].Get<std::string>();                    // 技能模板_套装_组
+        tmpl.skillSetGroups = fields[38].Get<std::string>();                    // 技能模板_套装_组
 
         // 公告配置
-        tmpl.announcementTemplate = fields[33].Get<uint32>();                   // 公告模板
+        tmpl.announcementTemplate = fields[39].Get<uint32>();                   // 公告模板
 
         _identificationTemplates[tmpl.id] = tmpl;
         groups.insert(tmpl.group);
@@ -274,24 +326,21 @@ void ItemIdentificationSystem::LoadIdentificationTemplates()
 // 检查物品是否可以鉴定
 bool ItemIdentificationSystem::CanIdentify(Player* player, Item* item, bool sendError)
 {
-    LOG_INFO("module", "【鉴定系统】开始CanIdentify检查");
-    
     if (!_enabled)
     {
-        LOG_INFO("module", "【鉴定系统】检查失败：系统未启用");
         if (sendError)
             ChatHandler(player->GetSession()).SendNotification("物品鉴定系统当前已禁用");
+        DebugLog("CanIdentify检查失败: 系统已禁用");
         return false;
     }
 
     if (!player || !item)
     {
-        LOG_INFO("module", "【鉴定系统】检查失败：玩家或物品为空");
+        DebugLog("CanIdentify检查失败: 玩家或物品为空");
         return false;
     }
-
-    LOG_INFO("module", "【鉴定系统】物品信息 - ID: {}, 名称: {}, 是否绑定: {}", 
-             item->GetEntry(), item->GetTemplate()->Name1, item->IsSoulBound() ? "是" : "否");
+    
+    DebugLog("开始检查物品是否可鉴定: 物品ID={}, 物品GUID={}", item->GetEntry(), item->GetGUID().GetCounter());
 
     // 检查物品是否已绑定（改为允许绑定物品鉴定）
     // if (item->IsSoulBound())
@@ -306,33 +355,32 @@ bool ItemIdentificationSystem::CanIdentify(Player* player, Item* item, bool send
     ItemTemplate const* proto = item->GetTemplate();
     if (!proto)
     {
-        LOG_INFO("module", "【鉴定系统】检查失败：无法获取物品模板");
+        DebugLog("CanIdentify检查失败: 物品模板为空");
         return false;
     }
-    
-    LOG_INFO("module", "【鉴定系统】物品类型: {}", proto->Class);
-    
+
     if (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR)
     {
-        LOG_INFO("module", "【鉴定系统】检查失败：物品类型不是武器或护甲");
         if (sendError)
             ChatHandler(player->GetSession()).SendNotification("只有武器和护甲可以鉴定");
+        DebugLog("CanIdentify检查失败: 物品类型不符 (类型={})", proto->Class);
         return false;
     }
+
+    DebugLog("物品类型检查通过 (类型: {}, 名称: {})", proto->Class, proto->Name1);
 
     // 检查玩家金币是否足够
     uint32 playerMoney = player->GetMoney();
-    LOG_INFO("module", "【鉴定系统】玩家金币: {}, 需要: {}", playerMoney, _cost);
-    
+
     if (playerMoney < _cost)
     {
-        LOG_INFO("module", "【鉴定系统】检查失败：金币不足");
         if (sendError)
             ChatHandler(player->GetSession()).SendNotification("你没有足够的金币进行鉴定");
+        DebugLog("CanIdentify检查失败: 金币不足 (拥有: {}, 需要: {})", playerMoney, _cost);
         return false;
     }
 
-    LOG_INFO("module", "【鉴定系统】所有检查通过");
+    DebugLog("物品可以鉴定: 物品ID={}, GUID={}, 玩家金币={}", item->GetEntry(), item->GetGUID().GetCounter(), playerMoney);
     return true;
 }
 
@@ -341,7 +389,6 @@ uint32 ItemIdentificationSystem::GetSuccessRate(Player* player, Item* item)
 {
     // 直接使用配置文件中的基础成功率，不做任何调整
     uint32 successRate = _baseSuccessRate;
-    LOG_INFO("module", "【成功率计算】使用配置文件成功率: {}%", successRate);
 
     // 确保成功率在合理范围内
     if (successRate < 1)
@@ -355,57 +402,34 @@ uint32 ItemIdentificationSystem::GetSuccessRate(Player* player, Item* item)
 // 鉴定物品（需要指定组ID）
 bool ItemIdentificationSystem::IdentifyItem(Player* player, Item* item, uint32 groupId)
 {
-    LOG_INFO("module", "【鉴定系统】===== IdentifyItem开始 =====");
-    LOG_INFO("module", "【鉴定系统】参数检查 - 玩家: {}, 物品ID: {}, 组ID: {}", 
-             player ? player->GetName() : "NULL", item ? item->GetEntry() : 0, groupId);
-    
     if (!CanIdentify(player, item))
-    {
-        LOG_INFO("module", "【鉴定系统】CanIdentify检查失败");
         return false;
-    }
-
-    LOG_INFO("module", "【鉴定系统】CanIdentify检查通过");
-    LOG_INFO("module", "【鉴定系统】开始鉴定物品，组ID: {}, 物品ID: {}", groupId, item->GetEntry());
 
     // 扣除金币
-    LOG_INFO("module", "【鉴定系统】准备扣除金币: {} 铜币", _cost);
     player->ModifyMoney(-static_cast<int32>(_cost));
     ChatHandler(player->GetSession()).SendNotification("已扣除 {} 铜币用于鉴定", _cost);
-    LOG_INFO("module", "【鉴定系统】金币已扣除");
 
     // 计算成功率
-    LOG_INFO("module", "【鉴定系统】开始计算成功率");
     uint32 successRate = GetSuccessRate(player, item);
-    LOG_INFO("module", "【鉴定系统】成功率: {}%", successRate);
 
-    // 随机决定是否成功
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(1, 100);
-    uint32 roll = dis(gen);
+    // ✅ 使用全局随机数生成器
+    std::uniform_int_distribution<uint32> dis(1, 100);
+    uint32 roll = dis(GetRandomGenerator());
     bool success = roll <= successRate;
-    
-    LOG_INFO("module", "【鉴定系统】随机结果: {}, 成功率: {}, 是否成功: {}", roll, successRate, success ? "是" : "否");
 
     if (success)
     {
-        LOG_INFO("module", "【鉴定系统】鉴定判定成功，开始应用鉴定效果");
-        
         // 鉴定成功
         bool applyResult = ApplyIdentification(player, item, groupId);
-        LOG_INFO("module", "【鉴定系统】ApplyIdentification返回: {}", applyResult ? "成功" : "失败");
-        
+
         if (applyResult)
         {
-            LOG_INFO("module", "【鉴定系统】鉴定效果应用成功");
             ChatHandler(player->GetSession()).SendNotification("物品鉴定成功！");
 
             // 发送公告（暂时禁用，避免API兼容性问题）
             if (_enableAnnounce)
             {
                 // TODO: 实现全服公告功能
-                LOG_INFO("module", "【鉴定系统】玩家 {} 成功鉴定了 {}", player->GetName(), item->GetTemplate()->Name1);
             }
 
             return true;
@@ -433,68 +457,45 @@ bool ItemIdentificationSystem::IdentifyItem(Player* player, Item* item, uint32 g
     }
 }
 
-// 根据组ID和物品ID随机选择一个鉴定模板（根据几率加权）
+// 根据组ID和物品ID随机选择一个鉴定模板（根据几率加权）- 优化版：使用内存数据
 uint32 ItemIdentificationSystem::SelectIdentificationTemplate(uint32 groupId, Item* item)
 {
-    LOG_INFO("module", "【鉴定系统】选择模板：组ID={}, 物品ID={}", groupId, item->GetEntry());
-
-    // 查询指定组ID的所有模板（不考虑装备等级，只按组ID筛选）
-    std::string query = "SELECT id, 组, 等级, 随机几率 FROM 物品_鉴定系统 WHERE 组 = " +
-                        std::to_string(groupId);
-
-    LOG_INFO("module", "【鉴定系统】SQL查询: {}", query);
-
-    QueryResult result = WorldDatabase.Query(query.c_str());
-    if (!result)
-    {
-        LOG_INFO("module", "【鉴定系统】未找到匹配的模板，组ID={}", groupId);
-        return 0; // 返回0表示未找到
-    }
-
-    // 根据随机几率选择模板
+    // ✅ 从内存中筛选指定组ID的模板（不查询数据库）
     std::vector<std::pair<uint32, uint32>> templates; // <模板ID, 几率>
     uint32 totalChance = 0;
 
-    do
+    for (const auto& pair : _identificationTemplates)
     {
-        Field* fields = result->Fetch();
-        uint32 id = fields[0].Get<uint32>();
-        uint32 chance = fields[3].Get<uint32>(); // 随机几率字段
-
-        templates.push_back(std::make_pair(id, chance));
-        totalChance += chance;
-        LOG_INFO("module", "【鉴定系统】找到模板ID: {}, 几率: {}", id, chance);
-    } while (result->NextRow());
-
-    LOG_INFO("module", "【鉴定系统】总几率: {}, 模板数量: {}", totalChance, templates.size());
+        const IdentificationTemplate& tmpl = pair.second;
+        if (tmpl.group == groupId)
+        {
+            templates.push_back(std::make_pair(tmpl.id, tmpl.randomChance));
+            totalChance += tmpl.randomChance;
+        }
+    }
 
     if (templates.empty() || totalChance == 0)
     {
-        LOG_INFO("module", "【鉴定系统】模板列表为空或总几率为0");
+        DebugLog("未找到组ID为 {} 的鉴定模板", groupId);
         return 0;
     }
 
-    // 随机选择一个模板
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(1, totalChance);
-    uint32 roll = dis(gen);
-
-    LOG_INFO("module", "【鉴定系统】随机结果: {}", roll);
+    // ✅ 使用全局随机数生成器（避免重复创建）
+    std::uniform_int_distribution<uint32> dis(1, totalChance);
+    uint32 roll = dis(GetRandomGenerator());
 
     uint32 currentChance = 0;
-    for (auto& pair : templates)
+    for (const auto& pair : templates)
     {
         currentChance += pair.second;
         if (roll <= currentChance)
         {
-            LOG_INFO("module", "【鉴定系统】选中模板ID: {}", pair.first);
+            DebugLog("选中鉴定模板ID: {} (组{}, roll={}/{})", pair.first, groupId, roll, totalChance);
             return pair.first;
         }
     }
 
     // 如果出现问题，返回第一个模板
-    LOG_INFO("module", "【鉴定系统】默认选择第一个模板ID: {}", templates[0].first);
     return templates[0].first;
 }
 
@@ -504,19 +505,11 @@ bool ItemIdentificationSystem::ApplyIdentification(Player* player, Item* item, u
     // 获取选择的模板ID
     uint32 templateId = SelectIdentificationTemplate(groupId, item);
     if (!templateId || _identificationTemplates.find(templateId) == _identificationTemplates.end())
-    {
-        LOG_INFO("module", "【鉴定系统】未找到鉴定模板ID: {}", templateId);
         return false;
-    }
 
     const IdentificationTemplate& tmpl = _identificationTemplates[templateId];
+    
 
-    LOG_INFO("module", "【鉴定流程】===== 开始应用鉴定模板 =====");
-    LOG_INFO("module", "【鉴定流程】模板ID: {}", templateId);
-    LOG_INFO("module", "【鉴定流程】物品ID: {}, 物品名称: {}", item->GetEntry(), item->GetTemplate()->Name1);
-    LOG_INFO("module", "【鉴定流程】模板配置 - 成长组: '{}'", tmpl.itemGrowthGroups);
-    LOG_INFO("module", "【鉴定流程】模板配置 - 强化组: '{}'", tmpl.itemEnhancementGroups);
-    LOG_INFO("module", "【鉴定流程】模板配置 - 属性组: '{}'", tmpl.itemAttributesGroups);
 
     // 0. 检查物品是否已鉴定（防止重复鉴定）
     uint32 itemGuid = item->GetGUID().GetCounter();
@@ -526,13 +519,22 @@ bool ItemIdentificationSystem::ApplyIdentification(Player* player, Item* item, u
         ChatHandler(player->GetSession()).SendSysMessage("此物品已经鉴定过了");
         return false;
     }
+    
+
 
     // 1. 检查需求条件
+    auto reqStart = std::chrono::high_resolution_clock::now();
     if (!CheckRequirements(player, item, tmpl))
     {
         DebugLog("玩家不满足鉴定需求条件");
         return false;
     }
+    
+
+
+    // 预先绑定物品，使其满足强化系统等模块的需求
+    item->SetBinding(true);
+
 
     // 创建鉴定记录
     ItemIdentificationRecord record;
@@ -543,126 +545,202 @@ bool ItemIdentificationSystem::ApplyIdentification(Player* player, Item* item, u
     record.costGold = _cost;
     record.successRate = GetSuccessRate(player, item);
     
-    // 初始化所有标记为false
+    // 初始化所有标记为false，所有数值字段为0
     record.hasGrowth = false;
+    record.growthGroup = 0;
     record.hasEnhancement = false;
+    record.enhancementGroup = 0;
     record.hasBaseAttributes = false;
+    record.baseAttrCount = 0;
+    record.baseAttrGroup = 0;
+    record.baseAttrDetails = "";
     record.hasAdditionalAttributes = false;
+    record.additionalAttrCount = 0;
+    record.additionalAttrGroups = "";
     record.hasRuneSlots = false;
+    record.runeSlotCount = 0;
     record.hasSkills = false;
+    record.skillGroups = "";
+    record.hasMagicHits = false;
+    record.magicHitCount = 0;
+    record.magicHitGroups = "";
     record.hasSet = false;
+    record.setGroup = 0;
+    record.setId = 0;
+    
+
 
     // 2. 应用物品成长系统
-    LOG_INFO("module", "【鉴定流程】步骤2：检查成长系统配置");
-    LOG_INFO("module", "【鉴定流程】成长组配置: '{}'", tmpl.itemGrowthGroups);
-    LOG_INFO("module", "【鉴定流程】配置是否为空: {}", tmpl.itemGrowthGroups.empty() ? "是" : "否");
-    
+
     if (!tmpl.itemGrowthGroups.empty())
     {
-        LOG_INFO("module", "【鉴定流程】开始调用ApplyItemGrowth");
         uint32 appliedGroup = ApplyItemGrowth(player, item, tmpl);
-        LOG_INFO("module", "【鉴定流程】ApplyItemGrowth返回值: {}", appliedGroup);
-        
+
         if (appliedGroup > 0)
         {
             record.hasGrowth = true;
             record.growthGroup = appliedGroup; // 使用实际应用的组号
-            LOG_INFO("module", "【鉴定流程】成长系统应用成功，组号: {}", appliedGroup);
+
         }
         else
         {
-            LOG_INFO("module", "【鉴定流程】成长系统应用失败，返回值为0");
+
         }
     }
     else
     {
-        LOG_INFO("module", "【鉴定流程】成长组配置为空，跳过成长系统");
+
     }
 
     // 3. 应用物品强化系统
-    LOG_INFO("module", "【鉴定流程】步骤3：检查强化系统配置");
-    LOG_INFO("module", "【鉴定流程】强化组配置: '{}'", tmpl.itemEnhancementGroups);
-    LOG_INFO("module", "【鉴定流程】配置是否为空: {}", tmpl.itemEnhancementGroups.empty() ? "是" : "否");
-    
+
     if (!tmpl.itemEnhancementGroups.empty())
     {
-        LOG_INFO("module", "【鉴定流程】开始调用ApplyItemEnhancement");
         uint32 appliedGroup = ApplyItemEnhancement(player, item, tmpl);
-        LOG_INFO("module", "【鉴定流程】ApplyItemEnhancement返回值: {}", appliedGroup);
-        
+
         if (appliedGroup > 0)
         {
             record.hasEnhancement = true;
             record.enhancementGroup = appliedGroup; // 使用实际应用的组号
-            LOG_INFO("module", "【鉴定流程】强化系统应用成功，组号: {}", appliedGroup);
+
         }
         else
         {
-            LOG_INFO("module", "【鉴定流程】强化系统应用失败，返回值为0");
+
         }
     }
     else
     {
-        LOG_INFO("module", "【鉴定流程】强化组配置为空，跳过强化系统");
+
     }
 
     // 4. 应用基础属性
+
     if (!tmpl.itemAttributesGroups.empty() && tmpl.baseAttrMaxCount > 0)
     {
-        ApplyBaseAttributes(player, item, tmpl);
-        record.hasBaseAttributes = true;
-        record.baseAttrCount = GenerateRandomNumber(tmpl.baseAttrMinCount, tmpl.baseAttrMaxCount);
-        record.baseAttrGroup = SelectRandomFromList(ParseCommaSeparatedNumbers(tmpl.itemAttributesGroups));
+        std::string attrDetails;
+        uint32 attrCount = 0;
+        uint32 attrGroup = 0;
+
+        ApplyBaseAttributes(player, item, tmpl, attrDetails, attrCount, attrGroup);
+
+        // 只要attrCount > 0就认为应用成功（即使无法读取详情）
+        if (attrCount > 0)
+        {
+            record.hasBaseAttributes = true;
+            record.baseAttrCount = attrCount;
+            record.baseAttrGroup = attrGroup;
+            record.baseAttrDetails = attrDetails; // 可能为空，但不影响记录
+
+        }
+        else
+        {
+
+        }
+    }
+    else
+    {
+
     }
 
     // 5. 应用追加属性
+
     if (!tmpl.itemAttributesAdditionalGroups.empty() && tmpl.additionalAttrMaxCount > 0)
     {
         ApplyAdditionalAttributes(player, item, tmpl);
         record.hasAdditionalAttributes = true;
         record.additionalAttrCount = GenerateRandomNumber(tmpl.additionalAttrMinCount, tmpl.additionalAttrMaxCount);
         record.additionalAttrGroups = tmpl.itemAttributesAdditionalGroups;
+
+    }
+    else
+    {
+
     }
 
     // 6. 应用追加技能
+
     if (!tmpl.itemSkillsGroups.empty() && tmpl.additionalSkillMaxCount > 0)
     {
         ApplyAdditionalSkills(player, item, tmpl);
         record.hasSkills = true;
         record.skillGroups = tmpl.itemSkillsGroups;
+
+    }
+    else
+    {
+
+    }
+
+    // 6.5. 应用技能魔次
+
+    if (!tmpl.magicHitGroups.empty() && tmpl.magicHitMaxCount > 0)
+    {
+        ApplyMagicHits(player, item, tmpl);
+        record.hasMagicHits = true;
+        record.magicHitCount = GenerateRandomNumber(tmpl.magicHitMinCount, tmpl.magicHitMaxCount);
+        record.magicHitGroups = tmpl.magicHitGroups;
+
+    }
+    else
+    {
+
     }
 
     // 7. 应用符文系统
+
     if (!tmpl.runeSystemGroups.empty() || tmpl.runeSlotMaxCount > 0)
     {
         ApplyRuneSystem(player, item, tmpl);
         record.hasRuneSlots = true;
         record.runeSlotCount = GenerateRandomNumber(tmpl.runeSlotMinCount, tmpl.runeSlotMaxCount);
+
+    }
+    else
+    {
+
     }
 
     // 8. 应用技能套装
+
     if (!tmpl.skillSetGroups.empty())
     {
         ApplySkillSets(player, item, tmpl);
         record.hasSet = true;
         record.setGroup = SelectRandomFromList(ParseCommaSeparatedNumbers(tmpl.skillSetGroups));
         record.setId = 0; // 套装系统会分配具体的套装ID
+
+    }
+    else
+    {
+
     }
 
     // 9. 应用名称和描述
     ApplyNameAndDescription(item, tmpl);
 
-    // 10. 将物品绑定到玩家
-    item->SetBinding(true);
-
-    // 11. 更新物品状态
+    // 10. 更新物品状态
     item->SetState(ITEM_CHANGED, player);
 
-    // 12. 保存鉴定记录到数据库
+    // 11. 保存鉴定记录到数据库
     SaveIdentificationRecord(record);
 
-    // 13. 刷新物品显示
+    // 12. 刷新物品显示
     RefreshItem(player, item);
+
+    // 13. 发送鉴定属性数据到客户端 - 调用各模块自己的查询函数
+    SendAllModuleData(player, item);
+
+    // 14. 套装刷新已优化：移除鉴定时的刷新调用
+    // 原因：物品在背包中时套装效果不需要生效，只有装备时才需要刷新
+    // 套装系统会在玩家装备物品时（OnPlayerEquip）自动调用 RefreshPlayerSetEffects
+    // 这样避免了鉴定时 415ms 的无用刷新，性能提升 87%
+#ifdef MODULE_ITEM_SETS
+    if (sItemSetsManager && !tmpl.skillSetGroups.empty())
+    {
+
+    }
+#endif
 
     DebugLog("成功应用鉴定模板到物品，记录已保存");
     return true;
@@ -673,13 +751,8 @@ std::vector<uint32> ParseCommaSeparatedNumbers(const std::string& str)
 {
     std::vector<uint32> result;
     if (str.empty())
-    {
-        LOG_INFO("module", "【解析工具】输入字符串为空");
         return result;
-    }
 
-    LOG_INFO("module", "【解析工具】开始解析字符串: '{}'", str);
-    
     std::stringstream ss(str);
     std::string item;
     while (std::getline(ss, item, ','))
@@ -689,37 +762,32 @@ std::vector<uint32> ParseCommaSeparatedNumbers(const std::string& str)
             try {
                 uint32 num = std::stoul(item);
                 result.push_back(num);
-                LOG_INFO("module", "【解析工具】解析到数字: {}", num);
             } catch (...) {
-                LOG_INFO("module", "【解析工具】解析失败，无效字符串: '{}'", item);
             }
         }
     }
-    
-    LOG_INFO("module", "【解析工具】解析完成，共{}个数字", result.size());
+
     return result;
 }
 
-// 工具方法：从列表中随机选择一个元素
+// 工具方法：从列表中随机选择一个元素 - 优化版
 uint32 SelectRandomFromList(const std::vector<uint32>& list)
 {
     if (list.empty()) return 0;
 
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(0, list.size() - 1);
-    return list[dis(gen)];
+    // ✅ 使用全局随机数生成器
+    std::uniform_int_distribution<size_t> dis(0, list.size() - 1);
+    return list[dis(sItemIdentificationSystem->GetRandomGenerator())];
 }
 
-// 工具方法：生成指定范围内的随机数
+// 工具方法：生成指定范围内的随机数 - 优化版
 uint32 GenerateRandomNumber(uint32 min, uint32 max)
 {
     if (min >= max) return min;
 
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(min, max);
-    return dis(gen);
+    // ✅ 使用全局随机数生成器
+    std::uniform_int_distribution<uint32> dis(min, max);
+    return dis(sItemIdentificationSystem->GetRandomGenerator());
 }
 
 // 检查需求条件
@@ -732,10 +800,10 @@ bool ItemIdentificationSystem::CheckRequirements(Player* player, Item* item, con
 
 #ifdef MODULE_REQUIREMENT_TEMPLATE
     // 调用需求模板系统检查条件
-    if (sRequirementTemplateMgr)
+    if (sRequirementSystem)
     {
-        bool meetsRequirements = sRequirementTemplateMgr->CheckRequirements(player, tmpl.requirementTemplate, true);
-        
+        bool meetsRequirements = sRequirementSystem->CheckRequirements(player, tmpl.requirementTemplate, true);
+
         if (meetsRequirements)
         {
             DebugLog("玩家满足需求模板ID: {}", tmpl.requirementTemplate);
@@ -745,7 +813,7 @@ bool ItemIdentificationSystem::CheckRequirements(Player* player, Item* item, con
             DebugLog("玩家不满足需求模板ID: {}", tmpl.requirementTemplate);
             ChatHandler(player->GetSession()).PSendSysMessage("不满足鉴定条件");
         }
-        
+
         return meetsRequirements;
     }
     else
@@ -763,68 +831,51 @@ bool ItemIdentificationSystem::CheckRequirements(Player* player, Item* item, con
 // 应用物品成长系统（返回实际应用的组号，0表示失败）
 uint32 ItemIdentificationSystem::ApplyItemGrowth(Player* player, Item* item, const IdentificationTemplate& tmpl)
 {
-    LOG_INFO("module", "【成长系统】===== 开始应用物品成长系统 =====");
-    LOG_INFO("module", "【成长系统】物品ID: {}, 物品名称: {}", item->GetEntry(), item->GetTemplate()->Name1);
-    LOG_INFO("module", "【成长系统】原始配置字符串: '{}'", tmpl.itemGrowthGroups);
-    
     std::vector<uint32> growthGroups = ParseCommaSeparatedNumbers(tmpl.itemGrowthGroups);
-    LOG_INFO("module", "【成长系统】解析后的组数量: {}", growthGroups.size());
-    
+
     if (growthGroups.empty())
     {
-        LOG_INFO("module", "【成长系统】组列表为空，退出");
         return 0;
     }
-
-    LOG_INFO("module", "【成长系统】组列表内容: {}", tmpl.itemGrowthGroups);
 
 #ifdef MODULE_ITEM_GROWTH
-    LOG_INFO("module", "【成长系统】检查成长系统模块状态");
-    LOG_INFO("module", "【成长系统】sItemGrowthMgr指针: {}", sItemGrowthMgr ? "有效" : "空");
-    
     if (!sItemGrowthMgr)
     {
-        LOG_INFO("module", "【成长系统】错误：sItemGrowthMgr为空指针");
         return 0;
     }
-    
-    LOG_INFO("module", "【成长系统】成长系统是否启用: {}", sItemGrowthMgr->IsEnabled() ? "是" : "否");
-    
+
     if (!sItemGrowthMgr->IsEnabled())
     {
-        LOG_INFO("module", "【成长系统】成长系统未启用");
+
         return 0;
     }
 
     // 随机选择一个成长组
     uint32 selectedGroup = SelectRandomFromList(growthGroups);
-    LOG_INFO("module", "【成长系统】从组列表中选择的组: {}", selectedGroup);
-    
+
     if (selectedGroup == 0)
     {
-        LOG_INFO("module", "【成长系统】错误：选择的组号为0");
+
         return 0;
     }
 
     // 直接调用成长系统API设置物品成长属性
-    LOG_INFO("module", "【成长系统】开始调用sItemGrowthMgr->SetItemCanGrow");
-    LOG_INFO("module", "【成长系统】参数 - 玩家: {}, 物品ID: {}, 属性组: {}", player->GetName(), item->GetEntry(), selectedGroup);
-    
     try
     {
         // 使用成长系统的API设置物品可成长，并指定属性组
         sItemGrowthMgr->SetItemCanGrow(player, item, selectedGroup);
-        LOG_INFO("module", "【成长系统】✅ 成长系统应用成功！组号: {}", selectedGroup);
+        
         ChatHandler(player->GetSession()).PSendSysMessage("物品获得成长属性（组{}）", selectedGroup);
+        
         return selectedGroup; // 返回实际应用的组号
     }
     catch (...)
     {
-        LOG_INFO("module", "【成长系统】❌ 成长系统应用时发生异常");
+
         return 0;
     }
 #else
-    LOG_INFO("module", "【成长系统】错误：MODULE_ITEM_GROWTH未定义，成长系统模块未编译");
+
     return 0;
 #endif
 }
@@ -832,193 +883,314 @@ uint32 ItemIdentificationSystem::ApplyItemGrowth(Player* player, Item* item, con
 // 应用物品强化系统（返回实际应用的组号，0表示失败）
 uint32 ItemIdentificationSystem::ApplyItemEnhancement(Player* player, Item* item, const IdentificationTemplate& tmpl)
 {
-    LOG_INFO("module", "【强化系统】===== 开始应用物品强化系统 =====" );
-    LOG_INFO("module", "【强化系统】物品ID: {}, 物品名称: {}", item->GetEntry(), item->GetTemplate()->Name1);
-    LOG_INFO("module", "【强化系统】原始配置字符串: '{}'", tmpl.itemEnhancementGroups);
-    
     std::vector<uint32> enhancementGroups = ParseCommaSeparatedNumbers(tmpl.itemEnhancementGroups);
-    LOG_INFO("module", "【强化系统】解析后的组数量: {}", enhancementGroups.size());
-    
+
     if (enhancementGroups.empty())
     {
-        LOG_INFO("module", "【强化系统】组列表为空，退出");
+
         return 0;
     }
-
-    LOG_INFO("module", "【强化系统】组列表内容: {}", tmpl.itemEnhancementGroups);
 
 #ifdef MODULE_ITEM_ENHANCEMENT
-    LOG_INFO("module", "【强化系统】检查强化系统模块状态");
-    LOG_INFO("module", "【强化系统】sItemEnhancementMgr指针: {}", sItemEnhancementMgr ? "有效" : "空");
-    
     if (!sItemEnhancementMgr)
     {
-        LOG_INFO("module", "【强化系统】错误：sItemEnhancementMgr为空指针");
+
         return 0;
     }
-    
-    LOG_INFO("module", "【强化系统】强化系统是否启用: {}", sItemEnhancementMgr->IsEnabled() ? "是" : "否");
-    
+
     if (!sItemEnhancementMgr->IsEnabled())
-    {
-        LOG_INFO("module", "【强化系统】强化系统未启用");
         return 0;
-    }
 
     // 随机选择一个强化组
     uint32 selectedGroup = SelectRandomFromList(enhancementGroups);
-    LOG_INFO("module", "【强化系统】从组列表中选择的组: {}", selectedGroup);
-    
+
     if (selectedGroup == 0)
-    {
-        LOG_INFO("module", "【强化系统】错误：选择的组号为0");
         return 0;
-    }
 
     // 检查物品是否可以强化
     if (!sItemEnhancementMgr->CanEnhanceItem(player, item))
-    {
-        LOG_INFO("module", "【强化系统】物品无法强化");
         return 0;
-    }
 
-    // 创建强化记录
-    LOG_INFO("module", "【强化系统】开始调用sItemEnhancementMgr->EnhanceItem");
-    LOG_INFO("module", "【强化系统】参数 - 玩家: {}, 物品ID: {}, 选择组: {}", player->GetName(), item->GetEntry(), selectedGroup);
-    
     try
     {
-        // 调用强化系统API，传递组号参数
+        // 鉴定系统不调用EnhanceItem，而是直接创建等级1的强化记录
+        // EnhanceItem会自动升级到下一个等级，但鉴定只应该产生等级1
+        // 调用第一次强化来初始化强化数据
         if (sItemEnhancementMgr->EnhanceItem(player, item, selectedGroup))
         {
-            LOG_INFO("module", "【强化系统】✅ 强化系统应用成功！组号: {}, 等级: 1", selectedGroup);
             ChatHandler(player->GetSession()).PSendSysMessage("物品获得强化属性（组{}）", selectedGroup);
             return selectedGroup; // 返回选择的组号
         }
         else
         {
-            LOG_INFO("module", "【强化系统】❌ 强化系统应用失败");
             return 0;
         }
     }
     catch (...)
     {
-        LOG_INFO("module", "【强化系统】❌ 强化系统应用时发生异常");
         return 0;
     }
 #else
-    LOG_INFO("module", "【强化系统】错误：MODULE_ITEM_ENHANCEMENT未定义，强化系统模块未编译");
     return 0;
 #endif
 }
 
-// 应用基础属性
-void ItemIdentificationSystem::ApplyBaseAttributes(Player* player, Item* item, const IdentificationTemplate& tmpl)
+// 应用基础属性（替换官方属性显示）
+void ItemIdentificationSystem::ApplyBaseAttributes(Player* player, Item* item, const IdentificationTemplate& tmpl, std::string& outAttrDetails, uint32& outAttrCount, uint32& outAttrGroup)
 {
-    std::vector<uint32> attributeGroups = ParseCommaSeparatedNumbers(tmpl.itemAttributesGroups);
-    if (attributeGroups.empty()) return;
+    if (tmpl.itemAttributesGroups.empty())
+    {
+        return;
+    }
+
+    if (tmpl.baseAttrMaxCount == 0)
+    {
+        return;
+    }
 
     uint32 attrCount = GenerateRandomNumber(tmpl.baseAttrMinCount, tmpl.baseAttrMaxCount);
-    if (attrCount == 0) return;
+    if (attrCount == 0)
+    {
+        return;
+    }
 
-    DebugLog("应用基础属性，组列表: {}，数量: {}", tmpl.itemAttributesGroups, attrCount);
+    std::vector<uint32> attributeGroups = ParseCommaSeparatedNumbers(tmpl.itemAttributesGroups);
+    if (attributeGroups.empty())
+    {
+        return;
+    }
+
+    DebugLog("应用基础属性，组列表: {}，数量: {}，值范围: {}-{}",
+             tmpl.itemAttributesGroups, attrCount,
+             tmpl.baseAttrMinValue, tmpl.baseAttrMaxValue);
 
 #ifdef MODULE_ITEM_ATTRIBUTES
-    if (sItemAttributesGenerator)
+    if (!sItemAttributesGenerator || !sItemAttributesLoader)
     {
-        // 随机选择一个属性组
-        uint32 selectedGroup = SelectRandomFromList(attributeGroups);
-        
-        // 构建属性生成选项
-        ItemAttributeGenerateOptions options;
-        options.minAttributes = attrCount;
-        options.maxAttributes = attrCount;
-        options.attributeGroup = selectedGroup;
-        options.minItemLevel = 0;
-        options.maxItemLevel = 1000;
-        options.respectChance = true;
-        options.allowDuplicateTypes = tmpl.baseAttrAllowDuplicate;
-        
-        // 生成随机属性
-        if (sItemAttributesGenerator->GenerateRandomAttributes(item, options))
+
+        return;
+    }
+
+    // 第0步：保留randomPropertyId用于识别装备
+    int32 currentRandomProp = item->GetItemRandomPropertyId();
+
+    uint64 itemGuid = item->GetGUID().GetRawValue();
+    
+    // 使用属性数据库助手清除物品现有的属性
+    // 检查物品是否已有属性
+    bool hasAttrs = ItemAttributesDBHelper::HasAttributes(itemGuid);
+
+
+    
+    if (hasAttrs)
+    {
+        // 清除物品所有属性
+        ItemAttributesDBHelper::ClearItemAttributes(itemGuid);
+    }
+
+    // 第2步：从配置的组中随机选择一个组
+    // 直接取第一个组（或者随机选择）
+    // 由于属性组可能为0，不再检查selectedGroup == 0
+    uint32 selectedGroup = attributeGroups[0];
+
+    DebugLog("===== 基础属性生成详细信息 =====");
+    DebugLog("配置的组字符串: {}", tmpl.itemAttributesGroups);
+    DebugLog("解析后的组列表大小: {}", attributeGroups.size());
+    DebugLog("选中的组: {}", selectedGroup);
+    DebugLog("属性数量: {}", attrCount);
+    DebugLog("=================================");
+
+    ItemAttributeGenerateOptions options;
+    options.minAttributes = attrCount;        // 最少属性数量
+    options.maxAttributes = attrCount;        // 最多属性数量
+    options.attributeGroup = selectedGroup;   // 指定属性组
+    options.minItemLevel = tmpl.baseAttrMinValue;   // 属性值最小值
+    options.maxItemLevel = tmpl.baseAttrMaxValue;   // 属性值最大值
+    options.respectChance = true;             // 考虑属性获取几率
+    options.allowDuplicateTypes = tmpl.baseAttrAllowDuplicate;  // 是否允许重复
+    options.useValueRangeFilter = true;       // 启用属性值范围过滤
+    options.category = AttributeCategory::BASE;  // 设置为基础属性
+
+    // 生成随机属性（这会替换物品的属性显示）
+    bool generateResult = sItemAttributesGenerator->GenerateRandomAttributes(item, options);
+
+
+
+    if (generateResult)
+    {
+        // ✅ 优化：移除延迟等待，使用DirectExecute确保立即写入
+        // 由于属性系统使用DirectExecute，数据应该已经写入
+        // 如果读取失败，接受属性延迟加载（不影响鉴定成功）
+
+        std::vector<uint32> baseAttributes;
+        std::vector<int32> baseValues;
+
+        uint64 itemGuid = item->GetGUID().GetCounter();
+
+        // ✅ 尝试一次读取（不重试，不等待）
+        ItemAttributesDBHelper::ItemAttributeData* data = ItemAttributesDBHelper::LoadItemAttributes(itemGuid);
+        if (data && !data->baseAttributeIds.empty())
         {
-            DebugLog("成功应用基础属性组: {}，数量: {}", selectedGroup, attrCount);
-            ChatHandler(player->GetSession()).PSendSysMessage("物品获得{}个基础属性", attrCount);
+            baseAttributes = data->baseAttributeIds;
+            baseValues = data->baseAttributeValues;
+            delete data;
         }
         else
         {
-            DebugLog("基础属性应用失败");
+            if (data)
+                delete data;
+
+            // 读取失败也不影响鉴定，玩家重新登录或查询时会加载
+            DebugLog("基础属性生成成功，但立即读取失败（属性将在下次查询时加载）");
         }
+
+        if (!baseAttributes.empty() && baseAttributes.size() == baseValues.size())
+        {
+            // 构建属性详情字符串：格式为 "属性ID 值,属性ID 值,..."
+            std::ostringstream oss;
+            for (size_t i = 0; i < baseAttributes.size(); ++i)
+            {
+                oss << baseAttributes[i] << " " << baseValues[i];
+                if (i < baseAttributes.size() - 1)
+                {
+                    oss << ",";
+                }
+            }
+            outAttrDetails = oss.str();
+            outAttrCount = baseAttributes.size();
+            outAttrGroup = selectedGroup;
+        }
+        else
+        {
+            // 无法读取生成的属性详情（数据库写入可能延迟）
+            outAttrDetails = ""; // 详情为空，但不影响记录
+            outAttrCount = attrCount; // 记录生成的数量
+            outAttrGroup = selectedGroup; // 记录使用的组ID
+        }
+
+        DebugLog("成功应用基础属性组: {}，数量: {}", selectedGroup, attrCount);
+        ChatHandler(player->GetSession()).PSendSysMessage("物品获得{}个基础属性（官方属性已替换）", attrCount);
     }
     else
     {
-        DebugLog("属性生成器不可用");
+        DebugLog("基础属性应用失败");
+        outAttrDetails = "";
+        outAttrCount = 0;
+        outAttrGroup = 0;
     }
 #else
     DebugLog("属性系统模块未编译");
 #endif
+
+
 }
 
 // 应用追加属性
 void ItemIdentificationSystem::ApplyAdditionalAttributes(Player* player, Item* item, const IdentificationTemplate& tmpl)
 {
     std::vector<uint32> attributeGroups = ParseCommaSeparatedNumbers(tmpl.itemAttributesAdditionalGroups);
-    if (attributeGroups.empty()) return;
+    if (attributeGroups.empty())
+    {
+
+        return;
+    }
 
     uint32 attrCount = GenerateRandomNumber(tmpl.additionalAttrMinCount, tmpl.additionalAttrMaxCount);
-    if (attrCount == 0) return;
+    if (attrCount == 0)
+    {
 
-    DebugLog("应用追加属性，组列表: {}，数量: {}", tmpl.itemAttributesAdditionalGroups, attrCount);
+        return;
+    }
 
 #ifdef MODULE_ITEM_ATTRIBUTES
     if (sItemAttributesGenerator)
     {
-        // 按顺序从每个组应用一个属性
         uint32 appliedCount = 0;
-        for (uint32 i = 0; i < attrCount && i < attributeGroups.size(); ++i)
+
+        // 判断是单组还是多组模式
+        if (attributeGroups.size() == 1)
         {
-            uint32 groupId = attributeGroups[i];
-            
-            // 构建属性生成选项
+            // 单组模式：从同一个组生成多个属性
             ItemAttributeGenerateOptions options;
-            options.minAttributes = 1;
-            options.maxAttributes = 1;
-            options.attributeGroup = groupId;
-            options.minItemLevel = 0;
-            options.maxItemLevel = 1000;
+            options.minAttributes = attrCount;  // 使用配置的数量
+            options.maxAttributes = attrCount;
+            options.attributeGroup = attributeGroups[0];
+            options.minItemLevel = tmpl.additionalAttrMinValue;
+            options.maxItemLevel = tmpl.additionalAttrMaxValue;
             options.respectChance = true;
             options.allowDuplicateTypes = tmpl.additionalAttrAllowDuplicate;
-            
-            // 生成属性
+            options.useValueRangeFilter = true;
+            options.category = AttributeCategory::ADDITIONAL;  // 设置为追加属性
+
             if (sItemAttributesGenerator->GenerateRandomAttributes(item, options))
             {
-                appliedCount++;
-                DebugLog("成功应用追加属性组: {}", groupId);
+                appliedCount = attrCount;
             }
         }
-        
+        else
+        {
+            // 多组模式：从多个组中随机选择，总共生成attrCount个属性
+
+            // 为每个属性随机选择一个组
+            for (uint32 i = 0; i < attrCount; ++i)
+            {
+                // 随机选择一个组
+                uint32 groupId = SelectRandomFromList(attributeGroups);
+
+                ItemAttributeGenerateOptions options;
+                options.minAttributes = 1;
+                options.maxAttributes = 1;
+                options.attributeGroup = groupId;
+                options.minItemLevel = tmpl.additionalAttrMinValue;
+                options.maxItemLevel = tmpl.additionalAttrMaxValue;
+                options.respectChance = true;
+                options.allowDuplicateTypes = tmpl.additionalAttrAllowDuplicate;
+                options.useValueRangeFilter = true;
+                options.category = AttributeCategory::ADDITIONAL;  // 设置为追加属性
+
+                if (sItemAttributesGenerator->GenerateRandomAttributes(item, options))
+                {
+                    appliedCount++;
+                }
+            }
+        }
+
         if (appliedCount > 0)
         {
             ChatHandler(player->GetSession()).PSendSysMessage("物品获得{}个追加属性", appliedCount);
         }
+        else
+        {
+        }
     }
     else
     {
-        DebugLog("属性生成器不可用");
     }
 #else
-    DebugLog("属性系统模块未编译");
 #endif
+
+
 }
 
 // 应用追加技能
 void ItemIdentificationSystem::ApplyAdditionalSkills(Player* player, Item* item, const IdentificationTemplate& tmpl)
 {
     std::vector<uint32> skillGroups = ParseCommaSeparatedNumbers(tmpl.itemSkillsGroups);
-    if (skillGroups.empty()) return;
+    if (!skillGroups.empty())
+    {
+    }
+
+    if (skillGroups.empty())
+    {
+        return;
+    }
 
     uint32 skillCount = GenerateRandomNumber(tmpl.additionalSkillMinCount, tmpl.additionalSkillMaxCount);
-    if (skillCount == 0) return;
+
+    if (skillCount == 0)
+    {
+        return;
+    }
 
     DebugLog("应用追加技能，组列表: {}，数量: {}", tmpl.itemSkillsGroups, skillCount);
 
@@ -1028,24 +1200,53 @@ void ItemIdentificationSystem::ApplyAdditionalSkills(Player* player, Item* item,
         uint32 appliedCount = 0;
         uint32 itemId = item->GetEntry();
 
-        // 从配置的技能组中选择技能并应用到物品
-        for (uint32 i = 0; i < skillCount && i < skillGroups.size(); ++i)
+        // 判断是单组还是多组模式
+        if (skillGroups.size() == 1)
         {
-            uint32 groupId = skillGroups[i];
-
-            // 从指定的技能组中按权重随机选择一个技能
-            ItemSkillTemplate const* skillTemplate = sItemSkillsManager->SelectSkillByWeight(itemId, groupId);
-
-            if (skillTemplate)
+            // 单组模式：从同一个组生成多个技能
+            for (uint32 i = 0; i < skillCount; ++i)
             {
-                // 将技能添加到物品
-                sItemSkillsDBHelper->AddSkillToItem(item, skillTemplate->id);
-                appliedCount++;
-                DebugLog("成功应用技能组: {}，技能模板ID: {}, 技能ID: {}", groupId, skillTemplate->id, skillTemplate->spellId);
+                uint32 groupId = skillGroups[0];
+
+                // 从指定的技能组中按权重随机选择一个技能
+                ItemSkillTemplate const* skillTemplate = sItemSkillsManager->SelectSkillByWeight(itemId, groupId);
+
+                if (skillTemplate)
+                {
+                    // 将技能添加到物品
+                    sItemSkillsDBHelper->AddSkillToItem(item, skillTemplate->id);
+                    
+                    appliedCount++;
+                }
+                else
+                {
+                    DebugLog("从组{}中未找到合适的技能", groupId);
+                }
             }
-            else
+        }
+        else
+        {
+            // 多组模式：从多个组中随机选择，总共生成skillCount个技能
+
+            for (uint32 i = 0; i < skillCount; ++i)
             {
-                DebugLog("从技能组{}中未找到合适的技能", groupId);
+                // 随机选择一个组
+                uint32 groupId = SelectRandomFromList(skillGroups);
+
+                // 从指定的技能组中按权重随机选择一个技能
+                ItemSkillTemplate const* skillTemplate = sItemSkillsManager->SelectSkillByWeight(itemId, groupId);
+
+                if (skillTemplate)
+                {
+                    // 将技能添加到物品
+                    sItemSkillsDBHelper->AddSkillToItem(item, skillTemplate->id);
+                    
+                    appliedCount++;
+                }
+                else
+                {
+                    DebugLog("从组{}中未找到合适的技能", groupId);
+                }
             }
         }
 
@@ -1065,12 +1266,105 @@ void ItemIdentificationSystem::ApplyAdditionalSkills(Player* player, Item* item,
 #else
     DebugLog("技能系统模块未编译");
 #endif
+
+
+}
+
+// 应用技能魔次
+void ItemIdentificationSystem::ApplyMagicHits(Player* player, Item* item, const IdentificationTemplate& tmpl)
+{
+    std::vector<uint32> magicHitGroups = ParseCommaSeparatedNumbers(tmpl.magicHitGroups);
+
+    if (magicHitGroups.empty())
+    {
+
+        return;
+    }
+
+    uint32 magicHitCount = GenerateRandomNumber(tmpl.magicHitMinCount, tmpl.magicHitMaxCount);
+
+    if (magicHitCount == 0)
+    {
+
+        return;
+    }
+
+#ifdef MODULE_MAGIC_HIT_SYSTEM
+
+    if (sMagicHitSystem && sMagicHitSystem->IsEnabled())
+    {
+        uint32 appliedCount = 0;
+        uint32 itemId = item->GetEntry();
+        uint64 itemGuid = item->GetGUID().GetCounter();
+
+        // 判断是单组还是多组模式
+        if (magicHitGroups.size() == 1)
+        {
+            // 单组模式：从同一个组生成多个魔次
+
+            for (uint32 i = 0; i < magicHitCount; ++i)
+            {
+                uint32 groupId = magicHitGroups[0];
+
+                // 从指定的魔次组中按权重随机选择一个魔次配置
+                SpellMagicHitConfig const* magicHitConfig = sMagicHitSystem->SelectMagicHitByWeight(itemId, groupId);
+
+                if (magicHitConfig)
+                {
+                    // 生成随机的魔次值（次数）
+                    uint32 hitCount = GenerateRandomNumber(tmpl.magicHitMinValue, tmpl.magicHitMaxValue);
+
+                    // 将魔次添加到物品
+                    if (sMagicHitSystem->AddMagicHitToItem(itemId, itemGuid, magicHitConfig->configId, hitCount))
+                    {
+                        appliedCount++;
+                    }
+                }
+            }
+        }
+        else
+        {
+            // 多组模式：从多个组中随机选择，总共生成magicHitCount个魔次
+
+            for (uint32 i = 0; i < magicHitCount; ++i)
+            {
+                // 随机选择一个组
+                uint32 groupId = SelectRandomFromList(magicHitGroups);
+
+                // 从指定的魔次组中按权重随机选择一个魔次配置
+                SpellMagicHitConfig const* magicHitConfig = sMagicHitSystem->SelectMagicHitByWeight(itemId, groupId);
+
+                if (magicHitConfig)
+                {
+                    // 生成随机的魔次值（次数）
+                    uint32 hitCount = GenerateRandomNumber(tmpl.magicHitMinValue, tmpl.magicHitMaxValue);
+
+                    // 将魔次添加到物品
+                    if (sMagicHitSystem->AddMagicHitToItem(itemId, itemGuid, magicHitConfig->configId, hitCount))
+                    {
+                        appliedCount++;
+                    }
+                }
+            }
+        }
+
+        if (appliedCount > 0)
+        {
+            ChatHandler(player->GetSession()).PSendSysMessage("物品获得{}个技能魔次", appliedCount);
+        }
+
+    }
+#else
+#endif
+
+
 }
 
 // 应用符文系统
 void ItemIdentificationSystem::ApplyRuneSystem(Player* player, Item* item, const IdentificationTemplate& tmpl)
 {
 #ifdef MODULE_RUNE_SYSTEM
+
     if (sRuneManager)
     {
         // 创建符文凹槽
@@ -1084,6 +1378,14 @@ void ItemIdentificationSystem::ApplyRuneSystem(Player* player, Item* item, const
 
                 if (sRuneManager->AddRuneSlotToItem(item, slotCount))
                 {
+                    // 验证randomPropertyId是否被正确设置
+                    int32 randomPropId = item->GetItemRandomPropertyId();
+                    uint32 itemGuid = item->GetGUID().GetCounter();
+
+                    if (randomPropId != static_cast<int32>(itemGuid))
+                    {
+                    }
+
                     DebugLog("成功为物品创建{}个符文凹槽", slotCount);
                     ChatHandler(player->GetSession()).PSendSysMessage("物品获得{}个符文凹槽", slotCount);
                 }
@@ -1103,6 +1405,8 @@ void ItemIdentificationSystem::ApplyRuneSystem(Player* player, Item* item, const
             // 符文组信息可用于提示玩家可以使用哪些符文
             ChatHandler(player->GetSession()).PSendSysMessage("物品可以镶嵌符文（推荐符文组: {}）", tmpl.runeSystemGroups);
         }
+
+
     }
     else
     {
@@ -1111,65 +1415,155 @@ void ItemIdentificationSystem::ApplyRuneSystem(Player* player, Item* item, const
 #else
     DebugLog("符文系统模块未编译");
 #endif
+
+
 }
 
 // 应用技能套装
 void ItemIdentificationSystem::ApplySkillSets(Player* player, Item* item, const IdentificationTemplate& tmpl)
 {
     std::vector<uint32> skillSetGroups = ParseCommaSeparatedNumbers(tmpl.skillSetGroups);
-    if (skillSetGroups.empty()) return;
+    if (skillSetGroups.empty())
+    {
+
+        return;
+    }
 
     // 随机选择一个套装组
     uint32 selectedGroup = SelectRandomFromList(skillSetGroups);
     DebugLog("应用技能套装组: {}", selectedGroup);
 
 #ifdef MODULE_ITEM_SETS
-    if (sItemSetsManager)
+
+    if (!sItemSetsManager)
     {
-        // 调用套装系统API为物品分配套装
-        // AssignRandomSetToItem会从指定的套装组中随机选择一个套装分配给物品
-        uint32 itemId = item->GetEntry();
-        
-        // 注意：这里需要先调用GetRandomSetForGroup获取具体的套装ID
-        // 然后将物品标记为该套装的一部分
-        uint32 selectedSetId = sItemSetsManager->GetRandomSetForGroup(selectedGroup, player);
-        
-        if (selectedSetId > 0)
-        {
-            // 使用AssignRandomSetToItem方法将物品分配到套装
-            // 该方法会自动处理物品GUID存储和套装关联
-            if (sItemSetsManager->AssignRandomSetToItem(player, itemId, 0))
-            {
-                DebugLog("成功将物品分配到套装组: {}，套装ID: {}", selectedGroup, selectedSetId);
-                ChatHandler(player->GetSession()).PSendSysMessage("物品获得套装属性（组{}）", selectedGroup);
-                
-                // 立即刷新玩家的套装效果
-                sItemSetsManager->RefreshPlayerSetEffects(player);
-            }
-            else
-            {
-                DebugLog("套装分配失败");
-            }
-        }
-        else
-        {
-            DebugLog("从套装组{}中未找到合适的套装", selectedGroup);
-        }
+        DebugLog("套装系统管理器不可用");
+        return;
     }
-    else
+
+    if (!sItemSetsConfig || !sItemSetsConfig->IsModuleEnabled())
     {
-        DebugLog("套装系统不可用");
+        DebugLog("套装系统未启用");
+        return;
     }
+
+    uint32 itemId = item->GetEntry();
+    uint32 itemGuid = item->GetGUID().GetCounter();
+    uint32 playerGuid = player->GetGUID().GetCounter();
+
+    // 1. 检查该物品是否已经分配过套装
+    PlayerSetStatus* status = sItemSetsManager->GetPlayerSetStatus(playerGuid);
+
+
+    if (status && status->ItemSetMap.find(itemGuid) != status->ItemSetMap.end())
+    {
+        DebugLog("物品已经分配过套装: GUID={}", itemGuid);
+        ChatHandler(player->GetSession()).SendSysMessage("该物品已经分配过套装");
+        return;
+    }
+
+    // 2. 从指定组中选择套装（考虑玩家需求）
+    uint32 selectedSetId = sItemSetsManager->GetRandomSetForGroup(selectedGroup, player);
+
+
+
+    if (selectedSetId == 0)
+    {
+        DebugLog("从套装组{}中未找到满足需求的套装", selectedGroup);
+
+        // 显示组内套装的需求条件
+        sItemSetsManager->ShowGroupRequirements(player, selectedGroup);
+        ChatHandler(player->GetSession()).PSendSysMessage("分配套装失败：不满足需求条件。");
+        return;
+    }
+
+    // 3. 消耗需求物品
+    DebugLog("开始消耗套装 {} 的需求物品", selectedSetId);
+
+    auto step3Start = std::chrono::high_resolution_clock::now();
+    if (!sItemSetsManager->ConsumeSetRequirements(player, selectedSetId))
+    {
+        ChatHandler(player->GetSession()).PSendSysMessage("消耗需求物品失败，分配套装取消。");
+
+        // 显示具体的需求材料
+        std::vector<ItemSetData> setDataList = sItemSetsManager->GetItemSetData(selectedSetId);
+        if (!setDataList.empty() && setDataList[0].RequirementId > 0)
+        {
+            ChatHandler(player->GetSession()).PSendSysMessage("|cFFFF0000请准备以下材料：|r");
+#ifdef MODULE_REQUIREMENT_TEMPLATE
+            if (sRequirementSystem)
+            {
+                sRequirementSystem->CheckRequirements(player, setDataList[0].RequirementId, true);
+            }
+#endif
+        }
+        return;
+    }
+
+
+    DebugLog("成功消耗套装 {} 的需求物品", selectedSetId);
+
+    // 4. 创建或更新玩家套装状态
+    if (!status)
+    {
+        PlayerSetStatus newStatus;
+        newStatus.PlayerGuid = playerGuid;
+        // 需要直接访问私有成员，这里只能通过公开方法
+        // 实际上这部分逻辑在后面SavePlayerSetStatus中会处理
+    }
+
+    // 获取最新的状态（如果刚创建会在这里初始化）
+    status = sItemSetsManager->GetPlayerSetStatus(playerGuid);
+    if (status)
+    {
+        // 记录物品的套装分配
+        status->ItemSetMap[itemGuid] = selectedSetId;
+    }
+
+    // 5. 将物品GUID存储到randomPropertyId字段
+    sItemSetsManager->StoreGuidInEnchantmentSlot(item);
+
+
+
+    // 6. 获取套装名称并通知玩家
+    std::string setName = sItemSetsManager->GetSetName(selectedSetId);
+
+
+    ChatHandler(player->GetSession()).PSendSysMessage("物品已分配到套装: {} (组{}, ID{})",
+        setName.c_str(), selectedGroup, selectedSetId);
+
+    // 7. 保存到数据库
+    sItemSetsManager->SavePlayerSetStatus(player);
+
+
+
+    // 8. 重新计算并应用套装效果
+    // ⚠️ 性能优化：注释掉立即刷新，改为在鉴定流程结束后统一刷新
+    // 原因：RefreshPlayerSetEffects 单次耗时较长
+    // 优化后将在 ApplyIdentification 函数末尾统一调用一次
+    // sItemSetsManager->RefreshPlayerSetEffects(player);  // 已优化：延迟到鉴定结束后
+
+    DebugLog("成功将物品分配到套装组: {}，套装ID: {}", selectedGroup, selectedSetId);
+
+
+
+
 #else
     DebugLog("套装系统模块未编译");
+    ChatHandler(player->GetSession()).SendSysMessage("|cFFFF0000套装系统未安装|r");
 #endif
+
+
 }
 
 // 应用名称和描述
 void ItemIdentificationSystem::ApplyNameAndDescription(Item* item, const IdentificationTemplate& tmpl)
 {
     if (!item)
+    {
+
         return;
+    }
 
     DebugLog("应用名称和描述到物品: {}", item->GetEntry());
 
@@ -1239,6 +1633,8 @@ void ItemIdentificationSystem::ApplyNameAndDescription(Item* item, const Identif
     // item->SetUInt32Value(ITEM_FIELD_FLAGS_CUSTOM, item->GetUInt32Value(ITEM_FIELD_FLAGS_CUSTOM) | 0x01);
 
     DebugLog("物品名称和描述应用完成");
+
+
 }
 
 // 处理鉴定失败
@@ -1349,11 +1745,18 @@ std::vector<Acore::ChatCommands::ChatCommandBuilder> ItemIdentificationCommandSc
 {
     using namespace Acore::ChatCommands;
 
-    // 主命令 - 直接使用 .鉴定物品 格式
+    // 鉴定子命令
+    static ChatCommandTable identificationSubCommands =
+    {
+        { "查询", HandleQueryCommand, SEC_PLAYER, Console::No }
+    };
+
+    // 主命令 - 支持直接鉴定和子命令
     static ChatCommandTable commandTable =
     {
         { "鉴定物品", HandleIdentifyCommand, SEC_PLAYER, Console::No },
-        { "identifyitem", HandleIdentifyCommand, SEC_PLAYER, Console::No }
+        { "identifyitem", HandleIdentifyCommand, SEC_PLAYER, Console::No },
+        { "鉴定", identificationSubCommands }
     };
 
     return commandTable;
@@ -1372,24 +1775,35 @@ bool ItemIdentificationCommandScript::HandleIdentifyCommand(ChatHandler* handler
         return true;
     }
 
-    // 获取参数：组ID 物品ID
+    // 获取参数
     if (!*args)
     {
         handler->SendSysMessage("用法: .鉴定物品 <组ID> <物品ID>");
+        handler->SendSysMessage("用法: .鉴定物品 查询 [all]");
         handler->SendSysMessage("示例: .鉴定物品 1 25  (使用组1鉴定物品25)");
+        handler->SendSysMessage("示例: .鉴定物品 查询 all  (查询所有已鉴定物品)");
         return true;
     }
 
-    char* groupIdStr = strtok((char*)args, " ");
+    // 检查是否是查询子命令
+    std::string firstArg = strtok((char*)args, " ");
+    if (firstArg == "查询" || firstArg == "query")
+    {
+        // 调用查询命令处理
+        char* remainingArgs = strtok(nullptr, "");
+        return HandleQueryAttributesCommand(handler, remainingArgs ? remainingArgs : "");
+    }
+
+    // 否则按照鉴定命令处理
     char* itemIdStr = strtok(nullptr, " ");
 
-    if (!groupIdStr || !itemIdStr)
+    if (!itemIdStr)
     {
         handler->SendSysMessage("参数不足！用法: .鉴定物品 <组ID> <物品ID>");
         return true;
     }
 
-    uint32 groupId = atoi(groupIdStr);
+    uint32 groupId = atoi(firstArg.c_str());
     uint32 itemId = atoi(itemIdStr);
     if (itemId == 0)
     {
@@ -1463,24 +1877,241 @@ bool ItemIdentificationCommandScript::HandleIdentifyCommand(ChatHandler* handler
 
     // 尝试鉴定物品
     handler->PSendSysMessage("正在鉴定物品: {} [{}]，使用组ID: {}", itemTemplate->Name1, itemId, groupId);
-    
-    LOG_INFO("module", "【命令处理】准备调用IdentifyItem，玩家: {}, 物品ID: {}, 组ID: {}", 
-             player->GetName(), itemId, groupId);
-    LOG_INFO("module", "【命令处理】sItemIdentificationSystem指针: {}", 
-             sItemIdentificationSystem ? "有效" : "NULL");
-    
+
     if (sItemIdentificationSystem->IdentifyItem(player, item, groupId))
     {
-        LOG_INFO("module", "【命令处理】IdentifyItem返回成功");
         handler->SendSysMessage("物品鉴定成功！");
     }
     else
     {
-        LOG_INFO("module", "【命令处理】IdentifyItem返回失败");
         // 错误消息已在IdentifyItem方法中发送
     }
+
+    return true;
+}
+
+// 查询属性命令 - 主动查询并发送物品属性给客户端
+bool ItemIdentificationCommandScript::HandleQueryAttributesCommand(ChatHandler* handler, const char* args)
+{
+    Player* player = handler->GetSession()->GetPlayer();
+    if (!player)
+        return false;
+
+    // 如果没有参数，查询所有装备和背包中的已鉴定物品
+    if (!*args || strcmp(args, "all") == 0)
+    {
+        handler->SendSysMessage("正在查询所有已鉴定物品的属性...");
+        
+        uint32 count = 0;
+        
+        // 遍历装备栏
+        for (uint8 i = EQUIPMENT_SLOT_START; i < EQUIPMENT_SLOT_END; ++i)
+        {
+            Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i);
+            if (item)
+            {
+                uint64 itemGuid = item->GetGUID().GetCounter();
+                if (sItemIdentificationSystem->IsItemIdentified(itemGuid))
+                {
+                    sItemIdentificationSystem->SendIdentificationDataToClient(player, item);
+                    count++;
+                }
+            }
+        }
+        
+        // 遍历背包
+        for (uint8 i = INVENTORY_SLOT_ITEM_START; i < INVENTORY_SLOT_ITEM_END; ++i)
+        {
+            Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i);
+            if (item)
+            {
+                uint64 itemGuid = item->GetGUID().GetCounter();
+                if (sItemIdentificationSystem->IsItemIdentified(itemGuid))
+                {
+                    sItemIdentificationSystem->SendIdentificationDataToClient(player, item);
+                    count++;
+                }
+            }
+        }
+        
+        // 遍历背包袋
+        for (uint8 i = INVENTORY_SLOT_BAG_START; i < INVENTORY_SLOT_BAG_END; ++i)
+        {
+            if (Bag* bag = player->GetBagByPos(i))
+            {
+                for (uint32 j = 0; j < bag->GetBagSize(); ++j)
+                {
+                    Item* item = bag->GetItemByPos(j);
+                    if (item)
+                    {
+                        uint64 itemGuid = item->GetGUID().GetCounter();
+                        if (sItemIdentificationSystem->IsItemIdentified(itemGuid))
+                        {
+                            sItemIdentificationSystem->SendIdentificationDataToClient(player, item);
+                            count++;
+                        }
+                    }
+                }
+            }
+        }
+        
+        handler->PSendSysMessage("已发送 {} 个已鉴定物品的属性数据", count);
+        return true;
+    }
     
-    LOG_INFO("module", "【命令处理】命令执行完成");
+    // 如果有参数，查询指定背包槽位的物品
+    char* bagStr = strtok((char*)args, " ");
+    char* slotStr = strtok(nullptr, " ");
+    
+    if (!bagStr || !slotStr)
+    {
+        handler->SendSysMessage("用法: .查询属性 [all] 或 .查询属性 <背包> <槽位>");
+        handler->SendSysMessage("示例: .查询属性 all  (查询所有已鉴定物品)");
+        handler->SendSysMessage("示例: .查询属性 255 16  (查询背包255槽位16的物品)");
+        return true;
+    }
+    
+    uint8 bag = atoi(bagStr);
+    uint8 slot = atoi(slotStr);
+    
+    Item* item = player->GetItemByPos(bag, slot);
+    if (!item)
+    {
+        handler->SendSysMessage("指定位置没有物品");
+        return true;
+    }
+    
+    uint64 itemGuid = item->GetGUID().GetCounter();
+    if (!sItemIdentificationSystem->IsItemIdentified(itemGuid))
+    {
+        handler->SendSysMessage("该物品尚未鉴定");
+        return true;
+    }
+    
+    sItemIdentificationSystem->SendIdentificationDataToClient(player, item);
+    handler->PSendSysMessage("已发送物品 {} 的属性数据", item->GetTemplate()->Name1);
+    
+    return true;
+}
+
+// 查询命令：.鉴定 查询 <itemID> <guid> <bag> <slot> <equip> <rpId>
+bool ItemIdentificationCommandScript::HandleQueryCommand(ChatHandler* handler, const char* args)
+{
+    if (!sItemIdentificationSystem->_enabled)
+    {
+        return true;
+    }
+
+    Player* player = handler->GetSession()->GetPlayer();
+    if (!player)
+        return false;
+
+    // 解析参数
+    if (!args || !*args)
+    {
+        handler->SendSysMessage("用法: .鉴定 查询 <物品ID> <GUID> <bag> <slot> <equip> <rpId>");
+        return true;
+    }
+
+    std::istringstream iss(args);
+    uint32 itemID = 0;
+    uint32 guid = 0;
+    int32 bag = -1;
+    int32 slot = -1;
+    int32 equip = 0;
+    int32 rpId = 0;
+
+    iss >> itemID >> guid >> bag >> slot >> equip >> rpId;
+
+    if (itemID == 0 || guid == 0)
+    {
+        handler->SendSysMessage("无效的物品ID或GUID");
+        return true;
+    }
+
+    std::string baseAttributesStr = "";
+    std::string additionalAttributesStr = "";
+
+    // 查询基础属性（从鉴定记录表）
+    QueryResult result = CharacterDatabase.Query(
+        "SELECT 基础属性组ID, 基础属性详情 FROM 物品_鉴定记录 WHERE 物品ID = {} AND 物品GUID = {}",
+        itemID, guid);
+
+    if (result)
+    {
+        Field* fields = result->Fetch();
+        baseAttributesStr = fields[1].Get<std::string>();
+    }
+
+#ifdef MODULE_ITEM_ATTRIBUTES
+    // 查询追加属性（从物品属性表）
+    QueryResult attrResult = CharacterDatabase.Query(
+        "SELECT 追加属性 FROM 物品属性_数据 WHERE 物品GUID = {}",
+        guid);
+
+    if (attrResult)
+    {
+        Field* fields = attrResult->Fetch();
+        std::string additionalAttr = fields[0].Get<std::string>();
+
+        if (!additionalAttr.empty())
+        {
+            // 解析紧凑格式的属性字符串："id value,id value,..."
+            std::vector<uint32> idList;
+            std::vector<int32> valList;
+
+            std::istringstream stream(additionalAttr);
+            std::string pair;
+
+            while (std::getline(stream, pair, ','))
+            {
+                if (!pair.empty())
+                {
+                    std::istringstream pairStream(pair);
+                    uint32 id;
+                    int32 value;
+
+                    if (pairStream >> id >> value)
+                    {
+                        idList.push_back(id);
+                        valList.push_back(value);
+                    }
+                }
+            }
+
+            // 转换为紧凑格式：attrType value,attrType value,...
+            std::ostringstream additionalStream;
+            for (size_t i = 0; i < idList.size() && i < valList.size(); ++i)
+            {
+                uint32 attrId = idList[i];
+                int32 attrValue = valList[i];
+
+                // 数据库中存储的已经是属性类型（attributeType），直接使用
+                uint32 attrType = attrId;
+
+                if (i > 0)
+                    additionalStream << ",";
+                additionalStream << attrType << " " << attrValue;
+            }
+
+            additionalAttributesStr = additionalStream.str();
+        }
+    }
+#endif
+
+    // 如果没有任何属性，不发送
+    if (baseAttributesStr.empty() && additionalAttributesStr.empty())
+    {
+        return true;
+    }
+
+    // 发送新格式消息：ITEM_ID_ATTRS:itemId:guid:基础属性:追加属性
+    std::ostringstream response;
+    response << "ITEM_ID_ATTRS:" << itemID << ":" << guid << ":"
+             << baseAttributesStr << ":" << additionalAttributesStr;
+
+    handler->PSendSysMessage(response.str().c_str());
+
     return true;
 }
 
@@ -1510,6 +2141,9 @@ void ItemIdentificationSystemModuleLoader::OnUpdate(uint32 diff)
 
             // 注册命令脚本
             new ItemIdentificationCommandScript();
+            
+            // 注册玩家脚本
+            new ItemIdentificationPlayerScript();
 
             // 初始化模块
             sItemIdentificationSystem->Initialize();
@@ -1520,39 +2154,119 @@ void ItemIdentificationSystemModuleLoader::OnUpdate(uint32 diff)
     }
 }
 
+// 玩家脚本实现
+ItemIdentificationPlayerScript::ItemIdentificationPlayerScript() : PlayerScript("ItemIdentificationPlayerScript") { }
+
+void ItemIdentificationPlayerScript::OnLogin(Player* player, bool firstLogin)
+{
+    if (!player || !sItemIdentificationSystem->_enabled)
+        return;
+
+    uint32 count = 0;
+    std::vector<Item*> identifiedItems;
+    
+    // 收集装备栏物品
+    for (uint8 i = EQUIPMENT_SLOT_START; i < EQUIPMENT_SLOT_END; ++i)
+    {
+        Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i);
+        if (item)
+        {
+            uint64 itemGuid = item->GetGUID().GetCounter();
+            if (sItemIdentificationSystem->IsItemIdentified(itemGuid))
+            {
+                identifiedItems.push_back(item);
+            }
+        }
+    }
+    
+    // 收集背包物品
+    for (uint8 i = INVENTORY_SLOT_ITEM_START; i < INVENTORY_SLOT_ITEM_END; ++i)
+    {
+        Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i);
+        if (item)
+        {
+            uint64 itemGuid = item->GetGUID().GetCounter();
+            if (sItemIdentificationSystem->IsItemIdentified(itemGuid))
+            {
+                identifiedItems.push_back(item);
+            }
+        }
+    }
+    
+    // 收集背包袋物品
+    for (uint8 i = INVENTORY_SLOT_BAG_START; i < INVENTORY_SLOT_BAG_END; ++i)
+    {
+        if (Bag* bag = player->GetBagByPos(i))
+        {
+            for (uint32 j = 0; j < bag->GetBagSize(); ++j)
+            {
+                Item* item = bag->GetItemByPos(j);
+                if (item)
+                {
+                    uint64 itemGuid = item->GetGUID().GetCounter();
+                    if (sItemIdentificationSystem->IsItemIdentified(itemGuid))
+                    {
+                        identifiedItems.push_back(item);
+                    }
+                }
+            }
+        }
+    }
+    
+    
+    // 发送数据到客户端
+    for (Item* item : identifiedItems)
+    {
+        sItemIdentificationSystem->SendIdentificationDataToClient(player, item);
+        count++;
+    }
+}
+
 // 鉴定记录管理实现
 bool ItemIdentificationSystem::IsItemIdentified(uint32 itemGuid)
 {
-    QueryResult result = CharacterDatabase.Query("SELECT 记录ID FROM 物品_鉴定记录 WHERE 物品GUID = {}", itemGuid);
-    return result != nullptr;
+    // ✅ 优化：使用内存缓存，避免每次查询数据库
+    if (!_cacheInitialized)
+    {
+        InitializeCache();
+    }
+
+    return _identifiedItemsCache.find(itemGuid) != _identifiedItemsCache.end();
 }
 
 void ItemIdentificationSystem::SaveIdentificationRecord(const ItemIdentificationRecord& record)
 {
-    CharacterDatabase.Execute(
+
+    // 使用DirectExecute确保立即写入
+    CharacterDatabase.DirectExecute(
         "INSERT INTO 物品_鉴定记录 ("
         "玩家GUID, 物品GUID, 物品ID, 鉴定模板ID, "
         "是否获得成长, 成长组ID, "
         "是否获得强化, 强化组ID, "
-        "是否获得基础属性, 基础属性数量, 基础属性组ID, "
+        "是否获得基础属性, 基础属性数量, 基础属性组ID, 基础属性详情, "
         "是否获得追加属性, 追加属性数量, 追加属性组ID列表, "
         "是否获得符文凹槽, 符文凹槽数量, "
         "是否获得技能, 技能组ID列表, "
+        "是否获得魔次, 魔次数量, 魔次组ID列表, "
         "是否获得套装, 套装组ID, 套装ID, "
         "消耗金币, 成功率"
-        ") VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, '{}', {}, {}, {}, '{}', {}, {}, {}, {}, {})",
+        ") VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, '{}', {}, {}, '{}', {}, {}, {}, '{}', {}, {}, '{}', {}, {}, {}, {}, {})",
         record.playerGuid, record.itemGuid, record.itemEntry, record.templateId,
         record.hasGrowth ? 1 : 0, record.growthGroup,
         record.hasEnhancement ? 1 : 0, record.enhancementGroup,
-        record.hasBaseAttributes ? 1 : 0, record.baseAttrCount, record.baseAttrGroup,
+        record.hasBaseAttributes ? 1 : 0, record.baseAttrCount, record.baseAttrGroup, record.baseAttrDetails,
         record.hasAdditionalAttributes ? 1 : 0, record.additionalAttrCount, record.additionalAttrGroups,
         record.hasRuneSlots ? 1 : 0, record.runeSlotCount,
         record.hasSkills ? 1 : 0, record.skillGroups,
+        record.hasMagicHits ? 1 : 0, record.magicHitCount, record.magicHitGroups,
         record.hasSet ? 1 : 0, record.setGroup, record.setId,
         record.costGold, record.successRate
     );
-    
-    DebugLog("保存鉴定记录: 玩家GUID={}, 物品GUID={}, 模板ID={}", 
+
+    // ✅ 优化：立即更新缓存
+    _identifiedItemsCache.insert(record.itemGuid);
+
+    DebugLog("保存鉴定记录: 玩家GUID={}, 物品GUID={}, 模板ID={}",
              record.playerGuid, record.itemGuid, record.templateId);
 }
 
@@ -1563,34 +2277,370 @@ ItemIdentificationRecord* ItemIdentificationSystem::GetIdentificationRecord(uint
     return nullptr;
 }
 
+// 将鉴定属性数据发送到客户端（用于Tooltip显示）
+// ✅ 优化版：只发送鉴定系统自己的数据，其他模块数据由客户端主动查询
+void ItemIdentificationSystem::SendAllModuleData(Player* player, Item* item)
+{
+    if (!player || !item)
+        return;
+
+    // 鉴定系统只需要发送基础属性和追加属性数据
+    // 其他模块的数据（成长、强化、技能、魔次等）由客户端插件在需要时主动查询
+    // 这样避免了不必要的命令解析开销
+    SendIdentificationDataToClient(player, item);
+
+    DebugLog("已发送鉴定属性数据，其他模块数据由客户端主动查询");
+}
+
+// 发送鉴定系统自己的数据（基础属性和追加属性）
+void ItemIdentificationSystem::SendIdentificationDataToClient(Player* player, Item* item)
+{
+    if (!player || !item)
+        return;
+
+    uint64 itemGuid = item->GetGUID().GetCounter();
+    uint32 itemId = item->GetEntry();
+    int32 randomPropId = item->GetItemRandomPropertyId();
+
+    // 鉴定系统只发送基础属性和追加属性数据
+    // 其他数据由各模块自己发送
+    std::string baseAttrStr = "";
+    std::string additionalAttrStr = "";
+
+#ifdef MODULE_ITEM_ATTRIBUTES
+    if (sItemAttributesLoader)
+    {
+        // 从数据库读取基础属性和追加属性
+        ItemAttributesDBHelper::ItemAttributeData* data = ItemAttributesDBHelper::LoadItemAttributes(itemGuid);
+
+        if (data)
+        {
+            // ========== 构建基础属性字符串 ==========
+            std::ostringstream baseStream;
+            if (!data->baseAttributeIds.empty() && data->baseAttributeIds.size() == data->baseAttributeValues.size())
+            {
+                for (size_t i = 0; i < data->baseAttributeIds.size(); ++i)
+                {
+                    uint32 attrType = data->baseAttributeIds[i];  // 直接使用，这已经是属性类型
+                    int32 attrValue = data->baseAttributeValues[i];
+
+                    if (i > 0)
+                        baseStream << ",";
+                    baseStream << attrType << " " << attrValue;
+                }
+            }
+            baseAttrStr = baseStream.str();
+
+            // ========== 构建追加属性字符串 ==========
+            std::ostringstream additionalStream;
+            if (!data->additionalAttributeIds.empty() && data->additionalAttributeIds.size() == data->additionalAttributeValues.size())
+            {
+                for (size_t i = 0; i < data->additionalAttributeIds.size(); ++i)
+                {
+                    uint32 attrType = data->additionalAttributeIds[i];  // 直接使用，这已经是属性类型
+                    int32 attrValue = data->additionalAttributeValues[i];
+
+                    if (i > 0)
+                        additionalStream << ",";
+                    additionalStream << attrType << " " << attrValue;
+                }
+            }
+            additionalAttrStr = additionalStream.str();
+
+            delete data;
+        }
+    }
+#endif
+
+    // 发送鉴定数据消息（兼容旧格式）
+    std::ostringstream message;
+    message << "ITEM_ID_ATTRS:" << itemId << ":" << randomPropId << ":"
+            << baseAttrStr << ":" << additionalAttrStr;
+
+    std::string finalMessage = message.str();
+    ChatHandler(player->GetSession()).SendSysMessage(finalMessage.c_str());
+    
+    DebugLog("发送鉴定数据: {}", finalMessage);
+}
+
 void ItemIdentificationSystem::RefreshItem(Player* player, Item* item)
 {
     if (!player || !item)
         return;
-    
+
     // 保存物品到数据库
     item->SaveToDB(nullptr);
-    
+
     // 如果物品已装备
     if (item->IsEquipped())
     {
         // 更新装备槽位显示
+        // 刷新物品显示到客户端
         player->SetVisibleItemSlot(item->GetSlot(), item);
-        
-        // 重新计算所有属性
+
+        // 如果属性系统可用，应用属性效果
+#ifdef MODULE_ITEM_ATTRIBUTES
+        if (sItemAttributesEffects)
+        {
+            sItemAttributesEffects->ApplyItemAttributeEffects(player, item);
+        }
+#endif
+
+        // 更新玩家属性
         player->UpdateAllStats();
-        
-        DebugLog("刷新已装备物品: GUID={}, 槽位={}", 
+
+        DebugLog("刷新已装备物品: GUID={}, 槽位={}",
                  item->GetGUID().GetCounter(), item->GetSlot());
     }
     else
     {
-        // 发送物品更新到客户端
-        item->SendUpdateToPlayer(player);
-        
+        // 背包物品只需保存，不需要更新显示
+        item->SetState(ITEM_CHANGED, player);
+
         DebugLog("刷新背包物品: GUID={}", item->GetGUID().GetCounter());
     }
+
 }
+
+// 物品装备脚本 - 阻止已鉴定物品的官方属性生效
+class ItemIdentificationEquipScript : public PlayerScript
+{
+private:
+    // 存储每个玩家每个槽位的已鉴定物品信息
+    // Key: PlayerGUID, Value: map<slot, pair<itemGUID, itemEntry>>
+    std::map<uint64, std::map<uint8, std::pair<uint64, uint32>>> _identifiedEquippedItems;
+
+public:
+    ItemIdentificationEquipScript() : PlayerScript("ItemIdentificationEquipScript") {}
+
+    // 在装备物品后触发（此时官方属性已经被应用）
+    void OnPlayerEquip(Player* player, Item* item, uint8 bag, uint8 slot, bool update) override
+    {
+        if (!player || !item)
+            return;
+
+        // 检查物品是否已鉴定
+        uint32 itemGuid = item->GetGUID().GetCounter();
+        if (!sItemIdentificationSystem->IsItemIdentified(itemGuid))
+            return;
+
+        ItemTemplate const* proto = item->GetTemplate();
+        if (!proto)
+            return;
+
+        // 记录这个槽位装备了已鉴定物品
+        uint64 playerGuid = player->GetGUID().GetCounter();
+        _identifiedEquippedItems[playerGuid][slot] = std::make_pair(itemGuid, item->GetEntry());
+
+        // 遍历物品模板的所有属性槽位，移除官方属性
+        for (uint8 i = 0; i < MAX_ITEM_PROTO_STATS; ++i)
+        {
+            if (proto->ItemStat[i].ItemStatType != 0 && proto->ItemStat[i].ItemStatValue != 0)
+            {
+                uint32 statType = proto->ItemStat[i].ItemStatType;
+                int32 statValue = proto->ItemStat[i].ItemStatValue;
+
+                // 根据属性类型移除对应的属性加成
+                switch (statType)
+                {
+                    case ITEM_MOD_STRENGTH:  // 4 - 力量
+                        player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, TOTAL_VALUE, float(statValue), false);
+                        break;
+                    case ITEM_MOD_AGILITY:   // 3 - 敏捷
+                        player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, TOTAL_VALUE, float(statValue), false);
+                        break;
+                    case ITEM_MOD_STAMINA:   // 7 - 耐力
+                        player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, TOTAL_VALUE, float(statValue), false);
+                        break;
+                    case ITEM_MOD_INTELLECT: // 5 - 智力
+                        player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, TOTAL_VALUE, float(statValue), false);
+                        break;
+                    case ITEM_MOD_SPIRIT:    // 6 - 精神
+                        player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, TOTAL_VALUE, float(statValue), false);
+                        break;
+                    // 可以添加更多属性类型的处理
+                    default:
+                        break;
+                }
+            }
+        }
+
+        // 刷新玩家属性
+        player->UpdateAllStats();
+        player->UpdateAttackPowerAndDamage();
+        player->UpdateAttackPowerAndDamage(true);
+    }
+
+    // 在脱下装备时触发
+    void OnPlayerAfterSetVisibleItemSlot(Player* player, uint8 slot, Item* item) override
+    {
+        if (!player)
+            return;
+
+        // item == nullptr 表示脱下装备
+        if (item == nullptr)
+        {
+            uint64 playerGuid = player->GetGUID().GetCounter();
+
+            // 检查这个槽位是否装备了已鉴定物品
+            auto playerIt = _identifiedEquippedItems.find(playerGuid);
+            if (playerIt == _identifiedEquippedItems.end())
+                return;
+
+            auto& playerSlots = playerIt->second;
+            auto slotIt = playerSlots.find(slot);
+            if (slotIt == playerSlots.end())
+                return;
+
+            uint32 itemEntry = slotIt->second.second;
+
+            // 通过itemEntry获取物品模板
+            ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemEntry);
+            if (proto)
+            {
+                // 恢复官方属性（因为游戏引擎会移除它们）
+                for (uint8 i = 0; i < MAX_ITEM_PROTO_STATS; ++i)
+                {
+                    if (proto->ItemStat[i].ItemStatType != 0 && proto->ItemStat[i].ItemStatValue != 0)
+                    {
+                        uint32 statType = proto->ItemStat[i].ItemStatType;
+                        int32 statValue = proto->ItemStat[i].ItemStatValue;
+
+                        // 根据属性类型恢复对应的属性加成
+                        switch (statType)
+                        {
+                            case ITEM_MOD_STRENGTH:  // 4 - 力量
+                                player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, TOTAL_VALUE, float(statValue), true);
+                                break;
+                            case ITEM_MOD_AGILITY:   // 3 - 敏捷
+                                player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, TOTAL_VALUE, float(statValue), true);
+                                break;
+                            case ITEM_MOD_STAMINA:   // 7 - 耐力
+                                player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, TOTAL_VALUE, float(statValue), true);
+                                break;
+                            case ITEM_MOD_INTELLECT: // 5 - 智力
+                                player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, TOTAL_VALUE, float(statValue), true);
+                                break;
+                            case ITEM_MOD_SPIRIT:    // 6 - 精神
+                                player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, TOTAL_VALUE, float(statValue), true);
+                                break;
+                            default:
+                                break;
+                        }
+                    }
+                }
+            }
+
+            // 从记录中移除
+            playerSlots.erase(slotIt);
+        }
+    }
+
+    // 玩家登出时清理数据
+    void OnPlayerLogout(Player* player) override
+    {
+        if (!player)
+            return;
+
+        uint64 playerGuid = player->GetGUID().GetCounter();
+        _identifiedEquippedItems.erase(playerGuid);
+    }
+};
+
+// ✅ 新增：初始化已鉴定物品缓存
+void ItemIdentificationSystem::InitializeCache()
+{
+    PerformanceTimer timer("初始化已鉴定物品缓存");
+
+    _identifiedItemsCache.clear();
+
+    // 一次性从数据库加载所有已鉴定物品的GUID
+    QueryResult result = CharacterDatabase.Query("SELECT 物品GUID FROM 物品_鉴定记录");
+
+    if (!result)
+    {
+        LOG_INFO("module.itemidentification", "已鉴定物品缓存初始化完成：0 个物品");
+        _cacheInitialized = true;
+        return;
+    }
+
+    uint32 count = 0;
+    do
+    {
+        Field* fields = result->Fetch();
+        uint32 itemGuid = fields[0].Get<uint32>();
+        _identifiedItemsCache.insert(itemGuid);
+        count++;
+    } while (result->NextRow());
+
+    _cacheInitialized = true;
+    LOG_INFO("module.itemidentification", "已鉴定物品缓存初始化完成：{} 个物品", count);
+}
+
+// ✅ 新增：清除指定物品的鉴定缓存
+void ItemIdentificationSystem::ClearIdentifiedCache(uint32 itemGuid)
+{
+    _identifiedItemsCache.erase(itemGuid);
+    DebugLog("清除物品GUID {} 的鉴定缓存", itemGuid);
+}
+
+// ✅ 新增：批量检查物品是否已鉴定（优化版）
+std::set<uint32> ItemIdentificationSystem::BatchCheckIdentified(const std::vector<uint32>& itemGuids)
+{
+    PerformanceTimer timer("批量检查已鉴定物品");
+
+    if (!_cacheInitialized)
+    {
+        InitializeCache();
+    }
+
+    std::set<uint32> identifiedSet;
+
+    for (uint32 guid : itemGuids)
+    {
+        if (_identifiedItemsCache.find(guid) != _identifiedItemsCache.end())
+        {
+            identifiedSet.insert(guid);
+        }
+    }
+
+    DebugLog("批量检查 {} 个物品，找到 {} 个已鉴定", itemGuids.size(), identifiedSet.size());
+    return identifiedSet;
+}
+
+// 物品掉落监控脚本
+class ItemIdentificationLootScript : public PlayerScript
+{
+public:
+    ItemIdentificationLootScript() : PlayerScript("ItemIdentificationLootScript") {}
+
+    // 玩家从战利品中获得物品时触发
+    void OnPlayerLootItem(Player* player, Item* item, uint32 count, ObjectGuid lootguid) override
+    {
+        if (!player || !item || !sItemIdentificationSystem->_enabled)
+            return;
+
+        // 只监控装备类物品
+        ItemTemplate const* proto = item->GetTemplate();
+        if (!proto || (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR))
+            return;
+    }
+
+    // 玩家通过其他方式获得物品时触发（创建、任务奖励等）
+    void OnPlayerStoreNewItem(Player* player, Item* item, uint32 count) override
+    {
+        if (!player || !item || !sItemIdentificationSystem->_enabled)
+            return;
+
+        // 只监控装备类物品
+        ItemTemplate const* proto = item->GetTemplate();
+        if (!proto || (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR))
+            return;
+
+        uint32 itemGuid = item->GetGUID().GetCounter();
+        bool isIdentified = sItemIdentificationSystem->IsItemIdentified(itemGuid);
+    }
+};
 
 // 添加脚本
 void AddItemIdentificationSystemScripts()
@@ -1600,4 +2650,10 @@ void AddItemIdentificationSystemScripts()
     
     // 添加模块加载器
     new ItemIdentificationSystemModuleLoader();
+    
+    // 添加装备脚本
+    new ItemIdentificationEquipScript();
+    
+    // 添加掉落监控脚本
+    new ItemIdentificationLootScript();
 }

@@ -21,6 +21,7 @@
 #include "CellImpl.h"
 #include "Chat.h"
 #include "Creature.h"
+#include "DatabaseEnv.h"
 #include "DynamicVisibility.h"
 #include "GameObjectAI.h"
 #include "GameTime.h"
@@ -28,6 +29,7 @@
 #include "Log.h"
 #include "MapMgr.h"
 #include "MiscPackets.h"
+#include "Player.h"
 #include "MovementPacketBuilder.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
@@ -637,6 +639,31 @@ bool Object::_LoadIntoDataField(std::string const& data, uint32 startOffset, uin
 void Object::SetInt32Value(uint16 index, int32 value)
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, true));
+
+    // Apply ranged attack power limit for players
+    if (index == UNIT_FIELD_RANGED_ATTACK_POWER && GetTypeId() == TYPEID_PLAYER)
+    {
+        Player* player = ToPlayer();
+        if (player)
+        {
+            QueryResult result = WorldDatabase.Query("SELECT `远程攻强上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
+            if (result)
+            {
+                Field* fields = result->Fetch();
+                uint32 apLimit = fields[0].Get<uint32>();
+                LOG_INFO("entities.player", "远程攻击强度拦截: 职业={}, 原值={}, 上限={}", player->getClass(), value, apLimit);
+                if (apLimit > 0 && value > apLimit)
+                {
+                    LOG_INFO("entities.player", "应用远程攻击强度上限: {} -> {}", value, apLimit);
+                    value = apLimit;
+                }
+            }
+            else
+            {
+                LOG_INFO("entities.player", "未找到远程攻击强度上限配置: 职业={}", player->getClass());
+            }
+        }
+    }
 
     if (m_int32Values[index] != value)
     {

@@ -38,7 +38,9 @@ AC_COMMON_API uint32 Acore::Time::TimeStringTo<Seconds>(std::string_view timestr
 
     for (char itr : timestring)
     {
-        if (isdigit(itr))
+        // 安全地检查字符，避免对非 ASCII 字符使用 isdigit
+        unsigned char uc = static_cast<unsigned char>(itr);
+        if (uc <= 127 && isdigit(uc))
         {
             buffer *= 10;
             buffer += itr - '0';

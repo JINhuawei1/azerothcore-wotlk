@@ -259,34 +259,9 @@ public:
 
     static bool HandleServerInfoCommand(ChatHandler* handler)
     {
-        std::string realmName = sWorld->GetRealmName();
-        uint32 playerCount = sWorldSessionMgr->GetPlayerCount();
-        uint32 activeSessionCount = sWorldSessionMgr->GetActiveSessionCount();
-        uint32 queuedSessionCount = sWorldSessionMgr->GetQueuedSessionCount();
-        uint32 connPeak = sWorldSessionMgr->GetMaxActiveSessionCount();
-
-        handler->PSendSysMessage("{}", GitRevision::GetFullVersion());
-        if (!queuedSessionCount)
-            handler->PSendSysMessage("Connected players: {}. Characters in world: {}.", activeSessionCount, playerCount);
-        else
-            handler->PSendSysMessage("Connected players: {}. Characters in world: {}. Queue: {}.", activeSessionCount, playerCount, queuedSessionCount);
-
-        handler->PSendSysMessage("Connection peak: {}.", connPeak);
-        handler->PSendSysMessage(LANG_UPTIME, secsToTimeString(GameTime::GetUptime().count()));
-        handler->PSendSysMessage("Update time diff: {}ms. Last {} diffs summary:", sWorldUpdateTime.GetLastUpdateTime(), sWorldUpdateTime.GetDatasetSize());
-        handler->PSendSysMessage("|- Mean: {}ms", sWorldUpdateTime.GetAverageUpdateTime());
-        handler->PSendSysMessage("|- Median: {}ms", sWorldUpdateTime.GetPercentile(50));
-        handler->PSendSysMessage("|- Percentiles (95, 99, max): {}ms, {}ms, {}ms",
-                                 sWorldUpdateTime.GetPercentile(95),
-                                 sWorldUpdateTime.GetPercentile(99),
-                                 sWorldUpdateTime.GetPercentile(100));
-
-        //! Can't use sWorld->ShutdownMsg here in case of console command
-        if (sWorld->IsShuttingDown())
-            handler->PSendSysMessage(LANG_SHUTDOWN_TIMELEFT, secsToTimeString(sWorld->GetShutDownTimeLeft()).append("."));
-
         return true;
     }
+
     // Display the 'Message of the day' for the realm
     static bool HandleServerMotdCommand(ChatHandler* handler)
     {

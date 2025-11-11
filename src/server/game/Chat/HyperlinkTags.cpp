@@ -164,16 +164,44 @@ bool Acore::Hyperlinks::LinkTags::item::StoreTo(ItemLinkData& val, std::string_v
     }
     else if (randomPropertyId > 0)
     {
-        if (!val.Item->RandomProperty)
-            return false;
-
-        if (ItemRandomPropertiesEntry const* propEntry = sItemRandomPropertiesStore.LookupEntry(randomPropertyId))
+        // 关键修复：优先判断是否是成长装备/强化装备的GUID标识
+        // 成长装备使用两种ID格式：
+        // 1. 小值范围（1-1000）：直接存储的物品GUID
+        // 2. 大值范围（>= 1000000）：GUID + 偏移量（1000000）
+        // 标准DBC随机属性ID通常在 1-10000 范围，但有重叠
+        
+        // 判断是否是成长装备GUID：
+        // - 大值（>= 1000000）：明确是 GUID + 偏移量
+        // - 小值（< 1000）：可能是 GUID，也可能是 DBC ID
+        bool isPotentialGrowthGuid = (randomPropertyId >= 1000000) || (randomPropertyId < 1000);
+        
+        if (isPotentialGrowthGuid)
         {
+            // 成长装备/强化装备的GUID标识
+            // 不检查物品模板的 RandomProperty 标志
+            // 不检查DBC表
+            // 直接允许通过，让成长系统自行处理
+            val.RandomSuffix = nullptr;
+            val.RandomProperty = nullptr;
+            // 验证通过
+        }
+        else if (ItemRandomPropertiesEntry const* propEntry = sItemRandomPropertiesStore.LookupEntry(randomPropertyId))
+        {
+            // 标准随机属性：在DBC中找到了，且不在成长GUID范围内
+            // 此时检查物品是否支持随机属性
+            if (!val.Item->RandomProperty)
+                return false;  // 物品不支持随机属性，但链接中有DBC随机属性 → 验证失败
+                
             val.RandomSuffix = nullptr;
             val.RandomProperty = propEntry;
         }
         else
-            return false;
+        {
+            // 不在成长GUID范围，也不在DBC中
+            // 可能是其他系统使用的ID，允许通过
+            val.RandomSuffix = nullptr;
+            val.RandomProperty = nullptr;
+        }
     }
     else
     {
@@ -181,8 +209,13 @@ bool Acore::Hyperlinks::LinkTags::item::StoreTo(ItemLinkData& val, std::string_v
         val.RandomProperty = nullptr;
     }
 
-    if ((val.RandomSuffix && !val.RandomSuffixBaseAmount) || (val.RandomSuffixBaseAmount && !val.RandomSuffix))
-        return false;
+    // 修改验证逻辑：允许物品有seed但没有随机后缀（用于成长系统、强化系统等）
+    // 原逻辑：RandomSuffix和seed必须同时存在或同时不存在
+    // 新逻辑：只检查如果有RandomSuffix则必须有seed，但允许只有seed没有RandomSuffix
+    if (val.RandomSuffix && !val.RandomSuffixBaseAmount)
+        return false;  // 有随机后缀但没有seed → 验证失败
+    // 移除了 (val.RandomSuffixBaseAmount && !val.RandomSuffix) 条件
+    // 现在允许：有seed但没有随机后缀 → 验证通过（用于成长/强化装备）
 
     return true;
 }

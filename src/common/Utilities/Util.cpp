@@ -168,7 +168,9 @@ uint32 TimeStringToSecs(const std::string& timestring)
 
     for (std::string::const_iterator itr = timestring.begin(); itr != timestring.end(); ++itr)
     {
-        if (isdigit(*itr))
+        // 安全地检查字符，避免对非 ASCII 字符使用 isdigit
+        unsigned char uc = static_cast<unsigned char>(*itr);
+        if (uc <= 127 && isdigit(uc))
         {
             buffer *= 10;
             buffer += (*itr) - '0';
@@ -591,18 +593,42 @@ void Acore::Impl::HexStrToByteArray(std::string_view str, uint8* out, std::size_
 
 bool StringEqualI(std::string_view a, std::string_view b)
 {
-    return std::equal(a.begin(), a.end(), b.begin(), b.end(), [](char c1, char c2) { return std::tolower(c1) == std::tolower(c2); });
+    return std::equal(a.begin(), a.end(), b.begin(), b.end(), [](char c1, char c2) { 
+        // 安全地转换为 unsigned char 以避免断言错误
+        unsigned char uc1 = static_cast<unsigned char>(c1);
+        unsigned char uc2 = static_cast<unsigned char>(c2);
+        // 只对 ASCII 字符进行大小写转换
+        if (uc1 > 127 || uc2 > 127)
+            return c1 == c2;
+        return std::tolower(uc1) == std::tolower(uc2);
+    });
 }
 
 bool StringContainsStringI(std::string_view haystack, std::string_view needle)
 {
     return haystack.end() !=
-        std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end(), [](char c1, char c2) { return std::tolower(c1) == std::tolower(c2); });
+        std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end(), [](char c1, char c2) { 
+            // 安全地转换为 unsigned char 以避免断言错误
+            unsigned char uc1 = static_cast<unsigned char>(c1);
+            unsigned char uc2 = static_cast<unsigned char>(c2);
+            // 只对 ASCII 字符进行大小写转换
+            if (uc1 > 127 || uc2 > 127)
+                return c1 == c2;
+            return std::tolower(uc1) == std::tolower(uc2);
+        });
 }
 
 bool StringCompareLessI(std::string_view a, std::string_view b)
 {
-    return std::lexicographical_compare(a.begin(), a.end(), b.begin(), b.end(), [](char c1, char c2) { return std::tolower(c1) < std::tolower(c2); });
+    return std::lexicographical_compare(a.begin(), a.end(), b.begin(), b.end(), [](char c1, char c2) { 
+        // 安全地转换为 unsigned char 以避免断言错误
+        unsigned char uc1 = static_cast<unsigned char>(c1);
+        unsigned char uc2 = static_cast<unsigned char>(c2);
+        // 只对 ASCII 字符进行大小写转换
+        if (uc1 > 127 || uc2 > 127)
+            return c1 < c2;
+        return std::tolower(uc1) < std::tolower(uc2);
+    });
 }
 
 std::string GetTypeName(std::type_info const& info)

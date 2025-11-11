@@ -55,7 +55,7 @@ public:
             { "taxinode",      HandleGoTaxinodeCommand,          SEC_MODERATOR,  Console::No },
             { "trigger",       HandleGoTriggerCommand,           SEC_MODERATOR,  Console::No },
             { "zonexy",        HandleGoZoneXYCommand,            SEC_MODERATOR,  Console::No },
-            { "xyz",           HandleGoXYZCommand,               SEC_MODERATOR,  Console::No },
+            { "xyz",           HandleGoXYZCommand,               SEC_PLAYER,     Console::No },
             { "ticket",        HandleGoTicketCommand,            SEC_GAMEMASTER, Console::No },
             { "quest",         HandleGoQuestCommand,             SEC_MODERATOR,  Console::No },
         };

@@ -4403,6 +4403,27 @@ void Spell::SendSpellCooldown()
         return;
     }
 
+    // 模块支持：优先检查是否有模块设置的自定义冷却（通过特殊itemid=0xFFFFFFFF标记）
+    // 必须在TRIGGERED_IGNORE检查之前，因为模块会设置TRIGGERED标志+m_CastItem=nullptr
+    if (_player->HasSpellCooldown(m_spellInfo->Id))
+    {
+        auto& cooldowns = _player->GetSpellCooldownMap();
+        auto itr = cooldowns.find(m_spellInfo->Id);
+        if (itr != cooldowns.end())
+        {
+            uint32 itemid = itr->second.itemid;
+            // LOG_ERROR("spells", "[Core] 检测到冷却: SpellId={}, itemid=0x{:X}, 标记匹配={}", 
+            //     m_spellInfo->Id, itemid, (itemid == 0xFFFFFFFF ? "是" : "否"));
+            
+            if (itemid == 0xFFFFFFFF)
+            {
+                // 检测到模块自定义冷却标记，不添加官方冷却
+                // LOG_ERROR("spells", "[Core] 跳过官方冷却添加");
+                return;
+            }
+        }
+    }
+    
     // have infinity cooldown but set at aura apply
     // do not set cooldown for triggered spells (needed by reincarnation)
     if (m_spellInfo->IsCooldownStartedOnEvent()

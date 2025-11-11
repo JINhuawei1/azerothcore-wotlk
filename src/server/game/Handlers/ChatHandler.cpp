@@ -669,6 +669,19 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
 
                 break;
             }
+        case CHAT_MSG_ADDON:
+            {
+                // ADDON messages are used for addon-to-addon or addon-to-server communication
+                // Call script hook to allow modules to handle ADDON messages
+                if (!sScriptMgr->OnPlayerCanUseChat(sender, type, lang, msg))
+                {
+                    return;
+                }
+
+                sScriptMgr->OnPlayerChat(sender, type, lang, msg);
+
+                break;
+            }
         default:
             LOG_ERROR("network.opcode", "CHAT: unknown message type {}, lang: {}", type, lang);
             break;

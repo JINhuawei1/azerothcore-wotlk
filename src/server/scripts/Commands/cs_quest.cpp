@@ -257,12 +257,17 @@ public:
 
                 uint32 curItemCount = player->GetItemCount(id, true);
 
-                ItemPosCountVec dest;
-                uint8           msg = player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, id, count - curItemCount);
-                if (msg == EQUIP_ERR_OK)
+                // Only add items if player doesn't have enough
+                if (curItemCount < count)
                 {
-                    Item* item = player->StoreNewItem(dest, id, true);
-                    player->SendNewItem(item, count - curItemCount, true, false);
+                    uint32 needCount = count - curItemCount;
+                    ItemPosCountVec dest;
+                    uint8 msg = player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, id, needCount);
+                    if (msg == EQUIP_ERR_OK)
+                    {
+                        Item* item = player->StoreNewItem(dest, id, true);
+                        player->SendNewItem(item, needCount, true, false);
+                    }
                 }
             }
 

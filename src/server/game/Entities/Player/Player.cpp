@@ -5092,9 +5092,25 @@ float Player::GetTotalBaseModValue(BaseModGroup modGroup) const
 
 uint32 Player::GetShieldBlockValue() const
 {
-    float value = (m_auraBaseMod[SHIELD_BLOCK_VALUE][FLAT_MOD] + GetStat(STAT_STRENGTH) * 0.5f - 10) * m_auraBaseMod[SHIELD_BLOCK_VALUE][PCT_MOD];
+    float flatMod = m_auraBaseMod[SHIELD_BLOCK_VALUE][FLAT_MOD];
+    float pctMod = m_auraBaseMod[SHIELD_BLOCK_VALUE][PCT_MOD];
+    uint32 strength = GetStat(STAT_STRENGTH);
+
+    float value = (flatMod + strength * 0.5f - 10) * pctMod;
 
     value = (value < 0) ? 0 : value;
+
+    // Apply block value limits from database
+    QueryResult result = WorldDatabase.Query("SELECT `格挡值上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+    if (result)
+    {
+        Field* fields = result->Fetch();
+        float blockValueLimit = fields[0].Get<float>();
+        if (blockValueLimit > 0.0f && value > blockValueLimit)
+        {
+            value = blockValueLimit;
+        }
+    }
 
     return uint32(value);
 }
@@ -5164,9 +5180,18 @@ void Player::GetDodgeFromAgility(float& diminishing, float& nondiminishing)
     float base_agility = GetCreateStat(STAT_AGILITY) * m_auraModifiersGroup[UNIT_MOD_STAT_START + static_cast<uint16>(STAT_AGILITY)][BASE_PCT];
     float bonus_agility = GetStat(STAT_AGILITY) - base_agility;
 
+    // Apply agility to dodge conversion rate from database
+    float agilityToDodgeRate = 1.0f; // Default 100% conversion rate
+    QueryResult result = WorldDatabase.Query("SELECT `敏捷转躲闪转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `敏捷转躲闪转换率` > 0 ORDER BY `class_` DESC LIMIT 1", getClass());
+    if (result)
+    {
+        Field* fields = result->Fetch();
+        agilityToDodgeRate = fields[0].Get<float>() / 100.0f; // Convert percentage to decimal
+    }
+
     // calculate diminishing (green in char screen) and non-diminishing (white) contribution
-    diminishing = 100.0f * bonus_agility * dodgeRatio->ratio * crit_to_dodge[pclass - 1];
-    nondiminishing = 100.0f * (dodge_base[pclass - 1] + base_agility * dodgeRatio->ratio * crit_to_dodge[pclass - 1]);
+    diminishing = 100.0f * bonus_agility * dodgeRatio->ratio * crit_to_dodge[pclass - 1] * agilityToDodgeRate;
+    nondiminishing = 100.0f * (dodge_base[pclass - 1] + base_agility * dodgeRatio->ratio * crit_to_dodge[pclass - 1] * agilityToDodgeRate);
 }
 
 float Player::GetSpellCritFromIntellect()
@@ -5204,7 +5229,8 @@ float Player::GetRatingMultiplier(CombatRating cr) const
 
 float Player::GetRatingBonusValue(CombatRating cr) const
 {
-    return float(GetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + cr)) * GetRatingMultiplier(cr);
+    float ratingValue = float(GetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + cr));
+    return ratingValue * GetRatingMultiplier(cr);
 }
 
 float Player::GetExpertiseDodgeOrParryReduction(WeaponAttackType attType) const
@@ -10885,6 +10911,28 @@ uint32 Player::GetMaxPersonalArenaRatingRequirement(uint32 minarenaslot) const
 
 void Player::AddSpellAndCategoryCooldowns(SpellInfo const* spellInfo, uint32 itemId, Spell* spell, bool infinityCooldown)
 {
+    // 模块支持：检查是否有模块设置的自定义冷却（通过特殊itemid=0xFFFFFFFF标记）
+    if (HasSpellCooldown(spellInfo->Id))
+    {
+        auto& cooldowns = GetSpellCooldownMap();
+        auto itr = cooldowns.find(spellInfo->Id);
+        if (itr != cooldowns.end() && itr->second.itemid == 0xFFFFFFFF)
+        {
+            // 检测到模块自定义冷却标记，完全阻止官方冷却
+            LOG_ERROR("spells", "[Core-AddSpellAndCategory] 检测到自定义冷却标记0xFFFFFFFF，完全阻止添加官方冷却: SpellId={}", spellInfo->Id);
+            return;
+        }
+    }
+    
+    // 模块支持：检查是否有物品触发且正在冷却中，如果是则不覆盖
+    if (itemId && HasSpellCooldown(spellInfo->Id))
+    {
+        uint32 remainingMs = GetSpellCooldownDelay(spellInfo->Id);
+        LOG_ERROR("spells", "[Core-AddSpellAndCategory] 物品技能已在冷却中: SpellId={}, ItemId={}, 剩余={}ms, 跳过添加", 
+            spellInfo->Id, itemId, remainingMs);
+        return;
+    }
+    
     // init cooldown values
     uint32 cat   = 0;
     int32 rec    = -1;
@@ -11041,6 +11089,15 @@ void Player::AddSpellAndCategoryCooldowns(SpellInfo const* spellInfo, uint32 ite
 
 void Player::_AddSpellCooldown(uint32 spellid, uint16 categoryId, uint32 itemid, uint32 end_time, bool needSendToClient, bool forceSendToSpectator)
 {
+    // 模块支持：如果已有自定义冷却标记（0xFFFFFFFF），且新冷却不是自定义的，则阻止
+    auto itr = m_spellCooldowns.find(spellid);
+    if (itr != m_spellCooldowns.end() && itr->second.itemid == 0xFFFFFFFF && itemid != 0xFFFFFFFF)
+    {
+        // LOG_ERROR("spells", "[Core-_AddSpellCooldown] 检测到自定义冷却标记，阻止覆盖: SpellId={}, 旧itemid=0xFFFFFFFF, 新itemid={}", 
+        //     spellid, itemid);
+        return;
+    }
+    
     SpellCooldown sc;
     sc.end = GameTime::GetGameTimeMS().count() + end_time;
     sc.category = categoryId;
@@ -11071,6 +11128,14 @@ void Player::ModifySpellCooldown(uint32 spellId, int32 cooldown)
     SpellCooldowns::iterator itr = m_spellCooldowns.find(spellId);
     if (itr == m_spellCooldowns.end())
         return;
+
+    // 模块支持：阻止修改自定义冷却（itemid=0xFFFFFFFF）
+    if (itr->second.itemid == 0xFFFFFFFF)
+    {
+        LOG_ERROR("spells", "[Core-ModifySpellCooldown] 检测到自定义冷却标记，阻止修改: SpellId={}, cooldown={}", 
+            spellId, cooldown);
+        return;
+    }
 
     itr->second.end += cooldown;
 
@@ -13579,7 +13644,7 @@ LootItem* Player::StoreLootItem(uint8 lootSlot, Loot* loot, InventoryResult& msg
         if (loot->containerGUID)
             sLootItemStorage->RemoveStoredLootItem(loot->containerGUID, item->itemid, item->count, loot, item->itemIndex);
 
-        sScriptMgr->OnPlayerLootItem(this, newitem, item->count, this->GetLootGUID());
+        sScriptMgr->OnPlayerLootItem(this, newitem, item->count, loot->sourceWorldObjectGUID);
     }
     else
     {

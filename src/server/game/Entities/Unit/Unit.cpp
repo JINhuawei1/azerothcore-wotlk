@@ -29,6 +29,8 @@
 #include "ChatTextBuilder.h"
 #include "Common.h"
 #include "ConditionMgr.h"
+#include "Config.h"
+#include "DatabaseEnv.h"
 #include "Creature.h"
 #include "CreatureAIImpl.h"
 #include "CreatureGroups.h"
@@ -12013,6 +12015,21 @@ int32 Unit::SpellBaseDamageBonusDone(SpellSchoolMask schoolMask)
         for (AuraEffectList::const_iterator i = mDamageDonebyAP.begin(); i != mDamageDonebyAP.end(); ++i)
             if ((*i)->GetMiscValue() & schoolMask)
                 DoneAdvertisedBenefit += int32(CalculatePct(GetTotalAttackPowerValue(BASE_ATTACK), (*i)->GetAmount()));
+
+        // Apply ClassAttributes spell damage multiplier
+        if (sConfigMgr->GetOption<bool>("ClassAttributes.Enable", false))
+        {
+            QueryResult result = WorldDatabase.Query("SELECT `法强倍率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", ToPlayer()->getClass());
+            if (result)
+            {
+                Field* fields = result->Fetch();
+                float spellPowerMultiplier = fields[0].Get<float>();
+                if (spellPowerMultiplier != 100.0f && spellPowerMultiplier > 0.0f)
+                {
+                    DoneAdvertisedBenefit = int32(DoneAdvertisedBenefit * spellPowerMultiplier / 100.0f);
+                }
+            }
+        }
     }
     return DoneAdvertisedBenefit;
 }
@@ -12773,6 +12790,21 @@ int32 Unit::SpellBaseHealingBonusDone(SpellSchoolMask schoolMask)
         for (AuraEffectList::const_iterator i = mHealingDonebyAP.begin(); i != mHealingDonebyAP.end(); ++i)
             if ((*i)->GetMiscValue() & schoolMask)
                 AdvertisedBenefit += int32(CalculatePct(GetTotalAttackPowerValue(BASE_ATTACK), (*i)->GetAmount()));
+
+        // Apply ClassAttributes healing multiplier
+        if (sConfigMgr->GetOption<bool>("ClassAttributes.Enable", false))
+        {
+            QueryResult result = WorldDatabase.Query("SELECT `治疗倍率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", ToPlayer()->getClass());
+            if (result)
+            {
+                Field* fields = result->Fetch();
+                float healingMultiplier = fields[0].Get<float>();
+                if (healingMultiplier != 100.0f && healingMultiplier > 0.0f)
+                {
+                    AdvertisedBenefit = int32(AdvertisedBenefit * healingMultiplier / 100.0f);
+                }
+            }
+        }
     }
     return AdvertisedBenefit;
 }

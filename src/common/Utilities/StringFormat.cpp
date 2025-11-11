@@ -24,8 +24,12 @@ AC_COMMON_API Str Acore::String::Trim(const Str& s, const std::locale& loc /*= s
     typename Str::const_iterator first = s.begin();
     typename Str::const_iterator end = s.end();
 
-    while (first != end && std::isspace(*first, loc))
+    // 安全地检查空白字符，避免对非 ASCII 字符使用 isspace
+    while (first != end)
     {
+        unsigned char uc = static_cast<unsigned char>(*first);
+        if (uc > 127 || !std::isspace(uc, loc))
+            break;
         ++first;
     }
 
@@ -39,7 +43,10 @@ AC_COMMON_API Str Acore::String::Trim(const Str& s, const std::locale& loc /*= s
     do
     {
         --last;
-    } while (std::isspace(*last, loc));
+        unsigned char uc = static_cast<unsigned char>(*last);
+        if (uc > 127 || !std::isspace(uc, loc))
+            break;
+    } while (last != first);
 
     if (first != s.begin() || last + 1 != end)
     {
@@ -53,8 +60,12 @@ std::string Acore::String::TrimRightInPlace(std::string& str)
 {
     int pos = int(str.size()) - 1;
 
-    while (pos >= 0 && std::isspace(str[pos]))
+    // 安全地检查空白字符，避免对非 ASCII 字符使用 isspace
+    while (pos >= 0)
     {
+        unsigned char uc = static_cast<unsigned char>(str[pos]);
+        if (uc > 127 || !std::isspace(uc))
+            break;
         --pos;
     }
 

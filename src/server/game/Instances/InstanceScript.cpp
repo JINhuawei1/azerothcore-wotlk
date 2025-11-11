@@ -154,7 +154,9 @@ void InstanceScript::SetHeaders(std::string const& dataHeaders)
 {
     for (char header : dataHeaders)
     {
-        if (isalpha(header))
+        // 安全地检查字符，避免对非 ASCII 字符使用 isalpha
+        unsigned char uc = static_cast<unsigned char>(header);
+        if (uc <= 127 && isalpha(uc))
         {
             headers.push_back(header);
         }

@@ -285,7 +285,8 @@ target_link_libraries(modules
   PRIVATE
     acore-core-interface
   PUBLIC
-    game-interface)
+    game-interface
+    jsoncpp)
 
 target_include_directories(modules
   PUBLIC

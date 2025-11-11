@@ -43,7 +43,9 @@ void WorldSession::HandleJoinChannel(WorldPacket& recvPacket)
     if (channelName.empty())
         return;
 
-    if (isdigit(channelName[0]))
+    // 安全地检查字符，避免对非 ASCII 字符使用 isdigit
+    unsigned char firstChar = static_cast<unsigned char>(channelName[0]);
+    if (firstChar <= 127 && isdigit(firstChar))
         return;
 
     if (channelName.size() >= 100 || !DisallowHyperlinksAndMaybeKick(channelName))
