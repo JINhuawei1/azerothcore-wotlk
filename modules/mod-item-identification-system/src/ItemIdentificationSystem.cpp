@@ -1748,7 +1748,9 @@ std::vector<Acore::ChatCommands::ChatCommandBuilder> ItemIdentificationCommandSc
     // 鉴定子命令
     static ChatCommandTable identificationSubCommands =
     {
-        { "查询", HandleQueryCommand, SEC_PLAYER, Console::No }
+        { "查询", HandleQueryCommand, SEC_PLAYER, Console::No },
+        { "批量查询", HandleBatchQueryCommand, SEC_PLAYER, Console::No },  // ⭐ 新增批量查询命令
+        { "性能统计", HandlePerformanceStatsCommand, SEC_ADMINISTRATOR, Console::No }  // ⭐ 性能监控
     };
 
     // 主命令 - 支持直接鉴定和子命令
@@ -2032,85 +2034,116 @@ bool ItemIdentificationCommandScript::HandleQueryCommand(ChatHandler* handler, c
     std::string baseAttributesStr = "";
     std::string additionalAttributesStr = "";
 
-    // 查询基础属性（从鉴定记录表）
-    QueryResult result = CharacterDatabase.Query(
-        "SELECT 基础属性组ID, 基础属性详情 FROM 物品_鉴定记录 WHERE 物品ID = {} AND 物品GUID = {}",
-        itemID, guid);
+    // 优化：先从缓存读取
+    uint64 cacheKey = ((uint64)itemID << 32) | guid;
+    auto it = sItemIdentificationSystem->_attrCache.find(cacheKey);
 
-    if (result)
+    // 检查缓存是否有效
+    if (it != sItemIdentificationSystem->_attrCache.end() &&
+        (time(nullptr) - it->second.cacheTime) < sItemIdentificationSystem->ATTR_CACHE_EXPIRE_TIME)
     {
-        Field* fields = result->Fetch();
-        baseAttributesStr = fields[1].Get<std::string>();
+        // 缓存命中，直接使用
+        baseAttributesStr = it->second.baseAttributes;
+        additionalAttributesStr = it->second.additionalAttributes;
+
+        LOG_DEBUG("module.itemidentification", "[Query] 缓存命中: itemID={}, guid={}", itemID, guid);
     }
+    else
+    {
+        // 缓存未命中或已过期，查询数据库
+        LOG_DEBUG("module.itemidentification", "[Query] 缓存未命中，从数据库加载: itemID={}, guid={}", itemID, guid);
+
+        // 查询基础属性（从鉴定记录表）
+        QueryResult result = CharacterDatabase.Query(
+            "SELECT 基础属性组ID, 基础属性详情 FROM 物品_鉴定记录 WHERE 物品ID = {} AND 物品GUID = {}",
+            itemID, guid);
+
+        if (result)
+        {
+            Field* fields = result->Fetch();
+            baseAttributesStr = fields[1].Get<std::string>();
+        }
 
 #ifdef MODULE_ITEM_ATTRIBUTES
-    // 查询追加属性（从物品属性表）
-    QueryResult attrResult = CharacterDatabase.Query(
-        "SELECT 追加属性 FROM 物品属性_数据 WHERE 物品GUID = {}",
-        guid);
+        // 查询追加属性（从物品属性表）
+        QueryResult attrResult = CharacterDatabase.Query(
+            "SELECT 追加属性 FROM 物品属性_数据 WHERE 物品GUID = {}",
+            guid);
 
-    if (attrResult)
-    {
-        Field* fields = attrResult->Fetch();
-        std::string additionalAttr = fields[0].Get<std::string>();
-
-        if (!additionalAttr.empty())
+        if (attrResult)
         {
-            // 解析紧凑格式的属性字符串："id value,id value,..."
-            std::vector<uint32> idList;
-            std::vector<int32> valList;
+            Field* fields = attrResult->Fetch();
+            std::string additionalAttr = fields[0].Get<std::string>();
 
-            std::istringstream stream(additionalAttr);
-            std::string pair;
-
-            while (std::getline(stream, pair, ','))
+            if (!additionalAttr.empty())
             {
-                if (!pair.empty())
-                {
-                    std::istringstream pairStream(pair);
-                    uint32 id;
-                    int32 value;
+                // 解析紧凑格式的属性字符串："id value,id value,..."
+                std::vector<uint32> idList;
+                std::vector<int32> valList;
 
-                    if (pairStream >> id >> value)
+                std::istringstream stream(additionalAttr);
+                std::string pair;
+
+                while (std::getline(stream, pair, ','))
+                {
+                    if (!pair.empty())
                     {
-                        idList.push_back(id);
-                        valList.push_back(value);
+                        std::istringstream pairStream(pair);
+                        uint32 id;
+                        int32 value;
+
+                        if (pairStream >> id >> value)
+                        {
+                            idList.push_back(id);
+                            valList.push_back(value);
+                        }
                     }
                 }
+
+                // 转换为紧凑格式：attrType value,attrType value,...
+                std::ostringstream additionalStream;
+                for (size_t i = 0; i < idList.size() && i < valList.size(); ++i)
+                {
+                    uint32 attrId = idList[i];
+                    int32 attrValue = valList[i];
+
+                    // 数据库中存储的已经是属性类型（attributeType），直接使用
+                    uint32 attrType = attrId;
+
+                    if (i > 0)
+                        additionalStream << ",";
+                    additionalStream << attrType << " " << attrValue;
+                }
+
+                additionalAttributesStr = additionalStream.str();
             }
-
-            // 转换为紧凑格式：attrType value,attrType value,...
-            std::ostringstream additionalStream;
-            for (size_t i = 0; i < idList.size() && i < valList.size(); ++i)
-            {
-                uint32 attrId = idList[i];
-                int32 attrValue = valList[i];
-
-                // 数据库中存储的已经是属性类型（attributeType），直接使用
-                uint32 attrType = attrId;
-
-                if (i > 0)
-                    additionalStream << ",";
-                additionalStream << attrType << " " << attrValue;
-            }
-
-            additionalAttributesStr = additionalStream.str();
         }
-    }
 #endif
 
-    // 如果没有任何属性，不发送
-    if (baseAttributesStr.empty() && additionalAttributesStr.empty())
-    {
-        return true;
+        // 更新缓存
+        ItemIdentificationSystem::ItemAttrCache cache;
+        cache.itemID = itemID;
+        cache.guid = guid;
+        cache.baseAttributes = baseAttributesStr;
+        cache.additionalAttributes = additionalAttributesStr;
+        cache.cacheTime = time(nullptr);
+        sItemIdentificationSystem->_attrCache[cacheKey] = cache;
+
+        LOG_DEBUG("module.itemidentification", "[Query] 缓存已更新: itemID={}, guid={}", itemID, guid);
     }
 
+    // ✅ 优化：即使没有属性也要发送响应，避免客户端一直等待
     // 发送新格式消息：ITEM_ID_ATTRS:itemId:guid:基础属性:追加属性
     std::ostringstream response;
     response << "ITEM_ID_ATTRS:" << itemID << ":" << guid << ":"
              << baseAttributesStr << ":" << additionalAttributesStr;
 
     handler->PSendSysMessage(response.str().c_str());
+
+    LOG_DEBUG("module.itemidentification", "[Query] 发送响应: itemID={}, guid={}, 基础属性数={}, 追加属性数={}",
+              itemID, guid,
+              baseAttributesStr.empty() ? 0 : std::count(baseAttributesStr.begin(), baseAttributesStr.end(), ',') + 1,
+              additionalAttributesStr.empty() ? 0 : std::count(additionalAttributesStr.begin(), additionalAttributesStr.end(), ',') + 1);
 
     return true;
 }
@@ -2141,7 +2174,7 @@ void ItemIdentificationSystemModuleLoader::OnUpdate(uint32 diff)
 
             // 注册命令脚本
             new ItemIdentificationCommandScript();
-            
+
             // 注册玩家脚本
             new ItemIdentificationPlayerScript();
 
@@ -2152,6 +2185,16 @@ void ItemIdentificationSystemModuleLoader::OnUpdate(uint32 diff)
             LOG_INFO("server.loading", "→物品鉴定系统√");
         }
     }
+
+    // ⭐ 定期清理过期缓存（每5分钟执行一次）
+    static uint32 cacheCleanTimer = 0;
+    cacheCleanTimer += diff;
+
+    if (cacheCleanTimer >= 300000)  // 5分钟 = 300000ms
+    {
+        cacheCleanTimer = 0;
+        sItemIdentificationSystem->CleanExpiredCache();
+    }
 }
 
 // 玩家脚本实现
@@ -2161,6 +2204,10 @@ void ItemIdentificationPlayerScript::OnLogin(Player* player, bool firstLogin)
 {
     if (!player || !sItemIdentificationSystem->_enabled)
         return;
+
+    // ⭐ 直接预加载（不使用延迟，因为Player可能没有Scheduler）
+    // 预加载会在登录流程中异步执行，不会阻塞
+    sItemIdentificationSystem->PreloadPlayerEquipment(player);
 
     uint32 count = 0;
     std::vector<Item*> identifiedItems;
@@ -2647,13 +2694,702 @@ void AddItemIdentificationSystemScripts()
 {
     // 添加命令脚本
     new ItemIdentificationCommandScript();
-    
+
     // 添加模块加载器
     new ItemIdentificationSystemModuleLoader();
-    
+
     // 添加装备脚本
     new ItemIdentificationEquipScript();
-    
+
     // 添加掉落监控脚本
     new ItemIdentificationLootScript();
 }
+
+// ============================================================================
+// ⭐ 批量查询优化实现 - 解决客户端查询延迟问题
+// ============================================================================
+
+// 批量查询所有模块数据（核心方法）
+ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModuleData(uint32 itemID, uint32 guid)
+{
+    PerformanceTimer timer("批量查询所有模块数据");
+
+    AllModuleData result;
+    result.hasData = false;
+
+    // 检查是否已鉴定
+    if (!IsItemIdentified(guid))
+    {
+        DebugLog("[批量查询] 物品未鉴定: itemID={}, guid={}", itemID, guid);
+        return result;
+    }
+
+    // ========== 表存在性缓存（静态变量，只初始化一次）==========
+    static std::unordered_map<std::string, bool> tableCache;
+    static bool cacheInitialized = false;
+    
+    if (!cacheInitialized)
+    {
+        // 一次性检查所有需要的表
+        std::vector<std::string> tablesToCheck = {
+            "物品属性_数据", "物品_鉴定记录", "物品成长_玩家记录",
+            "物品强化_记录", "物品技能_数据", "魔次系统_数据",
+            "符文系统_数据", "玩家套装状态"
+        };
+        
+        for (const auto& tableName : tablesToCheck)
+        {
+            QueryResult result = CharacterDatabase.Query(
+                "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{}'",
+                tableName);
+            
+            tableCache[tableName] = (result && result->Fetch()[0].Get<uint32>() > 0);
+        }
+        
+        cacheInitialized = true;
+        LOG_INFO("module.itemidentification", "[批量查询] 表存在性缓存已初始化");
+    }
+
+    // ========== 辅助函数：从缓存检查表是否存在 ==========
+    auto TableExists = [](const std::string& tableName) -> bool {
+        auto it = tableCache.find(tableName);
+        return (it != tableCache.end() && it->second);
+    };
+
+    // ========== 1. 查询鉴定系统数据（基础属性+追加属性）- 合并查询优化 ==========
+    DebugLog("[批量查询] 开始查询鉴定系统: itemID={}, guid={}", itemID, guid);
+    if (TableExists("物品_鉴定记录"))
+    {
+        PerformanceTimer attrTimer("查询鉴定系统数据");
+        // 使用 LEFT JOIN 一次性查询两个表的数据，减少数据库往返
+        QueryResult attrResult = CharacterDatabase.Query(
+            "SELECT r.`基础属性详情`, IFNULL(a.`追加属性`, '') as `追加属性` "
+            "FROM `物品_鉴定记录` r "
+            "LEFT JOIN `物品属性_数据` a ON r.`物品GUID` = a.`物品GUID` "
+            "WHERE r.`物品GUID` = {}",
+            guid);
+
+        if (attrResult)
+        {
+            Field* fields = attrResult->Fetch();
+            std::string baseAttr = fields[0].Get<std::string>();
+            std::string additionalAttr = fields[1].Get<std::string>();
+
+            DebugLog("[批量查询-鉴定] 查询成功: 基础属性=[{}], 追加属性=[{}]", baseAttr, additionalAttr);
+
+            if (!baseAttr.empty())
+            {
+                result.baseAttributes = baseAttr;
+                result.hasData = true;
+            }
+
+            if (!additionalAttr.empty())
+            {
+                result.additionalAttributes = additionalAttr;
+                result.hasData = true;
+            }
+        }
+        else
+        {
+            DebugLog("[批量查询-鉴定] 查询失败或无数据");
+        }
+    }
+    else
+    {
+        DebugLog("[批量查询-鉴定] 表不存在: 物品_鉴定记录");
+    }
+
+    // ========== 2. 查询成长系统数据 ==========
+    DebugLog("[批量查询] 开始查询成长系统: itemID={}, guid={}", itemID, guid);
+    if (TableExists("物品成长_玩家记录"))
+    {
+        PerformanceTimer growthTimer("查询成长系统数据");
+        QueryResult growthResult = CharacterDatabase.Query(
+            "SELECT `当前等级`, `当前经验`, `升级经验`, `成长属性` FROM `物品成长_玩家记录` WHERE `物品GUID` = {}",
+            guid);
+
+        if (growthResult)
+        {
+            Field* fields = growthResult->Fetch();
+            uint32 level = fields[0].Get<uint32>();
+            uint32 currentExp = fields[1].Get<uint32>();
+            uint32 requiredExp = fields[2].Get<uint32>();
+            std::string attrs = fields[3].Get<std::string>();
+
+            // 格式：level|currentExp|requiredExp|attrs（使用|避免与主消息:冲突）
+            std::ostringstream growthStream;
+            growthStream << level << "|" << currentExp << "|" << requiredExp << "|" << attrs;
+            result.growthData = growthStream.str();
+            result.hasData = true;
+
+            DebugLog("[批量查询-成长] 查询成功: level={}, exp={}/{}, attrs=[{}], 结果=[{}]", 
+                     level, currentExp, requiredExp, attrs, result.growthData);
+        }
+        else
+        {
+            DebugLog("[批量查询-成长] 查询失败或无数据");
+        }
+    }
+    else
+    {
+        DebugLog("[批量查询-成长] 表不存在: 物品成长_玩家记录");
+    }
+
+    // ========== 3. 查询强化系统数据 ==========
+    DebugLog("[批量查询] 开始查询强化系统: itemID={}, guid={}", itemID, guid);
+    if (TableExists("物品强化_记录"))
+    {
+        PerformanceTimer enhanceTimer("查询强化系统数据");
+        QueryResult enhanceResult = CharacterDatabase.Query(
+            "SELECT `强化等级`, `属性值` FROM `物品强化_记录` WHERE `guid` = {}",
+            guid);
+
+        if (enhanceResult)
+        {
+            Field* fields = enhanceResult->Fetch();
+            uint32 level = fields[0].Get<uint32>();
+            std::string attrs = fields[1].Get<std::string>();
+
+            // 格式：level|attrs（使用|避免与主消息:冲突）
+            std::ostringstream enhanceStream;
+            enhanceStream << level << "|" << attrs;
+            result.enhancementData = enhanceStream.str();
+            result.hasData = true;
+
+            DebugLog("[批量查询-强化] 查询成功: level={}, attrs=[{}], 结果=[{}]", 
+                     level, attrs, result.enhancementData);
+        }
+        else
+        {
+            DebugLog("[批量查询-强化] 查询失败或无数据");
+        }
+    }
+    else
+    {
+        DebugLog("[批量查询-强化] 表不存在: 物品强化_记录");
+    }
+
+    // ========== 4. 查询技能系统数据 ==========
+    DebugLog("[批量查询] 开始查询技能系统: itemID={}, guid={}", itemID, guid);
+    if (TableExists("物品技能_数据"))
+    {
+        PerformanceTimer skillTimer("查询技能系统数据");
+        QueryResult skillResult = CharacterDatabase.Query(
+            "SELECT `技能ID`, `技能模板ID`, `技能触发类型` FROM `物品技能_数据` WHERE `物品GUID` = {}",
+            guid);
+
+        if (skillResult)
+        {
+            Field* fields = skillResult->Fetch();
+            std::string skillIds = fields[0].Get<std::string>();
+            std::string templateIds = fields[1].Get<std::string>();
+            std::string triggerTypes = fields[2].Get<std::string>();
+            
+            // 使用逗号分隔的技能ID作为数据
+            // 格式: "技能ID1,技能ID2,技能ID3"
+            result.skillsData = skillIds;
+            result.hasData = true;
+
+            DebugLog("[批量查询-技能] 查询成功: skillIds=[{}], templateIds=[{}], triggerTypes=[{}]", 
+                     skillIds, templateIds, triggerTypes);
+        }
+        else
+        {
+            DebugLog("[批量查询-技能] 查询失败或无数据");
+        }
+    }
+    else
+    {
+        DebugLog("[批量查询-技能] 表不存在: 物品技能_数据");
+    }
+
+    // ========== 5. 查询魔次系统数据 ==========
+    DebugLog("[批量查询] 开始查询魔次系统: itemID={}, guid={}", itemID, guid);
+    if (TableExists("魔次系统_数据"))
+    {
+        PerformanceTimer magicTimer("查询魔次系统数据");
+        QueryResult magicResult = CharacterDatabase.Query(
+            "SELECT `魔次系统ID`, `魔次值` FROM `魔次系统_数据` WHERE `物品GUID` = {}",
+            guid);
+
+        if (magicResult)
+        {
+            Field* fields = magicResult->Fetch();
+            std::string magicIds = fields[0].Get<std::string>();
+            std::string magicValues = fields[1].Get<std::string>();
+            
+            // 使用逗号分隔的魔次数据
+            // 格式: "魔次系统ID1,魔次系统ID2|魔次值1,魔次值2"
+            result.magicHitData = magicIds + "|" + magicValues;
+            result.hasData = true;
+
+            DebugLog("[批量查询-魔次] 查询成功: magicIds=[{}], magicValues=[{}], 结果=[{}]", 
+                     magicIds, magicValues, result.magicHitData);
+        }
+        else
+        {
+            DebugLog("[批量查询-魔次] 查询失败或无数据");
+        }
+    }
+    else
+    {
+        DebugLog("[批量查询-魔次] 表不存在: 魔次系统_数据");
+    }
+
+    // ========== 6. 查询符文系统数据 ==========
+    DebugLog("[批量查询] 开始查询符文系统: itemID={}, guid={}", itemID, guid);
+    if (TableExists("符文系统_数据"))
+    {
+        PerformanceTimer runeTimer("查询符文系统数据");
+        QueryResult runeResult = CharacterDatabase.Query(
+            "SELECT `插槽数量`, `插槽ID`, `符文物品ID` FROM `符文系统_数据` WHERE `物品GUID` = {}",
+            guid);
+
+        if (runeResult)
+        {
+            Field* fields = runeResult->Fetch();
+            uint32 slotCount = fields[0].Get<uint32>();
+            std::string slotIds = fields[1].Get<std::string>();
+            std::string runeItemIds = fields[2].Get<std::string>();
+
+            // 格式：插槽数量|插槽ID列表|符文物品ID列表（使用|避免与主消息:冲突）
+            std::ostringstream runeStream;
+            runeStream << slotCount << "|" << slotIds << "|" << runeItemIds;
+            result.runeData = runeStream.str();
+            result.hasData = true;
+
+            DebugLog("[批量查询-符文] 查询成功: slotCount={}, slotIds=[{}], runeItemIds=[{}], 结果=[{}]", 
+                     slotCount, slotIds, runeItemIds, result.runeData);
+        }
+        else
+        {
+            DebugLog("[批量查询-符文] 查询失败或无数据");
+        }
+    }
+    else
+    {
+        DebugLog("[批量查询-符文] 表不存在: 符文系统_数据");
+    }
+
+    // ========== 7. 查询套装系统数据 ==========
+    DebugLog("[批量查询] 开始查询套装系统: itemID={}, guid={}", itemID, guid);
+    if (TableExists("玩家套装状态"))
+    {
+        PerformanceTimer setTimer("查询套装系统数据");
+        QueryResult setResult = CharacterDatabase.Query(
+            "SELECT `套装ID` FROM `玩家套装状态` WHERE `物品GUID` = {}",
+            guid);
+
+        if (setResult)
+        {
+            Field* fields = setResult->Fetch();
+            uint32 setId = fields[0].Get<uint32>();
+
+            // 格式：套装ID
+            result.setData = std::to_string(setId);
+            result.hasData = true;
+
+            DebugLog("[批量查询-套装] 查询成功: setId={}, 结果=[{}]", setId, result.setData);
+        }
+        else
+        {
+            DebugLog("[批量查询-套装] 查询失败或无数据");
+        }
+    }
+    else
+    {
+        DebugLog("[批量查询-套装] 表不存在: 玩家套装状态");
+    }
+
+    // ========== 查询完成总结 ==========
+    DebugLog("[批量查询] 查询完成汇总: itemID={}, guid={}, hasData={}", itemID, guid, result.hasData);
+    DebugLog("[批量查询] 基础属性=[{}]", result.baseAttributes);
+    DebugLog("[批量查询] 追加属性=[{}]", result.additionalAttributes);
+    DebugLog("[批量查询] 成长数据=[{}]", result.growthData);
+    DebugLog("[批量查询] 强化数据=[{}]", result.enhancementData);
+    DebugLog("[批量查询] 技能数据=[{}]", result.skillsData);
+    DebugLog("[批量查询] 魔次数据=[{}]", result.magicHitData);
+    DebugLog("[批量查询] 符文数据=[{}]", result.runeData);
+    DebugLog("[批量查询] 套装数据=[{}]", result.setData);
+
+    DebugLog("[批量查询] 完成查询: itemID={}, guid={}, 有数据={}", itemID, guid, result.hasData);
+
+    return result;
+}
+
+// 批量查询命令处理器（一次性返回所有数据）
+void ItemIdentificationSystem::HandleBatchQueryCommand(Player* player, uint32 itemID, uint32 guid)
+{
+    if (!player)
+        return;
+
+    auto queryStart = std::chrono::high_resolution_clock::now();
+
+    // ⭐ 优先从缓存读取
+    uint64 cacheKey = ((uint64)itemID << 32) | guid;
+    auto it = _batchQueryCache.find(cacheKey);
+
+    AllModuleData data;
+    bool cacheHit = false;
+
+    // 更新统计：总查询次数
+    _perfStats.totalQueries++;
+
+    if (it != _batchQueryCache.end())
+    {
+        // 检查缓存是否过期
+        time_t now = time(nullptr);
+        if ((now - it->second.cacheTime) < BATCH_CACHE_EXPIRE_TIME)
+        {
+            // 缓存有效，直接使用
+            data = it->second.data;
+            cacheHit = true;
+            _perfStats.cacheHits++;  // 统计：缓存命中
+            DebugLog("[批量查询缓存] 缓存命中: itemID={}, guid={}", itemID, guid);
+        }
+        else
+        {
+            // 缓存过期，删除
+            _batchQueryCache.erase(it);
+            _perfStats.cacheMisses++;  // 统计：缓存未命中
+            DebugLog("[批量查询缓存] 缓存过期: itemID={}, guid={}", itemID, guid);
+        }
+    }
+    else
+    {
+        _perfStats.cacheMisses++;  // 统计：缓存未命中
+    }
+
+    if (!cacheHit)
+    {
+        // 缓存未命中，查询数据库
+        _perfStats.dbQueries++;  // 统计：数据库查询
+        data = QueryAllModuleData(itemID, guid);
+
+        // 存入缓存
+        BatchQueryCache cache;
+        cache.data = data;
+        cache.cacheTime = time(nullptr);
+        _batchQueryCache[cacheKey] = cache;
+
+        DebugLog("[批量查询缓存] 新数据已缓存: itemID={}, guid={}", itemID, guid);
+    }
+
+    // ⭐ 新格式消息：ALL_MODULE_DATA:itemID:guid:base:additional:growth:enhancement:skills:magic:rune:set
+    std::ostringstream response;
+    response << "ALL_MODULE_DATA:" << itemID << ":" << guid << ":"
+             << data.baseAttributes << ":"
+             << data.additionalAttributes << ":"
+             << data.growthData << ":"
+             << data.enhancementData << ":"
+             << data.skillsData << ":"
+             << data.magicHitData << ":"
+             << data.runeData << ":"
+             << data.setData;
+
+    // 发送前记录完整消息内容
+    DebugLog("[批量查询命令] 准备发送完整消息: [{}]", response.str());
+    DebugLog("[批量查询命令] 各字段详情:");
+    DebugLog("  - 基础属性: [{}]", data.baseAttributes);
+    DebugLog("  - 追加属性: [{}]", data.additionalAttributes);
+    DebugLog("  - 成长数据: [{}]", data.growthData);
+    DebugLog("  - 强化数据: [{}]", data.enhancementData);
+    DebugLog("  - 技能数据: [{}]", data.skillsData);
+    DebugLog("  - 魔次数据: [{}]", data.magicHitData);
+    DebugLog("  - 符文数据: [{}]", data.runeData);
+    DebugLog("  - 套装数据: [{}]", data.setData);
+
+    // 发送到客户端
+    ChatHandler(player->GetSession()).PSendSysMessage(response.str().c_str());
+
+    // 计算查询耗时
+    auto queryEnd = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(queryEnd - queryStart).count();
+    _perfStats.totalQueryTime += duration;
+    _perfStats.avgQueryTime = _perfStats.totalQueryTime / _perfStats.totalQueries;
+
+    DebugLog("[批量查询命令] 已发送数据: itemID={}, guid={}, 消息长度={}, 缓存命中={}, 耗时={}μs",
+             itemID, guid, response.str().length(), cacheHit, duration);
+}
+
+// 清理过期缓存
+void ItemIdentificationSystem::CleanExpiredCache()
+{
+    time_t now = time(nullptr);
+    uint32 cleanedAttr = 0;
+    uint32 cleanedBatch = 0;
+
+    // 清理属性缓存
+    for (auto it = _attrCache.begin(); it != _attrCache.end(); )
+    {
+        if ((now - it->second.cacheTime) >= ATTR_CACHE_EXPIRE_TIME)
+        {
+            it = _attrCache.erase(it);
+            cleanedAttr++;
+        }
+        else
+        {
+            ++it;
+        }
+    }
+
+    // 清理批量查询缓存
+    for (auto it = _batchQueryCache.begin(); it != _batchQueryCache.end(); )
+    {
+        if ((now - it->second.cacheTime) >= BATCH_CACHE_EXPIRE_TIME)
+        {
+            it = _batchQueryCache.erase(it);
+            cleanedBatch++;
+        }
+        else
+        {
+            ++it;
+        }
+    }
+
+    if (cleanedAttr > 0 || cleanedBatch > 0)
+    {
+        LOG_DEBUG("module.itemidentification", "[缓存清理] 属性缓存: {}, 批量缓存: {}",
+                  cleanedAttr, cleanedBatch);
+    }
+}
+
+// 批量查询命令处理函数
+bool ItemIdentificationCommandScript::HandleBatchQueryCommand(ChatHandler* handler, const char* args)
+{
+    if (!sItemIdentificationSystem->_enabled)
+        return true;
+
+    Player* player = handler->GetSession()->GetPlayer();
+    if (!player)
+        return false;
+
+    // 解析参数：.鉴定 批量查询 <物品ID> <GUID>
+    if (!args || !*args)
+    {
+        handler->SendSysMessage("用法: .鉴定 批量查询 <物品ID> <GUID>");
+        return true;
+    }
+
+    std::istringstream iss(args);
+    uint32 itemID = 0;
+    uint32 guid = 0;
+
+    iss >> itemID >> guid;
+
+    if (itemID == 0 || guid == 0)
+    {
+        handler->SendSysMessage("无效的物品ID或GUID");
+        return true;
+    }
+
+    // 执行批量查询
+    sItemIdentificationSystem->HandleBatchQueryCommand(player, itemID, guid);
+
+    return true;
+}
+
+// ============================================================================
+// ⭐ 高级优化功能实现
+// ============================================================================
+
+// 预加载玩家装备数据（登录时调用）
+void ItemIdentificationSystem::PreloadPlayerEquipment(Player* player)
+{
+    if (!player || !_enabled)
+        return;
+
+    PerformanceTimer timer("预加载玩家装备数据");
+
+    uint32 preloadCount = 0;
+    std::vector<std::pair<uint32, uint32>> itemsToPreload;  // <itemID, guid>
+
+    // 收集所有已鉴定的装备
+    for (uint8 i = EQUIPMENT_SLOT_START; i < EQUIPMENT_SLOT_END; ++i)
+    {
+        Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i);
+        if (item)
+        {
+            uint32 itemGuid = item->GetGUID().GetCounter();
+            if (IsItemIdentified(itemGuid))
+            {
+                itemsToPreload.push_back(std::make_pair(item->GetEntry(), itemGuid));
+            }
+        }
+    }
+
+    // 收集背包中的已鉴定装备
+    for (uint8 i = INVENTORY_SLOT_ITEM_START; i < INVENTORY_SLOT_ITEM_END; ++i)
+    {
+        Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i);
+        if (item)
+        {
+            uint32 itemGuid = item->GetGUID().GetCounter();
+            if (IsItemIdentified(itemGuid))
+            {
+                ItemTemplate const* proto = item->GetTemplate();
+                if (proto && (proto->Class == ITEM_CLASS_WEAPON || proto->Class == ITEM_CLASS_ARMOR))
+                {
+                    itemsToPreload.push_back(std::make_pair(item->GetEntry(), itemGuid));
+                }
+            }
+        }
+    }
+
+    // 收集背包袋中的已鉴定装备
+    for (uint8 i = INVENTORY_SLOT_BAG_START; i < INVENTORY_SLOT_BAG_END; ++i)
+    {
+        if (Bag* bag = player->GetBagByPos(i))
+        {
+            for (uint32 j = 0; j < bag->GetBagSize(); ++j)
+            {
+                Item* item = bag->GetItemByPos(j);
+                if (item)
+                {
+                    uint32 itemGuid = item->GetGUID().GetCounter();
+                    if (IsItemIdentified(itemGuid))
+                    {
+                        ItemTemplate const* proto = item->GetTemplate();
+                        if (proto && (proto->Class == ITEM_CLASS_WEAPON || proto->Class == ITEM_CLASS_ARMOR))
+                        {
+                            itemsToPreload.push_back(std::make_pair(item->GetEntry(), itemGuid));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 预加载数据到缓存
+    for (const auto& itemPair : itemsToPreload)
+    {
+        uint32 itemID = itemPair.first;
+        uint32 guid = itemPair.second;
+        uint64 cacheKey = ((uint64)itemID << 32) | guid;
+
+        // 检查是否已在缓存中
+        if (_batchQueryCache.find(cacheKey) == _batchQueryCache.end())
+        {
+            // 查询并缓存
+            AllModuleData data = QueryAllModuleData(itemID, guid);
+
+            BatchQueryCache cache;
+            cache.data = data;
+            cache.cacheTime = time(nullptr);
+            _batchQueryCache[cacheKey] = cache;
+
+            preloadCount++;
+        }
+    }
+
+    _perfStats.preloadCount += preloadCount;
+
+    LOG_INFO("module.itemidentification", "[预加载] 玩家 {} 预加载了 {} 个装备数据",
+             player->GetName(), preloadCount);
+
+    DebugLog("[预加载] 完成预加载: 玩家={}, 装备数量={}", player->GetName(), preloadCount);
+}
+
+// 重置性能统计
+void ItemIdentificationSystem::ResetPerformanceStats()
+{
+    _perfStats = PerformanceStats();
+    LOG_INFO("module.itemidentification", "[性能统计] 已重置统计数据");
+}
+
+// 性能统计命令处理函数
+bool ItemIdentificationCommandScript::HandlePerformanceStatsCommand(ChatHandler* handler, const char* args)
+{
+    if (!sItemIdentificationSystem->_enabled)
+    {
+        handler->SendSysMessage("物品鉴定系统当前已禁用");
+        return true;
+    }
+
+    const auto& stats = sItemIdentificationSystem->GetPerformanceStats();
+
+    handler->PSendSysMessage("|cff00ff00========== 鉴定系统性能统计 ==========|r");
+    handler->PSendSysMessage("总查询次数: |cffff8000{}|r", stats.totalQueries);
+    handler->PSendSysMessage("缓存命中: |cff00ff00{}|r 次 ({:.2f}%%)",
+                            stats.cacheHits, stats.GetCacheHitRate());
+    handler->PSendSysMessage("缓存未命中: |cffff0000{}|r 次 ({:.2f}%%)",
+                            stats.cacheMisses,
+                            stats.totalQueries > 0 ? (float)stats.cacheMisses / stats.totalQueries * 100.0f : 0.0f);
+    handler->PSendSysMessage("数据库查询: |cffffa500{}|r 次", stats.dbQueries);
+    handler->PSendSysMessage("平均查询时间: |cffadd8e6{:.2f}|r 毫秒",
+                            stats.avgQueryTime / 1000.0);
+    handler->PSendSysMessage("总查询时间: |cffadd8e6{:.2f}|r 秒",
+                            stats.totalQueryTime / 1000000.0);
+    handler->PSendSysMessage("预加载次数: |cff00ff00{}|r", stats.preloadCount);
+
+    // 运行时间
+    time_t now = time(nullptr);
+    uint32 runningTime = now - stats.startTime;
+    uint32 hours = runningTime / 3600;
+    uint32 minutes = (runningTime % 3600) / 60;
+    uint32 seconds = runningTime % 60;
+    handler->PSendSysMessage("运行时间: |cffffffff{}时{}分{}秒|r", hours, minutes, seconds);
+
+    // 缓存状态
+    handler->PSendSysMessage("|cff00ff00========== 缓存状态 ==========|r");
+    handler->PSendSysMessage("属性缓存大小: |cffadd8e6{}|r", sItemIdentificationSystem->GetAttrCacheSize());
+    handler->PSendSysMessage("批量查询缓存大小: |cffadd8e6{}|r", sItemIdentificationSystem->GetBatchQueryCacheSize());
+    handler->PSendSysMessage("已鉴定物品缓存: |cffadd8e6{}|r", sItemIdentificationSystem->GetIdentifiedCacheSize());
+
+    // 性能评估
+    handler->PSendSysMessage("|cff00ff00========== 性能评估 ==========|r");
+    if (stats.GetCacheHitRate() >= 80.0f)
+    {
+        handler->SendSysMessage("|cff00ff00性能状态: 优秀 ✓|r");
+    }
+    else if (stats.GetCacheHitRate() >= 60.0f)
+    {
+        handler->SendSysMessage("|cffffa500性能状态: 良好|r");
+    }
+    else if (stats.GetCacheHitRate() >= 40.0f)
+    {
+        handler->SendSysMessage("|cffff8000性能状态: 一般，考虑调整缓存策略|r");
+    }
+    else
+    {
+        handler->SendSysMessage("|cffff0000性能状态: 较差，需要优化|r");
+    }
+
+    if (stats.avgQueryTime < 5000)  // <5ms
+    {
+        handler->SendSysMessage("|cff00ff00查询速度: 极快 ✓|r");
+    }
+    else if (stats.avgQueryTime < 20000)  // <20ms
+    {
+        handler->SendSysMessage("|cff00ff00查询速度: 快速 ✓|r");
+    }
+    else if (stats.avgQueryTime < 50000)  // <50ms
+    {
+        handler->SendSysMessage("|cffffa500查询速度: 正常|r");
+    }
+    else if (stats.avgQueryTime < 100000)  // <100ms
+    {
+        handler->SendSysMessage("|cffff8000查询速度: 较慢，考虑优化数据库|r");
+    }
+    else
+    {
+        handler->SendSysMessage("|cffff0000查询速度: 很慢，需要立即优化！|r");
+    }
+
+    handler->PSendSysMessage("|cff888888提示: 使用 |cffffffff.鉴定 性能统计 reset|r |cff888888重置统计|r");
+
+    // 检查是否需要重置
+    if (args && *args)
+    {
+        std::string arg = args;
+        if (arg == "reset")
+        {
+            sItemIdentificationSystem->ResetPerformanceStats();
+            handler->SendSysMessage("|cff00ff00性能统计已重置|r");
+        }
+    }
+
+    return true;
+}
+
+

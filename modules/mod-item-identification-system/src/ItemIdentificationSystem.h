@@ -16,8 +16,10 @@
 #include <vector>
 #include <map>
 #include <set>
+#include <unordered_map>
 #include <string>
 #include <random>
+#include <ctime>
 
 // 物品鉴定记录结构
 struct ItemIdentificationRecord
@@ -126,6 +128,39 @@ public:
     // 批量检查物品是否已鉴定（优化版，减少数据库查询）
     std::set<uint32> BatchCheckIdentified(const std::vector<uint32>& itemGuids);
 
+    // ⭐ 新增：批量查询所有模块数据（一次性返回所有系统的数据）
+    struct AllModuleData {
+        // 鉴定系统数据
+        std::string baseAttributes;      // 格式：attrType value,attrType value
+        std::string additionalAttributes; // 格式：attrType value,attrType value
+
+        // 成长系统数据
+        std::string growthData;          // 格式：level:exp:maxExp:attrs
+
+        // 强化系统数据
+        std::string enhancementData;     // 格式：level:attrs
+
+        // 技能系统数据
+        std::string skillsData;          // 格式：skillId:skillName:level,skillId:skillName:level
+
+        // 魔次系统数据
+        std::string magicHitData;        // 格式：configId:count:desc,configId:count:desc
+
+        // 符文系统数据
+        std::string runeData;            // 格式：totalSlots:filledSlots:slotData
+
+        // 套装系统数据
+        std::string setData;             // 格式：setId:setName:attrs:effects
+
+        bool hasData;                    // 是否有任何数据
+    };
+
+    // 批量查询所有模块数据
+    AllModuleData QueryAllModuleData(uint32 itemID, uint32 guid);
+
+    // 批量查询命令处理器（一次性返回所有数据）
+    void HandleBatchQueryCommand(Player* player, uint32 itemID, uint32 guid);
+
 public:
     // 配置变量
     bool _enabled;
@@ -134,6 +169,64 @@ public:
     uint32 _cost;
     bool _enableAnnounce;
     bool _debugMode;
+
+    // 属性数据缓存结构（用于查询命令优化）
+    struct ItemAttrCache {
+        uint32 itemID;
+        uint32 guid;
+        std::string baseAttributes;
+        std::string additionalAttributes;
+        time_t cacheTime;
+    };
+    std::unordered_map<uint64, ItemAttrCache> _attrCache;  // key = (itemID << 32) | guid
+    const uint32 ATTR_CACHE_EXPIRE_TIME = 300;  // 5分钟过期
+
+    // ⭐ 新增：批量查询数据缓存（避免重复查询数据库）
+    struct BatchQueryCache {
+        AllModuleData data;
+        time_t cacheTime;
+    };
+    std::unordered_map<uint64, BatchQueryCache> _batchQueryCache;  // key = (itemID << 32) | guid
+    const uint32 BATCH_CACHE_EXPIRE_TIME = 300;  // 5分钟过期
+
+    // 清理过期缓存（定期调用）
+    void CleanExpiredCache();
+
+    // ⭐ 新增：预加载玩家装备数据（登录时调用）
+    void PreloadPlayerEquipment(Player* player);
+
+    // ⭐ 新增：性能统计
+    struct PerformanceStats {
+        uint32 totalQueries;           // 总查询次数
+        uint32 cacheHits;              // 缓存命中次数
+        uint32 cacheMisses;            // 缓存未命中次数
+        uint32 dbQueries;              // 数据库查询次数
+        uint64 totalQueryTime;         // 总查询时间（微秒）
+        uint64 avgQueryTime;           // 平均查询时间（微秒）
+        uint32 preloadCount;           // 预加载次数
+        time_t startTime;              // 统计开始时间
+
+        PerformanceStats() : totalQueries(0), cacheHits(0), cacheMisses(0),
+                           dbQueries(0), totalQueryTime(0), avgQueryTime(0),
+                           preloadCount(0), startTime(time(nullptr)) {}
+
+        float GetCacheHitRate() const {
+            return totalQueries > 0 ? (float)cacheHits / totalQueries * 100.0f : 0.0f;
+        }
+    };
+
+    PerformanceStats _perfStats;
+
+    // 获取性能统计
+    const PerformanceStats& GetPerformanceStats() const { return _perfStats; }
+
+    // 重置性能统计
+    void ResetPerformanceStats();
+
+    // ⭐ 获取缓存大小（用于性能统计）
+    size_t GetIdentifiedCacheSize() const { return _identifiedItemsCache.size(); }
+    size_t GetAttrCacheSize() const { return _attrCache.size(); }
+    size_t GetBatchQueryCacheSize() const { return _batchQueryCache.size(); }
 
 private:
     // 已鉴定物品GUID缓存（内存缓存，提升性能）
@@ -218,6 +311,12 @@ private:
     static bool HandleIdentifyCommand(ChatHandler* handler, const char* args);
     static bool HandleQueryAttributesCommand(ChatHandler* handler, const char* args);
     static bool HandleQueryCommand(ChatHandler* handler, const char* args);
+
+    // ⭐ 新增：批量查询命令处理器
+    static bool HandleBatchQueryCommand(ChatHandler* handler, const char* args);
+
+    // ⭐ 新增：性能统计命令
+    static bool HandlePerformanceStatsCommand(ChatHandler* handler, const char* args);
 };
 
 // 物品鉴定系统模块加载器
