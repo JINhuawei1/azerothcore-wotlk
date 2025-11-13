@@ -1,0 +1,8 @@
+## Interface: 30300
+## Title: 物品属性提示框
+## Notes: Combined tooltip experiment for magic hit and item growth data
+## Author: Cascade Assistant
+## Version: 0.1.0
+
+## 主文件
+MagicHitGrowthTooltip_v2.lua
