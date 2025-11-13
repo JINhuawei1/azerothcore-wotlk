@@ -651,7 +651,7 @@ function Parsers.Enhancement(message)
             if GameTooltip and GameTooltip:IsShown() then
                 local _, itemLink = GameTooltip:GetItem()
                 if itemLink then
-                    currentItemID, currentGUID = ExtractItemInfoEnhanced(itemLink)
+                    currentItemID, currentGUID = ExtractItemInfo(itemLink)
                 end
             end
 
@@ -1960,8 +1960,6 @@ local function RenderTooltip(tooltip, itemID, guid)
         return
     end
 
-    DebugPrint("[渲染] 开始渲染属性: itemID=", itemID, "guid=", guid, "系统数量=", #(cached.systems or {}))
-
     -- 1. 先统一渲染所有基础属性（鉴定、强化、成长）
     if not meta.rendered.identification and not meta.rendered.enhancement and not meta.rendered.growth then
         RenderUnifiedBaseAttributes(tooltip, cached, meta)
@@ -2066,7 +2064,7 @@ local function OnChatMessage(self, event, message, sender)
                         if tooltip:IsShown() and meta.key then
                             local _, itemLink = tooltip:GetItem()
                             if itemLink then
-                                local itemID, itemGUID = ExtractItemInfoEnhanced(itemLink)
+                                local itemID, itemGUID = ExtractItemInfo(itemLink)
                                 if itemID and itemGUID == data.guid then
                                     data.itemID = itemID
                                     break
@@ -2093,7 +2091,7 @@ local function OnChatMessage(self, event, message, sender)
                         if tooltip:IsShown() then
                             local _, itemLink = tooltip:GetItem()
                             if itemLink then
-                                local itemID, itemGUID = ExtractItemInfoEnhanced(itemLink)
+                                local itemID, itemGUID = ExtractItemInfo(itemLink)
                                 if itemGUID == data.guid then
                                     data.itemID = itemID
                                     local key = MakeKey(itemID, itemGUID, nil, nil, false)
@@ -2141,21 +2139,17 @@ local function OnTooltipSetItem(tooltip)
         return
     end
 
-    -- 使用增强版提取，如果链接没有 GUID，会尝试从背包/装备栏查找
-    local itemID, guid, bag, slot, isEquipped = ExtractItemInfoEnhanced(itemLink)
+    -- 只从链接中提取GUID，如果链接中没有GUID（随机属性），说明物品没有鉴定属性，直接跳过
+    local itemID, guid = ExtractItemInfo(itemLink)
     if not itemID then
         return
     end
 
+    -- 只有当链接中包含有效GUID时才查询和渲染
     if guid and guid > 0 then
         RenderTooltip(tooltip, itemID, guid)
-    else
-        -- 没有找到 GUID，显示提示信息
-        tooltip:AddLine(" ")
-        tooltip:AddLine("|cffff8000[提示] 此物品不在你的背包或装备栏中|r")
-        tooltip:AddLine("|cffff8000无法显示自定义属性|r")
-        tooltip:Show()
     end
+    -- 如果没有GUID，直接返回，不做任何处理（不查询，不显示提示）
 end
 
 local function OnTooltipCleared(tooltip)
@@ -2247,7 +2241,7 @@ SlashCmdList["UNIFIEDTOOLTIP"] = function(msg)
         -- 获取当前鼠标悬停的物品
         local _, itemLink = GameTooltip:GetItem()
         if itemLink then
-            local itemID, guid = ExtractItemInfoEnhanced(itemLink)
+            local itemID, guid = ExtractItemInfo(itemLink)
             if itemID and guid and guid > 0 then
                 local key = MakeKey(itemID, guid, nil, nil, false)
                 -- 清除该装备的缓存
@@ -2279,7 +2273,7 @@ SlashCmdList["UNIFIEDTOOLTIP"] = function(msg)
         -- 显示当前装备的详细信息
         local _, itemLink = GameTooltip:GetItem()
         if itemLink then
-            local itemID, guid = ExtractItemInfoEnhanced(itemLink)
+            local itemID, guid = ExtractItemInfo(itemLink)
             if itemID and guid and guid > 0 then
                 local key = MakeKey(itemID, guid, nil, nil, false)
                 local cached = State.cache[key]
