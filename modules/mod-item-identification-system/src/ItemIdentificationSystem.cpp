@@ -728,8 +728,9 @@ bool ItemIdentificationSystem::ApplyIdentification(Player* player, Item* item, u
     // 12. 刷新物品显示
     RefreshItem(player, item);
 
-    // 13. 发送鉴定属性数据到客户端 - 调用各模块自己的查询函数
-    SendAllModuleData(player, item);
+    // 13. ⭐ 不再主动发送数据 - 客户端会通过 addon 消息主动查询
+    // 旧逻辑：SendAllModuleData(player, item) - 已删除
+    // 新逻辑：客户端悬停物品时自动发送 UITQ QUERY 请求，服务器通过 HandleAddonBatchQuery 响应
 
     // 14. 套装刷新已优化：移除鉴定时的刷新调用
     // 原因：物品在背包中时套装效果不需要生效，只有装备时才需要刷新
@@ -1748,8 +1749,8 @@ std::vector<Acore::ChatCommands::ChatCommandBuilder> ItemIdentificationCommandSc
     // 鉴定子命令
     static ChatCommandTable identificationSubCommands =
     {
-        { "查询", HandleQueryCommand, SEC_PLAYER, Console::No },
-        { "批量查询", HandleBatchQueryCommand, SEC_PLAYER, Console::No },  // ⭐ 新增批量查询命令
+        // ⭐ "查询" 命令已删除 - 使用 addon 消息自动查询替代
+        { "批量查询", HandleBatchQueryCommand, SEC_PLAYER, Console::No },  // ⭐ 批量查询命令
         { "性能统计", HandlePerformanceStatsCommand, SEC_ADMINISTRATOR, Console::No }  // ⭐ 性能监控
     };
 
@@ -1787,25 +1788,20 @@ bool ItemIdentificationCommandScript::HandleIdentifyCommand(ChatHandler* handler
         return true;
     }
 
-    // 检查是否是查询子命令
-    std::string firstArg = strtok((char*)args, " ");
-    if (firstArg == "查询" || firstArg == "query")
-    {
-        // 调用查询命令处理
-        char* remainingArgs = strtok(nullptr, "");
-        return HandleQueryAttributesCommand(handler, remainingArgs ? remainingArgs : "");
-    }
+    // ⭐ 删除旧的查询子命令 - 现在使用 addon 消息自动查询
+    // 旧代码：if (firstArg == "查询") HandleQueryAttributesCommand(...) - 已删除
 
-    // 否则按照鉴定命令处理
+    // 解析鉴定命令参数: <组ID> <物品ID>
+    char* groupIdStr = strtok((char*)args, " ");
     char* itemIdStr = strtok(nullptr, " ");
 
-    if (!itemIdStr)
+    if (!groupIdStr || !itemIdStr)
     {
         handler->SendSysMessage("参数不足！用法: .鉴定物品 <组ID> <物品ID>");
         return true;
     }
 
-    uint32 groupId = atoi(firstArg.c_str());
+    uint32 groupId = atoi(groupIdStr);
     uint32 itemId = atoi(itemIdStr);
     if (itemId == 0)
     {
@@ -1892,261 +1888,10 @@ bool ItemIdentificationCommandScript::HandleIdentifyCommand(ChatHandler* handler
     return true;
 }
 
-// 查询属性命令 - 主动查询并发送物品属性给客户端
-bool ItemIdentificationCommandScript::HandleQueryAttributesCommand(ChatHandler* handler, const char* args)
-{
-    Player* player = handler->GetSession()->GetPlayer();
-    if (!player)
-        return false;
+// ⭐ HandleQueryAttributesCommand 已删除 - 现在使用 addon 格式的 HandleAddonBatchQuery
+// 客户端不再通过命令查询，而是自动发送 addon 消息 (UITQ QUERY) 来获取数据
 
-    // 如果没有参数，查询所有装备和背包中的已鉴定物品
-    if (!*args || strcmp(args, "all") == 0)
-    {
-        handler->SendSysMessage("正在查询所有已鉴定物品的属性...");
-        
-        uint32 count = 0;
-        
-        // 遍历装备栏
-        for (uint8 i = EQUIPMENT_SLOT_START; i < EQUIPMENT_SLOT_END; ++i)
-        {
-            Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i);
-            if (item)
-            {
-                uint64 itemGuid = item->GetGUID().GetCounter();
-                if (sItemIdentificationSystem->IsItemIdentified(itemGuid))
-                {
-                    sItemIdentificationSystem->SendIdentificationDataToClient(player, item);
-                    count++;
-                }
-            }
-        }
-        
-        // 遍历背包
-        for (uint8 i = INVENTORY_SLOT_ITEM_START; i < INVENTORY_SLOT_ITEM_END; ++i)
-        {
-            Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i);
-            if (item)
-            {
-                uint64 itemGuid = item->GetGUID().GetCounter();
-                if (sItemIdentificationSystem->IsItemIdentified(itemGuid))
-                {
-                    sItemIdentificationSystem->SendIdentificationDataToClient(player, item);
-                    count++;
-                }
-            }
-        }
-        
-        // 遍历背包袋
-        for (uint8 i = INVENTORY_SLOT_BAG_START; i < INVENTORY_SLOT_BAG_END; ++i)
-        {
-            if (Bag* bag = player->GetBagByPos(i))
-            {
-                for (uint32 j = 0; j < bag->GetBagSize(); ++j)
-                {
-                    Item* item = bag->GetItemByPos(j);
-                    if (item)
-                    {
-                        uint64 itemGuid = item->GetGUID().GetCounter();
-                        if (sItemIdentificationSystem->IsItemIdentified(itemGuid))
-                        {
-                            sItemIdentificationSystem->SendIdentificationDataToClient(player, item);
-                            count++;
-                        }
-                    }
-                }
-            }
-        }
-        
-        handler->PSendSysMessage("已发送 {} 个已鉴定物品的属性数据", count);
-        return true;
-    }
-    
-    // 如果有参数，查询指定背包槽位的物品
-    char* bagStr = strtok((char*)args, " ");
-    char* slotStr = strtok(nullptr, " ");
-    
-    if (!bagStr || !slotStr)
-    {
-        handler->SendSysMessage("用法: .查询属性 [all] 或 .查询属性 <背包> <槽位>");
-        handler->SendSysMessage("示例: .查询属性 all  (查询所有已鉴定物品)");
-        handler->SendSysMessage("示例: .查询属性 255 16  (查询背包255槽位16的物品)");
-        return true;
-    }
-    
-    uint8 bag = atoi(bagStr);
-    uint8 slot = atoi(slotStr);
-    
-    Item* item = player->GetItemByPos(bag, slot);
-    if (!item)
-    {
-        handler->SendSysMessage("指定位置没有物品");
-        return true;
-    }
-    
-    uint64 itemGuid = item->GetGUID().GetCounter();
-    if (!sItemIdentificationSystem->IsItemIdentified(itemGuid))
-    {
-        handler->SendSysMessage("该物品尚未鉴定");
-        return true;
-    }
-    
-    sItemIdentificationSystem->SendIdentificationDataToClient(player, item);
-    handler->PSendSysMessage("已发送物品 {} 的属性数据", item->GetTemplate()->Name1);
-    
-    return true;
-}
-
-// 查询命令：.鉴定 查询 <itemID> <guid> <bag> <slot> <equip> <rpId>
-bool ItemIdentificationCommandScript::HandleQueryCommand(ChatHandler* handler, const char* args)
-{
-    if (!sItemIdentificationSystem->_enabled)
-    {
-        return true;
-    }
-
-    Player* player = handler->GetSession()->GetPlayer();
-    if (!player)
-        return false;
-
-    // 解析参数
-    if (!args || !*args)
-    {
-        handler->SendSysMessage("用法: .鉴定 查询 <物品ID> <GUID> <bag> <slot> <equip> <rpId>");
-        return true;
-    }
-
-    std::istringstream iss(args);
-    uint32 itemID = 0;
-    uint32 guid = 0;
-    int32 bag = -1;
-    int32 slot = -1;
-    int32 equip = 0;
-    int32 rpId = 0;
-
-    iss >> itemID >> guid >> bag >> slot >> equip >> rpId;
-
-    if (itemID == 0 || guid == 0)
-    {
-        handler->SendSysMessage("无效的物品ID或GUID");
-        return true;
-    }
-
-    std::string baseAttributesStr = "";
-    std::string additionalAttributesStr = "";
-
-    // 优化：先从缓存读取
-    uint64 cacheKey = ((uint64)itemID << 32) | guid;
-    auto it = sItemIdentificationSystem->_attrCache.find(cacheKey);
-
-    // 检查缓存是否有效
-    if (it != sItemIdentificationSystem->_attrCache.end() &&
-        (time(nullptr) - it->second.cacheTime) < sItemIdentificationSystem->ATTR_CACHE_EXPIRE_TIME)
-    {
-        // 缓存命中，直接使用
-        baseAttributesStr = it->second.baseAttributes;
-        additionalAttributesStr = it->second.additionalAttributes;
-
-        LOG_DEBUG("module.itemidentification", "[Query] 缓存命中: itemID={}, guid={}", itemID, guid);
-    }
-    else
-    {
-        // 缓存未命中或已过期，查询数据库
-        LOG_DEBUG("module.itemidentification", "[Query] 缓存未命中，从数据库加载: itemID={}, guid={}", itemID, guid);
-
-        // 查询基础属性（从鉴定记录表）
-        QueryResult result = CharacterDatabase.Query(
-            "SELECT 基础属性组ID, 基础属性详情 FROM 物品_鉴定记录 WHERE 物品ID = {} AND 物品GUID = {}",
-            itemID, guid);
-
-        if (result)
-        {
-            Field* fields = result->Fetch();
-            baseAttributesStr = fields[1].Get<std::string>();
-        }
-
-#ifdef MODULE_ITEM_ATTRIBUTES
-        // 查询追加属性（从物品属性表）
-        QueryResult attrResult = CharacterDatabase.Query(
-            "SELECT 追加属性 FROM 物品属性_数据 WHERE 物品GUID = {}",
-            guid);
-
-        if (attrResult)
-        {
-            Field* fields = attrResult->Fetch();
-            std::string additionalAttr = fields[0].Get<std::string>();
-
-            if (!additionalAttr.empty())
-            {
-                // 解析紧凑格式的属性字符串："id value,id value,..."
-                std::vector<uint32> idList;
-                std::vector<int32> valList;
-
-                std::istringstream stream(additionalAttr);
-                std::string pair;
-
-                while (std::getline(stream, pair, ','))
-                {
-                    if (!pair.empty())
-                    {
-                        std::istringstream pairStream(pair);
-                        uint32 id;
-                        int32 value;
-
-                        if (pairStream >> id >> value)
-                        {
-                            idList.push_back(id);
-                            valList.push_back(value);
-                        }
-                    }
-                }
-
-                // 转换为紧凑格式：attrType value,attrType value,...
-                std::ostringstream additionalStream;
-                for (size_t i = 0; i < idList.size() && i < valList.size(); ++i)
-                {
-                    uint32 attrId = idList[i];
-                    int32 attrValue = valList[i];
-
-                    // 数据库中存储的已经是属性类型（attributeType），直接使用
-                    uint32 attrType = attrId;
-
-                    if (i > 0)
-                        additionalStream << ",";
-                    additionalStream << attrType << " " << attrValue;
-                }
-
-                additionalAttributesStr = additionalStream.str();
-            }
-        }
-#endif
-
-        // 更新缓存
-        ItemIdentificationSystem::ItemAttrCache cache;
-        cache.itemID = itemID;
-        cache.guid = guid;
-        cache.baseAttributes = baseAttributesStr;
-        cache.additionalAttributes = additionalAttributesStr;
-        cache.cacheTime = time(nullptr);
-        sItemIdentificationSystem->_attrCache[cacheKey] = cache;
-
-        LOG_DEBUG("module.itemidentification", "[Query] 缓存已更新: itemID={}, guid={}", itemID, guid);
-    }
-
-    // ✅ 优化：即使没有属性也要发送响应，避免客户端一直等待
-    // 发送新格式消息：ITEM_ID_ATTRS:itemId:guid:基础属性:追加属性
-    std::ostringstream response;
-    response << "ITEM_ID_ATTRS:" << itemID << ":" << guid << ":"
-             << baseAttributesStr << ":" << additionalAttributesStr;
-
-    handler->PSendSysMessage(response.str().c_str());
-
-    LOG_DEBUG("module.itemidentification", "[Query] 发送响应: itemID={}, guid={}, 基础属性数={}, 追加属性数={}",
-              itemID, guid,
-              baseAttributesStr.empty() ? 0 : std::count(baseAttributesStr.begin(), baseAttributesStr.end(), ',') + 1,
-              additionalAttributesStr.empty() ? 0 : std::count(additionalAttributesStr.begin(), additionalAttributesStr.end(), ',') + 1);
-
-    return true;
-}
+// ⭐ HandleQueryCommand 已删除 - 使用 HandleAddonBatchQuery (addon格式) 替代旧的单独查询
 
 // 模块加载器实现
 ItemIdentificationSystemModuleLoader::ItemIdentificationSystemModuleLoader() : WorldScript("ItemIdentificationSystemModuleLoader"), _loaded(false), _startTime(0) { }
@@ -2209,64 +1954,9 @@ void ItemIdentificationPlayerScript::OnLogin(Player* player, bool firstLogin)
     // 预加载会在登录流程中异步执行，不会阻塞
     sItemIdentificationSystem->PreloadPlayerEquipment(player);
 
-    uint32 count = 0;
-    std::vector<Item*> identifiedItems;
-    
-    // 收集装备栏物品
-    for (uint8 i = EQUIPMENT_SLOT_START; i < EQUIPMENT_SLOT_END; ++i)
-    {
-        Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i);
-        if (item)
-        {
-            uint64 itemGuid = item->GetGUID().GetCounter();
-            if (sItemIdentificationSystem->IsItemIdentified(itemGuid))
-            {
-                identifiedItems.push_back(item);
-            }
-        }
-    }
-    
-    // 收集背包物品
-    for (uint8 i = INVENTORY_SLOT_ITEM_START; i < INVENTORY_SLOT_ITEM_END; ++i)
-    {
-        Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i);
-        if (item)
-        {
-            uint64 itemGuid = item->GetGUID().GetCounter();
-            if (sItemIdentificationSystem->IsItemIdentified(itemGuid))
-            {
-                identifiedItems.push_back(item);
-            }
-        }
-    }
-    
-    // 收集背包袋物品
-    for (uint8 i = INVENTORY_SLOT_BAG_START; i < INVENTORY_SLOT_BAG_END; ++i)
-    {
-        if (Bag* bag = player->GetBagByPos(i))
-        {
-            for (uint32 j = 0; j < bag->GetBagSize(); ++j)
-            {
-                Item* item = bag->GetItemByPos(j);
-                if (item)
-                {
-                    uint64 itemGuid = item->GetGUID().GetCounter();
-                    if (sItemIdentificationSystem->IsItemIdentified(itemGuid))
-                    {
-                        identifiedItems.push_back(item);
-                    }
-                }
-            }
-        }
-    }
-    
-    
-    // 发送数据到客户端
-    for (Item* item : identifiedItems)
-    {
-        sItemIdentificationSystem->SendIdentificationDataToClient(player, item);
-        count++;
-    }
+    // ⭐ 删除旧的登录时主动发送逻辑 - 现在客户端会在需要时通过 addon 消息自动查询
+    // 旧代码：收集所有已鉴定物品并通过 SendIdentificationDataToClient 发送 - 已删除
+    // 新逻辑：客户端悬停物品时自动发送 UITQ QUERY 请求，服务器通过 HandleAddonBatchQuery 响应
 }
 
 // 鉴定记录管理实现
@@ -2324,91 +2014,9 @@ ItemIdentificationRecord* ItemIdentificationSystem::GetIdentificationRecord(uint
     return nullptr;
 }
 
-// 将鉴定属性数据发送到客户端（用于Tooltip显示）
-// ✅ 优化版：只发送鉴定系统自己的数据，其他模块数据由客户端主动查询
-void ItemIdentificationSystem::SendAllModuleData(Player* player, Item* item)
-{
-    if (!player || !item)
-        return;
-
-    // 鉴定系统只需要发送基础属性和追加属性数据
-    // 其他模块的数据（成长、强化、技能、魔次等）由客户端插件在需要时主动查询
-    // 这样避免了不必要的命令解析开销
-    SendIdentificationDataToClient(player, item);
-
-    DebugLog("已发送鉴定属性数据，其他模块数据由客户端主动查询");
-}
-
-// 发送鉴定系统自己的数据（基础属性和追加属性）
-void ItemIdentificationSystem::SendIdentificationDataToClient(Player* player, Item* item)
-{
-    if (!player || !item)
-        return;
-
-    uint64 itemGuid = item->GetGUID().GetCounter();
-    uint32 itemId = item->GetEntry();
-    int32 randomPropId = item->GetItemRandomPropertyId();
-
-    // 鉴定系统只发送基础属性和追加属性数据
-    // 其他数据由各模块自己发送
-    std::string baseAttrStr = "";
-    std::string additionalAttrStr = "";
-
-#ifdef MODULE_ITEM_ATTRIBUTES
-    if (sItemAttributesLoader)
-    {
-        // 从数据库读取基础属性和追加属性
-        ItemAttributesDBHelper::ItemAttributeData* data = ItemAttributesDBHelper::LoadItemAttributes(itemGuid);
-
-        if (data)
-        {
-            // ========== 构建基础属性字符串 ==========
-            std::ostringstream baseStream;
-            if (!data->baseAttributeIds.empty() && data->baseAttributeIds.size() == data->baseAttributeValues.size())
-            {
-                for (size_t i = 0; i < data->baseAttributeIds.size(); ++i)
-                {
-                    uint32 attrType = data->baseAttributeIds[i];  // 直接使用，这已经是属性类型
-                    int32 attrValue = data->baseAttributeValues[i];
-
-                    if (i > 0)
-                        baseStream << ",";
-                    baseStream << attrType << " " << attrValue;
-                }
-            }
-            baseAttrStr = baseStream.str();
-
-            // ========== 构建追加属性字符串 ==========
-            std::ostringstream additionalStream;
-            if (!data->additionalAttributeIds.empty() && data->additionalAttributeIds.size() == data->additionalAttributeValues.size())
-            {
-                for (size_t i = 0; i < data->additionalAttributeIds.size(); ++i)
-                {
-                    uint32 attrType = data->additionalAttributeIds[i];  // 直接使用，这已经是属性类型
-                    int32 attrValue = data->additionalAttributeValues[i];
-
-                    if (i > 0)
-                        additionalStream << ",";
-                    additionalStream << attrType << " " << attrValue;
-                }
-            }
-            additionalAttrStr = additionalStream.str();
-
-            delete data;
-        }
-    }
-#endif
-
-    // 发送鉴定数据消息（兼容旧格式）
-    std::ostringstream message;
-    message << "ITEM_ID_ATTRS:" << itemId << ":" << randomPropId << ":"
-            << baseAttrStr << ":" << additionalAttrStr;
-
-    std::string finalMessage = message.str();
-    ChatHandler(player->GetSession()).SendSysMessage(finalMessage.c_str());
-    
-    DebugLog("发送鉴定数据: {}", finalMessage);
-}
+// ⭐ SendAllModuleData 和 SendIdentificationDataToClient 已删除
+// 现在使用 addon 格式的 HandleAddonBatchQuery 替代旧的单独发送逻辑
+// 客户端通过 addon 消息 (UITQ) 接收批量数据，不再使用聊天消息
 
 void ItemIdentificationSystem::RefreshItem(Player* player, Item* item)
 {
@@ -2921,7 +2529,6 @@ void AddItemIdentificationSystemScripts()
 // 批量查询所有模块数据（核心方法）
 ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModuleData(uint32 itemID, uint32 guid)
 {
-    PerformanceTimer timer("批量查询所有模块数据");
 
     AllModuleData result;
     result.hasData = false;
@@ -2969,7 +2576,6 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
     DebugLog("[批量查询] 开始查询鉴定系统: itemID={}, guid={}", itemID, guid);
     if (TableExists("物品_鉴定记录"))
     {
-        PerformanceTimer attrTimer("查询鉴定系统数据");
         // 使用 LEFT JOIN 一次性查询两个表的数据，减少数据库往返
         QueryResult attrResult = CharacterDatabase.Query(
             "SELECT r.`基础属性详情`, IFNULL(a.`追加属性`, '') as `追加属性` "
@@ -3012,7 +2618,6 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
     DebugLog("[批量查询] 开始查询成长系统: itemID={}, guid={}", itemID, guid);
     if (TableExists("物品成长_玩家记录"))
     {
-        PerformanceTimer growthTimer("查询成长系统数据");
         QueryResult growthResult = CharacterDatabase.Query(
             "SELECT `当前等级`, `当前经验`, `升级经验`, `成长属性` FROM `物品成长_玩家记录` WHERE `物品GUID` = {}",
             guid);
@@ -3048,7 +2653,6 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
     DebugLog("[批量查询] 开始查询强化系统: itemID={}, guid={}", itemID, guid);
     if (TableExists("物品强化_记录"))
     {
-        PerformanceTimer enhanceTimer("查询强化系统数据");
         QueryResult enhanceResult = CharacterDatabase.Query(
             "SELECT `强化等级`, `属性值` FROM `物品强化_记录` WHERE `guid` = {}",
             guid);
@@ -3082,7 +2686,6 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
     DebugLog("[批量查询] 开始查询技能系统: itemID={}, guid={}", itemID, guid);
     if (TableExists("物品技能_数据"))
     {
-        PerformanceTimer skillTimer("查询技能系统数据");
         QueryResult skillResult = CharacterDatabase.Query(
             "SELECT `技能ID`, `技能模板ID`, `技能触发类型` FROM `物品技能_数据` WHERE `物品GUID` = {}",
             guid);
@@ -3116,7 +2719,6 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
     DebugLog("[批量查询] 开始查询魔次系统: itemID={}, guid={}", itemID, guid);
     if (TableExists("魔次系统_数据"))
     {
-        PerformanceTimer magicTimer("查询魔次系统数据");
         QueryResult magicResult = CharacterDatabase.Query(
             "SELECT `魔次系统ID`, `魔次值` FROM `魔次系统_数据` WHERE `物品GUID` = {}",
             guid);
@@ -3149,7 +2751,6 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
     DebugLog("[批量查询] 开始查询符文系统: itemID={}, guid={}", itemID, guid);
     if (TableExists("符文系统_数据"))
     {
-        PerformanceTimer runeTimer("查询符文系统数据");
         QueryResult runeResult = CharacterDatabase.Query(
             "SELECT `插槽数量`, `插槽ID`, `符文物品ID` FROM `符文系统_数据` WHERE `物品GUID` = {}",
             guid);
@@ -3184,7 +2785,6 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
     DebugLog("[批量查询] 开始查询套装系统: itemID={}, guid={}", itemID, guid);
     if (TableExists("玩家套装状态"))
     {
-        PerformanceTimer setTimer("查询套装系统数据");
         QueryResult setResult = CharacterDatabase.Query(
             "SELECT `套装ID` FROM `玩家套装状态` WHERE `物品GUID` = {}",
             guid);
