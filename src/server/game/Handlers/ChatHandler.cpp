@@ -231,12 +231,14 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
                 lang = ModLangAuras.front()->GetMiscValue();
         }
 
-        if (type != CHAT_MSG_AFK && type != CHAT_MSG_DND)
+        // ⭐ 注意：WHISPER消息的洪水检查会在后面处理，这里先不检查
+        if (type != CHAT_MSG_AFK && type != CHAT_MSG_DND && type != CHAT_MSG_WHISPER)
             sender->UpdateSpeakTime(lang == LANG_ADDON ? Player::ChatFloodThrottle::ADDON : Player::ChatFloodThrottle::REGULAR);
     }
 
     std::string to, channel, msg;
     bool ignoreChecks = false;
+    bool skipFloodCheck = false;  // ⭐ 新增标志：是否跳过洪水检查
     switch (type)
     {
         case CHAT_MSG_SAY:
@@ -384,6 +386,13 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
                 Player* receiver = ObjectAccessor::FindPlayerByName(to, false);
                 bool senderIsPlayer = AccountMgr::IsPlayerAccount(GetSecurity());
                 bool receiverIsPlayer = AccountMgr::IsPlayerAccount(receiver ? receiver->GetSession()->GetSecurity() : SEC_PLAYER);
+                
+                // ⭐ 特殊处理：自己给自己发WHISPER消息（插件查询），跳过洪水检查
+                bool isSelfWhisper = (receiver && receiver == sender);
+                if (isSelfWhisper)
+                {
+                    skipFloodCheck = true;  // 自己给自己发消息，不受洪水保护限制
+                }
 
                 if (sender->GetLevel() < sWorld->getIntConfig(CONFIG_CHAT_WHISPER_LEVEL_REQ) && receiver != sender)
                 {
@@ -414,6 +423,12 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
                 // If player is a Gamemaster and doesn't accept whisper, we auto-whitelist every player that the Gamemaster is talking to
                 if (!senderIsPlayer && !sender->isAcceptWhispers() && !sender->IsInWhisperWhiteList(receiver->GetGUID()))
                     sender->AddWhisperWhiteList(receiver->GetGUID());
+                
+                // ⭐ 现在进行WHISPER的洪水检查（但自己给自己发消息时跳过）
+                if (!skipFloodCheck && type == CHAT_MSG_WHISPER && !ignoreChecks)
+                {
+                    sender->UpdateSpeakTime(lang == LANG_ADDON ? Player::ChatFloodThrottle::ADDON : Player::ChatFloodThrottle::REGULAR);
+                }
 
                 GetPlayer()->Whisper(msg, Language(lang), receiver);
             }

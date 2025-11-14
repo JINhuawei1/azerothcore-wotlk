@@ -2,6 +2,7 @@
 -- 统一的物品提示框插件 - 根据服务器数据动态显示所有属性
 
 local ADDON_NAME = "UnifiedItemTooltip"
+local ADDON_PREFIX = "UITQ"  -- ⭐ Addon消息前缀（最多16字符）- UnifiedItemTooltipQuery
 
 -- ============================================================================
 -- 配置
@@ -13,7 +14,6 @@ local DEFAULTS = {
     timeout = 15,           -- 查询超时（秒）- 增加到15秒以应对服务器延迟
     emptyCooldown = 30,     -- 无数据冷却时间（秒）
     cacheExpiration = 300,  -- 缓存有效期（秒）- 默认5分钟
-    commandDelay = 0.05,    -- 命令发送间隔（秒）- 避免一次性发送太多命令
 
     -- 各系统开关
     systems = {
@@ -115,7 +115,10 @@ local State = {
     tooltips = {},
 
     -- 性能统计：systemName -> { totalQueries, totalTime, maxTime, minTime }
-    stats = {}
+    stats = {},
+
+    -- 全局查询计数器
+    queryId = 0
 }
 
 -- ============================================================================
@@ -388,26 +391,66 @@ end
 
 
 -- ============================================================================
--- 数据解析器 - 统一处理所有系统的消息
+-- 数据解析器 - 只保留批量查询解析器（旧格式解析器已删除）
 -- ============================================================================
 
 local Parsers = {}
 
--- 解析魔次系统消息
-function Parsers.Magic(message)
-    if not message:match("^MAGICHIT:") then return nil end
+-- ⭐ 旧的单独解析器已全部删除（Magic, Growth, Identification, Enhancement, Skills, Runes, Sets）
+-- 现在只使用批量查询解析器（定义在后面）
+
+-- ⭐ 新增：批量数据解析器（解析ALL_MODULE_DATA消息）
+function Parsers.BatchQuery(message)
+    DebugPrint("[解析器908] 开始解析: message前100字符=", message:sub(1, 100))
+    
+    -- 格式：ALL_MODULE_DATA:itemID:guid:base:additional:growth:enhancement:skills:magic:rune:set
+    if not message:match("^ALL_MODULE_DATA:") then
+        DebugPrint("[解析器908] 不匹配ALL_MODULE_DATA前缀")
+        return nil
+    end
+    
+    DebugPrint("[解析器908] 匹配ALL_MODULE_DATA前缀成功")
+
+    -- 性能监控：开始解析
+    local parseStartTime = GetTime()
 
     local parts = { strsplit(":", message) }
-    if #parts < 8 then return nil end
+    if #parts < 3 then
+        DebugPrint("[解析器908] parts数量不足:", #parts)
+        return nil
+    end
+    
+    DebugPrint("[解析器908] parts数量:", #parts)
 
     local itemID = tonumber(parts[2])
     local guid = tonumber(parts[3])
-    local configsStr = parts[4] or ""
 
-    if not itemID or not guid or guid == 0 then return nil end
+    if not itemID or not guid or guid == 0 then
+        DebugPrint("[解析器908] itemID或guid无效:", itemID, guid)
+        return nil
+    end
+    
+    DebugPrint("[解析器908] 解析成功: itemID=", itemID, "guid=", guid)
 
-    local configs = {}
-    if configsStr ~= "" then
+    -- 解析所有系统数据
+    local baseAttributes = parts[4] or ""
+    local additionalAttributes = parts[5] or ""
+    local growthData = parts[6] or ""
+    local enhancementData = parts[7] or ""
+    local skillsData = parts[8] or ""
+    local magicData = parts[9] or ""
+    local runeData = parts[10] or ""
+    local setData = parts[11] or ""
+
+    local result = {
+        type = "batch",
+        itemID = itemID,
+        guid = guid,
+        systems = {}
+    }
+
+    -- 解析鉴定系统数据（基础属性和追加属性）
+    if baseAttributes ~= "" or additionalAttributes ~= "" then
         for chunk in string.gmatch(configsStr, "([^,]+)") do
             local id, count, desc = chunk:match("(%d+)|(%d+)|(.+)")
             if id and count then
@@ -903,16 +946,36 @@ end
 
 -- ⭐ 新增：批量数据解析器（解析ALL_MODULE_DATA消息）
 function Parsers.BatchQuery(message)
+    DebugPrint("[解析器908] 开始解析: message前100字符=", message:sub(1, 100))
+    
     -- 格式：ALL_MODULE_DATA:itemID:guid:base:additional:growth:enhancement:skills:magic:rune:set
-    if not message:match("^ALL_MODULE_DATA:") then return nil end
+    if not message:match("^ALL_MODULE_DATA:") then
+        DebugPrint("[解析器908] 不匹配ALL_MODULE_DATA前缀")
+        return nil
+    end
+    
+    DebugPrint("[解析器908] 匹配ALL_MODULE_DATA前缀成功")
+
+    -- 性能监控：开始解析
+    local parseStartTime = GetTime()
 
     local parts = { strsplit(":", message) }
-    if #parts < 3 then return nil end
+    if #parts < 3 then
+        DebugPrint("[解析器908] parts数量不足:", #parts)
+        return nil
+    end
+    
+    DebugPrint("[解析器908] parts数量:", #parts)
 
     local itemID = tonumber(parts[2])
     local guid = tonumber(parts[3])
 
-    if not itemID or not guid or guid == 0 then return nil end
+    if not itemID or not guid or guid == 0 then
+        DebugPrint("[解析器908] itemID或guid无效:", itemID, guid)
+        return nil
+    end
+    
+    DebugPrint("[解析器908] 解析成功: itemID=", itemID, "guid=", guid)
 
     -- 解析所有系统数据
     local baseAttributes = parts[4] or ""
@@ -923,8 +986,6 @@ function Parsers.BatchQuery(message)
     local magicData = parts[9] or ""
     local runeData = parts[10] or ""
     local setData = parts[11] or ""
-
-    DebugPrint("[批量解析] itemID=", itemID, "guid=", guid, "parts=", #parts)
 
     local result = {
         type = "batch",
@@ -1222,7 +1283,6 @@ function Parsers.BatchQuery(message)
     -- 统计解析的系统数量
     local sysCount = 0
     for _ in pairs(result.systems) do sysCount = sysCount + 1 end
-    DebugPrint("[批量解析] 完成: 解析了", sysCount, "个系统")
 
     return result
 end
@@ -1645,8 +1705,9 @@ local function ShouldSkipQuery(key)
         for systemName, enabled in pairs(DB.systems) do
             if enabled then
                 local systemData = cached.systems[systemName]
-                -- 如果系统数据不存在，或者是空数据（isEmpty），需要重新查询
-                if not systemData or systemData.isEmpty then
+                -- 只有当系统数据完全不存在时才需要重新查询
+                -- isEmpty标记表示服务器确认没有数据，这也是有效的缓存
+                if not systemData then
                     allSystemsCached = false
                     break
                 end
@@ -1680,20 +1741,21 @@ end
 -- 查询管理
 -- ============================================================================
 
--- 发送查询请求（⭐ 优化：使用批量查询，只发送一个命令）
-local function SendQuery(itemID, guid)
-    if not itemID or not guid or guid == 0 then return end
-
-    local key = MakeKey(itemID, guid, nil, nil, false)
-
-    if ShouldSkipQuery(key) then
-        return
-    end
+-- 发送查询（使用Addon消息）
+local function DoSendQuery(itemID, guid, key)
+    local now = GetTime()
 
     -- 立即标记为查询中，防止重复发送
-    local now = GetTime()
+    State.queryId = State.queryId + 1
+    local queryId = State.queryId
+    
     State.lastQuery[key] = now
-    State.pending[key] = { started = now, systems = {} }
+    State.pending[key] = { 
+        started = now, 
+        systems = {},
+        queryId = queryId,
+        queryStartTime = now
+    }
 
     -- 获取已缓存的系统
     local cached = State.cache[key]
@@ -1704,13 +1766,15 @@ local function SendQuery(itemID, guid)
         end
     end
 
-    -- ⭐ 新方案：使用批量查询命令，一次性查询所有系统数据
-    -- 旧方案：7个命令，每个延迟0.05秒，总计0.3秒 + 7次网络往返
-    -- 新方案：1个命令，0秒延迟，1次网络往返，性能提升70-85%
+    -- ⭐ 使用Addon消息格式发送查询（避免聊天速率限制）
+    -- 重要：消息内容不包含前缀！前缀由SendAddonMessage的第一个参数指定
+    -- 发送: SendAddonMessage("UITQ", "QUERY:itemID:guid", ...)
+    -- 服务器收到: "UITQ<TAB>QUERY:itemID:guid"
+    local addonMessage = string.format("QUERY:%d:%d", itemID, guid)
 
-    local batchCommand = string.format(".鉴定 批量查询 %d %d", itemID, guid)
-
-    DebugPrint("[批量查询] 发送命令:", batchCommand)
+    -- 立即输出发送日志
+    print(string.format("|cff00ffff[统一提示框]|r |cff00ff00[Q%d→ADDON]|r itemID=%d guid=%d |cffaaaaaa[%.3fs]|r", 
+        queryId, itemID, guid, now))
 
     -- 标记所有系统为查询中
     for systemName, enabled in pairs(DB.systems) do
@@ -1719,8 +1783,67 @@ local function SendQuery(itemID, guid)
         end
     end
 
-    -- 发送批量查询命令（只发送一次！）
-    SendChatMessage(batchCommand, "WHISPER", nil, UnitName("player"))
+    -- 统计当前pending查询数量
+    local pendingCount = 0
+    for _ in pairs(State.pending) do
+        pendingCount = pendingCount + 1
+    end
+
+    -- 记录发送前的时间
+    local sendBeforeTime = GetTime()
+
+    -- ⭐ 使用SendAddonMessage发送（不受聊天速率限制）
+    -- 兼容WoW 3.3.5和零售版API
+    local sendSuccess = false
+    if SendAddonMessage then
+        SendAddonMessage(ADDON_PREFIX, addonMessage, "WHISPER", UnitName("player"))
+        sendSuccess = true
+    elseif C_ChatInfo and C_ChatInfo.SendAddonMessage then
+        C_ChatInfo.SendAddonMessage(ADDON_PREFIX, addonMessage, "WHISPER", UnitName("player"))
+        sendSuccess = true
+    end
+    
+    -- 记录发送后的时间
+    local sendAfterTime = GetTime()
+    local sendDuration = (sendAfterTime - sendBeforeTime) * 1000  -- 转换为毫秒
+    
+    -- 输出发送耗时
+    if sendDuration > 10 then
+        print(string.format("|cff00ffff[统一提示框]|r |cffff8000[Q%d 发送耗时]|r %.0fms |cffff0000(异常)|r", 
+            queryId, sendDuration))
+    else
+        print(string.format("|cff00ffff[统一提示框]|r |cff00ff00[Q%d 已发送ADDON]|r %.0fms", 
+            queryId, sendDuration))
+    end
+
+    -- 如果pending查询过多，显示警告
+    if pendingCount > 5 then
+        print(string.format("|cff00ffff[统一提示框]|r |cffff0000[警告]|r 当前有 %d 个查询等待响应，可能存在查询堆积", pendingCount))
+        
+        -- 显示等待最久的5个查询
+        local sortedPending = {}
+        for pKey, pData in pairs(State.pending) do
+            if pData.queryStartTime then
+                table.insert(sortedPending, {
+                    key = pKey,
+                    queryId = pData.queryId,
+                    startTime = pData.queryStartTime,
+                    waitTime = now - pData.queryStartTime
+                })
+            end
+        end
+        
+        -- 按等待时间排序
+        table.sort(sortedPending, function(a, b) return a.waitTime > b.waitTime end)
+        
+        -- 显示前5个
+        print("  |cffffcc00等待最久的查询:|r")
+        for i = 1, math.min(5, #sortedPending) do
+            local item = sortedPending[i]
+            print(string.format("    Q%s: %s 已等待 %.1fs", 
+                item.queryId or "?", item.key, item.waitTime))
+        end
+    end
 
     -- 设置超时机制
     C_Timer.After(DB.timeout, function()
@@ -1751,6 +1874,32 @@ local function SendQuery(itemID, guid)
             State.noDataUntil[key] = nil
         end
     end)
+end
+
+-- 发送查询（直接发送，Addon消息不受速率限制）
+local function SendQuery(itemID, guid)
+    if not itemID or not guid or guid == 0 then return end
+
+    local key = MakeKey(itemID, guid, nil, nil, false)
+    local now = GetTime()
+
+    -- 先检查是否应该跳过
+    if ShouldSkipQuery(key) then
+        -- 跳过查询（缓存命中或正在查询中）
+        -- 如果是因为pending而跳过，且等待时间过长，显示警告
+        if State.pending[key] and State.pending[key].queryStartTime then
+            local waitTime = now - State.pending[key].queryStartTime
+            if waitTime > 3 and (not State.pending[key].warnShown or now - State.pending[key].warnShown > 5) then
+                State.pending[key].warnShown = now
+                DebugPrint(string.format("[警告] itemID=%d guid=%d 已等待%.1f秒，服务器响应缓慢", 
+                    itemID, guid, waitTime))
+            end
+        end
+        return
+    end
+
+    -- 直接发送查询（Addon消息不受聊天速率限制）
+    DoSendQuery(itemID, guid, key)
 end
 
 -- ============================================================================
@@ -1933,8 +2082,24 @@ local function RenderTooltip(tooltip, itemID, guid)
     local meta = GetTooltipMeta(tooltip, key)
     local cached = GetCachedData(itemID, guid)
 
-    -- 无论是否有缓存，都尝试发送查询（SendQuery内部会检查是否需要查询）
-    SendQuery(itemID, guid)
+    -- 只在没有完整缓存时才发送查询
+    local hasCompleteCache = false
+    if cached and cached.systems then
+        hasCompleteCache = true
+        -- 检查是否所有启用的系统都有数据（包括isEmpty标记）
+        for systemName, enabled in pairs(DB.systems) do
+            if enabled and not cached.systems[systemName] then
+                hasCompleteCache = false
+                break
+            end
+        end
+    end
+
+    -- 如果没有完整缓存，尝试发送查询（SendQuery内部会检查是否需要查询）
+    local now = GetTime()
+    if not hasCompleteCache then
+        SendQuery(itemID, guid)
+    end
 
     -- 检查是否正在查询中
     local isPending = State.pending[key] ~= nil
@@ -1942,9 +2107,19 @@ local function RenderTooltip(tooltip, itemID, guid)
     if not cached then
         -- 完全没有缓存
         if isPending then
-            -- 正在查询中
+            -- 正在查询中，显示等待时间
+            local waitTime = 0
+            if State.pending[key] and State.pending[key].queryStartTime then
+                waitTime = now - State.pending[key].queryStartTime
+            end
             tooltip:AddLine(" ")
-            tooltip:AddLine(DB.colors.special .. "正在加载属性..." .. DB.colors.reset)
+            if waitTime > 2 then
+                -- 超过2秒，显示警告
+                tooltip:AddLine(string.format("%s正在加载属性... (已等待 %.1f秒)%s", 
+                    DB.colors.special, waitTime, DB.colors.reset))
+            else
+                tooltip:AddLine(DB.colors.special .. "正在加载属性..." .. DB.colors.reset)
+            end
             tooltip:Show()
             return
         else
@@ -1956,7 +2131,6 @@ local function RenderTooltip(tooltip, itemID, guid)
 
     -- 如果缓存标记为无数据，直接返回不显示任何额外内容
     if cached.noData then
-        DebugPrint("[渲染] 缓存标记为noData，跳过渲染")
         return
     end
 
@@ -1999,24 +2173,119 @@ end
 
 local EventFrame = CreateFrame("Frame")
 
+-- ⭐ 前向声明（函数定义在后面）
+local ProcessServerResponse
 
--- 处理聊天消息
-local function OnChatMessage(self, event, message, sender)
-    if not message or type(message) ~= "string" then
+-- ⭐ 处理Addon消息
+local function OnAddonMessage(self, event, prefix, message, channel, sender)
+    local now = GetTime()
+    
+    DebugPrint("[事件调试] CHAT_MSG_ADDON触发: prefix=", prefix, "channel=", channel, "sender=", sender)
+    DebugPrint("[事件调试] message前100字符:", message:sub(1, 100))
+    
+    -- 只处理我们自己的前缀
+    if prefix ~= ADDON_PREFIX then
+        DebugPrint("[事件调试] 前缀不匹配: 期望=", ADDON_PREFIX, "实际=", prefix)
         return
     end
-
+    
+    DebugPrint("[事件调试] 前缀匹配成功")
+    
+    -- 只处理来自自己的消息
+    if sender ~= UnitName("player") then
+        DebugPrint("[事件调试] 发送者不匹配: 期望=", UnitName("player"), "实际=", sender)
+        return
+    end
+    
+    DebugPrint("[事件调试] 发送者匹配成功，开始处理消息")
+    
     local receiveTime = GetTime()
+    
+    -- ⭐ 修复：忽略自己发出的查询消息（格式：QUERY:itemID:guid）
+    if message:match("^QUERY:") then
+        DebugPrint("[事件调试] 忽略自己发出的查询消息")
+        return
+    end
+    
+    -- 检查是否是ALL_MODULE_DATA响应
+    if not message:match("ALL_MODULE_DATA:") then
+        DebugPrint("[事件调试] 不是ALL_MODULE_DATA消息，忽略")
+        return
+    end
+    
+    DebugPrint("[事件调试] 检测到ALL_MODULE_DATA消息，开始处理")
+    
+    -- 移除RESPONSE:前缀（如果有）
+    local dataMessage = message:gsub("^RESPONSE:", "")
+    
+    DebugPrint("[事件调试] 准备调用ProcessServerResponse")
+    DebugPrint("[事件调试] dataMessage前50字符:", dataMessage:sub(1, 50))
+    
+    -- 使用pcall捕获错误
+    local success, err = pcall(function()
+        ProcessServerResponse(dataMessage, receiveTime)
+    end)
+    
+    if not success then
+        print("|cffff0000[统一提示框错误]|r ProcessServerResponse失败:", err)
+    else
+        DebugPrint("[事件调试] ProcessServerResponse执行完成")
+    end
+end
+
+-- OnChatMessage已删除，现在只使用Addon消息通道
+
+-- ⭐ 统一的服务器响应处理函数（实现前面声明的函数）
+ProcessServerResponse = function(message, receiveTime)
+    DebugPrint("[ProcessServerResponse] 开始处理: message前100字符=", message:sub(1, 100))
 
     -- ⭐ 优先尝试批量数据解析器
     local batchData = Parsers.BatchQuery(message)
-    if batchData then
+    
+    if not batchData then
+        DebugPrint("[ProcessServerResponse] BatchQuery返回nil，解析失败")
+        return
     end
+    
+    DebugPrint("[ProcessServerResponse] BatchQuery成功: itemID=", batchData.itemID, "guid=", batchData.guid)
+    
     if batchData then
-        DebugPrint("[批量数据] 收到批量响应: itemID=", batchData.itemID, "guid=", batchData.guid)
-
         local key = MakeKey(batchData.itemID, batchData.guid, nil, nil, false)
+        
+        -- 性能监控：计算从发送到接收的延迟
+        local now = GetTime()
+        local pending = State.pending[key]
+        if pending and pending.queryStartTime then
+            local rtt = (now - pending.queryStartTime) * 1000  -- 转换为毫秒
+            local queryId = pending.queryId or "?"
+            
+            -- 更详细的时间信息
+            print(string.format("|cff00ffff[统一提示框]|r |cffff8000[Q%s←]|r itemID=%d guid=%d RTT=%.0fms |cffaaaaaa[接收时间 %.3fs]|r", 
+                queryId, batchData.itemID, batchData.guid, rtt, now))
+            
+            -- 如果RTT超过3秒，显示详细分析
+            if rtt > 3000 then
+                print(string.format("  |cffff0000[延迟分析]|r 发送时间: %.3fs, 接收时间: %.3fs, 延迟: %.3fs", 
+                    pending.queryStartTime, now, (now - pending.queryStartTime)))
+                print(string.format("  |cffff0000[警告]|r 这可能是服务器处理慢或网络延迟导致"))
+            end
+        else
+            -- 没有pending记录，说明可能是重复消息或异常情况
+            print(string.format("|cff00ffff[统一提示框]|r |cffff8000[Q?←]|r itemID=%d guid=%d |cffff0000(无pending记录)|r", 
+                batchData.itemID, batchData.guid))
+        end
+
         local hasAnyData = false
+
+        -- 先确保缓存对象存在
+        if not State.cache[key] then
+            State.cache[key] = {
+                itemID = batchData.itemID,
+                guid = batchData.guid,
+                systems = {}
+            }
+            State.cacheTime[key] = GetTime()
+        end
 
         -- 将批量数据拆分并缓存到各个系统
         for systemName, systemData in pairs(batchData.systems) do
@@ -2024,109 +2293,61 @@ local function OnChatMessage(self, event, message, sender)
             CacheData(batchData.itemID, batchData.guid, systemData)
         end
 
-        -- 如果没有任何系统数据，创建空缓存并清除pending状态
-        if not hasAnyData then
-            -- 创建空缓存结构
-            if not State.cache[key] then
-                State.cache[key] = {
+        -- 为所有启用但没有数据的系统创建空标记，确保pending可以被清除
+        for systemName, enabled in pairs(DB.systems) do
+            if enabled and not State.cache[key].systems[systemName] then
+                State.cache[key].systems[systemName] = {
+                    type = systemName,
                     itemID = batchData.itemID,
                     guid = batchData.guid,
-                    systems = {},
-                    noData = true  -- 标记为无数据
+                    isEmpty = true  -- 标记为空数据
                 }
-                State.cacheTime[key] = GetTime()
             end
+        end
 
-            -- 清除pending状态，避免继续显示"正在加载"
-            State.pending[key] = nil
-            State.noDataUntil[key] = nil
+        -- 批量查询完成后，强制清除pending状态（因为服务器已经返回了所有数据）
+        State.pending[key] = nil
+        State.noDataUntil[key] = nil
+
+        -- 如果完全没有数据，标记整个缓存
+        if not hasAnyData then
+            State.cache[key].noData = true
         end
 
         -- 更新所有相关的提示框
+        local renderCount = 0
         for tooltip, meta in pairs(State.tooltips) do
             if tooltip:IsShown() and meta.key == key then
                 RenderTooltip(tooltip, batchData.itemID, batchData.guid)
+                renderCount = renderCount + 1
             end
+        end
+
+        -- 如果没有渲染目标，显示警告
+        if renderCount == 0 and pending then
+            local queryId = pending.queryId or "?"
+            DebugPrint(string.format("[警告] Q%s 收到数据但无渲染目标（用户可能已移开鼠标）", queryId))
         end
 
         return
     end
-
-    -- 尝试旧的单个解析器（向后兼容）
-    for name, parser in pairs(Parsers) do
-        if name ~= "BatchQuery" then  -- 跳过批量解析器
-            local data = parser(message)
-            if data then
-                -- 特殊处理 RUNEINFO 格式（没有 itemID）
-                if data.type == "runes" and (not data.itemID or data.itemID == 0) then
-                    -- 尝试从当前显示的 tooltip 获取 itemID
-                    for tooltip, meta in pairs(State.tooltips) do
-                        if tooltip:IsShown() and meta.key then
-                            local _, itemLink = tooltip:GetItem()
-                            if itemLink then
-                                local itemID, itemGUID = ExtractItemInfo(itemLink)
-                                if itemID and itemGUID == data.guid then
-                                    data.itemID = itemID
-                                    break
-                                end
-                            end
-                        end
-                    end
-
-                    -- 如果还是没有 itemID，尝试从缓存中查找
-                    if not data.itemID or data.itemID == 0 then
-                        for key, cache in pairs(State.cache) do
-                            if cache.guid == data.guid then
-                                data.itemID = cache.itemID
-                                break
-                            end
-                        end
-                    end
-                end
-
-                -- 如果是符文系统数据但没有 itemID，跳过缓存但仍然更新 tooltip
-                if data.type == "runes" and (not data.itemID or data.itemID == 0) then
-                    -- 直接更新所有显示中的 tooltip
-                    for tooltip, meta in pairs(State.tooltips) do
-                        if tooltip:IsShown() then
-                            local _, itemLink = tooltip:GetItem()
-                            if itemLink then
-                                local itemID, itemGUID = ExtractItemInfo(itemLink)
-                                if itemGUID == data.guid then
-                                    data.itemID = itemID
-                                    local key = MakeKey(itemID, itemGUID, nil, nil, false)
-                                    CacheData(itemID, itemGUID, data)
-                                    RenderTooltip(tooltip, itemID, itemGUID)
-                                    break
-                                end
-                            end
-                        end
-                    end
-                    return
-                end
-
-                local key = CacheData(data.itemID, data.guid, data)
-
-                -- 更新所有相关的提示框
-                for tooltip, meta in pairs(State.tooltips) do
-                    if tooltip:IsShown() and meta.key == key then
-                        RenderTooltip(tooltip, data.itemID, data.guid)
-                    end
-                end
-
-                return
-            end
-        end
-    end
 end
 
--- 注册所有相关的聊天事件
-EventFrame:RegisterEvent("CHAT_MSG_SYSTEM")
-EventFrame:RegisterEvent("CHAT_MSG_SYSTEM")
-EventFrame:RegisterEvent("CHAT_MSG_WHISPER")
-EventFrame:RegisterEvent("CHAT_MSG_YELL")
-EventFrame:RegisterEvent("CHAT_MSG_GUILD")
-EventFrame:SetScript("OnEvent", OnChatMessage)
+-- ⭐ 注册Addon消息前缀（兼容WoW 3.3.5）
+if RegisterAddonMessagePrefix then
+    RegisterAddonMessagePrefix(ADDON_PREFIX)
+elseif C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
+    C_ChatInfo.RegisterAddonMessagePrefix(ADDON_PREFIX)
+end
+
+-- ⭐ 注册Addon消息事件
+EventFrame:RegisterEvent("CHAT_MSG_ADDON")
+
+EventFrame:SetScript("OnEvent", function(self, event, ...)
+    if event == "CHAT_MSG_ADDON" then
+        OnAddonMessage(self, event, ...)
+    end
+end)
 
 
 -- ============================================================================
@@ -2166,19 +2387,16 @@ GameTooltip:HookScript("OnTooltipCleared", OnTooltipCleared)
 if ShoppingTooltip1 then
     ShoppingTooltip1:HookScript("OnTooltipSetItem", OnTooltipSetItem)
     ShoppingTooltip1:HookScript("OnTooltipCleared", OnTooltipCleared)
-    print("|cFFFF0000[步骤7]|r ShoppingTooltip1钩子注册完成")
 end
 if ShoppingTooltip2 then
     ShoppingTooltip2:HookScript("OnTooltipSetItem", OnTooltipSetItem)
     ShoppingTooltip2:HookScript("OnTooltipCleared", OnTooltipCleared)
-    print("|cFFFF0000[步骤7]|r ShoppingTooltip2钩子注册完成")
 end
 
 -- Hook物品引用提示框（聊天框链接点击）
 if ItemRefTooltip then
     ItemRefTooltip:HookScript("OnTooltipSetItem", OnTooltipSetItem)
     ItemRefTooltip:HookScript("OnTooltipCleared", OnTooltipCleared)
-    print("|cFFFF0000[步骤7]|r ItemRefTooltip钩子注册完成")
 end
 
 -- ============================================================================
@@ -2206,17 +2424,6 @@ SlashCmdList["UNIFIEDTOOLTIP"] = function(msg)
         else
             print("|cffff0000[统一提示框]|r 无效的时间值，请输入1-60之间的整数")
             print("|cff888888示例: /提示框 设置超时 15|r （15秒）")
-        end
-
-    elseif msg:match("^设置间隔%s+") or msg:match("^delay%s+") then
-        local delay = tonumber(msg:match("[%d%.]+"))
-        if delay and delay >= 0 and delay <= 1 then
-            DB.commandDelay = delay
-            print("|cff00ff00[统一提示框]|r 命令间隔已设置为: " .. delay .. " 秒")
-            print("|cff888888提示: 设置为0表示一次性发送所有命令（可能导致排队）|r")
-        else
-            print("|cffff0000[统一提示框]|r 无效的间隔值，请输入0-1之间的数字")
-            print("|cff888888示例: /提示框 设置间隔 0.1|r （0.1秒）")
         end
 
     elseif msg:match("^设置有效期%s+") or msg:match("^缓存时间%s+") or msg:match("^expire%s+") then
@@ -2260,14 +2467,24 @@ SlashCmdList["UNIFIEDTOOLTIP"] = function(msg)
         end
 
     elseif msg == "状态" or msg == "查看" or msg == "status" then
+        -- 统计数量
+        local cacheCount = 0
+        for _ in pairs(State.cache or {}) do cacheCount = cacheCount + 1 end
+        
+        local pendingCount = 0
+        for _ in pairs(State.pending or {}) do pendingCount = pendingCount + 1 end
+        
+        local cooldownCount = 0
+        for _ in pairs(State.noDataUntil or {}) do cooldownCount = cooldownCount + 1 end
+        
         print("|cff00ff00[统一提示框]|r 缓存状态:")
-        print("  总缓存数: " .. (State.cache and #State.cache or 0))
-        print("  查询中: " .. (State.pending and #State.pending or 0))
-        print("  冷却中: " .. (State.noDataUntil and #State.noDataUntil or 0))
+        print("  总缓存数: " .. cacheCount)
+        print("  查询中: " .. pendingCount)
+        print("  冷却中: " .. cooldownCount)
         print("\n|cff00ff00[统一提示框]|r 性能配置:")
         print("  缓存有效期: " .. DB.cacheExpiration .. " 秒 (" .. math.floor(DB.cacheExpiration / 60) .. " 分钟)")
         print("  查询超时: " .. DB.timeout .. " 秒")
-        print("  命令间隔: " .. DB.commandDelay .. " 秒")
+        print("  通信方式: Addon消息（不受聊天速率限制）")
         print("  调试模式: " .. (DB.debug and "开启" or "关闭"))
 
         -- 显示当前装备的详细信息
@@ -2299,6 +2516,68 @@ SlashCmdList["UNIFIEDTOOLTIP"] = function(msg)
                 end
             end
         end
+        
+        -- 如果有pending查询，显示详细列表
+        if pendingCount > 0 then
+            print("\n|cffffcc00所有等待中的查询:|r")
+            local now = GetTime()
+            local pendingList = {}
+            
+            for pKey, pData in pairs(State.pending) do
+                if pData.queryStartTime then
+                    table.insert(pendingList, {
+                        key = pKey,
+                        queryId = pData.queryId,
+                        startTime = pData.queryStartTime,
+                        waitTime = now - pData.queryStartTime
+                    })
+                end
+            end
+            
+            -- 按queryId排序
+            table.sort(pendingList, function(a, b) return (a.queryId or 0) < (b.queryId or 0) end)
+            
+            for _, item in ipairs(pendingList) do
+                local color = item.waitTime > 5 and "|cffff0000" or (item.waitTime > 3 and "|cffffcc00" or "|cff00ff00")
+                print(string.format("  Q%s: %s 已等待 %s%.1fs|r", 
+                    item.queryId or "?", item.key, color, item.waitTime))
+            end
+        end
+
+    elseif msg == "pending" or msg == "等待" then
+        -- 新命令：专门查看pending状态
+        local pendingCount = 0
+        for _ in pairs(State.pending or {}) do pendingCount = pendingCount + 1 end
+        
+        if pendingCount == 0 then
+            print("|cff00ff00[统一提示框]|r 当前没有等待中的查询")
+            return
+        end
+        
+        print("|cff00ff00[统一提示框]|r 等待中的查询 (共 " .. pendingCount .. " 个):")
+        
+        local now = GetTime()
+        local pendingList = {}
+        
+        for pKey, pData in pairs(State.pending) do
+            if pData.queryStartTime then
+                table.insert(pendingList, {
+                    key = pKey,
+                    queryId = pData.queryId,
+                    startTime = pData.queryStartTime,
+                    waitTime = now - pData.queryStartTime
+                })
+            end
+        end
+        
+        -- 按等待时间排序（最长的在前）
+        table.sort(pendingList, function(a, b) return a.waitTime > b.waitTime end)
+        
+        for _, item in ipairs(pendingList) do
+            local color = item.waitTime > 5 and "|cffff0000" or (item.waitTime > 3 and "|cffffcc00" or "|cff00ff00")
+            print(string.format("  Q%s: %s 已等待 %s%.1fs|r", 
+                item.queryId or "?", item.key, color, item.waitTime))
+        end
 
     elseif msg == "性能" or msg == "统计" or msg == "perf" or msg == "performance" then
         print("|cff00ff00[统一提示框]|r 性能统计:")
@@ -2326,18 +2605,14 @@ SlashCmdList["UNIFIEDTOOLTIP"] = function(msg)
 
     elseif msg == "优化延迟" or msg == "慢速模式" or msg == "slow" then
         DB.timeout = 20
-        DB.commandDelay = 0.15
         print("|cff00ff00[统一提示框]|r 已应用慢速服务器优化:")
         print("  查询超时: 20 秒")
-        print("  命令间隔: 0.15 秒")
         print("|cff888888此配置适用于响应慢的服务器|r")
 
     elseif msg == "优化速度" or msg == "快速模式" or msg == "fast" then
         DB.timeout = 10
-        DB.commandDelay = 0.05
         print("|cff00ff00[统一提示框]|r 已应用快速服务器优化:")
         print("  查询超时: 10 秒")
-        print("  命令间隔: 0.05 秒")
         print("|cff888888此配置适用于响应快的服务器|r")
 
     elseif msg == "链接" or msg == "调试链接" or msg == "link" then
@@ -2388,14 +2663,13 @@ SlashCmdList["UNIFIEDTOOLTIP"] = function(msg)
         print("  |cffffcc00/提示框 清除|r - 清除所有缓存")
         print("  |cffffcc00/提示框 刷新|r - 清除当前装备缓存并重新查询")
         print("  |cffffcc00/提示框 状态|r - 显示缓存状态和配置")
+        print("  |cffffcc00/提示框 pending|r - 显示所有等待中的查询")
         print("\n|cffffcc00性能优化:|r")
         print("  |cffffcc00/提示框 性能|r - 显示各系统响应时间统计")
         print("  |cffffcc00/提示框 优化延迟|r - 应用慢速服务器预设（推荐⭐）")
         print("  |cffffcc00/提示框 优化速度|r - 应用快速服务器预设")
         print("  |cffffcc00/提示框 设置超时 <秒数>|r - 设置查询超时时间")
         print("    |cff888888示例: /提示框 设置超时 20|r （20秒）")
-        print("  |cffffcc00/提示框 设置间隔 <秒数>|r - 设置命令发送间隔")
-        print("    |cff888888示例: /提示框 设置间隔 0.15|r （0.15秒间隔）")
         print("  |cffffcc00/提示框 设置有效期 <秒数>|r - 设置缓存有效期")
         print("    |cff888888示例: /提示框 设置有效期 600|r （10分钟）")
         print("\n|cffffcc00其他:|r")
@@ -2405,8 +2679,8 @@ SlashCmdList["UNIFIEDTOOLTIP"] = function(msg)
         print(" ")
         print("|cff888888其他可用命令：/属性提示 /物品提示 /utt|r")
         print(" ")
-        print("|cffff8000如果服务器响应慢，建议先执行:|r")
-        print("  |cffffcc00/提示框 优化延迟|r")
+        print("|cff00ff00提示：插件使用Addon消息通道，不受聊天速率限制！|r")
+        print("|cff888888快速悬停多个装备时，查询将以最快速度响应（RTT<100ms）。|r")
 
     else
         print("|cffff0000[统一提示框]|r 未知命令: " .. msg)

@@ -2689,6 +2689,212 @@ public:
     }
 };
 
+// ⭐ Addon消息处理脚本
+class ItemIdentificationAddonScript : public PlayerScript
+{
+public:
+    ItemIdentificationAddonScript() : PlayerScript("ItemIdentificationAddonScript") { }
+
+    // 监听玩家聊天事件，拦截Addon消息
+    void OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg, Player* /*receiver*/) override
+    {
+        // ⭐ 添加详细日志
+        LOG_INFO("module.itemidentification", "[Addon调试] OnPlayerChat被调用: player={}, type={}, lang={}, msg前50字符={}",
+                 player ? player->GetName() : "NULL", type, lang, msg.substr(0, 50));
+        
+        // 只处理Addon消息
+        if (type != CHAT_MSG_WHISPER || lang != LANG_ADDON)
+        {
+            LOG_INFO("module.itemidentification", "[Addon调试] 跳过: type={} (需要{}), lang={} (需要{})",
+                     type, CHAT_MSG_WHISPER, lang, LANG_ADDON);
+            return;
+        }
+
+        LOG_INFO("module.itemidentification", "[Addon调试] 收到Addon消息: msg={}", msg);
+
+        // 注意：服务器收到的消息格式是 "UITQ<TAB>QUERY:itemID:guid"
+        // 需要先移除"UITQ<TAB>"前缀，然后解析"QUERY:itemID:guid"
+        
+        // 查找TAB字符的位置
+        size_t tabPos = msg.find('\t');
+        if (tabPos == std::string::npos)
+        {
+            LOG_INFO("module.itemidentification", "[Addon调试] 消息格式错误，没有找到TAB分隔符: msg={}", msg);
+            return;
+        }
+        
+        // 提取前缀部分（应该是"UITQ"）
+        std::string prefix = msg.substr(0, tabPos);
+        if (prefix != "UITQ")
+        {
+            LOG_INFO("module.itemidentification", "[Addon调试] 前缀不匹配: 期望=UITQ, 实际={}", prefix);
+            return;
+        }
+        
+        LOG_INFO("module.itemidentification", "[Addon调试] 前缀匹配成功");
+
+        // 提取消息内容（TAB之后的部分）
+        std::string command = msg.substr(tabPos + 1);
+
+        // 解析QUERY命令
+        if (command.find("QUERY:") != 0)
+            return;
+
+        // 提取参数
+        std::string params = command.substr(6);  // 去掉"QUERY:"
+        
+        // 解析itemID和guid
+        size_t colonPos = params.find(':');
+        if (colonPos == std::string::npos)
+            return;
+
+        uint32 itemID = 0;
+        uint32 guid = 0;
+
+        try
+        {
+            itemID = std::stoul(params.substr(0, colonPos));
+            guid = std::stoul(params.substr(colonPos + 1));
+        }
+        catch (...)
+        {
+            return;  // 解析失败
+        }
+
+        if (itemID == 0 || guid == 0)
+        {
+            LOG_INFO("module.itemidentification", "[Addon调试] itemID或guid无效: itemID={}, guid={}", itemID, guid);
+            return;
+        }
+
+        // 记录日志（始终记录，不管调试模式）
+        LOG_INFO("module.itemidentification", "[Addon消息] ⭐ 收到批量查询: player={}, itemID={}, guid={}",
+                 player->GetName(), itemID, guid);
+
+        // ⭐ 执行批量查询并通过Addon消息返回结果
+        HandleAddonBatchQuery(player, itemID, guid);
+        
+        LOG_INFO("module.itemidentification", "[Addon消息] ⭐ HandleAddonBatchQuery执行完成");
+    }
+
+private:
+    void HandleAddonBatchQuery(Player* player, uint32 itemID, uint32 guid)
+    {
+        LOG_INFO("module.itemidentification", "[Addon调试] HandleAddonBatchQuery开始: itemID={}, guid={}", itemID, guid);
+        
+        if (!player)
+        {
+            LOG_ERROR("module.itemidentification", "[Addon调试] player is NULL!");
+            return;
+        }
+        
+        if (!sItemIdentificationSystem->_enabled)
+        {
+            LOG_INFO("module.itemidentification", "[Addon调试] 系统未启用");
+            return;
+        }
+
+        // 执行批量查询（使用现有的查询逻辑）
+        auto queryStart = std::chrono::high_resolution_clock::now();
+
+        // 优先从缓存读取
+        uint64 cacheKey = ((uint64)itemID << 32) | guid;
+        auto it = sItemIdentificationSystem->_batchQueryCache.find(cacheKey);
+
+        ItemIdentificationSystem::AllModuleData moduleData;  // 改名避免与WorldPacket data冲突
+        bool cacheHit = false;
+
+        // 更新统计：总查询次数
+        sItemIdentificationSystem->_perfStats.totalQueries++;
+
+        if (it != sItemIdentificationSystem->_batchQueryCache.end())
+        {
+            // 检查缓存是否过期
+            time_t now = time(nullptr);
+            if ((now - it->second.cacheTime) < sItemIdentificationSystem->BATCH_CACHE_EXPIRE_TIME)
+            {
+                // 缓存有效，直接使用
+                moduleData = it->second.data;
+                cacheHit = true;
+                sItemIdentificationSystem->_perfStats.cacheHits++;
+            }
+            else
+            {
+                // 缓存过期，删除
+                sItemIdentificationSystem->_batchQueryCache.erase(it);
+                sItemIdentificationSystem->_perfStats.cacheMisses++;
+            }
+        }
+        else
+        {
+            sItemIdentificationSystem->_perfStats.cacheMisses++;
+        }
+
+        if (!cacheHit)
+        {
+            // 缓存未命中，查询数据库
+            sItemIdentificationSystem->_perfStats.dbQueries++;
+            moduleData = sItemIdentificationSystem->QueryAllModuleData(itemID, guid);
+
+            // 存入缓存
+            ItemIdentificationSystem::BatchQueryCache cache;
+            cache.data = moduleData;
+            cache.cacheTime = time(nullptr);
+            sItemIdentificationSystem->_batchQueryCache[cacheKey] = cache;
+        }
+
+        // ⭐ 构建Addon响应消息
+        // 格式：ALL_MODULE_DATA:itemID:guid:base:additional:growth:enhancement:skills:magic:rune:set
+        // 注意：客户端会自动添加RESPONSE:前缀检查，这里只发数据
+        std::ostringstream response;
+        response << "ALL_MODULE_DATA:" << itemID << ":" << guid << ":"
+                 << moduleData.baseAttributes << ":"
+                 << moduleData.additionalAttributes << ":"
+                 << moduleData.growthData << ":"
+                 << moduleData.enhancementData << ":"
+                 << moduleData.skillsData << ":"
+                 << moduleData.magicHitData << ":"
+                 << moduleData.runeData << ":"
+                 << moduleData.setData;
+
+        std::string responseStr = response.str();
+        
+        LOG_INFO("module.itemidentification", "[Addon调试] 构建响应消息: 长度={}, 前100字符={}",
+                 responseStr.length(), responseStr.substr(0, 100));
+
+        // ⭐ 通过Addon消息发送响应
+        // 参考符文系统：构建完整消息 "UITQ<TAB>响应数据"
+        std::string fullMessage = "UITQ\t" + responseStr;
+        
+        LOG_INFO("module.itemidentification", "[Addon调试] 完整消息: 前100字符={}", fullMessage.substr(0, 100));
+
+        // 使用ChatHandler::BuildChatPacket构建标准包
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, 
+                                     player, player, fullMessage, 0);
+
+        LOG_INFO("module.itemidentification", "[Addon调试] WorldPacket构建完成，准备发送");
+        
+        player->SendDirectMessage(&data);
+        
+        LOG_INFO("module.itemidentification", "[Addon调试] ⭐ SendDirectMessage已调用");
+
+        // 计算查询耗时
+        auto queryEnd = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(queryEnd - queryStart).count();
+        sItemIdentificationSystem->_perfStats.totalQueryTime += duration;
+        sItemIdentificationSystem->_perfStats.avgQueryTime = 
+            sItemIdentificationSystem->_perfStats.totalQueryTime / sItemIdentificationSystem->_perfStats.totalQueries;
+
+        if (sItemIdentificationSystem->_debugMode)
+        {
+            LOG_INFO("module.itemidentification", 
+                     "[Addon响应] 已发送数据: itemID={}, guid={}, 消息长度={}, 缓存命中={}, 耗时={}μs",
+                     itemID, guid, responseStr.length(), cacheHit, duration);
+        }
+    }
+};
+
 // 添加脚本
 void AddItemIdentificationSystemScripts()
 {
@@ -2703,6 +2909,9 @@ void AddItemIdentificationSystemScripts()
 
     // 添加掉落监控脚本
     new ItemIdentificationLootScript();
+
+    // ⭐ 添加Addon消息处理脚本
+    new ItemIdentificationAddonScript();
 }
 
 // ============================================================================
@@ -3100,7 +3309,17 @@ void ItemIdentificationSystem::HandleBatchQueryCommand(Player* player, uint32 it
     DebugLog("  - 套装数据: [{}]", data.setData);
 
     // 发送到客户端
+    // 记录发送时间以监控潜在的消息队列延迟
+    auto sendStart = std::chrono::high_resolution_clock::now();
     ChatHandler(player->GetSession()).PSendSysMessage(response.str().c_str());
+    auto sendEnd = std::chrono::high_resolution_clock::now();
+    auto sendDuration = std::chrono::duration_cast<std::chrono::microseconds>(sendEnd - sendStart).count();
+    
+    if (sendDuration > 1000)  // 如果发送耗时超过1ms，记录警告
+    {
+        LOG_WARN("module.itemidentification", "[批量查询] 消息发送延迟: {}μs ({}ms), itemID={}, guid={}, 消息长度={}",
+                 sendDuration, sendDuration / 1000, itemID, guid, response.str().length());
+    }
 
     // 计算查询耗时
     auto queryEnd = std::chrono::high_resolution_clock::now();

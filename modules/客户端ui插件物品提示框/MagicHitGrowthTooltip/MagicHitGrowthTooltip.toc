@@ -1,8 +1,13 @@
 ## Interface: 30300
-## Title: 物品属性提示框
-## Notes: Combined tooltip experiment for magic hit and item growth data
+## Title: 统一物品提示框
+## Title-zhCN: 统一物品提示框
+## Title-enUS: Unified Item Tooltip
+## Notes: 统一显示物品的所有自定义属性（鉴定、成长、强化、技能、符文、套装、魔次）
+## Notes-zhCN: 统一显示物品的所有自定义属性（鉴定、成长、强化、技能、符文、套装、魔次）
+## Notes-enUS: Unified tooltip for all custom item attributes (Identification, Growth, Enhancement, Skills, Runes, Sets, Magic)
 ## Author: Cascade Assistant
-## Version: 0.1.0
+## Version: 2.0.0
+## SavedVariables: UnifiedItemTooltipDB
 
-## 主文件
+## 核心文件
 MagicHitGrowthTooltip_v2.lua

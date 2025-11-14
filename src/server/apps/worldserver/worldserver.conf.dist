@@ -4025,7 +4025,7 @@ ChatStrictLinkChecking.Kick = 0
 #        Default:     10 - (Enabled)
 #                     0  - (Disabled)
 
-ChatFlood.MessageCount = 10
+ChatFlood.MessageCount = 0
 
 #
 #    ChatFlood.MessageDelay
@@ -4040,7 +4040,7 @@ ChatFlood.MessageDelay = 1
 #        Default:     100 - (Enabled)
 #                     0  - (Disabled)
 
-ChatFlood.AddonMessageCount = 100
+ChatFlood.AddonMessageCount = 0
 
 #
 #    ChatFlood.AddonMessageDelay
@@ -4054,7 +4054,7 @@ ChatFlood.AddonMessageDelay = 1
 #        Description: Time (in seconds) characters get muted for violating ChatFlood.MessageCount / ChatFlood.AddonMessageCount.
 #        Default:     10
 
-ChatFlood.MuteTime = 10
+ChatFlood.MuteTime = 0
 
 #
 #    Chat.MuteFirstLogin
