@@ -3,6 +3,7 @@
 
 local ADDON_NAME = "UnifiedItemTooltip"
 local ADDON_PREFIX = "UITQ"  -- ⭐ Addon消息前缀（最多16字符）- UnifiedItemTooltipQuery
+local ADDON_PREFIX_ALT = "ITEMENHANCE"  -- ⭐ 备用前缀（兼容服务器可能使用的其他前缀）
 
 -- ============================================================================
 -- 配置
@@ -391,591 +392,33 @@ end
 
 
 -- ============================================================================
--- 数据解析器 - 只保留批量查询解析器（旧格式解析器已删除）
+-- 数据解析器 - 只使用批量查询解析器（addon格式）
 -- ============================================================================
 
 local Parsers = {}
 
--- ⭐ 旧的单独解析器已全部删除（Magic, Growth, Identification, Enhancement, Skills, Runes, Sets）
--- 现在只使用批量查询解析器（定义在后面）
-
--- ⭐ 新增：批量数据解析器（解析ALL_MODULE_DATA消息）
+-- ⭐ 批量数据解析器（解析ALL_MODULE_DATA消息）
+-- 这是唯一的解析器，处理服务器通过addon消息返回的批量数据
 function Parsers.BatchQuery(message)
-    DebugPrint("[解析器908] 开始解析: message前100字符=", message:sub(1, 100))
-    
     -- 格式：ALL_MODULE_DATA:itemID:guid:base:additional:growth:enhancement:skills:magic:rune:set
     if not message:match("^ALL_MODULE_DATA:") then
-        DebugPrint("[解析器908] 不匹配ALL_MODULE_DATA前缀")
         return nil
     end
-    
-    DebugPrint("[解析器908] 匹配ALL_MODULE_DATA前缀成功")
 
     -- 性能监控：开始解析
     local parseStartTime = GetTime()
 
     local parts = { strsplit(":", message) }
     if #parts < 3 then
-        DebugPrint("[解析器908] parts数量不足:", #parts)
         return nil
     end
-    
-    DebugPrint("[解析器908] parts数量:", #parts)
 
     local itemID = tonumber(parts[2])
     local guid = tonumber(parts[3])
 
     if not itemID or not guid or guid == 0 then
-        DebugPrint("[解析器908] itemID或guid无效:", itemID, guid)
         return nil
     end
-    
-    DebugPrint("[解析器908] 解析成功: itemID=", itemID, "guid=", guid)
-
-    -- 解析所有系统数据
-    local baseAttributes = parts[4] or ""
-    local additionalAttributes = parts[5] or ""
-    local growthData = parts[6] or ""
-    local enhancementData = parts[7] or ""
-    local skillsData = parts[8] or ""
-    local magicData = parts[9] or ""
-    local runeData = parts[10] or ""
-    local setData = parts[11] or ""
-
-    local result = {
-        type = "batch",
-        itemID = itemID,
-        guid = guid,
-        systems = {}
-    }
-
-    -- 解析鉴定系统数据（基础属性和追加属性）
-    if baseAttributes ~= "" or additionalAttributes ~= "" then
-        for chunk in string.gmatch(configsStr, "([^,]+)") do
-            local id, count, desc = chunk:match("(%d+)|(%d+)|(.+)")
-            if id and count then
-                table.insert(configs, {
-                    id = tonumber(id),
-                    count = tonumber(count),
-                    desc = desc or ("配置" .. id)
-                })
-            end
-        end
-    end
-
-    return {
-        type = "magic",
-        itemID = itemID,
-        guid = guid,
-        configs = configs
-    }
-end
-
--- 解析成长系统消息
-function Parsers.Growth(message)
-    if not message:match("^ITEMGROWTH:") then return nil end
-
-    local parts = { strsplit(":", message) }
-    if #parts < 7 then return nil end
-
-    local itemID = tonumber(parts[2])
-    local guid = tonumber(parts[3])
-    local level = tonumber(parts[4])
-    local currentExp = tonumber(parts[5])
-    local requiredExp = tonumber(parts[6])
-    local attrsStr = parts[7] or ""
-
-    if not itemID or not guid or guid == 0 then return nil end
-
-    local attributes = {}
-    if attrsStr ~= "" then
-        for pair in string.gmatch(attrsStr, "([^,]+)") do
-            local attrType, value = pair:match("(%d+)%s+(%-?%d+)")
-            if attrType and value then
-                table.insert(attributes, {
-                    type = tonumber(attrType),
-                    value = tonumber(value)
-                })
-            end
-        end
-    end
-
-    return {
-        type = "growth",
-        itemID = itemID,
-        guid = guid,
-        level = level,
-        currentExp = currentExp,
-        requiredExp = requiredExp,
-        attributes = attributes
-    }
-end
-
--- 解析鉴定系统消息
-function Parsers.Identification(message)
-    -- 先去除可能的前缀
-    local cleaned = message:gsub("^【鉴定属性】", ""):gsub("^【追加属性】", "")
-
-    if not cleaned:match("ITEM_ID_ATTRS:") then return nil end
-
-    -- 新格式: ITEM_ID_ATTRS:itemID:guid:基础属性:追加属性
-    -- 使用手动分割，正确处理空字符串的情况
-    local prefix, rest = cleaned:match("^(ITEM_ID_ATTRS):(.*)$")
-    if not prefix or not rest then return nil end
-
-    -- 手动分割，保留空字符串
-    local colonPos1 = rest:find(":")
-    if not colonPos1 then return nil end
-
-    local itemIDStr = rest:sub(1, colonPos1 - 1)
-    rest = rest:sub(colonPos1 + 1)
-
-    local colonPos2 = rest:find(":")
-    if not colonPos2 then return nil end
-
-    local guidStr = rest:sub(1, colonPos2 - 1)
-    rest = rest:sub(colonPos2 + 1)
-
-    -- 找到第三个冒号，分离基础属性和追加属性
-    local colonPos3 = rest:find(":")
-    local baseAttrsStr, additionalAttrsStr
-
-    if colonPos3 then
-        baseAttrsStr = rest:sub(1, colonPos3 - 1)
-        additionalAttrsStr = rest:sub(colonPos3 + 1)
-    else
-        -- 如果没有第三个冒号，说明只有基础属性，没有追加属性
-        baseAttrsStr = rest
-        additionalAttrsStr = ""
-    end
-
-    local itemID = tonumber(itemIDStr)
-    local guid = tonumber(guidStr)
-
-    if not itemID or not guid then return nil end
-
-    -- 去除前后空白
-    baseAttrsStr = baseAttrsStr:gsub("^%s+", ""):gsub("%s+$", "")
-    additionalAttrsStr = additionalAttrsStr:gsub("^%s+", ""):gsub("%s+$", "")
-
-    -- 解析基础属性（只有当字符串不为空时才解析）
-    local baseAttributes = {}
-    if baseAttrsStr ~= "" and #baseAttrsStr > 0 then
-        for pair in string.gmatch(baseAttrsStr, "[^,]+") do
-            local attrType, value = pair:match("(%d+)%s+([%-]?%d+)")
-            if attrType and value then
-                table.insert(baseAttributes, {
-                    type = tonumber(attrType),
-                    value = tonumber(value)
-                })
-            end
-        end
-    end
-
-    -- 解析追加属性（只有当字符串不为空时才解析）
-    local additionalAttributes = {}
-    if additionalAttrsStr ~= "" and #additionalAttrsStr > 0 then
-        for pair in string.gmatch(additionalAttrsStr, "[^,]+") do
-            local attrType, value = pair:match("(%d+)%s+([%-]?%d+)")
-            if attrType and value then
-                table.insert(additionalAttributes, {
-                    type = tonumber(attrType),
-                    value = tonumber(value)
-                })
-            end
-        end
-    end
-
-    -- 修复：注释掉此行，即使没有属性也应该返回数据以便缓存，避免未鉴定装备重复查询
-    -- if #baseAttributes == 0 and #additionalAttributes == 0 then return nil end
-
-    return {
-        type = "identification",
-        itemID = itemID,
-        guid = guid,
-        baseAttributes = baseAttributes,
-        additionalAttributes = additionalAttributes
-    }
-end
-
--- 解析强化系统消息
-function Parsers.Enhancement(message)
-    local cleaned = message:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
-
-    -- 尝试新格式：ITEM_ENHANCEMENT:itemID:guid:level:attrs
-    if message:match("^ITEM_ENHANCEMENT:") then
-        local parts = { strsplit(":", message) }
-        if #parts >= 4 then
-            local itemID = tonumber(parts[2])
-            local guid = tonumber(parts[3])
-            local level = tonumber(parts[4])
-            local stats = parts[5] or ""
-
-            if itemID and guid then
-                local attributes = {}
-                if stats ~= "" then
-                    for pair in string.gmatch(stats, "([^,]+)") do
-                        local attrType, value = pair:match("(%d+)%s+([%+%-]?%d+)")
-                        if attrType and value then
-                            table.insert(attributes, {
-                                type = tonumber(attrType),
-                                value = tonumber(value)
-                            })
-                        end
-                    end
-                end
-
-                return {
-                    type = "enhancement",
-                    itemID = itemID,
-                    guid = guid,
-                    level = level,
-                    attributes = attributes
-                }
-            end
-        end
-    end
-
-    -- 尝试旧格式：[强化系统] 物品ID: xxx guid: xxx 强化等级: x 属性: ...
-    if cleaned:match("%[强化系统%]") or cleaned:match("物品ID:") then
-        local itemID, guid, level, stats = cleaned:match("物品ID:%s*(%d+)%s+[Gg][Uu][Ii][Dd]:%s*(%d+)%s+强化等级:%s*(%d+)%s+属性:%s*(.*)$")
-
-        if itemID and guid then
-            local attributes = {}
-            if stats and stats ~= "" then
-                for pair in string.gmatch(stats, "([^,]+)") do
-                    local attrType, value = pair:match("(%d+)%s+([%+%-]?%d+)")
-                    if attrType and value then
-                        table.insert(attributes, {
-                            type = tonumber(attrType),
-                            value = tonumber(value)
-                        })
-                    end
-                end
-            end
-
-            return {
-                type = "enhancement",
-                itemID = tonumber(itemID),
-                guid = tonumber(guid),
-                level = tonumber(level),
-                attributes = attributes
-            }
-        end
-    end
-
-    -- 尝试简化格式：强化等级: x 属性: ...
-    if cleaned:match("强化等级:") then
-        local level, stats = cleaned:match("强化等级:%s*(%d+)%s+属性:%s*(.*)$")
-
-        if level then
-            local attributes = {}
-            if stats and stats ~= "" then
-                -- 解析属性：格式为 "attrType value" 对，用逗号分隔
-                -- 例如: "4 2,5 2,7 2" 或 "4 +2, 5 +2, 7 +2"
-                local pairs = {}
-                for pair in string.gmatch(stats, "([^,]+)") do
-                    table.insert(pairs, pair)
-                end
-
-                for _, pair in ipairs(pairs) do
-                    local attrType, value = pair:match("(%d+)%s+([%+%-]?%d+)")
-                    if attrType and value then
-                        table.insert(attributes, {
-                            type = tonumber(attrType),
-                            value = tonumber(value)
-                        })
-                    end
-                end
-            end
-
-            -- 从当前tooltip获取物品信息
-            local currentItemID, currentGUID
-            if GameTooltip and GameTooltip:IsShown() then
-                local _, itemLink = GameTooltip:GetItem()
-                if itemLink then
-                    currentItemID, currentGUID = ExtractItemInfo(itemLink)
-                end
-            end
-
-            -- 如果找不到当前物品，尝试从pending查找
-            if not currentItemID or not currentGUID or currentGUID == 0 then
-                for key, pending in pairs(State.pending) do
-                    if pending then
-                        -- 从key中提取itemID和guid
-                        local id, g = key:match("G:(%d+):(%d+)")
-                        if id and g then
-                            currentItemID = tonumber(id)
-                            currentGUID = tonumber(g)
-                            break
-                        end
-                    end
-                end
-            end
-
-            if currentItemID and currentGUID and currentGUID > 0 then
-                return {
-                    type = "enhancement",
-                    itemID = currentItemID,
-                    guid = currentGUID,
-                    level = tonumber(level),
-                    attributes = attributes
-                }
-            end
-        end
-    end
-
-    return nil
-end
-
--- 解析追加技能消息
-function Parsers.Skills(message)
-    if not message:match("^ITEMSKILLS:") then return nil end
-
-    local parts = { strsplit(":", message) }
-    if #parts < 4 then return nil end
-
-    local itemID = tonumber(parts[2])
-    local guid = tonumber(parts[3])
-    local skillsStr = parts[4] or ""
-
-    if not itemID or not guid or guid == 0 then return nil end
-
-    local skills = {}
-    if skillsStr ~= "" then
-        for skillInfo in string.gmatch(skillsStr, "([^,]+)") do
-            local name, level = skillInfo:match("(.+)%(等级(%d+)%)")
-            if name then
-                table.insert(skills, {
-                    name = name:gsub("^%s+", ""):gsub("%s+$", ""),
-                    level = tonumber(level) or 1
-                })
-            else
-                table.insert(skills, {
-                    name = skillInfo:gsub("^%s+", ""):gsub("%s+$", ""),
-                    level = 1
-                })
-            end
-        end
-    end
-
-    return {
-        type = "skills",
-        itemID = itemID,
-        guid = guid,
-        skills = skills
-    }
-end
-
--- 解析符文系统消息
-function Parsers.Runes(message)
-    -- 支持新格式：[RUNEINFO]guid:totalSlots:filledSlots:slotData
-    -- 格式示例：[RUNEINFO]4:5:3:1,61001,1,符文1,61001,火球术+1000耐力;2,61001,1,符文1,61001,火球术+1000耐力;3,0,0,,0,
-    if message:match("%[RUNEINFO%]") then
-        local dataStr = message:match("%[RUNEINFO%](.+)")
-        if not dataStr then return nil end
-
-        local parts = { strsplit(":", dataStr) }
-        if #parts < 3 then return nil end
-
-        local guid = tonumber(parts[1])
-        local totalSlots = tonumber(parts[2])
-        local filledSlots = tonumber(parts[3])
-        local slotsStr = parts[4] or ""
-
-        if not guid or guid == 0 or not totalSlots then return nil end
-
-        local slots = {}
-        if slotsStr ~= "" then
-            -- 分割槽位数据，用分号分隔
-            -- 格式：slotId,runeId,runeQuality,runeName,itemId,effectDesc
-            for slotInfo in string.gmatch(slotsStr, "([^;]+)") do
-                local slotParts = { strsplit(",", slotInfo) }
-                if #slotParts >= 3 then
-                    local slotId = tonumber(slotParts[1])
-                    local runeId = tonumber(slotParts[2])
-                    local runeQuality = tonumber(slotParts[3]) or 0
-                    local runeName = slotParts[4] or ""
-                    local runeItemId = tonumber(slotParts[5]) or 0
-                    local effectDesc = slotParts[6] or ""
-
-                    if slotId and slotId > 0 then
-                        table.insert(slots, {
-                            slotId = slotId,
-                            runeId = runeId or 0,
-                            runeName = runeName,
-                            runeQuality = runeQuality,
-                            effectDesc = effectDesc,
-                            runeItemId = runeItemId
-                        })
-                    end
-                end
-            end
-        end
-
-        return {
-            type = "runes",
-            itemID = 0,  -- RUNEINFO格式没有itemID，需要从上下文获取
-            guid = guid,
-            totalSlots = totalSlots,
-            filledSlots = filledSlots,
-            slots = slots
-        }
-    end
-
-    -- 支持旧格式：RUNEDATA:itemID:guid:totalSlots:filledSlots:slotData
-    -- 格式示例：RUNEDATA:28800:4:5:5:1:61001:未知符文:0:,2:61001:未知符文:0:,...
-    if not message:match("^RUNEDATA:") then return nil end
-
-    local parts = { strsplit(":", message) }
-    if #parts < 5 then return nil end
-
-    local itemID = tonumber(parts[2])
-    local guid = tonumber(parts[3])
-    local totalSlots = tonumber(parts[4])
-    local filledSlots = tonumber(parts[5])
-
-    if not itemID or not guid or guid == 0 then return nil end
-
-    -- 槽位数据从第6个参数开始，格式：slotId:runeId:runeName:runeQuality:,
-    -- 注意：最后有一个逗号分隔符
-    local slots = {}
-    local i = 6
-    while i <= #parts do
-        local slotId = tonumber(parts[i])
-        if slotId and i + 3 <= #parts then
-            local runeId = tonumber(parts[i + 1])
-            local runeName = parts[i + 2] or ""
-            local runeQuality = tonumber(parts[i + 3]) or 0
-
-            if slotId > 0 then
-                table.insert(slots, {
-                    slotId = slotId,
-                    runeId = runeId or 0,
-                    runeName = runeName,
-                    runeQuality = runeQuality,
-                    effectDesc = ""
-                })
-            end
-
-            -- 跳过4个字段（slotId, runeId, runeName, runeQuality）+ 1个空字段（逗号分隔符）
-            i = i + 5
-        else
-            break
-        end
-    end
-
-    return {
-        type = "runes",
-        itemID = itemID,
-        guid = guid,
-        totalSlots = totalSlots,
-        filledSlots = filledSlots,
-        slots = slots
-    }
-end
-
--- 解析套装系统消息
-function Parsers.Sets(message)
-    -- 格式：ITEMSETS_HIDDEN:SPECIFIC_ITEM_DATA:itemId:itemGuid:setId:setName:attributes:effectDesc
-    if not message:match("ITEMSETS_HIDDEN:") then return nil end
-
-    local dataStr = message:match("ITEMSETS_HIDDEN:SPECIFIC_ITEM_DATA:(.+)")
-    if not dataStr then return nil end
-
-    local parts = { strsplit(":", dataStr) }
-    if #parts < 6 then return nil end
-
-    local itemID = tonumber(parts[1])
-    local guid = tonumber(parts[2])
-    local setId = tonumber(parts[3])
-    local setName = parts[4] or ""
-    local attributesStr = parts[5] or ""
-
-    -- 效果描述可能包含冒号，需要拼接parts[6]及之后的所有内容
-    local effectDescStr = ""
-    if #parts >= 6 then
-        for i = 6, #parts do
-            if effectDescStr ~= "" then
-                effectDescStr = effectDescStr .. ":"
-            end
-            effectDescStr = effectDescStr .. parts[i]
-        end
-    end
-
-    if not itemID or not guid or guid == 0 or not setId or setId == 0 then return nil end
-
-    -- 解析套装属性：格式 "4 20,7 30,31 15"
-    local attributes = {}
-    if attributesStr ~= "" then
-        for pair in string.gmatch(attributesStr, "([^,]+)") do
-            local attrType, value = pair:match("(%d+)%s+([%-]?%d+)")
-            if attrType and value then
-                table.insert(attributes, {
-                    type = tonumber(attrType),
-                    value = tonumber(value)
-                })
-            end
-        end
-    end
-
-    -- 解析效果描述：格式 "2件套:效果1|4件套:效果2"
-    local effects = {}
-    if effectDescStr ~= "" then
-        for effectInfo in string.gmatch(effectDescStr, "([^|]+)") do
-            local count, desc = effectInfo:match("(%d+)件套:(.+)")
-            if count and desc then
-                table.insert(effects, {
-                    count = tonumber(count),
-                    desc = desc
-                })
-            end
-        end
-    end
-
-    return {
-        type = "sets",
-        itemID = itemID,
-        guid = guid,
-        setId = setId,
-        setName = setName,
-        attributes = attributes,
-        effects = effects
-    }
-end
-
--- ⭐ 新增：批量数据解析器（解析ALL_MODULE_DATA消息）
-function Parsers.BatchQuery(message)
-    DebugPrint("[解析器908] 开始解析: message前100字符=", message:sub(1, 100))
-    
-    -- 格式：ALL_MODULE_DATA:itemID:guid:base:additional:growth:enhancement:skills:magic:rune:set
-    if not message:match("^ALL_MODULE_DATA:") then
-        DebugPrint("[解析器908] 不匹配ALL_MODULE_DATA前缀")
-        return nil
-    end
-    
-    DebugPrint("[解析器908] 匹配ALL_MODULE_DATA前缀成功")
-
-    -- 性能监控：开始解析
-    local parseStartTime = GetTime()
-
-    local parts = { strsplit(":", message) }
-    if #parts < 3 then
-        DebugPrint("[解析器908] parts数量不足:", #parts)
-        return nil
-    end
-    
-    DebugPrint("[解析器908] parts数量:", #parts)
-
-    local itemID = tonumber(parts[2])
-    local guid = tonumber(parts[3])
-
-    if not itemID or not guid or guid == 0 then
-        DebugPrint("[解析器908] itemID或guid无效:", itemID, guid)
-        return nil
-    end
-    
-    DebugPrint("[解析器908] 解析成功: itemID=", itemID, "guid=", guid)
 
     -- 解析所有系统数据
     local baseAttributes = parts[4] or ""
@@ -2179,47 +1622,57 @@ local ProcessServerResponse
 -- ⭐ 处理Addon消息
 local function OnAddonMessage(self, event, prefix, message, channel, sender)
     local now = GetTime()
+
+    -- ⭐ 修复：处理服务器可能发送的包含竖线的前缀
+    -- 服务器可能发送 "ITEMENHANCE|LOGIN_COMPLETED" 这样的格式
+    -- 我们需要分离出实际的前缀和消息内容
+    local actualPrefix = prefix
+    local actualMessage = message
     
-    DebugPrint("[事件调试] CHAT_MSG_ADDON触发: prefix=", prefix, "channel=", channel, "sender=", sender)
-    DebugPrint("[事件调试] message前100字符:", message:sub(1, 100))
-    
-    -- 只处理我们自己的前缀
-    if prefix ~= ADDON_PREFIX then
-        DebugPrint("[事件调试] 前缀不匹配: 期望=", ADDON_PREFIX, "实际=", prefix)
+    -- 如果prefix包含竖线，分离出真正的前缀和消息
+    if prefix:find("|") then
+        local parts = { strsplit("|", prefix) }
+        actualPrefix = parts[1]
+        -- 将剩余部分重新组合到消息中
+        if #parts > 1 then
+            local extraContent = table.concat(parts, "|", 2)
+            actualMessage = extraContent .. (message or "")
+        end
+    end
+
+    -- 只处理我们自己的前缀（包括主前缀和备用前缀）
+    if actualPrefix ~= ADDON_PREFIX and actualPrefix ~= ADDON_PREFIX_ALT then
         return
     end
-    
-    DebugPrint("[事件调试] 前缀匹配成功")
-    
+
     -- 只处理来自自己的消息
     if sender ~= UnitName("player") then
-        DebugPrint("[事件调试] 发送者不匹配: 期望=", UnitName("player"), "实际=", sender)
         return
     end
     
-    DebugPrint("[事件调试] 发送者匹配成功，开始处理消息")
+    -- 使用分离后的消息继续处理
+    message = actualMessage
     
     local receiveTime = GetTime()
     
     -- ⭐ 修复：忽略自己发出的查询消息（格式：QUERY:itemID:guid）
     if message:match("^QUERY:") then
-        DebugPrint("[事件调试] 忽略自己发出的查询消息")
         return
     end
-    
+
+    -- ⭐ 过滤掉服务器事件通知（非数据响应）
+    if message:match("LOGIN_COMPLETE") or message:match("LOGIN_SUCCESS") or
+       message:match("LOGOUT") or message == "" or message:len() < 5 then
+        return
+    end
+
     -- 检查是否是ALL_MODULE_DATA响应
     if not message:match("ALL_MODULE_DATA:") then
-        DebugPrint("[事件调试] 不是ALL_MODULE_DATA消息，忽略")
         return
     end
-    
-    DebugPrint("[事件调试] 检测到ALL_MODULE_DATA消息，开始处理")
-    
+
     -- 移除RESPONSE:前缀（如果有）
     local dataMessage = message:gsub("^RESPONSE:", "")
-    
-    DebugPrint("[事件调试] 准备调用ProcessServerResponse")
-    DebugPrint("[事件调试] dataMessage前50字符:", dataMessage:sub(1, 50))
     
     -- 使用pcall捕获错误
     local success, err = pcall(function()
@@ -2228,8 +1681,6 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
     
     if not success then
         print("|cffff0000[统一提示框错误]|r ProcessServerResponse失败:", err)
-    else
-        DebugPrint("[事件调试] ProcessServerResponse执行完成")
     end
 end
 
@@ -2237,18 +1688,13 @@ end
 
 -- ⭐ 统一的服务器响应处理函数（实现前面声明的函数）
 ProcessServerResponse = function(message, receiveTime)
-    DebugPrint("[ProcessServerResponse] 开始处理: message前100字符=", message:sub(1, 100))
-
     -- ⭐ 优先尝试批量数据解析器
     local batchData = Parsers.BatchQuery(message)
-    
+
     if not batchData then
-        DebugPrint("[ProcessServerResponse] BatchQuery返回nil，解析失败")
         return
     end
-    
-    DebugPrint("[ProcessServerResponse] BatchQuery成功: itemID=", batchData.itemID, "guid=", batchData.guid)
-    
+
     if batchData then
         local key = MakeKey(batchData.itemID, batchData.guid, nil, nil, false)
         
@@ -2336,8 +1782,12 @@ end
 -- ⭐ 注册Addon消息前缀（兼容WoW 3.3.5）
 if RegisterAddonMessagePrefix then
     RegisterAddonMessagePrefix(ADDON_PREFIX)
+    RegisterAddonMessagePrefix(ADDON_PREFIX_ALT)  -- 注册备用前缀
+    DebugPrint("[初始化] 已注册前缀:", ADDON_PREFIX, "和", ADDON_PREFIX_ALT)
 elseif C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
     C_ChatInfo.RegisterAddonMessagePrefix(ADDON_PREFIX)
+    C_ChatInfo.RegisterAddonMessagePrefix(ADDON_PREFIX_ALT)  -- 注册备用前缀
+    DebugPrint("[初始化] 已注册前缀:", ADDON_PREFIX, "和", ADDON_PREFIX_ALT)
 end
 
 -- ⭐ 注册Addon消息事件
@@ -2485,6 +1935,7 @@ SlashCmdList["UNIFIEDTOOLTIP"] = function(msg)
         print("  缓存有效期: " .. DB.cacheExpiration .. " 秒 (" .. math.floor(DB.cacheExpiration / 60) .. " 分钟)")
         print("  查询超时: " .. DB.timeout .. " 秒")
         print("  通信方式: Addon消息（不受聊天速率限制）")
+        print("  已注册前缀: " .. ADDON_PREFIX .. ", " .. ADDON_PREFIX_ALT)
         print("  调试模式: " .. (DB.debug and "开启" or "关闭"))
 
         -- 显示当前装备的详细信息
@@ -2694,4 +2145,8 @@ end
 
 -- 插件加载完成提示
 print("|cff00ff00[统一提示框]|r v2.0 已加载 - 输入 |cffffcc00/提示框 帮助|r 查看命令")
+print("|cff888888[统一提示框]|r 已注册前缀: |cffffcc00" .. ADDON_PREFIX .. "|r 和 |cffffcc00" .. ADDON_PREFIX_ALT .. "|r")
+if DB.debug then
+    print("|cff888888[统一提示框]|r |cffff8000调试模式已开启|r")
+end
 
