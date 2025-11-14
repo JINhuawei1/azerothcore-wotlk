@@ -309,10 +309,12 @@ public:
 
 private:
     static bool HandleIdentifyCommand(ChatHandler* handler, const char* args);
-    static bool HandleQueryAttributesCommand(ChatHandler* handler, const char* args);
-    static bool HandleQueryCommand(ChatHandler* handler, const char* args);
+    
+    // ⭐ 已删除旧的查询命令：
+    // static bool HandleQueryAttributesCommand(ChatHandler* handler, const char* args);  // 旧格式，已废弃
+    // static bool HandleQueryCommand(ChatHandler* handler, const char* args);  // 旧格式，已废弃
 
-    // ⭐ 新增：批量查询命令处理器
+    // ⭐ 批量查询命令处理器
     static bool HandleBatchQueryCommand(ChatHandler* handler, const char* args);
 
     // ⭐ 新增：性能统计命令

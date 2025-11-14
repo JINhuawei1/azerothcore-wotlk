@@ -10,7 +10,7 @@ local ADDON_PREFIX_ALT = "ITEMENHANCE"  -- ⭐ 备用前缀（兼容服务器可
 -- ============================================================================
 
 local DEFAULTS = {
-    debug = true,  -- 临时开启调试以排查问题
+    debug = false,  -- 默认关闭调试模式
     queryInterval = 1,      -- 查询间隔（秒）- 只在所有数据齐全时生效
     timeout = 15,           -- 查询超时（秒）- 增加到15秒以应对服务器延迟
     emptyCooldown = 30,     -- 无数据冷却时间（秒）
@@ -1215,10 +1215,6 @@ local function DoSendQuery(itemID, guid, key)
     -- 服务器收到: "UITQ<TAB>QUERY:itemID:guid"
     local addonMessage = string.format("QUERY:%d:%d", itemID, guid)
 
-    -- 立即输出发送日志
-    print(string.format("|cff00ffff[统一提示框]|r |cff00ff00[Q%d→ADDON]|r itemID=%d guid=%d |cffaaaaaa[%.3fs]|r", 
-        queryId, itemID, guid, now))
-
     -- 标记所有系统为查询中
     for systemName, enabled in pairs(DB.systems) do
         if enabled and not cachedSystems[systemName] then
@@ -1252,17 +1248,14 @@ local function DoSendQuery(itemID, guid, key)
     
     -- 输出发送耗时
     if sendDuration > 10 then
-        print(string.format("|cff00ffff[统一提示框]|r |cffff8000[Q%d 发送耗时]|r %.0fms |cffff0000(异常)|r", 
-            queryId, sendDuration))
-    else
-        print(string.format("|cff00ffff[统一提示框]|r |cff00ff00[Q%d 已发送ADDON]|r %.0fms", 
+        print(string.format("|cff00ffff[统一提示框]|r |cffff8000[Q%d 发送耗时]|r %.0fms |cffff0000(异常)|r",
             queryId, sendDuration))
     end
 
     -- 如果pending查询过多，显示警告
     if pendingCount > 5 then
         print(string.format("|cff00ffff[统一提示框]|r |cffff0000[警告]|r 当前有 %d 个查询等待响应，可能存在查询堆积", pendingCount))
-        
+
         -- 显示等待最久的5个查询
         local sortedPending = {}
         for pKey, pData in pairs(State.pending) do
@@ -1275,15 +1268,15 @@ local function DoSendQuery(itemID, guid, key)
                 })
             end
         end
-        
+
         -- 按等待时间排序
         table.sort(sortedPending, function(a, b) return a.waitTime > b.waitTime end)
-        
+
         -- 显示前5个
         print("  |cffffcc00等待最久的查询:|r")
         for i = 1, math.min(5, #sortedPending) do
             local item = sortedPending[i]
-            print(string.format("    Q%s: %s 已等待 %.1fs", 
+            print(string.format("    Q%s: %s 已等待 %.1fs",
                 item.queryId or "?", item.key, item.waitTime))
         end
     end
@@ -1705,20 +1698,20 @@ ProcessServerResponse = function(message, receiveTime)
             local rtt = (now - pending.queryStartTime) * 1000  -- 转换为毫秒
             local queryId = pending.queryId or "?"
             
-            -- 更详细的时间信息
-            print(string.format("|cff00ffff[统一提示框]|r |cffff8000[Q%s←]|r itemID=%d guid=%d RTT=%.0fms |cffaaaaaa[接收时间 %.3fs]|r", 
-                queryId, batchData.itemID, batchData.guid, rtt, now))
+            -- 更详细的时间信息（已关闭控制台日志输出）
+            -- print(string.format("|cff00ffff[统一提示框]|r |cffff8000[Q%s←]|r itemID=%d guid=%d RTT=%.0fms |cffaaaaaa[接收时间 %.3fs]|r", 
+            --     queryId, batchData.itemID, batchData.guid, rtt, now))
             
-            -- 如果RTT超过3秒，显示详细分析
+            -- 如果RTT超过3秒，显示详细分析（已关闭）
             if rtt > 3000 then
-                print(string.format("  |cffff0000[延迟分析]|r 发送时间: %.3fs, 接收时间: %.3fs, 延迟: %.3fs", 
-                    pending.queryStartTime, now, (now - pending.queryStartTime)))
-                print(string.format("  |cffff0000[警告]|r 这可能是服务器处理慢或网络延迟导致"))
+                -- print(string.format("  |cffff0000[延迟分析]|r 发送时间: %.3fs, 接收时间: %.3fs, 延迟: %.3fs", 
+                --     pending.queryStartTime, now, (now - pending.queryStartTime)))
+                -- print(string.format("  |cffff0000[警告]|r 这可能是服务器处理慢或网络延迟导致"))
             end
         else
-            -- 没有pending记录，说明可能是重复消息或异常情况
-            print(string.format("|cff00ffff[统一提示框]|r |cffff8000[Q?←]|r itemID=%d guid=%d |cffff0000(无pending记录)|r", 
-                batchData.itemID, batchData.guid))
+            -- 没有pending记录，说明可能是重复消息或异常情况（已关闭日志）
+            -- print(string.format("|cff00ffff[统一提示框]|r |cffff8000[Q?←]|r itemID=%d guid=%d |cffff0000(无pending记录)|r", 
+            --     batchData.itemID, batchData.guid))
         end
 
         local hasAnyData = false
@@ -2143,10 +2136,5 @@ end
 -- 插件加载完成
 -- ============================================================================
 
--- 插件加载完成提示
-print("|cff00ff00[统一提示框]|r v2.0 已加载 - 输入 |cffffcc00/提示框 帮助|r 查看命令")
-print("|cff888888[统一提示框]|r 已注册前缀: |cffffcc00" .. ADDON_PREFIX .. "|r 和 |cffffcc00" .. ADDON_PREFIX_ALT .. "|r")
-if DB.debug then
-    print("|cff888888[统一提示框]|r |cffff8000调试模式已开启|r")
-end
+-- 插件加载完成（不显示日志）
 

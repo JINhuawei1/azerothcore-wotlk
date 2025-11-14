@@ -425,9 +425,6 @@ void PluginManager::SendAllPluginConfigsToPlayer(Player* player)
     if (!player || !_enabled)
         return;
 
-    LOG_INFO("module", "【调试】SendAllPluginConfigsToPlayer被调用 - 玩家: {} (总配置数: {})", player->GetName(), _plugins.size());
-    LOG_DEBUG("module", "插件管理器: 向玩家 {} 发送所有插件配置", player->GetName());
-
     // 发送插件配置开始标记
     ChatHandler(player->GetSession()).PSendSysMessage(".plugincfg_start");
 
@@ -446,9 +443,6 @@ void PluginManager::SendAllPluginConfigsToPlayer(Player* player)
 
     // 发送插件配置结束标记
     ChatHandler(player->GetSession()).PSendSysMessage(".plugincfg_end");
-
-    LOG_INFO("module", "插件管理器: 已向玩家 {} 发送 {} 个插件配置",
-        player->GetName(), _plugins.size());
 }
 
 bool PluginManager::SavePluginToDatabase(const PluginEntry& entry)
