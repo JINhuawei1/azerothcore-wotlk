@@ -865,9 +865,9 @@ uint32 ItemIdentificationSystem::ApplyItemGrowth(Player* player, Item* item, con
     {
         // 使用成长系统的API设置物品可成长，并指定属性组
         sItemGrowthMgr->SetItemCanGrow(player, item, selectedGroup);
-        
-        ChatHandler(player->GetSession()).PSendSysMessage("物品获得成长属性（组{}）", selectedGroup);
-        
+
+        // ChatHandler(player->GetSession()).PSendSysMessage("物品获得成长属性（组{}）", selectedGroup);
+
         return selectedGroup; // 返回实际应用的组号
     }
     catch (...)
@@ -919,7 +919,7 @@ uint32 ItemIdentificationSystem::ApplyItemEnhancement(Player* player, Item* item
         // 调用第一次强化来初始化强化数据
         if (sItemEnhancementMgr->EnhanceItem(player, item, selectedGroup))
         {
-            ChatHandler(player->GetSession()).PSendSysMessage("物品获得强化属性（组{}）", selectedGroup);
+            // ChatHandler(player->GetSession()).PSendSysMessage("物品获得强化属性（组{}）", selectedGroup);
             return selectedGroup; // 返回选择的组号
         }
         else
@@ -1158,7 +1158,7 @@ void ItemIdentificationSystem::ApplyAdditionalAttributes(Player* player, Item* i
 
         if (appliedCount > 0)
         {
-            ChatHandler(player->GetSession()).PSendSysMessage("物品获得{}个追加属性", appliedCount);
+            // ChatHandler(player->GetSession()).PSendSysMessage("物品获得{}个追加属性", appliedCount);
         }
         else
         {
@@ -1253,7 +1253,7 @@ void ItemIdentificationSystem::ApplyAdditionalSkills(Player* player, Item* item,
 
         if (appliedCount > 0)
         {
-            ChatHandler(player->GetSession()).PSendSysMessage("物品获得{}个技能效果", appliedCount);
+            // ChatHandler(player->GetSession()).PSendSysMessage("物品获得{}个技能效果", appliedCount);
         }
         else
         {
@@ -1351,7 +1351,7 @@ void ItemIdentificationSystem::ApplyMagicHits(Player* player, Item* item, const 
 
         if (appliedCount > 0)
         {
-            ChatHandler(player->GetSession()).PSendSysMessage("物品获得{}个技能魔次", appliedCount);
+            // ChatHandler(player->GetSession()).PSendSysMessage("物品获得{}个技能魔次", appliedCount);
         }
 
     }
@@ -1388,7 +1388,7 @@ void ItemIdentificationSystem::ApplyRuneSystem(Player* player, Item* item, const
                     }
 
                     DebugLog("成功为物品创建{}个符文凹槽", slotCount);
-                    ChatHandler(player->GetSession()).PSendSysMessage("物品获得{}个符文凹槽", slotCount);
+                    // ChatHandler(player->GetSession()).PSendSysMessage("物品获得{}个符文凹槽", slotCount);
                 }
                 else
                 {
@@ -1404,7 +1404,7 @@ void ItemIdentificationSystem::ApplyRuneSystem(Player* player, Item* item, const
             DebugLog("物品符文组配置: {}（玩家可以使用这些组中的符文进行镶嵌）", tmpl.runeSystemGroups);
             // 注意：当前符文系统设计中，玩家需要自行镶嵌符文
             // 符文组信息可用于提示玩家可以使用哪些符文
-            ChatHandler(player->GetSession()).PSendSysMessage("物品可以镶嵌符文（推荐符文组: {}）", tmpl.runeSystemGroups);
+            // ChatHandler(player->GetSession()).PSendSysMessage("物品可以镶嵌符文（推荐符文组: {}）", tmpl.runeSystemGroups);
         }
 
 
@@ -1530,8 +1530,8 @@ void ItemIdentificationSystem::ApplySkillSets(Player* player, Item* item, const 
     std::string setName = sItemSetsManager->GetSetName(selectedSetId);
 
 
-    ChatHandler(player->GetSession()).PSendSysMessage("物品已分配到套装: {} (组{}, ID{})",
-        setName.c_str(), selectedGroup, selectedSetId);
+    // ChatHandler(player->GetSession()).PSendSysMessage("物品已分配到套装: {} (组{}, ID{})",
+    //     setName.c_str(), selectedGroup, selectedSetId);
 
     // 7. 保存到数据库
     sItemSetsManager->SavePlayerSetStatus(player);
@@ -3116,7 +3116,7 @@ bool ItemIdentificationCommandScript::HandlePerformanceStatsCommand(ChatHandler*
     handler->PSendSysMessage("|cff00ff00========== 性能评估 ==========|r");
     if (stats.GetCacheHitRate() >= 80.0f)
     {
-        handler->SendSysMessage("|cff00ff00性能状态: 优秀 ✓|r");
+        handler->SendSysMessage("|cff00ff00性能状态: 优秀|r");
     }
     else if (stats.GetCacheHitRate() >= 60.0f)
     {
@@ -3133,11 +3133,11 @@ bool ItemIdentificationCommandScript::HandlePerformanceStatsCommand(ChatHandler*
 
     if (stats.avgQueryTime < 5000)  // <5ms
     {
-        handler->SendSysMessage("|cff00ff00查询速度: 极快 ✓|r");
+        handler->SendSysMessage("|cff00ff00查询速度: 极快|r");
     }
     else if (stats.avgQueryTime < 20000)  // <20ms
     {
-        handler->SendSysMessage("|cff00ff00查询速度: 快速 ✓|r");
+        handler->SendSysMessage("|cff00ff00查询速度: 快速|r");
     }
     else if (stats.avgQueryTime < 50000)  // <50ms
     {
