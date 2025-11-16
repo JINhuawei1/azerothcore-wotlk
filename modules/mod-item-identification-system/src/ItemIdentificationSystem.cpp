@@ -2653,29 +2653,72 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
     DebugLog("[批量查询] 开始查询技能系统: itemID={}, guid={}", itemID, guid);
     if (TableExists("物品技能_数据"))
     {
+#if defined(MODULE_ITEM_SKILLS)
+        // 优先使用物品技能模块提供的缓存 + 模板数据，构建完整的技能描述
+        std::vector<ItemSkillData> skills = sItemSkillsDBHelper->GetItemSkillsData(static_cast<uint64>(guid));
+
+        if (!skills.empty())
+        {
+            std::ostringstream skillStream;
+            bool first = true;
+
+            for (const auto& skillData : skills)
+            {
+                ItemSkillTemplate const* skillTemplate = sItemSkillsManager->GetSkillTemplate(skillData.skillTemplateId);
+                if (!skillTemplate)
+                {
+                    DebugLog("[批量查询-技能] 未找到技能模板: templateId={}", skillData.skillTemplateId);
+                    continue;
+                }
+
+                if (!first)
+                    skillStream << ",";
+
+                first = false;
+
+                // 格式：spellId|客户端显示|等级
+                // 注意：使用 '|' 作为内部分隔符，避免与主消息 ':' 冲突
+                skillStream << skillData.skillId << "|" << skillTemplate->clientDisplay << "|" << skillTemplate->level;
+            }
+
+            std::string skillsStr = skillStream.str();
+            if (!skillsStr.empty())
+            {
+                result.skillsData = skillsStr;
+                result.hasData = true;
+
+                DebugLog("[批量查询-技能] 查询成功(完整数据): skills=[{}]", result.skillsData);
+            }
+            else
+            {
+                DebugLog("[批量查询-技能] 技能模板全部缺失或无有效技能数据");
+            }
+        }
+        else
+        {
+            DebugLog("[批量查询-技能] 查询失败或无数据");
+        }
+#else
+        // 回退：仅返回技能ID列表（保持与旧版本兼容）
         QueryResult skillResult = CharacterDatabase.Query(
-            "SELECT `技能ID`, `技能模板ID`, `技能触发类型` FROM `物品技能_数据` WHERE `物品GUID` = {}",
+            "SELECT `技能ID` FROM `物品技能_数据` WHERE `物品GUID` = {}",
             guid);
 
         if (skillResult)
         {
             Field* fields = skillResult->Fetch();
             std::string skillIds = fields[0].Get<std::string>();
-            std::string templateIds = fields[1].Get<std::string>();
-            std::string triggerTypes = fields[2].Get<std::string>();
-            
-            // 使用逗号分隔的技能ID作为数据
-            // 格式: "技能ID1,技能ID2,技能ID3"
+
             result.skillsData = skillIds;
             result.hasData = true;
 
-            DebugLog("[批量查询-技能] 查询成功: skillIds=[{}], templateIds=[{}], triggerTypes=[{}]", 
-                     skillIds, templateIds, triggerTypes);
+            DebugLog("[批量查询-技能] 查询成功(仅ID): skillIds=[{}]", skillIds);
         }
         else
         {
             DebugLog("[批量查询-技能] 查询失败或无数据");
         }
+#endif
     }
     else
     {
@@ -2693,16 +2736,62 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
         if (magicResult)
         {
             Field* fields = magicResult->Fetch();
-            std::string magicIds = fields[0].Get<std::string>();
-            std::string magicValues = fields[1].Get<std::string>();
-            
-            // 使用逗号分隔的魔次数据
-            // 格式: "魔次系统ID1,魔次系统ID2|魔次值1,魔次值2"
-            result.magicHitData = magicIds + "|" + magicValues;
+            std::string magicIdsStr = fields[0].Get<std::string>();
+            std::string magicValuesStr = fields[1].Get<std::string>();
+
+#if defined(MODULE_MAGIC_HIT_SYSTEM)
+            // 使用魔次系统配置，构建带描述的完整数据
+            std::vector<uint32> magicIds = ParseCommaSeparatedNumbers(magicIdsStr);
+            std::vector<uint32> magicValues = ParseCommaSeparatedNumbers(magicValuesStr);
+
+            size_t count = std::min(magicIds.size(), magicValues.size());
+            std::ostringstream magicStream;
+            bool first = true;
+
+            for (size_t i = 0; i < count; ++i)
+            {
+                uint32 configId = magicIds[i];
+                uint32 hitCount = magicValues[i];
+
+                if (configId == 0 || hitCount == 0)
+                    continue;
+
+                SpellMagicHitConfig const* cfg = sMagicHitSystem->GetConfigById(configId);
+                if (!cfg)
+                {
+                    DebugLog("[批量查询-魔次] 未找到配置: configId={}", configId);
+                    continue;
+                }
+
+                if (!first)
+                    magicStream << ",";
+
+                first = false;
+
+                // 完整格式：configId|count|desc
+                magicStream << configId << "|" << hitCount << "|" << cfg->description;
+            }
+
+            std::string magicStr = magicStream.str();
+            if (!magicStr.empty())
+            {
+                result.magicHitData = magicStr;
+                result.hasData = true;
+
+                DebugLog("[批量查询-魔次] 查询成功(完整数据): magicData=[{}]", result.magicHitData);
+            }
+            else
+            {
+                DebugLog("[批量查询-魔次] 没有有效的魔次配置数据");
+            }
+#else
+            // 回退：保持旧格式 ids|values，兼容旧版客户端
+            result.magicHitData = magicIdsStr + "|" + magicValuesStr;
             result.hasData = true;
 
-            DebugLog("[批量查询-魔次] 查询成功: magicIds=[{}], magicValues=[{}], 结果=[{}]", 
-                     magicIds, magicValues, result.magicHitData);
+            DebugLog("[批量查询-魔次] 查询成功(仅ID+次数): magicIds=[{}], magicValues=[{}], 结果=[{}]",
+                     magicIdsStr, magicValuesStr, result.magicHitData);
+#endif
         }
         else
         {
@@ -2761,11 +2850,109 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
             Field* fields = setResult->Fetch();
             uint32 setId = fields[0].Get<uint32>();
 
-            // 格式：套装ID
-            result.setData = std::to_string(setId);
+            std::string setName;
+            std::string attrsStr;
+            std::string effectsStr;
+
+#if defined(MODULE_ITEM_SETS)
+            // 优先尝试使用套装系统管理器（内存数据，性能更好）
+            const std::vector<ItemSetData>& setDataList = sItemSetsManager->GetItemSetData(setId);
+
+            if (!setDataList.empty())
+            {
+                setName = setDataList[0].SetName;
+
+                bool firstAttr = true;
+                bool firstEffect = true;
+
+                for (const auto& setData : setDataList)
+                {
+                    if (!setData.SetAttributes.empty())
+                    {
+                        if (!firstAttr)
+                            attrsStr += ",";
+
+                        attrsStr += setData.SetAttributes;
+                        firstAttr = false;
+                    }
+
+                    if (!setData.EffectDesc.empty())
+                    {
+                        if (!firstEffect)
+                            effectsStr += ",";
+
+                        firstEffect = false;
+
+                        effectsStr += std::to_string(setData.ItemsCount);
+                        effectsStr += "|";
+                        effectsStr += setData.EffectDesc;
+                    }
+                }
+            }
+#endif
+
+            // 如果管理器不可用或未返回数据，回退到直接查询数据库
+            if (setName.empty())
+            {
+                QueryResult setInfo = WorldDatabase.Query(
+                    "SELECT `套装名称`, `套装属性`, `物品数量`, `效果描述` FROM `套装系统` WHERE `套装ID` = {} ORDER BY `物品数量`",
+                    setId);
+
+                if (setInfo)
+                {
+                    bool firstAttr = attrsStr.empty();
+                    bool firstEffect = effectsStr.empty();
+
+                    do
+                    {
+                        Field* sf = setInfo->Fetch();
+
+                        if (setName.empty())
+                            setName = sf[0].Get<std::string>();
+
+                        std::string setAttrs = sf[1].IsNull() ? "" : sf[1].Get<std::string>();
+                        uint32 itemsCount = sf[2].Get<uint32>();
+                        std::string effectDesc = sf[3].IsNull() ? "" : sf[3].Get<std::string>();
+
+                        if (!setAttrs.empty())
+                        {
+                            if (!firstAttr)
+                                attrsStr += ",";
+
+                            attrsStr += setAttrs;
+                            firstAttr = false;
+                        }
+
+                        if (!effectDesc.empty())
+                        {
+                            if (!firstEffect)
+                                effectsStr += ",";
+
+                            firstEffect = false;
+
+                            effectsStr += std::to_string(itemsCount);
+                            effectsStr += "|";
+                            effectsStr += effectDesc;
+                        }
+
+                    } while (setInfo->NextRow());
+                }
+            }
+
+            std::ostringstream setStream;
+            setStream << setId;
+
+            // 只有当有额外信息时才附加名称/属性/效果字段
+            if (!setName.empty() || !attrsStr.empty() || !effectsStr.empty())
+            {
+                setStream << ":" << setName << ":" << attrsStr << ":" << effectsStr;
+            }
+
+            result.setData = setStream.str();
             result.hasData = true;
 
-            DebugLog("[批量查询-套装] 查询成功: setId={}, 结果=[{}]", setId, result.setData);
+            DebugLog("[批量查询-套装] 查询成功: setId={}, setName='{}', attrs='{}', effects='{}', 结果=[{}]",
+                     setId, setName, attrsStr, effectsStr, result.setData);
         }
         else
         {

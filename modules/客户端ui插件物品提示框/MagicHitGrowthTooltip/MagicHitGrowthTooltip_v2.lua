@@ -83,6 +83,11 @@ local ATTR_NAMES = {
     [48] = "自然抗性", [49] = "暗影抗性", [50] = "神圣抗性"
 }
 
+-- 颜色常量：粉色/红色/重置
+local COLOR_PINK = "|cffff69b4"   -- 粉色，用于显示“倍率xN”
+local COLOR_RED  = "|cffff0000"   -- 红色，用于显示“= 数值”
+local COLOR_RESET = "|r"
+
 -- 符文图标
 local RUNE_ICONS = {
     EMPTY = "|cFF555555□|r",
@@ -122,12 +127,387 @@ local State = {
     queryId = 0
 }
 
+local MakeKey      -- 提前声明，供幻境相关函数使用
+local RenderTooltip -- 提前声明，供幻境相关更新调用
+
+-- 幻境系统数据缓存（独立于服务器批量查询）
+local HuanJingState = {
+    cache = {},   -- key -> { itemID, guid, multiplier, attributeData, identificationData, timestamp }
+    pending = {}, -- key -> lastQueryTime
+    COOLDOWN = 3, -- 查询冷却（秒）
+    EXPIRE = 60   -- 缓存有效期（秒）
+}
+
+-- 记录当前正在显示的“官方”提示框（GameTooltip / ItemRefTooltip / ShoppingTooltip）
+-- 用于在收到幻境倍率后回写左侧官方属性行（例如：156 力量 → 156 + 倍率x20 = 3120 力量）
+local HuanJingOfficialTooltips = {}
+
+-- 尝试从缓存获取有效的幻境数据
+local function HuanJingGetData(key)
+    local data = HuanJingState.cache[key]
+    if not data then return nil end
+
+    local now = GetTime()
+    if not data.timestamp or (now - data.timestamp) > HuanJingState.EXPIRE then
+        HuanJingState.cache[key] = nil
+        return nil
+    end
+
+    return data
+end
+
+-- 渲染幻境属性块：按照“4 + 4”风格显示（原值 + 幻境追加值）
+local function RenderHuanJingAttributes(tooltip, hjData, meta)
+    if not tooltip or not hjData then return end
+
+    meta = meta or {}
+    meta.rendered = meta.rendered or {}
+    if meta.rendered.huanjing then return end
+
+    -- 解析属性数据，格式：属性类型 原值 增强值,属性类型 原值 增强值
+    local attributes = {}
+
+    local function parseAttributes(src)
+        if not src or src == "" then return end
+
+        for attrStr in string.gmatch(src, "([^,]+)") do
+            local parts = {}
+            for part in string.gmatch(attrStr, "([^%s]+)") do
+                table.insert(parts, part)
+            end
+
+            if #parts >= 3 then
+                local attrType = parts[1]
+                local originalValue = tonumber(parts[2])
+                local enhancedValue = tonumber(parts[3])
+
+                if originalValue and enhancedValue then
+                    table.insert(attributes, {
+                        type = attrType,
+                        original = originalValue,
+                        enhanced = enhancedValue
+                    })
+                end
+            end
+        end
+    end
+
+    -- 官方基础属性 + 鉴定系统属性都视为“追加属性”的原始值和增强值
+    parseAttributes(hjData.attributeData)
+    parseAttributes(hjData.identificationData)
+
+    if #attributes == 0 then return end
+
+    tooltip:AddLine(" ")
+    tooltip:AddLine(DB.colors.header .. "幻境属性" .. DB.colors.reset)
+
+    for _, attr in ipairs(attributes) do
+        local name
+        local attrTypeNum = tonumber(attr.type)
+
+        if attrTypeNum then
+            name = ATTR_NAMES[attrTypeNum] or ("属性" .. attrTypeNum)
+        else
+            if attr.type == "armor" then
+                name = "护甲"
+            elseif attr.type:match("^resist%d+") then
+                local resistNames = {
+                    resist0 = "神圣抗性",
+                    resist1 = "火焰抗性",
+                    resist2 = "自然抗性",
+                    resist3 = "冰霜抗性",
+                    resist4 = "暗影抗性",
+                    resist5 = "奥术抗性"
+                }
+                name = resistNames[attr.type] or "抗性"
+            else
+                name = attr.type
+            end
+        end
+
+        local bonus = attr.enhanced - attr.original
+        if bonus ~= 0 then
+            tooltip:AddDoubleLine(
+                string.format("%d + %d", attr.original, bonus),
+                name,
+                0, 1, 0,
+                0, 1, 0
+            )
+        end
+    end
+
+    meta.rendered.huanjing = true
+    tooltip:Show()
+end
+
+-- 发送幻境倍率查询（带简单冷却，避免刷屏）
+local function HuanJingRequest(itemID, guid, key, now)
+    if not itemID or not guid or guid == 0 then return end
+
+    -- 已有有效缓存则不再查询
+    if HuanJingGetData(key) then
+        return
+    end
+
+    local last = HuanJingState.pending[key]
+    if last and (now - last) < HuanJingState.COOLDOWN then
+        return
+    end
+
+    local addonMessage = string.format("HUANJING_QUERY:%d:%d", itemID, guid)
+
+    if SendAddonMessage then
+        SendAddonMessage(ADDON_PREFIX, addonMessage, "WHISPER", UnitName("player"))
+    elseif C_ChatInfo and C_ChatInfo.SendAddonMessage then
+        C_ChatInfo.SendAddonMessage(ADDON_PREFIX, addonMessage, "WHISPER", UnitName("player"))
+    end
+
+    HuanJingState.pending[key] = now
+end
+
+-- 将幻境倍率应用到“官方”物品提示框（左侧原版 GameTooltip）
+local function ApplyHuanJingToOfficialTooltip(tooltip)
+    if not tooltip or not tooltip:IsShown() then return end
+
+    local state = HuanJingOfficialTooltips[tooltip]
+    if not state or state.applied then return end
+
+    local hjData = HuanJingGetData(state.key)
+    if not hjData or not hjData.multiplier or hjData.multiplier <= 1 then
+        return
+    end
+
+    local mult = hjData.multiplier
+
+    -- 只处理主属性：敏捷(3)、力量(4)、智力(5)、精神(6)、耐力(7)
+    local baseTypes = {
+        [3] = true, -- 敏捷
+        [4] = true, -- 力量
+        [5] = true, -- 智力
+        [6] = true, -- 精神
+        [7] = true, -- 耐力
+    }
+
+    local baseAttrsByName = {}
+
+    if hjData.attributeData and hjData.attributeData ~= "" then
+        for attrStr in string.gmatch(hjData.attributeData, "([^,]+)") do
+            local parts = {}
+            for part in string.gmatch(attrStr, "([^%s]+)") do
+                table.insert(parts, part)
+            end
+
+            if #parts >= 3 then
+                local attrTypeNum = tonumber(parts[1])
+                local originalValue = tonumber(parts[2])
+                local enhancedValue = tonumber(parts[3])
+
+                if attrTypeNum and originalValue and enhancedValue and baseTypes[attrTypeNum] then
+                    local name = ATTR_NAMES[attrTypeNum]
+                    if name then
+                        baseAttrsByName[name] = {
+                            original = originalValue,
+                            enhanced = enhancedValue
+                        }
+                    end
+                end
+            end
+        end
+    end
+
+    if not next(baseAttrsByName) then
+        return
+    end
+
+    local numLines = tooltip:NumLines()
+    local changed = false
+
+    for i = 1, numLines do
+        local leftText = _G[tooltip:GetName() .. "TextLeft" .. i]
+        if leftText then
+            local text = leftText:GetText()
+            if text and text ~= "" then
+                local colorPrefix = text:match("^(|c%x%x%x%x%x%x%x%x)") or ""
+                local colorSuffix = text:match("(|r)$") or ""
+
+                local clean = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+
+                for name, info in pairs(baseAttrsByName) do
+                    -- 匹配类似 “+156 力量” 的官方属性行
+                    local amountStr = clean:match("^%+?(%-?%d+)%s*" .. name .. "%s*$")
+                    if amountStr then
+                        local original = info.original or tonumber(amountStr) or 0
+                        local enhanced = info.enhanced or (original * mult)
+
+                        -- 与右侧“基础/追加属性”保持一致的配色：倍率为粉色，最终值为红色
+                        local newCoreText = string.format("%d + %s倍率x%d%s %s= %d%s %s",
+                            original,
+                            COLOR_PINK, mult, COLOR_RESET,
+                            COLOR_RED, enhanced, COLOR_RESET,
+                            name)
+
+                        leftText:SetText(colorPrefix .. newCoreText .. colorSuffix)
+                        changed = true
+                        break
+                    end
+                end
+            end
+        end
+    end
+
+    if changed then
+        state.applied = true
+        tooltip:Show()
+    end
+end
+
+-- 在现有tooltip上尝试渲染幻境属性（如果缓存中已有数据）
+local function HuanJingTryRender(tooltip, itemID, guid, meta)
+    local key = MakeKey(itemID, guid, nil, nil, false)
+    local data = HuanJingGetData(key)
+    if data then
+        RenderHuanJingAttributes(tooltip, data, meta)
+    end
+end
+
+-- 处理来自服务器的幻境系统系统消息
+local function HuanJingHandleSystemMessage(message)
+    if not message or not message:find("^%[幻境系统%]") then
+        return
+    end
+
+    -- 兼容多种响应格式
+    local itemId, itemGuid, multiplier, attributeData, identificationData =
+        message:match("%[幻境系统%] 装备ID:(%d+) GUID:(%d+) 属性倍率:([%d%.]+) 属性数据:(.+) 鉴定数据:(.+)")
+
+    if not itemId then
+        itemId, itemGuid, multiplier, attributeData =
+            message:match("%[幻境系统%] 装备ID:(%d+) GUID:(%d+) 属性倍率:([%d%.]+) 属性数据:(.+)")
+        identificationData = nil
+    end
+
+    if not itemId then
+        itemId, itemGuid, multiplier =
+            message:match("%[幻境系统%] 装备ID:(%d+) GUID:(%d+) 属性倍率:([%d%.]+)")
+        attributeData = nil
+        identificationData = nil
+    end
+
+    if not itemId or not itemGuid or not multiplier then
+        return
+    end
+
+    itemId = tonumber(itemId)
+    itemGuid = tonumber(itemGuid)
+    multiplier = tonumber(multiplier)
+
+    if not itemId or not itemGuid or not multiplier then
+        return
+    end
+
+    local key = MakeKey(itemId, itemGuid, nil, nil, false)
+
+    HuanJingState.cache[key] = {
+        itemID = itemId,
+        guid = itemGuid,
+        multiplier = multiplier,
+        attributeData = attributeData or "",
+        identificationData = identificationData or "",
+        timestamp = GetTime()
+    }
+
+    HuanJingState.pending[key] = nil
+
+    -- 更新当前正在显示同一件装备的官方提示框（左侧）
+    for t, s in pairs(HuanJingOfficialTooltips) do
+        if t:IsShown() and s.key == key then
+            ApplyHuanJingToOfficialTooltip(t)
+        end
+    end
+
+    -- 如果当前有正在显示该物品的提示框，刷新基础/追加属性的显示（追加“原值 + 幻境加成”）
+    for tooltip, meta in pairs(State.tooltips) do
+        if tooltip:IsShown() and meta.key == key then
+            meta.rendered = meta.rendered or {}
+            meta.rendered.identification = nil
+            meta.rendered.enhancement = nil
+            meta.rendered.growth = nil
+
+            RenderTooltip(tooltip, itemId, itemGuid)
+        end
+    end
+end
+
+-- 处理来自服务器的幻境系统Addon消息
+local function HuanJingHandleAddonMessage(message)
+    if not message or not message:match("^HUANJING_DATA:") then
+        return
+    end
+
+    local itemId, itemGuid, multiplier, rest =
+        message:match("^HUANJING_DATA:(%d+):(%d+):([%d%.]+):?(.*)$")
+
+    if not itemId or not itemGuid or not multiplier then
+        return
+    end
+
+    local attributeData, identificationData
+    if rest and rest ~= "" then
+        local sep = rest:find("|", 1, true)
+        if sep then
+            attributeData = rest:sub(1, sep - 1)
+            identificationData = rest:sub(sep + 1)
+        else
+            attributeData = rest
+        end
+    end
+
+    itemId = tonumber(itemId)
+    itemGuid = tonumber(itemGuid)
+    multiplier = tonumber(multiplier)
+
+    if not itemId or not itemGuid or not multiplier then
+        return
+    end
+
+    local key = MakeKey(itemId, itemGuid, nil, nil, false)
+
+    HuanJingState.cache[key] = {
+        itemID = itemId,
+        guid = itemGuid,
+        multiplier = multiplier,
+        attributeData = attributeData or "",
+        identificationData = identificationData or "",
+        timestamp = GetTime()
+    }
+
+    HuanJingState.pending[key] = nil
+
+    -- 更新当前正在显示同一件装备的官方提示框（左侧）
+    for t, s in pairs(HuanJingOfficialTooltips) do
+        if t:IsShown() and s.key == key then
+            ApplyHuanJingToOfficialTooltip(t)
+        end
+    end
+
+    for tooltip, meta in pairs(State.tooltips) do
+        if tooltip:IsShown() and meta.key == key then
+            meta.rendered = meta.rendered or {}
+            meta.rendered.identification = nil
+            meta.rendered.enhancement = nil
+            meta.rendered.growth = nil
+
+            RenderTooltip(tooltip, itemId, itemGuid)
+        end
+    end
+end
+
 -- ============================================================================
 -- 工具函数
 -- ============================================================================
 
 -- 生成缓存键
-local function MakeKey(itemID, guid, bag, slot, equipFlag)
+MakeKey = function(itemID, guid, bag, slot, equipFlag)
     if guid and guid > 0 then
         return string.format("G:%d:%d", itemID, guid)
     end
@@ -428,7 +808,12 @@ function Parsers.BatchQuery(message)
     local skillsData = parts[8] or ""
     local magicData = parts[9] or ""
     local runeData = parts[10] or ""
-    local setData = parts[11] or ""
+
+    -- 套装字段在消息末尾，可能包含多个":"，因此需要把第11段之后的内容重新拼回去
+    local setData = ""
+    if #parts >= 11 then
+        setData = table.concat(parts, ":", 11)
+    end
 
     local result = {
         type = "batch",
@@ -699,6 +1084,9 @@ function Parsers.BatchQuery(message)
         local sParts = { strsplit(":", setData) }
         if #sParts >= 1 then
             local attrs = {}
+            local effects = {}
+
+            -- 解析套装属性（attrs，形如 "4 20,7 30"）
             if #sParts >= 3 and sParts[3] ~= "" then
                 for pair in string.gmatch(sParts[3], "([^,]+)") do
                     local attrType, value = pair:match("(%d+)%s+([%-]?%d+)")
@@ -711,6 +1099,20 @@ function Parsers.BatchQuery(message)
                 end
             end
 
+            -- 解析套装效果（effects，服务器格式："件数|效果描述,件数|效果描述"）
+            if #sParts >= 4 and sParts[4] ~= "" then
+                for eff in string.gmatch(sParts[4], "([^,]+)") do
+                    local countStr, desc = eff:match("(%d+)%|(.*)")
+                    local count = tonumber(countStr)
+                    if count and desc and desc ~= "" then
+                        table.insert(effects, {
+                            count = count,
+                            desc = desc
+                        })
+                    end
+                end
+            end
+
             result.systems.sets = {
                 type = "sets",
                 itemID = itemID,
@@ -718,7 +1120,7 @@ function Parsers.BatchQuery(message)
                 setId = tonumber(sParts[1]),
                 setName = sParts[2] or "套装",  -- 如果没有setName，使用默认值
                 attributes = attrs,
-                effects = {}  -- 简化版，不解析详细效果
+                effects = effects
             }
         end
     end
@@ -1374,6 +1776,9 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
     local baseAttributes = {}
     local additionalAttributes = {}
 
+    -- 官方基础属性（如力量/敏捷/智力/耐力/精神），用于和幻境倍率一起显示
+    local officialBaseAttributes = {}
+
     -- 1. 收集鉴定系统的基础属性
     if identData and identData.baseAttributes and #identData.baseAttributes > 0 then
         for _, attr in ipairs(identData.baseAttributes) do
@@ -1396,31 +1801,135 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
         end
     end
 
-    -- 步骤1：只有当鉴定系统有基础属性时，才隐藏官方属性
-    -- 如果只有追加属性（没有基础属性），保留官方属性显示
-    if #baseAttributes > 0 then
-        local numLines = tooltip:NumLines()
-        for i = 1, numLines do
-            local leftText = _G[tooltip:GetName() .. "TextLeft" .. i]
-            if leftText then
-                local text = leftText:GetText() or ""
-                if text ~= "" and IsOfficialStatLine(text) then
-                    leftText:SetText("")  -- 隐藏官方属性
+    -- 幻境倍率信息（用于显示“原始值 x 幻境倍率 = 最终值”）
+    local hjData
+    do
+        local key = MakeKey(cached.itemID, cached.guid, nil, nil, false)
+        hjData = HuanJingGetData and HuanJingGetData(key) or nil
+    end
+
+    -- 从提示框元数据中获取官方基础属性（力量/敏捷/智力/耐力/精神），配合幻境倍率展示
+    if meta and meta.officialStats and hjData and hjData.multiplier and hjData.multiplier > 1 then
+        local stats = meta.officialStats
+        local mult = hjData.multiplier
+
+        local baseStatConfig = {
+            { key = "ITEM_MOD_STRENGTH_SHORT",  name = _G.ITEM_MOD_STRENGTH_SHORT or "力量" },
+            { key = "ITEM_MOD_AGILITY_SHORT",   name = _G.ITEM_MOD_AGILITY_SHORT or "敏捷" },
+            { key = "ITEM_MOD_INTELLECT_SHORT", name = _G.ITEM_MOD_INTELLECT_SHORT or "智力" },
+            { key = "ITEM_MOD_STAMINA_SHORT",   name = _G.ITEM_MOD_STAMINA_SHORT or "耐力" },
+            { key = "ITEM_MOD_SPIRIT_SHORT",    name = _G.ITEM_MOD_SPIRIT_SHORT or "精神" },
+        }
+
+        for _, conf in ipairs(baseStatConfig) do
+            local amount = stats[conf.key]
+            if amount and amount ~= 0 then
+                table.insert(officialBaseAttributes, {
+                    name = conf.name,
+                    value = amount,
+                    multiplier = mult
+                })
+            end
+        end
+    end
+
+    -- 结合幻境系统数据：按顺序为基础属性和追加属性记录“原值/增强值”
+    local hjBaseInfo = {}       -- index -> { original, enhanced }
+    local hjAdditionalInfo = {} -- index -> { original, enhanced }
+
+    do
+        if hjData and hjData.identificationData and hjData.identificationData ~= "" then
+            local hjList = {}
+
+            for attrStr in string.gmatch(hjData.identificationData, "([^,]+)") do
+                local parts = {}
+                for part in string.gmatch(attrStr, "([^%s]+)") do
+                    table.insert(parts, part)
+                end
+
+                if #parts >= 3 then
+                    local attrTypeNum = tonumber(parts[1])
+                    local originalValue = tonumber(parts[2])
+                    local enhancedValue = tonumber(parts[3])
+
+                    if attrTypeNum and originalValue and enhancedValue then
+                        table.insert(hjList, {
+                            type = attrTypeNum,
+                            original = originalValue,
+                            enhanced = enhancedValue
+                        })
+                    end
+                end
+            end
+
+            local baseCount = #baseAttributes
+
+            -- 前 baseCount 条对应基础属性
+            for i = 1, baseCount do
+                local attr = baseAttributes[i]
+                local hj = hjList[i]
+                if attr and hj and hj.type == attr.type then
+                    hjBaseInfo[i] = { original = hj.original, enhanced = hj.enhanced }
+                end
+            end
+
+            -- 后面的对应追加属性
+            for j = 1, #additionalAttributes do
+                local idx = baseCount + j
+                local attr = additionalAttributes[j]
+                local hj = hjList[idx]
+                if attr and hj and hj.type == attr.type then
+                    hjAdditionalInfo[j] = { original = hj.original, enhanced = hj.enhanced }
                 end
             end
         end
     end
 
-    -- 步骤2：在tooltip末尾添加鉴定系统的基础属性
-    if #baseAttributes > 0 then
+    -- 直接在官方属性之后追加展示鉴定系统的基础属性
+    local hasBaseSection = (#officialBaseAttributes > 0) or (#baseAttributes > 0)
+    if hasBaseSection then
         tooltip:AddLine(" ")
         tooltip:AddLine(DB.colors.header .. "基础属性" .. DB.colors.reset)
 
-        for _, attr in ipairs(baseAttributes) do
-            local name = ATTR_NAMES[attr.type] or ("属性" .. attr.type)
-            -- 使用AddDoubleLine实现完美对齐
+        -- 先显示官方基础属性（力/敏/智/耐/精），带幻境倍率
+        for _, attr in ipairs(officialBaseAttributes) do
+            local baseValue = attr.value
+            local mult = attr.multiplier
+            local enhanced = baseValue * mult
+
+            local leftText = string.format("%d + %s倍率x%d%s %s= %d%s",
+                baseValue,
+                COLOR_PINK, mult, COLOR_RESET,
+                COLOR_RED, enhanced, COLOR_RESET)
+
             tooltip:AddDoubleLine(
-                string.format("+%d", attr.value),
+                leftText,
+                attr.name,
+                0, 1, 0,
+                0, 1, 0
+            )
+        end
+
+        -- 再显示鉴定系统的基础属性
+        for index, attr in ipairs(baseAttributes) do
+            local name = ATTR_NAMES[attr.type] or ("属性" .. attr.type)
+            local hjInfo = hjBaseInfo[index]
+            local leftText
+
+            if hjData and hjData.multiplier and hjData.multiplier > 1 and hjInfo then
+                local mult = hjData.multiplier
+                local original = hjInfo.original or attr.value
+                local enhanced = hjInfo.enhanced or (original * mult)
+                leftText = string.format("%d + %s倍率x%d%s %s= %d%s",
+                    original,
+                    COLOR_PINK, mult, COLOR_RESET,
+                    COLOR_RED, enhanced, COLOR_RESET)
+            else
+                leftText = string.format("+%d", attr.value)
+            end
+
+            tooltip:AddDoubleLine(
+                leftText,
                 name,
                 0, 1, 0,  -- 左列：绿色
                 0, 1, 0   -- 右列：绿色
@@ -1428,16 +1937,31 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
         end
     end
 
-    -- 步骤3：在tooltip末尾添加鉴定系统的追加属性（如果有）
+    -- 在tooltip末尾添加鉴定系统的追加属性（如果有）
     if #additionalAttributes > 0 then
         tooltip:AddLine(" ")
         tooltip:AddLine(DB.colors.header .. "追加属性" .. DB.colors.reset)
 
-        for _, attr in ipairs(additionalAttributes) do
+        -- 只显示鉴定系统随机生成的追加属性（不再混入官方基础属性）
+        for index, attr in ipairs(additionalAttributes) do
             local name = ATTR_NAMES[attr.type] or ("属性" .. attr.type)
-            -- 使用AddDoubleLine实现完美对齐
+            local hjInfo = hjAdditionalInfo[index]
+            local leftText
+
+            if hjData and hjData.multiplier and hjData.multiplier > 1 and hjInfo then
+                local mult = hjData.multiplier
+                local original = hjInfo.original or attr.value
+                local enhanced = hjInfo.enhanced or (original * mult)
+                leftText = string.format("%d + %s倍率x%d%s %s= %d%s",
+                    original,
+                    COLOR_PINK, mult, COLOR_RESET,
+                    COLOR_RED, enhanced, COLOR_RESET)
+            else
+                leftText = string.format("+%d", attr.value)
+            end
+
             tooltip:AddDoubleLine(
-                string.format("+%d", attr.value),
+                leftText,
                 name,
                 0, 1, 0,  -- 左列：绿色
                 0, 1, 0   -- 右列：绿色
@@ -1445,7 +1969,7 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
         end
     end
 
-    -- 步骤4：渲染强化系统的属性（独立区块）
+    -- 渲染强化系统的属性（独立区块）
     -- 只要有强化数据（等级或属性），就显示强化区块
     if enhanceData and (
         (enhanceData.level and enhanceData.level > 0) or
@@ -1461,8 +1985,24 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
         if enhanceData.attributes and #enhanceData.attributes > 0 then
             for _, attr in ipairs(enhanceData.attributes) do
                 local name = ATTR_NAMES[attr.type] or ("属性" .. attr.type)
+                local leftText
+
+                -- 如果存在幻境倍率，则按“原值 + 倍率xN = 最终值”格式显示
+                if hjData and hjData.multiplier and hjData.multiplier > 1 then
+                    local mult = hjData.multiplier
+                    local baseValue = attr.value or 0
+                    local finalValue = math.floor(baseValue * mult + 0.5)
+
+                    leftText = string.format("%d + %s倍率x%d%s %s= %d%s",
+                        baseValue,
+                        COLOR_PINK, mult, COLOR_RESET,
+                        COLOR_RED, finalValue, COLOR_RESET)
+                else
+                    leftText = string.format("+%d", attr.value)
+                end
+
                 tooltip:AddDoubleLine(
-                    string.format("+%d", attr.value),
+                    leftText,
                     name,
                     0, 1, 0,  -- 左列：绿色
                     0, 1, 0   -- 右列：绿色
@@ -1471,7 +2011,7 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
         end
     end
 
-    -- 步骤5：渲染成长系统的属性（独立区块）
+    -- 渲染成长系统的属性（独立区块）
     -- 只要有成长数据（等级、经验或属性），就显示成长区块
     if growthData and (
         (growthData.level and growthData.level > 0) or
@@ -1492,8 +2032,24 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
         if growthData.attributes and #growthData.attributes > 0 then
             for _, attr in ipairs(growthData.attributes) do
                 local name = ATTR_NAMES[attr.type] or ("属性" .. attr.type)
+                local leftText
+
+                -- 成长属性同样应用幻境倍率显示
+                if hjData and hjData.multiplier and hjData.multiplier > 1 then
+                    local mult = hjData.multiplier
+                    local baseValue = attr.value or 0
+                    local finalValue = math.floor(baseValue * mult + 0.5)
+
+                    leftText = string.format("%d + %s倍率x%d%s %s= %d%s",
+                        baseValue,
+                        COLOR_PINK, mult, COLOR_RESET,
+                        COLOR_RED, finalValue, COLOR_RESET)
+                else
+                    leftText = string.format("+%d", attr.value)
+                end
+
                 tooltip:AddDoubleLine(
-                    string.format("+%d", attr.value),
+                    leftText,
                     name,
                     0, 1, 0,  -- 左列：绿色
                     0, 1, 0   -- 右列：绿色
@@ -1511,12 +2067,17 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
 end
 
 -- 渲染提示框
-local function RenderTooltip(tooltip, itemID, guid)
+RenderTooltip = function(tooltip, itemID, guid)
     if not itemID or not guid or guid == 0 then return end
 
     local key = MakeKey(itemID, guid, nil, nil, false)
     local meta = GetTooltipMeta(tooltip, key)
     local cached = GetCachedData(itemID, guid)
+
+    local now = GetTime()
+
+    -- 幻境系统查询：通过系统消息单独获取倍率和增强后的属性
+    HuanJingRequest(itemID, guid, key, now)
 
     -- 只在没有完整缓存时才发送查询
     local hasCompleteCache = false
@@ -1532,7 +2093,6 @@ local function RenderTooltip(tooltip, itemID, guid)
     end
 
     -- 如果没有完整缓存，尝试发送查询（SendQuery内部会检查是否需要查询）
-    local now = GetTime()
     if not hasCompleteCache then
         SendQuery(itemID, guid)
     end
@@ -1659,6 +2219,13 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
         return
     end
 
+    -- 优先处理幻境系统的Addon响应
+    if message:match("^HUANJING_DATA:") or message:match("^RESPONSE:HUANJING_DATA:") then
+        local dataMessage = message:gsub("^RESPONSE:", "")
+        HuanJingHandleAddonMessage(dataMessage)
+        return
+    end
+
     -- 检查是否是ALL_MODULE_DATA响应
     if not message:match("ALL_MODULE_DATA:") then
         return
@@ -1677,7 +2244,10 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
     end
 end
 
--- OnChatMessage已删除，现在只使用Addon消息通道
+-- 处理系统消息（目前用于接收幻境系统的倍率与属性响应）
+local function OnSystemMessage(self, event, message)
+    HuanJingHandleSystemMessage(message)
+end
 
 -- ⭐ 统一的服务器响应处理函数（实现前面声明的函数）
 ProcessServerResponse = function(message, receiveTime)
@@ -1785,10 +2355,13 @@ end
 
 -- ⭐ 注册Addon消息事件
 EventFrame:RegisterEvent("CHAT_MSG_ADDON")
+EventFrame:RegisterEvent("CHAT_MSG_SYSTEM")
 
 EventFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "CHAT_MSG_ADDON" then
         OnAddonMessage(self, event, ...)
+    elseif event == "CHAT_MSG_SYSTEM" then
+        OnSystemMessage(self, event, ...)
     end
 end)
 
@@ -1797,11 +2370,165 @@ end)
 -- Tooltip Hook
 -- ============================================================================
 
-local function OnTooltipSetItem(tooltip)
-    local _, itemLink = tooltip:GetItem()
-    if not itemLink then
-        return
+-- 为任意物品提示框创建/获取一个“自定义属性提示框”
+local function GetExtraTooltip(ownerTooltip)
+    if not ownerTooltip or not ownerTooltip.GetName then
+        return nil
     end
+
+    if ownerTooltip.UIT_ExtraTooltip then
+        return ownerTooltip.UIT_ExtraTooltip
+    end
+
+    local baseName = ownerTooltip:GetName() or "UnifiedItemTooltip"
+    local extraName = baseName .. "_UnifiedExtra"
+
+    local extra = CreateFrame("GameTooltip", extraName, UIParent, "GameTooltipTemplate")
+    extra:SetFrameStrata(ownerTooltip:GetFrameStrata())
+    extra:SetScale(ownerTooltip:GetScale())
+
+    ownerTooltip.UIT_ExtraTooltip = extra
+    return extra
+end
+
+-- 判断一个提示框是否源自聊天框/聊天链接
+local function IsTooltipFromChat(tooltip)
+	if not tooltip or not tooltip.GetOwner then return false end
+
+	local current = tooltip
+	local depth = 0
+	while current and depth < 5 do
+		local name = current.GetName and current:GetName()
+		if name and name:match("^ChatFrame%d+") then
+			return true
+		end
+		if _G.ItemRefTooltip and current == _G.ItemRefTooltip then
+			return true
+		end
+		if not current.GetOwner then break end
+		current = current:GetOwner()
+		depth = depth + 1
+	end
+
+	return false
+end
+
+-- 根据提示框类型决定自定义属性提示框的停靠方向
+local function AnchorExtraTooltip(extra, ownerTooltip)
+	extra:SetOwner(ownerTooltip, "ANCHOR_NONE")
+	extra:ClearAllPoints()
+
+	local name = ownerTooltip:GetName()
+	local owner = ownerTooltip.GetOwner and ownerTooltip:GetOwner() or nil
+	local ownerName = owner and owner.GetName and owner:GetName() or ""
+	local isChatTooltip = (name == "ItemRefTooltip") or ownerName:match("^ChatFrame%d+") ~= nil
+
+	-- 间距调整为 0,0，保证两个提示框紧贴但不重叠
+	local gapNormal  = 0   -- 普通场景：主提示框与自定义框的水平间距
+	local gapChat    = 0   -- 聊天框场景：系统提示框与自定义框的水平间距
+	local gapCompare = 0   -- 对比提示框：对比框与自定义框的水平间距
+
+	if name == "ShoppingTooltip1" then
+		-- 第一个对比框：自定义提示框放在其左侧，避免与第二个对比框重叠
+		extra:SetPoint("TOPRIGHT", ownerTooltip, "TOPLEFT", -gapCompare, 0)
+	elseif name == "ShoppingTooltip2" then
+		-- 第二个对比框：自定义提示框放在其右侧（最右边）
+		extra:SetPoint("TOPLEFT", ownerTooltip, "TOPRIGHT", gapCompare, 0)
+	elseif isChatTooltip then
+		-- 聊天框链接/悬停：自定义属性提示框移动到系统提示框右侧显示
+		extra:SetPoint("TOPLEFT", ownerTooltip, "TOPRIGHT", gapChat, 0)
+	else
+		-- 普通/主提示框：自定义提示框挂在其右侧
+		extra:SetPoint("TOPLEFT", ownerTooltip, "TOPRIGHT", gapNormal, 0)
+	end
+end
+
+local function FixExtraTooltipOffscreen(extra, ownerTooltip)
+	if not extra or not extra:IsShown() or not ownerTooltip or not ownerTooltip:IsShown() then return end
+
+	local ownerLeft, ownerRight = ownerTooltip:GetLeft(), ownerTooltip:GetRight()
+	if not ownerLeft or not ownerRight then return end
+
+	local screenWidth = GetScreenWidth() or 0
+	if screenWidth <= 0 then return end
+
+	local extraWidth = extra:GetWidth() or 0
+	if extra.SetClampedToScreen then
+		extra:SetClampedToScreen(true)
+	end
+
+	local _, _, _, _, yOfs = extra:GetPoint(1)
+	yOfs = yOfs or 0
+
+	local needFlip
+	-- 如果靠右放不下而左边有空间，则贴到左侧；反之亦然
+	if ownerRight + extraWidth > screenWidth and ownerLeft - extraWidth >= 0 then
+		needFlip = "LEFT"
+	elseif ownerLeft - extraWidth < 0 and ownerRight + extraWidth <= screenWidth then
+		needFlip = "RIGHT"
+	end
+
+	if not needFlip then
+		return
+	end
+
+	extra:ClearAllPoints()
+	local xOffset = 4
+	if needFlip == "LEFT" then
+		extra:SetPoint("TOPRIGHT", ownerTooltip, "TOPLEFT", -xOffset, yOfs)
+	else
+		extra:SetPoint("TOPLEFT", ownerTooltip, "TOPRIGHT", xOffset, yOfs)
+	end
+end
+
+local function OnTooltipSetItem(tooltip)
+	-- 从聊天框悬停/点击时，屏蔽“当前装备”对比
+	local tName = tooltip.GetName and tooltip:GetName() or ""
+
+	-- 1) 如果是聊天里点击出来的 ItemRefTooltip：
+	--    强制隐藏官方对比框 + 清理 tooltip 自身可能残留的“当前装备”文字
+	if tName == "ItemRefTooltip" and IsTooltipFromChat(tooltip) then
+		if ShoppingTooltip1 then
+			ShoppingTooltip1:Hide()
+			if ShoppingTooltip1.UIT_ExtraTooltip then
+				ShoppingTooltip1.UIT_ExtraTooltip:Hide()
+				ClearTooltipMeta(ShoppingTooltip1.UIT_ExtraTooltip)
+			end
+		end
+		if ShoppingTooltip2 then
+			ShoppingTooltip2:Hide()
+			if ShoppingTooltip2.UIT_ExtraTooltip then
+				ShoppingTooltip2.UIT_ExtraTooltip:Hide()
+				ClearTooltipMeta(ShoppingTooltip2.UIT_ExtraTooltip)
+			end
+		end
+
+		local compareText = _G.ITEM_COMPARE_TOOLTIP_TEXT
+		for i = 1, tooltip:NumLines() do
+			local left = _G[tName .. "TextLeft" .. i]
+			if left then
+				local text = left:GetText()
+				if text and ((compareText and text == compareText) or text:find("当前装备")) then
+					left:SetText("")
+				end
+			end
+		end
+	end
+
+	-- 2) 如果是 ShoppingTooltip1/2 且来源于聊天：完全不显示该对比框
+	if (tName == "ShoppingTooltip1" or tName == "ShoppingTooltip2") and IsTooltipFromChat(tooltip) then
+		tooltip:Hide()
+		if tooltip.UIT_ExtraTooltip then
+			tooltip.UIT_ExtraTooltip:Hide()
+			ClearTooltipMeta(tooltip.UIT_ExtraTooltip)
+		end
+		return
+	end
+
+	local _, itemLink = tooltip:GetItem()
+	if not itemLink then
+		return
+	end
 
     -- 只从链接中提取GUID，如果链接中没有GUID（随机属性），说明物品没有鉴定属性，直接跳过
     local itemID, guid = ExtractItemInfo(itemLink)
@@ -1809,15 +2536,49 @@ local function OnTooltipSetItem(tooltip)
         return
     end
 
-    -- 只有当链接中包含有效GUID时才查询和渲染
-    if guid and guid > 0 then
-        RenderTooltip(tooltip, itemID, guid)
+    -- 没有有效 GUID 说明没有自定义属性，仅保持官方提示框原样
+    if not (guid and guid > 0) then
+        if tooltip.UIT_ExtraTooltip then
+            tooltip.UIT_ExtraTooltip:Hide()
+            ClearTooltipMeta(tooltip.UIT_ExtraTooltip)
+        end
+        return
     end
-    -- 如果没有GUID，直接返回，不做任何处理（不查询，不显示提示）
+
+    local key = MakeKey(itemID, guid, nil, nil, false)
+
+    -- 记录该官方提示框当前对应的装备，用于在收到幻境倍率时回写左侧属性
+    HuanJingOfficialTooltips[tooltip] = {
+        key = key,
+        itemID = itemID,
+        guid = guid,
+        applied = false
+    }
+
+    -- 如果缓存中已经有幻境数据，立即更新官方提示框
+    ApplyHuanJingToOfficialTooltip(tooltip)
+
+    -- 在官方提示框旁显示自定义属性专用提示框
+    local extra = GetExtraTooltip(tooltip)
+    if not extra then
+        return
+    end
+
+    local meta = GetTooltipMeta(extra, key)
+
+    AnchorExtraTooltip(extra, tooltip)
+    extra:ClearLines()
+    RenderTooltip(extra, itemID, guid)
+    FixExtraTooltipOffscreen(extra, tooltip)
 end
 
 local function OnTooltipCleared(tooltip)
-    ClearTooltipMeta(tooltip)
+    if tooltip.UIT_ExtraTooltip then
+        tooltip.UIT_ExtraTooltip:Hide()
+        ClearTooltipMeta(tooltip.UIT_ExtraTooltip)
+    end
+
+    HuanJingOfficialTooltips[tooltip] = nil
 end
 
 -- Hook游戏提示框
