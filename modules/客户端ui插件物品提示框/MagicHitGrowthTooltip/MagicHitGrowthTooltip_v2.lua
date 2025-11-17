@@ -127,8 +127,12 @@ local State = {
     queryId = 0
 }
 
-local MakeKey      -- 提前声明，供幻境相关函数使用
+local MakeKey       -- 提前声明，供幻境相关函数使用
 local RenderTooltip -- 提前声明，供幻境相关更新调用
+local RefreshUnifiedFrame -- 提前声明，供四联大框刷新使用
+
+-- 记录当前按物品键关联的统一四联大框，用于异步刷新
+local UnifiedFramesByKey = {}
 
 -- 幻境系统数据缓存（独立于服务器批量查询）
 local HuanJingState = {
@@ -427,13 +431,21 @@ local function HuanJingHandleSystemMessage(message)
 
     -- 如果当前有正在显示该物品的提示框，刷新基础/追加属性的显示（追加“原值 + 幻境加成”）
     for tooltip, meta in pairs(State.tooltips) do
-        if tooltip:IsShown() and meta.key == key then
+        if not tooltip.UIT_IsUnifiedFrame and tooltip:IsShown() and meta.key == key then
             meta.rendered = meta.rendered or {}
             meta.rendered.identification = nil
             meta.rendered.enhancement = nil
             meta.rendered.growth = nil
 
             RenderTooltip(tooltip, itemId, itemGuid)
+        end
+    end
+
+    -- 同步刷新统一四联大框中的幻境相关数值（即使当前未显示，也会根据数据智能决定是否显示）
+    local frames = UnifiedFramesByKey[key]
+    if frames then
+        for _, frame in ipairs(frames) do
+            RefreshUnifiedFrame(frame, itemId, itemGuid)
         end
     end
 end
@@ -491,13 +503,21 @@ local function HuanJingHandleAddonMessage(message)
     end
 
     for tooltip, meta in pairs(State.tooltips) do
-        if tooltip:IsShown() and meta.key == key then
+        if not tooltip.UIT_IsUnifiedFrame and tooltip:IsShown() and meta.key == key then
             meta.rendered = meta.rendered or {}
             meta.rendered.identification = nil
             meta.rendered.enhancement = nil
             meta.rendered.growth = nil
 
             RenderTooltip(tooltip, itemId, itemGuid)
+        end
+    end
+
+    -- 同步刷新统一四联大框中的幻境相关数值
+    local frames = UnifiedFramesByKey[key]
+    if frames then
+        for _, frame in ipairs(frames) do
+            RefreshUnifiedFrame(frame, itemId, itemGuid)
         end
     end
 end
@@ -677,12 +697,11 @@ local function ExtractItemInfoEnhanced(itemLink)
     return itemID, nil, nil, nil, false
 end
 
--- 文本换行工具函数
--- 将长文本按照指定宽度分割成多行，正确保留颜色代码和中文字符
 local function WrapText(text, maxCharsPerLine)
     if not text or text == "" then return {text} end
 
-    maxCharsPerLine = maxCharsPerLine or 40  -- 默认每行40个显示字符
+    -- 默认每行200个“显示字节”：ASCII算1，中文算2，大约可以放下100个汉字
+    maxCharsPerLine = maxCharsPerLine or 200
 
     -- 提取颜色代码
     local colorCode = text:match("^(|c%x%x%x%x%x%x%x%x)")
@@ -1340,8 +1359,8 @@ function Renderers.Skills(tooltip, data)
         end
         text = text .. DB.colors.reset
 
-        -- 使用WrapText函数将长文本分行显示，每行最多40个字符
-        local lines = WrapText(text, 40)
+        -- 使用WrapText函数将长文本分行显示，每行约支持100个汉字（200显示字节）
+        local lines = WrapText(text, 200)
         for _, line in ipairs(lines) do
             tooltip:AddLine(line)
         end
@@ -2323,11 +2342,20 @@ ProcessServerResponse = function(message, receiveTime)
             State.cache[key].noData = true
         end
 
-        -- 更新所有相关的提示框
+        -- 更新所有相关的提示框（仅限真正的 GameTooltip/ShoppingTooltip 等）
         local renderCount = 0
         for tooltip, meta in pairs(State.tooltips) do
-            if tooltip:IsShown() and meta.key == key then
+            if not tooltip.UIT_IsUnifiedFrame and tooltip:IsShown() and meta.key == key then
                 RenderTooltip(tooltip, batchData.itemID, batchData.guid)
+                renderCount = renderCount + 1
+            end
+        end
+
+        -- 同步刷新所有统一四联大框（是否显示由 RefreshUnifiedFrame 自己决定）
+        local frames = UnifiedFramesByKey[key]
+        if frames then
+            for _, frame in ipairs(frames) do
+                RefreshUnifiedFrame(frame, batchData.itemID, batchData.guid)
                 renderCount = renderCount + 1
             end
         end
@@ -2370,14 +2398,450 @@ end)
 -- Tooltip Hook
 -- ============================================================================
 
--- 为任意物品提示框创建/获取一个“自定义属性提示框”
+-- ============================================================================
+-- 四联提示框系统函数（必须在OnTooltipSetItem之前定义）
+-- ============================================================================
+
+-- 创建一个统一的大框，内部分2列
+local function GetUnifiedTooltipFrame(ownerTooltip)
+    if not ownerTooltip or not ownerTooltip.GetName then
+        print("|cFFFF0000[错误]|r ownerTooltip无效")
+        return nil
+    end
+
+    local baseName = ownerTooltip:GetName() or "UnifiedItemTooltip"
+
+    -- 如果已经创建过，直接返回
+    if ownerTooltip.UIT_UnifiedFrame then
+        return ownerTooltip.UIT_UnifiedFrame
+    end
+
+    -- 创建主框架
+    local mainFrame = CreateFrame("Frame", baseName .. "_UnifiedFrame", UIParent)
+    mainFrame:SetFrameStrata("TOOLTIP")
+    mainFrame:SetFrameLevel(100)  -- 确保在最上层
+    mainFrame.UIT_IsUnifiedFrame = true
+
+    -- 设置背景
+    mainFrame:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true,
+        tileSize = 16,
+        edgeSize = 16,
+        insets = { left = 4, right = 4, top = 4, bottom = 4 }
+    })
+    mainFrame:SetBackdropColor(0, 0, 0, 0.8)  -- 半透明黑色背景，提升可读性
+    mainFrame:SetBackdropBorderColor(1, 0.8, 0, 0)  -- 金色边框完全透明
+
+    -- 根据屏幕宽度自适应总宽，以 2560x1440 分辨率下两列布局为基准
+    local baselineScreenWidth = 2560
+    local baselineTotalWidth = 600
+
+    local screenWidth = GetScreenWidth and GetScreenWidth() or baselineScreenWidth
+    if not screenWidth or screenWidth <= 0 then
+        screenWidth = baselineScreenWidth
+    end
+
+    -- 按屏幕宽度比例缩放总宽，在 1920 下仅轻微缩小，在更高分辨率下略放大，限定缩放范围
+    local widthScale = screenWidth / baselineScreenWidth
+    if widthScale < 0.95 then
+        widthScale = 0.95
+    elseif widthScale > 1.25 then
+        widthScale = 1.25
+    end
+
+    -- 两列布局：先计算基准内部宽度，再在列宽基础上放大 30%
+    local columnSpacing = 10
+    local sidePadding = 20
+
+    local baseInsideWidth = baselineTotalWidth - sidePadding - columnSpacing
+    local baseColumnWidth = baseInsideWidth / 2
+
+    -- 在基准两列宽度基础上再放大 30%，并按分辨率缩放
+    local columnWidth = baseColumnWidth * 1.3 * widthScale
+
+    local totalWidth = columnWidth * 2 + sidePadding + columnSpacing
+
+    mainFrame:SetWidth(totalWidth)
+    mainFrame:SetHeight(800)
+
+    -- 创建2个内容区域
+    local columns = {}
+
+    for i = 1, 2 do
+        local column = CreateFrame("Frame", baseName .. "_Column" .. i, mainFrame)
+        column:SetWidth(columnWidth)
+        column:SetHeight(1150)
+        column:SetFrameLevel(mainFrame:GetFrameLevel() + 1)  -- 确保在主框架之上
+
+        -- 设置列的背景，���每列可见
+        column:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+            tile = false,
+            tileSize = 16,
+            edgeSize = 1,
+            insets = { left = 1, right = 1, top = 1, bottom = 1 }
+        })
+
+        -- 每列不同的背景色
+        if i == 1 then
+            column:SetPoint("TOPLEFT", mainFrame, "TOPLEFT", 10, -10)
+            column:SetBackdropColor(0.1, 0.1, 0.2, 0)  -- 深蓝色，背景完全透明
+            column:SetBackdropBorderColor(0.3, 0.3, 0.5, 0)  -- 边框完全透明
+        elseif i == 2 then
+            column:SetPoint("TOPLEFT", columns[i-1], "TOPRIGHT", columnSpacing, 0)
+            column:SetBackdropColor(0.1, 0.2, 0.1, 0)  -- 深绿色，背景完全透明
+            column:SetBackdropBorderColor(0.3, 0.5, 0.3, 0)  -- 边框完全透明
+        end
+
+        -- 所有列都创建内容容器
+        local content = CreateFrame("Frame", nil, column)
+        content:SetWidth(columnWidth)
+        content:SetAllPoints(column)  -- 填充整个列
+        content:SetFrameLevel(column:GetFrameLevel() + 1)
+        column.content = content
+
+        -- 创建文本显示区域
+        local textFrame = CreateFrame("Frame", nil, content)
+        textFrame:SetWidth(columnWidth - 10)
+        textFrame:SetPoint("TOPLEFT", content, "TOPLEFT", 5, -5)
+        textFrame:SetFrameLevel(content:GetFrameLevel() + 1)
+        column.textFrame = textFrame
+
+        -- 存储文本行
+        column.lines = {}
+        column.currentY = 0
+
+        columns[i] = column
+    end
+
+    mainFrame.columns = columns
+
+    -- 为列创建适配器，以便复用现有 tooltip 渲染函数
+    local function CreateColumnTooltipAdapter(frame, columnIndex)
+        local adapter = {}
+
+        function adapter:AddLine(text, r, g, b)
+            frame:AddLineToColumn(columnIndex, text or "", r, g, b)
+        end
+
+        function adapter:AddDoubleLine(left, right, lr, lg, lb, rr, rg, rb)
+            local combined
+            if right and right ~= "" then
+                combined = (left or "") .. "  " .. right
+            else
+                combined = left or ""
+            end
+            frame:AddLineToColumn(columnIndex, combined, lr, lg, lb)
+        end
+
+        function adapter:Show()
+            -- 统一大框本身负责显示
+        end
+
+        return adapter
+    end
+
+    mainFrame.ColumnTooltips = {
+        [1] = CreateColumnTooltipAdapter(mainFrame, 1),
+        [2] = CreateColumnTooltipAdapter(mainFrame, 2),
+    }
+
+    -- 添加辅助方法：向指定列添加文本
+    mainFrame.AddLineToColumn = function(self, columnIndex, text, r, g, b)
+        if columnIndex < 1 or columnIndex > 2 then return end
+
+        local column = self.columns[columnIndex]
+
+        -- 创建FontString（直接使用column作为父框架）
+        local fontString = column:CreateFontString(nil, "OVERLAY")
+        if not fontString then
+            return
+        end
+
+        -- 设置字体（带备用字体列表，按分辨率缩放字号）
+        local baselineScreenWidth = 2560
+        local baselineFontSize = 14
+        local minFontSize = 11
+        local maxFontSize = 14
+
+        local screenWidth = GetScreenWidth and GetScreenWidth() or baselineScreenWidth
+        if not screenWidth or screenWidth <= 0 then
+            screenWidth = baselineScreenWidth
+        end
+
+        local fontScale = screenWidth / baselineScreenWidth
+        local fontSize = baselineFontSize * fontScale
+        if fontSize < minFontSize then
+            fontSize = minFontSize
+        elseif fontSize > maxFontSize then
+            fontSize = maxFontSize
+        end
+
+        local fontSet = false
+        local fonts = {
+            "Fonts\\ARKai_T.ttf",           -- 主字体
+            "Fonts\\ARKai_C.ttf",           -- 备用中文字体1
+            "Fonts\\ZYKai_T.ttf",           -- 备用中文字体2
+            "Fonts\\ZYHei.ttf",             -- 备用中文字体3
+            "Fonts\\FRIZQT__.TTF",          -- 游戏默认字体
+        }
+
+        for _, fontPath in ipairs(fonts) do
+            local ok = fontString:SetFont(fontPath, fontSize, "OUTLINE")
+            if ok then
+                fontSet = true
+                break
+            end
+        end
+
+        if not fontSet then
+            fontString:SetFont("Fonts\\FRIZQT__.TTF", fontSize)
+        end
+
+        fontString:SetPoint("TOPLEFT", column, "TOPLEFT", 10, -10 - column.currentY)
+        fontString:SetText(text or "")
+
+        if r and g and b then
+            fontString:SetTextColor(r, g, b, 1)
+        else
+            fontString:SetTextColor(1, 1, 1, 1)
+        end
+
+        fontString:SetWidth(columnWidth - 20)
+        fontString:SetJustifyH("LEFT")
+        fontString:SetWordWrap(true)
+        fontString:SetDrawLayer("OVERLAY", 7)
+        fontString:Show()
+
+        table.insert(column.lines, fontString)
+
+        local height = fontString:GetStringHeight() or fontSize
+        column.currentY = column.currentY + height + 2
+    end
+
+    -- 清空指定列的内容
+    mainFrame.ClearColumn = function(self, columnIndex)
+        if columnIndex < 1 or columnIndex > 2 then return end
+
+        local column = self.columns[columnIndex]
+        for _, line in ipairs(column.lines) do
+            line:Hide()
+            line:SetText("")
+        end
+        column.lines = {}
+        column.currentY = 0
+    end
+
+    -- 复制官方tooltip内容到第1列
+    mainFrame.CopyOfficialTooltip = function(self, officialTooltip)
+        self:ClearColumn(1)
+
+        local tooltipName = officialTooltip:GetName()
+        if not tooltipName then
+            return
+        end
+
+        local numLines = officialTooltip:NumLines()
+
+        -- 遍历所有行，复制文本和颜色
+        for i = 1, numLines do
+            local leftText = _G[tooltipName .. "TextLeft" .. i]
+            local rightText = _G[tooltipName .. "TextRight" .. i]
+
+            if leftText then
+                local text = leftText:GetText()
+                if text and text ~= "" then
+                    local r, g, b = leftText:GetTextColor()
+
+                    -- 如果有右侧文本，合并显示
+                    if rightText then
+                        local rightStr = rightText:GetText()
+                        if rightStr and rightStr ~= "" then
+                            text = text .. "  " .. rightStr
+                        end
+                    end
+
+                    self:AddLineToColumn(1, text, r, g, b)
+                end
+            end
+        end
+    end
+
+    -- 保存引用
+    ownerTooltip.UIT_UnifiedFrame = mainFrame
+    mainFrame.UIT_OwnerTooltip = ownerTooltip
+    return mainFrame
+end
+
+-- 根据官方 tooltip 位置，将统一大框智能停靠在其左右侧，避免超出屏幕
+local function AnchorUnifiedFrame(unifiedFrame, officialTooltip)
+    if not unifiedFrame then return end
+
+    unifiedFrame:ClearAllPoints()
+
+    -- 如果没有有效的官方 tooltip，则兜底放在屏幕中上方
+    if not officialTooltip or not officialTooltip.GetLeft then
+        unifiedFrame:SetPoint("TOP", UIParent, "TOP", 0, -80)
+        return
+    end
+
+    local tipLeft  = officialTooltip:GetLeft()
+    local tipRight = officialTooltip:GetRight()
+    local tipTop   = officialTooltip:GetTop()
+
+    if not tipLeft or not tipRight or not tipTop then
+        unifiedFrame:SetPoint("TOP", UIParent, "TOP", 0, -80)
+        return
+    end
+
+    local screenWidth  = GetScreenWidth and GetScreenWidth() or 0
+    local screenHeight = GetScreenHeight and GetScreenHeight() or 0
+    local frameWidth   = unifiedFrame:GetWidth() or 0
+
+    -- 官方提示框与大框之间的水平间距（越小越紧凑）
+    local gap = 2
+
+    if unifiedFrame.SetClampedToScreen then
+        unifiedFrame:SetClampedToScreen(true)
+    end
+    if officialTooltip.SetClampedToScreen then
+        officialTooltip:SetClampedToScreen(true)
+    end
+
+    -- 默认：tooltip 在屏幕左半边 → 大框放右侧；在右半边 → 放左侧
+    local placeOnRight = true
+    if screenWidth > 0 then
+        local tipCenterX = (tipLeft + tipRight) / 2
+        if tipCenterX > screenWidth / 2 then
+            placeOnRight = false
+        end
+    end
+
+    -- 如果右侧空间不足，则强制放左侧
+    if placeOnRight and screenWidth > 0 then
+        if tipRight + gap + frameWidth > screenWidth then
+            placeOnRight = false
+        end
+    end
+
+    -- 如果左侧空间不足，则强制放右侧
+    if not placeOnRight and screenWidth > 0 then
+        if tipLeft - gap - frameWidth < 0 then
+            placeOnRight = true
+        end
+    end
+
+    if placeOnRight then
+        unifiedFrame:SetPoint("TOPLEFT", officialTooltip, "TOPRIGHT", gap, 0)
+    else
+        unifiedFrame:SetPoint("TOPRIGHT", officialTooltip, "TOPLEFT", -gap, 0)
+    end
+end
+
+-- 刷新统一四联大框中的自定义属性/技能/符文等数据
+RefreshUnifiedFrame = function(unifiedFrame, itemID, guid)
+    if not unifiedFrame or not unifiedFrame.columns then return end
+
+    local cached = GetCachedData(itemID, guid)
+
+    -- 没有缓存或被标记无数据：不显示大框，保留官方提示框
+    if not cached or not cached.systems or cached.noData then
+        unifiedFrame:Hide()
+        if unifiedFrame.UIT_OwnerTooltip and unifiedFrame.UIT_OwnerTooltip.SetAlpha then
+            unifiedFrame.UIT_OwnerTooltip:SetAlpha(1)
+        end
+        return
+    end
+
+    local systems = cached.systems
+
+    -- 检查是否至少有一个系统有有效数据（不是 isEmpty 占位）
+    local function hasNonEmpty(system)
+        return system and not system.isEmpty
+    end
+
+    local hasData = hasNonEmpty(systems.identification)
+        or hasNonEmpty(systems.enhancement)
+        or hasNonEmpty(systems.growth)
+        or hasNonEmpty(systems.magic)
+        or hasNonEmpty(systems.skills)
+        or hasNonEmpty(systems.sets)
+        or hasNonEmpty(systems.runes)
+
+    if not hasData then
+        unifiedFrame:Hide()
+        if unifiedFrame.UIT_OwnerTooltip and unifiedFrame.UIT_OwnerTooltip.SetAlpha then
+            unifiedFrame.UIT_OwnerTooltip:SetAlpha(1)
+        end
+        return
+    end
+
+    -- 现在两列全部用于自定义内容
+    unifiedFrame:ClearColumn(1)
+    unifiedFrame:ClearColumn(2)
+
+    unifiedFrame:AddLineToColumn(1, "|cFFFFD700基础/追加/成长/强化|r", 1, 0.84, 0)
+    unifiedFrame:AddLineToColumn(2, "|cFFFFD700技能效果（魔次/技能/套装/符文）|r", 1, 0.84, 0)
+
+    -- 为当前大框构造/重置渲染元数据（用于幻境倍率等逻辑）
+    local key = MakeKey(itemID, guid, nil, nil, false)
+    local meta = State.tooltips[unifiedFrame] or { key = key, rendered = {} }
+    meta.key = key
+    meta.rendered = {}
+    State.tooltips[unifiedFrame] = meta
+
+    -- 第1列：基础属性 / 追加属性 / 成长属性 / 强化属性
+    if systems.identification or systems.enhancement or systems.growth then
+        RenderUnifiedBaseAttributes(unifiedFrame.ColumnTooltips[1], cached, meta)
+    end
+
+    -- 第2列：技能效果（魔次属性 / 追加技能 / 追加套装 / 符文系统）
+    if DB.systems.magic and systems.magic and not systems.magic.isEmpty then
+        Renderers.Magic(unifiedFrame.ColumnTooltips[2], systems.magic)
+    end
+
+    if DB.systems.skills and systems.skills and not systems.skills.isEmpty then
+        Renderers.Skills(unifiedFrame.ColumnTooltips[2], systems.skills)
+    end
+
+    if DB.systems.sets and systems.sets and not systems.sets.isEmpty then
+        Renderers.Sets(unifiedFrame.ColumnTooltips[2], systems.sets)
+    end
+
+    if DB.systems.runes and systems.runes and not systems.runes.isEmpty then
+        Renderers.Runes(unifiedFrame.ColumnTooltips[2], systems.runes)
+    end
+
+    -- 渲染完成后显示大框，官方 tooltip 保持可见，由 AnchorUnifiedFrame 决定左右停靠
+    unifiedFrame:Show()
+
+    -- 将官方提示框的高度拉到与大框一致，保持整体视觉统一
+    if unifiedFrame.UIT_OwnerTooltip and unifiedFrame.UIT_OwnerTooltip.SetHeight then
+        local owner = unifiedFrame.UIT_OwnerTooltip
+        local frameHeight = unifiedFrame:GetHeight() or 0
+        local tipHeight   = owner:GetHeight() or 0
+
+        if frameHeight > 0 and tipHeight < frameHeight then
+            owner:SetHeight(frameHeight)
+        end
+    end
+end
+
+-- ============================================================================
+-- 旧的tooltip辅助函数（将被逐步替换）
+-- ============================================================================
+
+-- 为任意物品提示框创建/获取一个"自定义属性提示框"
 local function GetExtraTooltip(ownerTooltip)
     if not ownerTooltip or not ownerTooltip.GetName then
         return nil
     end
 
-    if ownerTooltip.UIT_ExtraTooltip then
-        return ownerTooltip.UIT_ExtraTooltip
+    if ownertooltip.UIT_Tooltip2 then
+        return ownertooltip.UIT_Tooltip2
     end
 
     local baseName = ownerTooltip:GetName() or "UnifiedItemTooltip"
@@ -2387,7 +2851,7 @@ local function GetExtraTooltip(ownerTooltip)
     extra:SetFrameStrata(ownerTooltip:GetFrameStrata())
     extra:SetScale(ownerTooltip:GetScale())
 
-    ownerTooltip.UIT_ExtraTooltip = extra
+    ownertooltip.UIT_Tooltip2 = extra
     return extra
 end
 
@@ -2418,88 +2882,181 @@ local function AnchorExtraTooltip(extra, ownerTooltip)
 	extra:SetOwner(ownerTooltip, "ANCHOR_NONE")
 	extra:ClearAllPoints()
 
-	local name = ownerTooltip:GetName()
-	local owner = ownerTooltip.GetOwner and ownerTooltip:GetOwner() or nil
-	local ownerName = owner and owner.GetName and owner:GetName() or ""
-	local isChatTooltip = (name == "ItemRefTooltip") or ownerName:match("^ChatFrame%d+") ~= nil
+	local name = ownerTooltip:GetName() or ""
+	local isChatTooltip = IsTooltipFromChat(ownerTooltip)
 
-	-- 间距调整为 0,0，保证两个提示框紧贴但不重叠
-	local gapNormal  = 0   -- 普通场景：主提示框与自定义框的水平间距
-	local gapChat    = 0   -- 聊天框场景：系统提示框与自定义框的水平间距
-	local gapCompare = 0   -- 对比提示框：对比框与自定义框的水平间距
+	-- 通过 owner 链判断是否为"角色/检查装备栏"环境
+	local isCharacterEquip = false
+	local current = ownerTooltip
+	local depth = 0
+	while current and depth < 5 do
+		local ownerName = current.GetName and current:GetName() or ""
+		if ownerName ~= "" and (ownerName:match("^Character") or ownerName:match("PaperDoll") or ownerName:match("^Inspect")) then
+			isCharacterEquip = true
+			break
+		end
+		if not current.GetOwner then break end
+		current = current:GetOwner()
+		depth = depth + 1
+	end
+
+	-- 统一使用紧贴模式，间距设为2像素（避免完全重叠但又不会有明显缝隙）
+	local gap = 2
+
+	extra.UIT_IsCharacterEquip = isCharacterEquip
+	extra.UIT_FixedCenter = false
+	extra.UIT_Gap = gap
+
+	DebugPrint("AnchorExtraTooltip", "name=", name, "isCharacterEquip=", isCharacterEquip, "gap=", gap)
 
 	if name == "ShoppingTooltip1" then
-		-- 第一个对比框：自定义提示框放在其左侧，避免与第二个对比框重叠
-		extra:SetPoint("TOPRIGHT", ownerTooltip, "TOPLEFT", -gapCompare, 0)
+		-- 第一个对比框：自定义提示框放在其左侧
+		extra:SetPoint("TOPRIGHT", ownerTooltip, "TOPLEFT", -gap, 0)
 	elseif name == "ShoppingTooltip2" then
-		-- 第二个对比框：自定义提示框放在其右侧（最右边）
-		extra:SetPoint("TOPLEFT", ownerTooltip, "TOPRIGHT", gapCompare, 0)
-	elseif isChatTooltip then
-		-- 聊天框链接/悬停：自定义属性提示框移动到系统提示框右侧显示
-		extra:SetPoint("TOPLEFT", ownerTooltip, "TOPRIGHT", gapChat, 0)
+		-- 第二个对比框：自定义提示框放在其右侧
+		extra:SetPoint("TOPLEFT", ownerTooltip, "TOPRIGHT", gap, 0)
 	else
-		-- 普通/主提示框：自定义提示框挂在其右侧
-		extra:SetPoint("TOPLEFT", ownerTooltip, "TOPRIGHT", gapNormal, 0)
+		-- 所有其他情况（背包、角色装备、聊天等）：自定义提示框挂在官方提示框右侧
+		extra:SetPoint("TOPLEFT", ownerTooltip, "TOPRIGHT", gap, 0)
 	end
 end
 
 local function FixExtraTooltipOffscreen(extra, ownerTooltip)
-	if not extra or not extra:IsShown() or not ownerTooltip or not ownerTooltip:IsShown() then return end
+	if not extra or not extra:IsShown() or not ownerTooltip or not ownerTooltip:IsShown() then 
+		return 
+	end
 
-	local ownerLeft, ownerRight = ownerTooltip:GetLeft(), ownerTooltip:GetRight()
-	if not ownerLeft or not ownerRight then return end
+	local ownerLeft = ownerTooltip:GetLeft()
+	local ownerRight = ownerTooltip:GetRight()
+	local ownerTop = ownerTooltip:GetTop()
+	local ownerWidth = ownerTooltip:GetWidth()
+	
+	if not ownerLeft or not ownerRight or not ownerTop or not ownerWidth then 
+		return 
+	end
 
 	local screenWidth = GetScreenWidth() or 0
-	if screenWidth <= 0 then return end
+	local screenHeight = GetScreenHeight() or 0
+	if screenWidth <= 0 or screenHeight <= 0 then 
+		return 
+	end
 
 	local extraWidth = extra:GetWidth() or 0
+	local gap = extra.UIT_Gap or 2
+	
+	-- 启用边界限制
 	if extra.SetClampedToScreen then
 		extra:SetClampedToScreen(true)
 	end
-
-	local _, _, _, _, yOfs = extra:GetPoint(1)
-	yOfs = yOfs or 0
-
-	local needFlip
-	-- 如果靠右放不下而左边有空间，则贴到左侧；反之亦然
-	if ownerRight + extraWidth > screenWidth and ownerLeft - extraWidth >= 0 then
-		needFlip = "LEFT"
-	elseif ownerLeft - extraWidth < 0 and ownerRight + extraWidth <= screenWidth then
-		needFlip = "RIGHT"
+	if ownerTooltip.SetClampedToScreen then
+		ownerTooltip:SetClampedToScreen(true)
 	end
 
-	if not needFlip then
+	-- 计算自定义tooltip在官方tooltip右侧时的总宽度
+	local totalWidth = ownerWidth + gap + extraWidth
+	
+	-- 如果总宽度超出屏幕，需要调整
+	if totalWidth > screenWidth then
+		DebugPrint("FixExtraTooltipOffscreen", "总宽度超出屏幕", "totalWidth=", totalWidth, "screenWidth=", screenWidth)
+		
+		-- 计算屏幕中央位置，使两个tooltip居中显示
+		local centerX = screenWidth / 2
+		local startX = centerX - totalWidth / 2
+		
+		-- 确保不会超出左边界
+		if startX < 0 then
+			startX = 10  -- 留出一点边距
+		end
+		
+		-- 移动官方tooltip到新位置
+		ownerTooltip:ClearAllPoints()
+		ownerTooltip:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", startX, ownerTop)
+		
+		-- 自定义tooltip挂在官方tooltip右侧
+		extra:ClearAllPoints()
+		extra:SetPoint("TOPLEFT", ownerTooltip, "TOPRIGHT", gap, 0)
+		
+		DebugPrint("FixExtraTooltipOffscreen", "已调整到中央", "startX=", startX)
 		return
 	end
-
-	extra:ClearAllPoints()
-	local xOffset = 4
-	if needFlip == "LEFT" then
-		extra:SetPoint("TOPRIGHT", ownerTooltip, "TOPLEFT", -xOffset, yOfs)
-	else
-		extra:SetPoint("TOPLEFT", ownerTooltip, "TOPRIGHT", xOffset, yOfs)
+	
+	-- 如果官方tooltip在右侧会导致自定义tooltip超出屏幕
+	if ownerRight + gap + extraWidth > screenWidth then
+		DebugPrint("FixExtraTooltipOffscreen", "右侧超出", "ownerRight=", ownerRight, "需要=", ownerRight + gap + extraWidth)
+		
+		-- 计算需要向左移动的距离
+		local overflow = (ownerRight + gap + extraWidth) - screenWidth + 10  -- 多留10像素边距
+		local newLeft = ownerLeft - overflow
+		
+		-- 确保不会超出左边界
+		if newLeft < 10 then
+			-- 如果向左移动还是不够，那就居中显示
+			local centerX = screenWidth / 2
+			newLeft = centerX - totalWidth / 2
+			if newLeft < 10 then
+				newLeft = 10
+			end
+		end
+		
+		-- 移动官方tooltip
+		ownerTooltip:ClearAllPoints()
+		ownerTooltip:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", newLeft, ownerTop)
+		
+		-- 自定义tooltip挂在官方tooltip右侧
+		extra:ClearAllPoints()
+		extra:SetPoint("TOPLEFT", ownerTooltip, "TOPRIGHT", gap, 0)
+		
+		DebugPrint("FixExtraTooltipOffscreen", "已向左移动", "newLeft=", newLeft, "overflow=", overflow)
+		return
+	end
+	
+	-- 如果官方tooltip太靠左，确保有足够空间
+	if ownerLeft < 10 then
+		ownerTooltip:ClearAllPoints()
+		ownerTooltip:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", 10, ownerTop)
+		
+		extra:ClearAllPoints()
+		extra:SetPoint("TOPLEFT", ownerTooltip, "TOPRIGHT", gap, 0)
+		
+		DebugPrint("FixExtraTooltipOffscreen", "调整左边距")
 	end
 end
 
 local function OnTooltipSetItem(tooltip)
-	-- 从聊天框悬停/点击时，屏蔽“当前装备”对比
+	-- 从聊天框悬停/点击时，屏蔽"当前装备"对比
 	local tName = tooltip.GetName and tooltip:GetName() or ""
 
 	-- 1) 如果是聊天里点击出来的 ItemRefTooltip：
-	--    强制隐藏官方对比框 + 清理 tooltip 自身可能残留的“当前装备”文字
+	--    强制隐藏官方对比框 + 清理 tooltip 自身可能残留的"当前装备"文字
 	if tName == "ItemRefTooltip" and IsTooltipFromChat(tooltip) then
 		if ShoppingTooltip1 then
 			ShoppingTooltip1:Hide()
-			if ShoppingTooltip1.UIT_ExtraTooltip then
-				ShoppingTooltip1.UIT_ExtraTooltip:Hide()
-				ClearTooltipMeta(ShoppingTooltip1.UIT_ExtraTooltip)
+			if ShoppingTooltip1.UIT_Tooltip2 then
+				ShoppingTooltip1.UIT_Tooltip2:Hide()
+				ClearTooltipMeta(ShoppingTooltip1.UIT_Tooltip2)
+			end
+			if ShoppingTooltip1.UIT_Tooltip3 then
+				ShoppingTooltip1.UIT_Tooltip3:Hide()
+				ClearTooltipMeta(ShoppingTooltip1.UIT_Tooltip3)
+			end
+			if ShoppingTooltip1.UIT_Tooltip4 then
+				ShoppingTooltip1.UIT_Tooltip4:Hide()
+				ClearTooltipMeta(ShoppingTooltip1.UIT_Tooltip4)
 			end
 		end
 		if ShoppingTooltip2 then
 			ShoppingTooltip2:Hide()
-			if ShoppingTooltip2.UIT_ExtraTooltip then
-				ShoppingTooltip2.UIT_ExtraTooltip:Hide()
-				ClearTooltipMeta(ShoppingTooltip2.UIT_ExtraTooltip)
+			if ShoppingTooltip2.UIT_Tooltip2 then
+				ShoppingTooltip2.UIT_Tooltip2:Hide()
+				ClearTooltipMeta(ShoppingTooltip2.UIT_Tooltip2)
+			end
+			if ShoppingTooltip2.UIT_Tooltip3 then
+				ShoppingTooltip2.UIT_Tooltip3:Hide()
+				ClearTooltipMeta(ShoppingTooltip2.UIT_Tooltip3)
+			end
+			if ShoppingTooltip2.UIT_Tooltip4 then
+				ShoppingTooltip2.UIT_Tooltip4:Hide()
+				ClearTooltipMeta(ShoppingTooltip2.UIT_Tooltip4)
 			end
 		end
 
@@ -2515,12 +3072,20 @@ local function OnTooltipSetItem(tooltip)
 		end
 	end
 
-	-- 2) 如果是 ShoppingTooltip1/2 且来源于聊天：完全不显示该对比框
-	if (tName == "ShoppingTooltip1" or tName == "ShoppingTooltip2") and IsTooltipFromChat(tooltip) then
+	-- 2) 如果是 ShoppingTooltip1/2：完全不显示官方装备对比框（无论是否来自聊天）
+	if (tName == "ShoppingTooltip1" or tName == "ShoppingTooltip2") then
 		tooltip:Hide()
-		if tooltip.UIT_ExtraTooltip then
-			tooltip.UIT_ExtraTooltip:Hide()
-			ClearTooltipMeta(tooltip.UIT_ExtraTooltip)
+		if tooltip.UIT_Tooltip2 then
+			tooltip.UIT_Tooltip2:Hide()
+			ClearTooltipMeta(tooltip.UIT_Tooltip2)
+		end
+		if tooltip.UIT_Tooltip3 then
+			tooltip.UIT_Tooltip3:Hide()
+			ClearTooltipMeta(tooltip.UIT_Tooltip3)
+		end
+		if tooltip.UIT_Tooltip4 then
+			tooltip.UIT_Tooltip4:Hide()
+			ClearTooltipMeta(tooltip.UIT_Tooltip4)
 		end
 		return
 	end
@@ -2530,22 +3095,49 @@ local function OnTooltipSetItem(tooltip)
 		return
 	end
 
-    -- 只从链接中提取GUID，如果链接中没有GUID（随机属性），说明物品没有鉴定属性，直接跳过
-    local itemID, guid = ExtractItemInfo(itemLink)
+    -- 使用增强版提取逻辑，优先从链接中取GUID，不存在时再从装备栏/背包扫描
+    local itemID, guid = ExtractItemInfoEnhanced(itemLink)
     if not itemID then
         return
     end
 
     -- 没有有效 GUID 说明没有自定义属性，仅保持官方提示框原样
     if not (guid and guid > 0) then
-        if tooltip.UIT_ExtraTooltip then
-            tooltip.UIT_ExtraTooltip:Hide()
-            ClearTooltipMeta(tooltip.UIT_ExtraTooltip)
+        if tooltip.UIT_Tooltip2 then
+            tooltip.UIT_Tooltip2:Hide()
+            ClearTooltipMeta(tooltip.UIT_Tooltip2)
+        end
+        if tooltip.UIT_Tooltip3 then
+            tooltip.UIT_Tooltip3:Hide()
+            ClearTooltipMeta(tooltip.UIT_Tooltip3)
+        end
+        if tooltip.UIT_Tooltip4 then
+            tooltip.UIT_Tooltip4:Hide()
+            ClearTooltipMeta(tooltip.UIT_Tooltip4)
         end
         return
     end
 
     local key = MakeKey(itemID, guid, nil, nil, false)
+
+    -- 先触发幻境/批量查询，只利用官方tooltip作为事件入口，不在其上追加自定义属性
+    local now = GetTime()
+    HuanJingRequest(itemID, guid, key, now)
+
+    local cached = GetCachedData(itemID, guid)
+    local hasCompleteCache = false
+    if cached and cached.systems then
+        hasCompleteCache = true
+        for systemName, enabled in pairs(DB.systems) do
+            if enabled and not cached.systems[systemName] then
+                hasCompleteCache = false
+                break
+            end
+        end
+    end
+    if not hasCompleteCache then
+        SendQuery(itemID, guid)
+    end
 
     -- 记录该官方提示框当前对应的装备，用于在收到幻境倍率时回写左侧属性
     HuanJingOfficialTooltips[tooltip] = {
@@ -2555,28 +3147,69 @@ local function OnTooltipSetItem(tooltip)
         applied = false
     }
 
-    -- 如果缓存中已经有幻境数据，立即更新官方提示框
+    -- 如果缓存中已经有幻境数据,立即更新官方提示框
     ApplyHuanJingToOfficialTooltip(tooltip)
 
-    -- 在官方提示框旁显示自定义属性专用提示框
-    local extra = GetExtraTooltip(tooltip)
-    if not extra then
+    -- 在任何情况下都强制隐藏官方比较框，只保留我们的大框
+    if ShoppingTooltip1 then
+        ShoppingTooltip1:Hide()
+    end
+    if ShoppingTooltip2 then
+        ShoppingTooltip2:Hide()
+    end
+
+    -- 创建并显示统一的四列框架
+    local unifiedFrame = GetUnifiedTooltipFrame(tooltip)
+
+    if not unifiedFrame then
+        print("|cFFFF0000[错误]|r 统一框架创建失败")
         return
     end
 
-    local meta = GetTooltipMeta(extra, key)
+    -- 不再复制官方tooltip内容到第1列，四列全部显示自定义属性
 
-    AnchorExtraTooltip(extra, tooltip)
-    extra:ClearLines()
-    RenderTooltip(extra, itemID, guid)
-    FixExtraTooltipOffscreen(extra, tooltip)
+    -- 定位统一大框到固定位置
+    AnchorUnifiedFrame(unifiedFrame, tooltip)
+
+    -- 记录物品键与统一大框的对应关系，便于服务器返回数据后刷新
+    unifiedFrame.UIT_ItemID = itemID
+    unifiedFrame.UIT_GUID = guid
+    unifiedFrame.UIT_Key = key
+
+    UnifiedFramesByKey[key] = UnifiedFramesByKey[key] or {}
+    table.insert(UnifiedFramesByKey[key], unifiedFrame)
+
+    -- 初次渲染所有自定义数据（内部会根据是否有数据决定是否显示大框）
+    RefreshUnifiedFrame(unifiedFrame, itemID, guid)
+
 end
 
 local function OnTooltipCleared(tooltip)
-    if tooltip.UIT_ExtraTooltip then
-        tooltip.UIT_ExtraTooltip:Hide()
-        ClearTooltipMeta(tooltip.UIT_ExtraTooltip)
+    -- 清理统一框架
+    if tooltip.UIT_UnifiedFrame then
+        local frame = tooltip.UIT_UnifiedFrame
+        frame:Hide()
+
+        -- 从映射表中移除
+        if frame.UIT_Key and UnifiedFramesByKey[frame.UIT_Key] then
+            local list = UnifiedFramesByKey[frame.UIT_Key]
+            for i = #list, 1, -1 do
+                if list[i] == frame then
+                    table.remove(list, i)
+                end
+            end
+            if #list == 0 then
+                UnifiedFramesByKey[frame.UIT_Key] = nil
+            end
+        end
+
+        -- 清理该大框对应的渲染元数据
+        State.tooltips[frame] = nil
     end
+
+    -- 恢复官方tooltip的透明度（下次显示时正常使用），但不强制重新显示
+    tooltip:SetAlpha(1)
+    tooltip.UIT_ForceHidden = nil
 
     HuanJingOfficialTooltips[tooltip] = nil
 end
@@ -2586,15 +3219,27 @@ end
 GameTooltip:HookScript("OnTooltipSetItem", OnTooltipSetItem)
 GameTooltip:HookScript("OnTooltipCleared", OnTooltipCleared)
 
+-- 当需要时强制隐藏官方tooltip（仅作为事件源使用）
+local function UIT_ForceHideTooltip(self)
+    if self.UIT_ForceHidden then
+        -- 保留位置用于统一大框对齐，仅隐藏官方提示框内容
+        self:SetAlpha(0)
+    end
+end
+
+GameTooltip:HookScript("OnShow", UIT_ForceHideTooltip)
+
 
 -- Hook物品对比提示框
 if ShoppingTooltip1 then
     ShoppingTooltip1:HookScript("OnTooltipSetItem", OnTooltipSetItem)
     ShoppingTooltip1:HookScript("OnTooltipCleared", OnTooltipCleared)
+    ShoppingTooltip1:HookScript("OnShow", function(self) self:Hide() end)
 end
 if ShoppingTooltip2 then
     ShoppingTooltip2:HookScript("OnTooltipSetItem", OnTooltipSetItem)
     ShoppingTooltip2:HookScript("OnTooltipCleared", OnTooltipCleared)
+    ShoppingTooltip2:HookScript("OnShow", function(self) self:Hide() end)
 end
 
 -- Hook物品引用提示框（聊天框链接点击）
@@ -2897,5 +3542,5 @@ end
 -- 插件加载完成
 -- ============================================================================
 
--- 插件加载完成（不显示日志）
-
+-- 插件加载完成
+print("|cFF00FF00[统一提示框]|r 四联提示框系统已加载")
