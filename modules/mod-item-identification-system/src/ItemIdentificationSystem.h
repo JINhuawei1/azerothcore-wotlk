@@ -128,7 +128,7 @@ public:
     // 批量检查物品是否已鉴定（优化版，减少数据库查询）
     std::set<uint32> BatchCheckIdentified(const std::vector<uint32>& itemGuids);
 
-    // ⭐ 新增：批量查询所有模块数据（一次性返回所有系统的数据）
+    // 新增：批量查询所有模块数据（一次性返回所有系统的数据）
     struct AllModuleData {
         // 鉴定系统数据
         std::string baseAttributes;      // 格式：attrType value,attrType value
@@ -181,7 +181,7 @@ public:
     std::unordered_map<uint64, ItemAttrCache> _attrCache;  // key = (itemID << 32) | guid
     const uint32 ATTR_CACHE_EXPIRE_TIME = 300;  // 5分钟过期
 
-    // ⭐ 新增：批量查询数据缓存（避免重复查询数据库）
+    // 新增：批量查询数据缓存（避免重复查询数据库）
     struct BatchQueryCache {
         AllModuleData data;
         time_t cacheTime;
@@ -192,10 +192,10 @@ public:
     // 清理过期缓存（定期调用）
     void CleanExpiredCache();
 
-    // ⭐ 新增：预加载玩家装备数据（登录时调用）
+    // 新增：预加载玩家装备数据（登录时调用）
     void PreloadPlayerEquipment(Player* player);
 
-    // ⭐ 新增：性能统计
+    // 新增：性能统计
     struct PerformanceStats {
         uint32 totalQueries;           // 总查询次数
         uint32 cacheHits;              // 缓存命中次数
@@ -223,7 +223,7 @@ public:
     // 重置性能统计
     void ResetPerformanceStats();
 
-    // ⭐ 获取缓存大小（用于性能统计）
+    // 获取缓存大小（用于性能统计）
     size_t GetIdentifiedCacheSize() const { return _identifiedItemsCache.size(); }
     size_t GetAttrCacheSize() const { return _attrCache.size(); }
     size_t GetBatchQueryCacheSize() const { return _batchQueryCache.size(); }
@@ -310,14 +310,14 @@ public:
 private:
     static bool HandleIdentifyCommand(ChatHandler* handler, const char* args);
     
-    // ⭐ 已删除旧的查询命令：
+    // 已删除旧的查询命令：
     // static bool HandleQueryAttributesCommand(ChatHandler* handler, const char* args);  // 旧格式，已废弃
     // static bool HandleQueryCommand(ChatHandler* handler, const char* args);  // 旧格式，已废弃
 
-    // ⭐ 批量查询命令处理器
+    // 批量查询命令处理器
     static bool HandleBatchQueryCommand(ChatHandler* handler, const char* args);
 
-    // ⭐ 新增：性能统计命令
+    // 新增：性能统计命令
     static bool HandlePerformanceStatsCommand(ChatHandler* handler, const char* args);
 };
 

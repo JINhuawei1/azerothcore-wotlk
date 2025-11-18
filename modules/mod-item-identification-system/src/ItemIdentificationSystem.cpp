@@ -728,7 +728,7 @@ bool ItemIdentificationSystem::ApplyIdentification(Player* player, Item* item, u
     // 12. 刷新物品显示
     RefreshItem(player, item);
 
-    // 13. ⭐ 不再主动发送数据 - 客户端会通过 addon 消息主动查询
+    // 13. 不再主动发送数据 - 客户端会通过 addon 消息主动查询
     // 旧逻辑：SendAllModuleData(player, item) - 已删除
     // 新逻辑：客户端悬停物品时自动发送 UITQ QUERY 请求，服务器通过 HandleAddonBatchQuery 响应
 
@@ -1749,9 +1749,9 @@ std::vector<Acore::ChatCommands::ChatCommandBuilder> ItemIdentificationCommandSc
     // 鉴定子命令
     static ChatCommandTable identificationSubCommands =
     {
-        // ⭐ "查询" 命令已删除 - 使用 addon 消息自动查询替代
-        { "批量查询", HandleBatchQueryCommand, SEC_PLAYER, Console::No },  // ⭐ 批量查询命令
-        { "性能统计", HandlePerformanceStatsCommand, SEC_ADMINISTRATOR, Console::No }  // ⭐ 性能监控
+        // "查询" 命令已删除 - 使用 addon 消息自动查询替代
+        { "批量查询", HandleBatchQueryCommand, SEC_PLAYER, Console::No },  // 批量查询命令
+        { "性能统计", HandlePerformanceStatsCommand, SEC_ADMINISTRATOR, Console::No }  // 性能监控
     };
 
     // 主命令 - 支持直接鉴定和子命令
@@ -1788,7 +1788,7 @@ bool ItemIdentificationCommandScript::HandleIdentifyCommand(ChatHandler* handler
         return true;
     }
 
-    // ⭐ 删除旧的查询子命令 - 现在使用 addon 消息自动查询
+    // 删除旧的查询子命令 - 现在使用 addon 消息自动查询
     // 旧代码：if (firstArg == "查询") HandleQueryAttributesCommand(...) - 已删除
 
     // 解析鉴定命令参数: <组ID> <物品ID>
@@ -1888,10 +1888,10 @@ bool ItemIdentificationCommandScript::HandleIdentifyCommand(ChatHandler* handler
     return true;
 }
 
-// ⭐ HandleQueryAttributesCommand 已删除 - 现在使用 addon 格式的 HandleAddonBatchQuery
+// HandleQueryAttributesCommand 已删除 - 现在使用 addon 格式的 HandleAddonBatchQuery
 // 客户端不再通过命令查询，而是自动发送 addon 消息 (UITQ QUERY) 来获取数据
 
-// ⭐ HandleQueryCommand 已删除 - 使用 HandleAddonBatchQuery (addon格式) 替代旧的单独查询
+// HandleQueryCommand 已删除 - 使用 HandleAddonBatchQuery (addon格式) 替代旧的单独查询
 
 // 模块加载器实现
 ItemIdentificationSystemModuleLoader::ItemIdentificationSystemModuleLoader() : WorldScript("ItemIdentificationSystemModuleLoader"), _loaded(false), _startTime(0) { }
@@ -1931,7 +1931,7 @@ void ItemIdentificationSystemModuleLoader::OnUpdate(uint32 diff)
         }
     }
 
-    // ⭐ 定期清理过期缓存（每5分钟执行一次）
+    // 定期清理过期缓存（每5分钟执行一次）
     static uint32 cacheCleanTimer = 0;
     cacheCleanTimer += diff;
 
@@ -1950,11 +1950,11 @@ void ItemIdentificationPlayerScript::OnLogin(Player* player, bool firstLogin)
     if (!player || !sItemIdentificationSystem->_enabled)
         return;
 
-    // ⭐ 直接预加载（不使用延迟，因为Player可能没有Scheduler）
+    // 直接预加载（不使用延迟，因为Player可能没有Scheduler）
     // 预加载会在登录流程中异步执行，不会阻塞
     sItemIdentificationSystem->PreloadPlayerEquipment(player);
 
-    // ⭐ 删除旧的登录时主动发送逻辑 - 现在客户端会在需要时通过 addon 消息自动查询
+    // 删除旧的登录时主动发送逻辑 - 现在客户端会在需要时通过 addon 消息自动查询
     // 旧代码：收集所有已鉴定物品并通过 SendIdentificationDataToClient 发送 - 已删除
     // 新逻辑：客户端悬停物品时自动发送 UITQ QUERY 请求，服务器通过 HandleAddonBatchQuery 响应
 }
@@ -2014,7 +2014,7 @@ ItemIdentificationRecord* ItemIdentificationSystem::GetIdentificationRecord(uint
     return nullptr;
 }
 
-// ⭐ SendAllModuleData 和 SendIdentificationDataToClient 已删除
+// SendAllModuleData 和 SendIdentificationDataToClient 已删除
 // 现在使用 addon 格式的 HandleAddonBatchQuery 替代旧的单独发送逻辑
 // 客户端通过 addon 消息 (UITQ) 接收批量数据，不再使用聊天消息
 
@@ -2297,7 +2297,7 @@ public:
     }
 };
 
-// ⭐ Addon消息处理脚本
+// Addon消息处理脚本
 class ItemIdentificationAddonScript : public PlayerScript
 {
 public:
@@ -2362,7 +2362,7 @@ public:
             return;
         }
 
-        // ⭐ 执行批量查询并通过Addon消息返回结果
+        // 执行批量查询并通过Addon消息返回结果
         HandleAddonBatchQuery(player, itemID, guid);
     }
 
@@ -2428,7 +2428,7 @@ private:
             sItemIdentificationSystem->_batchQueryCache[cacheKey] = cache;
         }
 
-        // ⭐ 构建Addon响应消息
+        // 构建Addon响应消息
         // 格式：ALL_MODULE_DATA:itemID:guid:base:additional:growth:enhancement:skills:magic:rune:set
         // 注意：客户端会自动添加RESPONSE:前缀检查，这里只发数据
         std::ostringstream response;
@@ -2444,7 +2444,7 @@ private:
 
         std::string responseStr = response.str();
 
-        // ⭐ 通过Addon消息发送响应
+        // 通过Addon消息发送响应
         // 参考符文系统：构建完整消息 "UITQ<TAB>响应数据"
         std::string fullMessage = "UITQ\t" + responseStr;
 
@@ -2486,12 +2486,12 @@ void AddItemIdentificationSystemScripts()
     // 添加掉落监控脚本
     new ItemIdentificationLootScript();
 
-    // ⭐ 添加Addon消息处理脚本
+    // 添加Addon消息处理脚本
     new ItemIdentificationAddonScript();
 }
 
 // ============================================================================
-// ⭐ 批量查询优化实现 - 解决客户端查询延迟问题
+// 批量查询优化实现 - 解决客户端查询延迟问题
 // ============================================================================
 
 // 批量查询所有模块数据（核心方法）
@@ -2988,7 +2988,7 @@ void ItemIdentificationSystem::HandleBatchQueryCommand(Player* player, uint32 it
 
     auto queryStart = std::chrono::high_resolution_clock::now();
 
-    // ⭐ 优先从缓存读取
+    // 优先从缓存读取
     uint64 cacheKey = ((uint64)itemID << 32) | guid;
     auto it = _batchQueryCache.find(cacheKey);
 
@@ -3038,7 +3038,7 @@ void ItemIdentificationSystem::HandleBatchQueryCommand(Player* player, uint32 it
         DebugLog("[批量查询缓存] 新数据已缓存: itemID={}, guid={}", itemID, guid);
     }
 
-    // ⭐ 新格式消息：ALL_MODULE_DATA:itemID:guid:base:additional:growth:enhancement:skills:magic:rune:set
+    // 新格式消息：ALL_MODULE_DATA:itemID:guid:base:additional:growth:enhancement:skills:magic:rune:set
     std::ostringstream response;
     response << "ALL_MODULE_DATA:" << itemID << ":" << guid << ":"
              << data.baseAttributes << ":"
@@ -3153,7 +3153,7 @@ bool ItemIdentificationCommandScript::HandleBatchQueryCommand(ChatHandler* handl
 }
 
 // ============================================================================
-// ⭐ 高级优化功能实现
+// 高级优化功能实现
 // ============================================================================
 
 // 预加载玩家装备数据（登录时调用）

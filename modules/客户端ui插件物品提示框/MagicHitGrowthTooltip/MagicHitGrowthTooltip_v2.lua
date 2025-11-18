@@ -2,8 +2,8 @@
 -- 统一的物品提示框插件 - 根据服务器数据动态显示所有属性
 
 local ADDON_NAME = "UnifiedItemTooltip"
-local ADDON_PREFIX = "UITQ"  -- ⭐ Addon消息前缀（最多16字符）- UnifiedItemTooltipQuery
-local ADDON_PREFIX_ALT = "ITEMENHANCE"  -- ⭐ 备用前缀（兼容服务器可能使用的其他前缀）
+local ADDON_PREFIX = "UITQ"  -- Addon消息前缀（最多16字符）- UnifiedItemTooltipQuery
+local ADDON_PREFIX_ALT = "ITEMENHANCE"  -- 备用前缀（兼容服务器可能使用的其他前缀）
 
 -- ============================================================================
 -- 配置
@@ -796,7 +796,7 @@ end
 
 local Parsers = {}
 
--- ⭐ 批量数据解析器（解析ALL_MODULE_DATA消息）
+-- 批量数据解析器（解析ALL_MODULE_DATA消息）
 -- 这是唯一的解析器，处理服务器通过addon消息返回的批量数据
 function Parsers.BatchQuery(message)
     -- 格式：ALL_MODULE_DATA:itemID:guid:base:additional:growth:enhancement:skills:magic:rune:set
@@ -1630,7 +1630,7 @@ local function DoSendQuery(itemID, guid, key)
         end
     end
 
-    -- ⭐ 使用Addon消息格式发送查询（避免聊天速率限制）
+    -- 使用Addon消息格式发送查询（避免聊天速率限制）
     -- 重要：消息内容不包含前缀！前缀由SendAddonMessage的第一个参数指定
     -- 发送: SendAddonMessage("UITQ", "QUERY:itemID:guid", ...)
     -- 服务器收到: "UITQ<TAB>QUERY:itemID:guid"
@@ -1652,7 +1652,7 @@ local function DoSendQuery(itemID, guid, key)
     -- 记录发送前的时间
     local sendBeforeTime = GetTime()
 
-    -- ⭐ 使用SendAddonMessage发送（不受聊天速率限制）
+    -- 使用SendAddonMessage发送（不受聊天速率限制）
     -- 兼容WoW 3.3.5和零售版API
     local sendSuccess = false
     if SendAddonMessage then
@@ -2188,14 +2188,14 @@ end
 
 local EventFrame = CreateFrame("Frame")
 
--- ⭐ 前向声明（函数定义在后面）
+-- 前向声明（函数定义在后面）
 local ProcessServerResponse
 
--- ⭐ 处理Addon消息
+-- 处理Addon消息
 local function OnAddonMessage(self, event, prefix, message, channel, sender)
     local now = GetTime()
 
-    -- ⭐ 修复：处理服务器可能发送的包含竖线的前缀
+    -- 修复：处理服务器可能发送的包含竖线的前缀
     -- 服务器可能发送 "ITEMENHANCE|LOGIN_COMPLETED" 这样的格式
     -- 我们需要分离出实际的前缀和消息内容
     local actualPrefix = prefix
@@ -2227,12 +2227,12 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
     
     local receiveTime = GetTime()
     
-    -- ⭐ 修复：忽略自己发出的查询消息（格式：QUERY:itemID:guid）
+    -- 修复：忽略自己发出的查询消息（格式：QUERY:itemID:guid）
     if message:match("^QUERY:") then
         return
     end
 
-    -- ⭐ 过滤掉服务器事件通知（非数据响应）
+    -- 过滤掉服务器事件通知（非数据响应）
     if message:match("LOGIN_COMPLETE") or message:match("LOGIN_SUCCESS") or
        message:match("LOGOUT") or message == "" or message:len() < 5 then
         return
@@ -2268,9 +2268,9 @@ local function OnSystemMessage(self, event, message)
     HuanJingHandleSystemMessage(message)
 end
 
--- ⭐ 统一的服务器响应处理函数（实现前面声明的函数）
+-- 统一的服务器响应处理函数（实现前面声明的函数）
 ProcessServerResponse = function(message, receiveTime)
-    -- ⭐ 优先尝试批量数据解析器
+    -- 优先尝试批量数据解析器
     local batchData = Parsers.BatchQuery(message)
 
     if not batchData then
@@ -2370,7 +2370,7 @@ ProcessServerResponse = function(message, receiveTime)
     end
 end
 
--- ⭐ 注册Addon消息前缀（兼容WoW 3.3.5）
+-- 注册Addon消息前缀（兼容WoW 3.3.5）
 if RegisterAddonMessagePrefix then
     RegisterAddonMessagePrefix(ADDON_PREFIX)
     RegisterAddonMessagePrefix(ADDON_PREFIX_ALT)  -- 注册备用前缀
@@ -2381,7 +2381,7 @@ elseif C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
     DebugPrint("[初始化] 已注册前缀:", ADDON_PREFIX, "和", ADDON_PREFIX_ALT)
 end
 
--- ⭐ 注册Addon消息事件
+-- 注册Addon消息事件
 EventFrame:RegisterEvent("CHAT_MSG_ADDON")
 EventFrame:RegisterEvent("CHAT_MSG_SYSTEM")
 

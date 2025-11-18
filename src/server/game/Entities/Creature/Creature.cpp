@@ -1055,7 +1055,15 @@ void Creature::RegenerateHealth()
 
     addvalue += GetTotalAuraModifier(SPELL_AURA_MOD_REGEN) * CREATURE_REGEN_INTERVAL  / (5 * IN_MILLISECONDS);
 
-    ModifyHealth(addvalue);
+    // 安全限制：治疗量不能超过缺失生命值，避免 uint32 溢出后在 ModifyHealth(int32) 中变成负值
+    uint32 const missing = maxValue - curValue;
+    if (addvalue > missing)
+        addvalue = missing;
+
+    if (!addvalue)
+        return;
+
+    ModifyHealth(static_cast<int32>(addvalue));
 }
 
 void Creature::DoFleeToGetAssistance()

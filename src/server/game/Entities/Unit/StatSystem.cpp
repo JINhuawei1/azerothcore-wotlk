@@ -820,11 +820,16 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
     minDamage = ((weaponMinDamage + baseValue) * basePct + totalValue) * totalPct;
     maxDamage = ((weaponMaxDamage + baseValue) * basePct + totalValue) * totalPct;
 
-    // pussywizard: crashfix (casting negative to uint => min > max => assertion in urand)
-    if (minDamage < 0.0f || minDamage > 1000000000.0f)
+    // 限制最终伤害到安全范围，避免转成 uint32 时出现溢出或断言，同时保持超大属性时仍能造成伤害
+    constexpr float MAX_SAFE_DAMAGE = 1000000000.0f;
+    if (minDamage < 0.0f)
         minDamage = 0.0f;
-    if (maxDamage < 0.0f || maxDamage > 1000000000.0f)
+    else if (minDamage > MAX_SAFE_DAMAGE)
+        minDamage = MAX_SAFE_DAMAGE;
+    if (maxDamage < 0.0f)
         maxDamage = 0.0f;
+    else if (maxDamage > MAX_SAFE_DAMAGE)
+        maxDamage = MAX_SAFE_DAMAGE;
     if (minDamage > maxDamage)
         minDamage = maxDamage;
 }
@@ -1482,6 +1487,10 @@ void Creature::UpdateResistances(uint32 school)
     if (school > SPELL_SCHOOL_NORMAL)
     {
         float value = GetTotalAuraModValue(UnitMods(UNIT_MOD_RESISTANCE_START + school));
+        if (value < 0.0f)
+            value = 0.0f;
+        else if (value > 2000000000.0f)
+            value = 2000000000.0f;
         SetResistance(SpellSchools(school), int32(value));
     }
     else
@@ -1491,6 +1500,10 @@ void Creature::UpdateResistances(uint32 school)
 void Creature::UpdateArmor()
 {
     float value = GetTotalAuraModValue(UNIT_MOD_ARMOR);
+    if (value < 0.0f)
+        value = 0.0f;
+    else if (value > 2000000000.0f)
+        value = 2000000000.0f;
     SetArmor(int32(value));
 }
 
@@ -1526,6 +1539,17 @@ void Creature::UpdateAttackPowerAndDamage(bool ranged)
     float baseAttackPower       = GetModifierValue(unitMod, BASE_VALUE) * GetModifierValue(unitMod, BASE_PCT);
     float attackPowerMod        = GetModifierValue(unitMod, TOTAL_VALUE);
     float attackPowerMultiplier = GetModifierValue(unitMod, TOTAL_PCT) - 1.0f;
+
+    // 攻强字段在 Unit 中以 int32 存储，这里做一次安全截断，避免超过 2,147,483,647 后变成负数
+    constexpr float MAX_SAFE_AP = 2000000000.0f;
+    if (baseAttackPower < 0.0f)
+        baseAttackPower = 0.0f;
+    else if (baseAttackPower > MAX_SAFE_AP)
+        baseAttackPower = MAX_SAFE_AP;
+    if (attackPowerMod < 0.0f)
+        attackPowerMod = 0.0f;
+    else if (attackPowerMod > MAX_SAFE_AP)
+        attackPowerMod = MAX_SAFE_AP;
 
     SetInt32Value(index, uint32(baseAttackPower));      // UNIT_FIELD_(RANGED)_ATTACK_POWER
     SetInt32Value(indexMod, uint32(attackPowerMod));    // UNIT_FIELD_(RANGED)_ATTACK_POWER_MODS
@@ -1598,11 +1622,16 @@ void Creature::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, 
     minDamage = ((weaponMinDamage + baseValue) * dmgMultiplier * basePct + totalValue) * totalPct;
     maxDamage = ((weaponMaxDamage + baseValue) * dmgMultiplier * basePct + totalValue) * totalPct;
 
-    // pussywizard: crashfix (casting negative to uint => min > max => assertion in urand)
-    if (minDamage < 0.0f || minDamage > 1000000000.0f)
+    // 限制最终伤害到安全范围，避免转成 uint32 时出现溢出或断言，同时保持超大属性时仍能造成伤害
+    constexpr float MAX_SAFE_DAMAGE = 1000000000.0f;
+    if (minDamage < 0.0f)
         minDamage = 0.0f;
-    if (maxDamage < 0.0f || maxDamage > 1000000000.0f)
+    else if (minDamage > MAX_SAFE_DAMAGE)
+        minDamage = MAX_SAFE_DAMAGE;
+    if (maxDamage < 0.0f)
         maxDamage = 0.0f;
+    else if (maxDamage > MAX_SAFE_DAMAGE)
+        maxDamage = MAX_SAFE_DAMAGE;
     if (minDamage > maxDamage)
         minDamage = maxDamage;
 }
