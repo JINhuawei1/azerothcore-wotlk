@@ -1529,7 +1529,6 @@ local function CacheData(itemID, guid, data)
     return key
 end
 
--- 获取缓存数据
 local function GetCachedData(itemID, guid)
     if not itemID or not guid or guid == 0 then return nil end
 

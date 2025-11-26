@@ -703,17 +703,20 @@ bool ItemIdentificationSystem::ApplyIdentification(Player* player, Item* item, u
 
     // 8. 应用技能套装
 
+    record.hasSet = false;
+    record.setGroup = 0;
+    record.setId = 0;
+
     if (!tmpl.skillSetGroups.empty())
     {
-        ApplySkillSets(player, item, tmpl);
-        record.hasSet = true;
-        record.setGroup = SelectRandomFromList(ParseCommaSeparatedNumbers(tmpl.skillSetGroups));
-        record.setId = 0; // 套装系统会分配具体的套装ID
-
-    }
-    else
-    {
-
+        uint32 selectedSetId = ApplySkillSets(player, item, tmpl);
+        if (selectedSetId > 0)
+        {
+            record.hasSet = true;
+            // 记录套装组ID（用于统计/查询），从配置中随机选择一个组
+            record.setGroup = SelectRandomFromList(ParseCommaSeparatedNumbers(tmpl.skillSetGroups));
+            record.setId = selectedSetId; // 保存实际分配的套装ID，供后续批量查询回退使用
+        }
     }
 
     // 9. 应用名称和描述
@@ -728,9 +731,8 @@ bool ItemIdentificationSystem::ApplyIdentification(Player* player, Item* item, u
     // 12. 刷新物品显示
     RefreshItem(player, item);
 
-    // 13. 不再主动发送数据 - 客户端会通过 addon 消息主动查询
-    // 旧逻辑：SendAllModuleData(player, item) - 已删除
-    // 新逻辑：客户端悬停物品时自动发送 UITQ QUERY 请求，服务器通过 HandleAddonBatchQuery 响应
+    // 13. 鉴定流程完成后，主动向统一物品提示框发送批量数据，刷新所有模块属性
+    SendAllModuleDataAddon(player, item->GetEntry(), itemGuid);
 
     // 14. 套装刷新已优化：移除鉴定时的刷新调用
     // 原因：物品在背包中时套装效果不需要生效，只有装备时才需要刷新
@@ -914,10 +916,9 @@ uint32 ItemIdentificationSystem::ApplyItemEnhancement(Player* player, Item* item
 
     try
     {
-        // 鉴定系统不调用EnhanceItem，而是直接创建等级1的强化记录
-        // EnhanceItem会自动升级到下一个等级，但鉴定只应该产生等级1
-        // 调用第一次强化来初始化强化数据
-        if (sItemEnhancementMgr->EnhanceItem(player, item, selectedGroup))
+        // ✅ 修复：使用新的初始化方法，保证产生等级1的强化
+        // InitializeEnhancementForIdentification 直接创建等级1的强化记录，跳过随机成功判定
+        if (sItemEnhancementMgr->InitializeEnhancementForIdentification(player, item, selectedGroup))
         {
             // ChatHandler(player->GetSession()).PSendSysMessage("物品获得强化属性（组{}）", selectedGroup);
             return selectedGroup; // 返回选择的组号
@@ -1420,14 +1421,13 @@ void ItemIdentificationSystem::ApplyRuneSystem(Player* player, Item* item, const
 
 }
 
-// 应用技能套装
-void ItemIdentificationSystem::ApplySkillSets(Player* player, Item* item, const IdentificationTemplate& tmpl)
+// 应用技能套装（返回实际分配的套装ID，0表示未分配）
+uint32 ItemIdentificationSystem::ApplySkillSets(Player* player, Item* item, const IdentificationTemplate& tmpl)
 {
     std::vector<uint32> skillSetGroups = ParseCommaSeparatedNumbers(tmpl.skillSetGroups);
     if (skillSetGroups.empty())
     {
-
-        return;
+        return 0;
     }
 
     // 随机选择一个套装组
@@ -1439,13 +1439,13 @@ void ItemIdentificationSystem::ApplySkillSets(Player* player, Item* item, const 
     if (!sItemSetsManager)
     {
         DebugLog("套装系统管理器不可用");
-        return;
+        return 0;
     }
 
     if (!sItemSetsConfig || !sItemSetsConfig->IsModuleEnabled())
     {
         DebugLog("套装系统未启用");
-        return;
+        return 0;
     }
 
     uint32 itemId = item->GetEntry();
@@ -1460,7 +1460,7 @@ void ItemIdentificationSystem::ApplySkillSets(Player* player, Item* item, const 
     {
         DebugLog("物品已经分配过套装: GUID={}", itemGuid);
         ChatHandler(player->GetSession()).SendSysMessage("该物品已经分配过套装");
-        return;
+        return 0;
     }
 
     // 2. 从指定组中选择套装（考虑玩家需求）
@@ -1475,7 +1475,7 @@ void ItemIdentificationSystem::ApplySkillSets(Player* player, Item* item, const 
         // 显示组内套装的需求条件
         sItemSetsManager->ShowGroupRequirements(player, selectedGroup);
         ChatHandler(player->GetSession()).PSendSysMessage("分配套装失败：不满足需求条件。");
-        return;
+        return 0;
     }
 
     // 3. 消耗需求物品
@@ -1498,7 +1498,7 @@ void ItemIdentificationSystem::ApplySkillSets(Player* player, Item* item, const 
             }
 #endif
         }
-        return;
+        return 0;
     }
 
 
@@ -1546,15 +1546,12 @@ void ItemIdentificationSystem::ApplySkillSets(Player* player, Item* item, const 
 
     DebugLog("成功将物品分配到套装组: {}，套装ID: {}", selectedGroup, selectedSetId);
 
-
-
-
+    return selectedSetId;
 #else
     DebugLog("套装系统模块未编译");
     ChatHandler(player->GetSession()).SendSysMessage("|cFFFF0000套装系统未安装|r");
+    return 0;
 #endif
-
-
 }
 
 // 应用名称和描述
@@ -2501,11 +2498,12 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
     AllModuleData result;
     result.hasData = false;
 
-    // 检查是否已鉴定
-    if (!IsItemIdentified(guid))
+    // 是否已鉴定：仅影响“鉴定系统自身”的基础/追加属性查询，
+    // 成长/强化等其他模块即使未鉴定也可能有数据，因此不再直接返回
+    bool isIdentified = IsItemIdentified(guid);
+    if (!isIdentified)
     {
-        DebugLog("[批量查询] 物品未鉴定: itemID={}, guid={}", itemID, guid);
-        return result;
+        DebugLog("[批量查询] 物品未鉴定(仍会继续检查成长/强化/技能等模块): itemID={}, guid={}", itemID, guid);
     }
 
     // ========== 表存在性缓存（静态变量，只初始化一次）==========
@@ -2541,7 +2539,7 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
 
     // ========== 1. 查询鉴定系统数据（基础属性+追加属性）- 合并查询优化 ==========
     DebugLog("[批量查询] 开始查询鉴定系统: itemID={}, guid={}", itemID, guid);
-    if (TableExists("物品_鉴定记录"))
+    if (isIdentified && TableExists("物品_鉴定记录"))
     {
         // 使用 LEFT JOIN 一次性查询两个表的数据，减少数据库往返
         QueryResult attrResult = CharacterDatabase.Query(
@@ -2575,6 +2573,10 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
         {
             DebugLog("[批量查询-鉴定] 查询失败或无数据");
         }
+    }
+    else if (!isIdentified)
+    {
+        DebugLog("[批量查询-鉴定] 物品未鉴定，跳过鉴定系统数据查询");
     }
     else
     {
@@ -2618,35 +2620,61 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
 
     // ========== 3. 查询强化系统数据 ==========
     DebugLog("[批量查询] 开始查询强化系统: itemID={}, guid={}", itemID, guid);
-    if (TableExists("物品强化_记录"))
+
+#if defined(MODULE_ITEM_ENHANCEMENT)
+    // 优先通过物品强化管理器读取内存/缓存记录，避免异步写库导致最新等级读不到
+    if (sItemEnhancementMgr)
     {
-        QueryResult enhanceResult = CharacterDatabase.Query(
-            "SELECT `强化等级`, `属性值` FROM `物品强化_记录` WHERE `guid` = {}",
-            guid);
-
-        if (enhanceResult)
+        EnhancementRecord const* enhRecord = sItemEnhancementMgr->GetEnhancementRecord(guid);
+        if (enhRecord && enhRecord->level > 0)
         {
-            Field* fields = enhanceResult->Fetch();
-            uint32 level = fields[0].Get<uint32>();
-            std::string attrs = fields[1].Get<std::string>();
-
-            // 格式：level|attrs（使用|避免与主消息:冲突）
             std::ostringstream enhanceStream;
-            enhanceStream << level << "|" << attrs;
+            enhanceStream << enhRecord->level << "|" << enhRecord->statValues;
             result.enhancementData = enhanceStream.str();
             result.hasData = true;
 
-            DebugLog("[批量查询-强化] 查询成功: level={}, attrs=[{}], 结果=[{}]", 
-                     level, attrs, result.enhancementData);
+            DebugLog("[批量查询-强化] 使用管理器缓存: level={}, attrs=[{}], 结果=[{}]",
+                     enhRecord->level, enhRecord->statValues, result.enhancementData);
         }
         else
         {
-            DebugLog("[批量查询-强化] 查询失败或无数据");
+            DebugLog("[批量查询-强化] 管理器中无记录或等级为0");
         }
     }
-    else
+
+    // 如果管理器没有返回有效数据，再回退到数据库查询
+    if (result.enhancementData.empty())
+#endif
     {
-        DebugLog("[批量查询-强化] 表不存在: 物品强化_记录");
+        if (TableExists("物品强化_记录"))
+        {
+            QueryResult enhanceResult = CharacterDatabase.Query(
+                "SELECT `强化等级`, `属性值` FROM `物品强化_记录` WHERE `guid` = {}",
+                guid);
+
+            if (enhanceResult)
+            {
+                Field* fields = enhanceResult->Fetch();
+                uint32 level = fields[0].Get<uint32>();
+                std::string attrs = fields[1].Get<std::string>();
+
+                std::ostringstream enhanceStream;
+                enhanceStream << level << "|" << attrs;
+                result.enhancementData = enhanceStream.str();
+                result.hasData = true;
+
+                DebugLog("[批量查询-强化] 数据库查询成功: level={}, attrs=[{}], 结果=[{}]",
+                         level, attrs, result.enhancementData);
+            }
+            else
+            {
+                DebugLog("[批量查询-强化] 数据库查询失败或无数据");
+            }
+        }
+        else
+        {
+            DebugLog("[批量查询-强化] 表不存在: 物品强化_记录");
+        }
     }
 
     // ========== 4. 查询技能系统数据 ==========
@@ -2839,6 +2867,10 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
 
     // ========== 7. 查询套装系统数据 ==========
     DebugLog("[批量查询] 开始查询套装系统: itemID={}, guid={}", itemID, guid);
+
+    uint32 setId = 0;
+
+    // 7.1 优先从玩家套装状态表读取（正常情况下由套装系统维护）
     if (TableExists("玩家套装状态"))
     {
         QueryResult setResult = CharacterDatabase.Query(
@@ -2848,14 +2880,63 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
         if (setResult)
         {
             Field* fields = setResult->Fetch();
-            uint32 setId = fields[0].Get<uint32>();
+            setId = fields[0].Get<uint32>();
+            DebugLog("[批量查询-套装] 来自玩家套装状态表的套装ID: setId={}", setId);
+        }
+        else
+        {
+            DebugLog("[批量查询-套装] 玩家套装状态表中无记录: guid={}", guid);
+        }
+    }
+    else
+    {
+        DebugLog("[批量查询-套装] 表不存在: 玩家套装状态");
+    }
 
-            std::string setName;
-            std::string attrsStr;
-            std::string effectsStr;
+    // 7.2 如果玩家套装状态还没有写入（例如刚鉴定完，套装系统异步保存尚未完成），
+    //     则回退到鉴定记录表，读取最近一次鉴定得到的套装ID
+    if (setId == 0 && TableExists("物品_鉴定记录"))
+    {
+        // 兼容不同版本的表结构：
+        //  - 早期版本使用唯一键 idx_物品GUID，通常每个物品GUID 只有一条记录
+        //  - 主键字段名为 `记录ID`，而不是通用的 `id`
+        // 因此这里不再使用 ORDER BY `id`，直接按物品GUID 精确匹配即可
+        QueryResult rec = CharacterDatabase.Query(
+            "SELECT `是否获得套装`, `套装ID` FROM `物品_鉴定记录` WHERE `物品GUID` = {}",
+            guid);
+
+        if (rec)
+        {
+            Field* rf = rec->Fetch();
+            bool hasSet = rf[0].Get<uint32>() != 0;
+            uint32 recSetId = rf[1].Get<uint32>();
+
+            if (hasSet && recSetId > 0)
+            {
+                setId = recSetId;
+                DebugLog("[批量查询-套装] 使用鉴定记录中的套装ID: setId={}", setId);
+            }
+            else
+            {
+                DebugLog("[批量查询-套装] 鉴定记录存在但未获得套装或套装ID为0");
+            }
+        }
+        else
+        {
+            DebugLog("[批量查询-套装] 鉴定记录表中无对应物品记录: guid={}", guid);
+        }
+    }
+
+    if (setId > 0)
+    {
+        std::string setName;
+        std::string attrsStr;
+        std::string effectsStr;
 
 #if defined(MODULE_ITEM_SETS)
-            // 优先尝试使用套装系统管理器（内存数据，性能更好）
+        // 优先尝试使用套装系统管理器（内存数据，性能更好）
+        if (sItemSetsManager)
+        {
             const std::vector<ItemSetData>& setDataList = sItemSetsManager->GetItemSetData(setId);
 
             if (!setDataList.empty())
@@ -2889,79 +2970,75 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
                     }
                 }
             }
+        }
 #endif
 
-            // 如果管理器不可用或未返回数据，回退到直接查询数据库
-            if (setName.empty())
-            {
-                QueryResult setInfo = WorldDatabase.Query(
-                    "SELECT `套装名称`, `套装属性`, `物品数量`, `效果描述` FROM `套装系统` WHERE `套装ID` = {} ORDER BY `物品数量`",
-                    setId);
-
-                if (setInfo)
-                {
-                    bool firstAttr = attrsStr.empty();
-                    bool firstEffect = effectsStr.empty();
-
-                    do
-                    {
-                        Field* sf = setInfo->Fetch();
-
-                        if (setName.empty())
-                            setName = sf[0].Get<std::string>();
-
-                        std::string setAttrs = sf[1].IsNull() ? "" : sf[1].Get<std::string>();
-                        uint32 itemsCount = sf[2].Get<uint32>();
-                        std::string effectDesc = sf[3].IsNull() ? "" : sf[3].Get<std::string>();
-
-                        if (!setAttrs.empty())
-                        {
-                            if (!firstAttr)
-                                attrsStr += ",";
-
-                            attrsStr += setAttrs;
-                            firstAttr = false;
-                        }
-
-                        if (!effectDesc.empty())
-                        {
-                            if (!firstEffect)
-                                effectsStr += ",";
-
-                            firstEffect = false;
-
-                            effectsStr += std::to_string(itemsCount);
-                            effectsStr += "|";
-                            effectsStr += effectDesc;
-                        }
-
-                    } while (setInfo->NextRow());
-                }
-            }
-
-            std::ostringstream setStream;
-            setStream << setId;
-
-            // 只有当有额外信息时才附加名称/属性/效果字段
-            if (!setName.empty() || !attrsStr.empty() || !effectsStr.empty())
-            {
-                setStream << ":" << setName << ":" << attrsStr << ":" << effectsStr;
-            }
-
-            result.setData = setStream.str();
-            result.hasData = true;
-
-            DebugLog("[批量查询-套装] 查询成功: setId={}, setName='{}', attrs='{}', effects='{}', 结果=[{}]",
-                     setId, setName, attrsStr, effectsStr, result.setData);
-        }
-        else
+        // 如果管理器不可用或未返回数据，回退到直接查询数据库
+        if (setName.empty())
         {
-            DebugLog("[批量查询-套装] 查询失败或无数据");
+            QueryResult setInfo = WorldDatabase.Query(
+                "SELECT `套装名称`, `套装属性`, `物品数量`, `效果描述` FROM `套装系统` WHERE `套装ID` = {} ORDER BY `物品数量`",
+                setId);
+
+            if (setInfo)
+            {
+                bool firstAttr = attrsStr.empty();
+                bool firstEffect = effectsStr.empty();
+
+                do
+                {
+                    Field* sf = setInfo->Fetch();
+
+                    if (setName.empty())
+                        setName = sf[0].Get<std::string>();
+
+                    std::string setAttrs = sf[1].IsNull() ? "" : sf[1].Get<std::string>();
+                    uint32 itemsCount = sf[2].Get<uint32>();
+                    std::string effectDesc = sf[3].IsNull() ? "" : sf[3].Get<std::string>();
+
+                    if (!setAttrs.empty())
+                    {
+                        if (!firstAttr)
+                            attrsStr += ",";
+
+                        attrsStr += setAttrs;
+                        firstAttr = false;
+                    }
+
+                    if (!effectDesc.empty())
+                    {
+                        if (!firstEffect)
+                            effectsStr += ",";
+
+                        firstEffect = false;
+
+                        effectsStr += std::to_string(itemsCount);
+                        effectsStr += "|";
+                        effectsStr += effectDesc;
+                    }
+
+                } while (setInfo->NextRow());
+            }
         }
+
+        std::ostringstream setStream;
+        setStream << setId;
+
+        // 只有当有额外信息时才附加名称/属性/效果字段
+        if (!setName.empty() || !attrsStr.empty() || !effectsStr.empty())
+        {
+            setStream << ":" << setName << ":" << attrsStr << ":" << effectsStr;
+        }
+
+        result.setData = setStream.str();
+        result.hasData = true;
+
+        DebugLog("[批量查询-套装] 查询成功: setId={}, setName='{}', attrs='{}', effects='{}', 结果=[{}]",
+                 setId, setName, attrsStr, effectsStr, result.setData);
     }
     else
     {
-        DebugLog("[批量查询-套装] 表不存在: 玩家套装状态");
+        DebugLog("[批量查询-套装] 未找到套装ID，跳过套装数据构建");
     }
 
     // ========== 查询完成总结 ==========
@@ -2978,6 +3055,36 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
     DebugLog("[批量查询] 完成查询: itemID={}, guid={}, 有数据={}", itemID, guid, result.hasData);
 
     return result;
+}
+
+// 通过 Addon 消息发送批量数据（ALL_MODULE_DATA:itemID:guid:...）
+void ItemIdentificationSystem::SendAllModuleDataAddon(Player* player, uint32 itemID, uint32 guid)
+{
+    if (!player)
+        return;
+
+    AllModuleData data = QueryAllModuleData(itemID, guid);
+
+    std::ostringstream response;
+    response << "ALL_MODULE_DATA:" << itemID << ":" << guid << ":"
+             << data.baseAttributes << ":"
+             << data.additionalAttributes << ":"
+             << data.growthData << ":"
+             << data.enhancementData << ":"
+             << data.skillsData << ":"
+             << data.magicHitData << ":"
+             << data.runeData << ":"
+             << data.setData;
+
+    std::string responseStr = response.str();
+
+    // 参考 HandleAddonBatchQuery：使用 "UITQ<TAB>数据" 作为实际发送内容
+    std::string fullMessage = "UITQ\t" + responseStr;
+
+    WorldPacket pkt;
+    ChatHandler::BuildChatPacket(pkt, CHAT_MSG_WHISPER, LANG_ADDON,
+                                 player, player, fullMessage, 0);
+    player->SendDirectMessage(&pkt);
 }
 
 // 批量查询命令处理器（一次性返回所有数据）

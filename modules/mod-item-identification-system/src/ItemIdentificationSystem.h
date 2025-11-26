@@ -161,6 +161,9 @@ public:
     // 批量查询命令处理器（一次性返回所有数据）
     void HandleBatchQueryCommand(Player* player, uint32 itemID, uint32 guid);
 
+    // 通过 Addon 消息发送批量数据（ALL_MODULE_DATA:itemID:guid:...）
+    void SendAllModuleDataAddon(Player* player, uint32 itemID, uint32 guid);
+
 public:
     // 配置变量
     bool _enabled;
@@ -273,8 +276,8 @@ private:
     // 应用符文系统
     void ApplyRuneSystem(Player* player, Item* item, const struct IdentificationTemplate& tmpl);
 
-    // 应用技能套装
-    void ApplySkillSets(Player* player, Item* item, const struct IdentificationTemplate& tmpl);
+    // 应用技能套装（返回实际分配的套装ID，0表示未分配）
+    uint32 ApplySkillSets(Player* player, Item* item, const struct IdentificationTemplate& tmpl);
 
     // 应用名称和描述
     void ApplyNameAndDescription(Item* item, const struct IdentificationTemplate& tmpl);
