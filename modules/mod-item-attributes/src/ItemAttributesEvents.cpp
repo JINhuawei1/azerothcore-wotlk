@@ -1,0 +1,230 @@
+#include "ItemAttributesEvents.h"
+#include "ItemAttributesLoader.h"
+#include "ItemAttributesEffects.h"
+#include "ItemAttributesDisplay.h"
+#include "ItemAttributesGenerator.h"
+#include "ItemAttributesDBHelper.h"
+#include "Configuration/Config.h"
+#include "Logging/Log.h"
+#include <chrono>
+
+ItemAttributesEvents::ItemAttributesEvents() :
+    PlayerScript("ItemAttributesEvents"),
+    ItemScript("ItemAttributesEvents")
+{
+}
+
+void ItemAttributesEvents::OnPlayerLogin(Player* player)
+{
+    auto loginStart = std::chrono::high_resolution_clock::now();
+    LOG_INFO("module", "[性能监控-物品属性] 玩家 {} 开始登录处理", player ? player->GetName() : "NULL");
+
+    if (!player || !sConfigMgr->GetOption<bool>("ItemAttributes.Enable", true))
+        return;
+
+    // 注意：登录时 OnPlayerEquip 已经为每个装备触发过了
+    // 所以这里不需要再次应用属性，否则会重复叠加！
+    // 我们只需要刷新一次属性面板即可
+
+    // 刷新玩家属性（确保面板显示正确）
+    auto step1Start = std::chrono::high_resolution_clock::now();
+    player->UpdateAllStats();
+    player->UpdateAttackPowerAndDamage();
+    player->UpdateAttackPowerAndDamage(true);
+    player->UpdateSpellDamageAndHealingBonus();
+    auto step1End = std::chrono::high_resolution_clock::now();
+    auto step1Duration = std::chrono::duration_cast<std::chrono::milliseconds>(step1End - step1Start).count();
+    LOG_INFO("module", "[性能监控-物品属性] 玩家 {} - 刷新玩家属性耗时: {}ms", player->GetName(), step1Duration);
+
+    // 可以在这里添加登录消息
+    if (sConfigMgr->GetOption<bool>("ItemAttributes.LoginMessage", false))
+    {
+        player->GetSession()->SendAreaTriggerMessage("物品追加属性系统已加载");
+    }
+
+    auto loginEnd = std::chrono::high_resolution_clock::now();
+    auto totalDuration = std::chrono::duration_cast<std::chrono::milliseconds>(loginEnd - loginStart).count();
+    LOG_INFO("module", "[性能监控-物品属性] 玩家 {} - 登录处理总耗时: {}ms", player->GetName(), totalDuration);
+}
+
+void ItemAttributesEvents::OnPlayerLogout(Player* player)
+{
+    if (!player)
+        return;
+
+    // 清理该玩家的装备跟踪数据
+    uint64 playerGuid = player->GetGUID().GetCounter();
+    _equippedItems.erase(playerGuid);
+    
+    // 玩家登出时清理孤立的属性数据
+    // 这会清理所有已删除物品但属性数据仍存在的记录
+    // 
+    // 清理时机说明：
+    // 1. 玩家出售装备到商店 → 属性数据保留（可以买回）
+    // 2. 玩家小退 → 清理所有孤立数据（未买回的装备属性被删除）
+    // 3. 玩家买回装备 → 属性依然存在 ✅
+    //
+    // 频率控制：每次登出都清理（确保及时清理）
+    static uint32 cleanupCounter = 0;
+    if (++cleanupCounter % 1 == 0)  // 每次玩家登出都清理
+    {
+        sItemAttributesLoader->CleanupOrphanedAttributeData();
+    }
+}
+
+void ItemAttributesEvents::OnPlayerDeleteFromDB(CharacterDatabaseTransaction trans, uint32 guid)
+{
+    if (!sConfigMgr->GetOption<bool>("ItemAttributes.Enable", true))
+        return;
+
+    // 当角色被删除时，清理该角色所有物品的属性数据
+    // 使用事务来确保数据一致性
+    CharacterDatabase.Execute(
+        "DELETE FROM `物品属性_数据` WHERE `物品GUID` IN "
+        "(SELECT `guid` FROM `item_instance` WHERE `owner_guid` = {})", guid);
+    ItemAttributesDBHelper::FlushCache();
+}
+
+void ItemAttributesEvents::OnPlayerEquip(Player* player, Item* item, uint8 bag, uint8 slot, bool update)
+{
+    if (!player || !item || !sConfigMgr->GetOption<bool>("ItemAttributes.Enable", true))
+        return;
+
+    using namespace std::chrono;
+    auto perfStart = high_resolution_clock::now();
+
+    uint64 playerGuid = player->GetGUID().GetCounter();
+    uint32 itemEntry = item->GetEntry();
+    uint64 itemGuid = item->GetGUID().GetCounter();
+
+    // 只处理真正的装备槽位（背包装备、银行等忽略），避免不必要的属性应用
+    if (bag != INVENTORY_SLOT_BAG_0 || slot >= EQUIPMENT_SLOT_END)
+        return;
+
+    // 检查该槽位是否已有装备（需要先移除旧装备的属性）
+    auto& playerEquipMap = _equippedItems[playerGuid];
+    auto it = playerEquipMap.find(slot);
+    if (it != playerEquipMap.end())
+    {
+        uint64 oldItemGuid = it->second;
+        
+        // 通过 GUID 查找旧物品
+        // 注意：此时旧物品可能已经不在装备槽了，可能在背包中
+        // 我们需要遍历玩家的所有物品来查找
+        Item* oldItem = nullptr;
+        // 先检查背包
+        for (uint8 i = INVENTORY_SLOT_ITEM_START; i < INVENTORY_SLOT_ITEM_END; ++i)
+        {
+            if (Item* bagItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i))
+            {
+                if (bagItem->GetGUID().GetCounter() == oldItemGuid)
+                {
+                    oldItem = bagItem;
+                    break;
+                }
+            }
+        }
+        
+        if (oldItem)
+        {
+            sItemAttributesEffects->RemoveItemAttributeEffects(player, oldItem);
+        }
+    }
+
+    // 记录新装备
+    playerEquipMap[slot] = itemGuid;
+
+    // 应用新装备的属性
+    sItemAttributesEffects->ApplyItemAttributeEffects(player, item);
+
+    // 刷新玩家属性：
+    // 【性能优化】登录加载阶段（未进世界）不做全量刷新，交给 OnPlayerLogin 统一刷新一次
+    // 原因：登录时每件装备都会触发 OnPlayerEquip，如果每次都刷新属性，
+    //       9件装备 × 80ms = 720ms 浪费在重复刷新上
+    // 优化后：登录阶段跳过刷新，OnPlayerLogin 最后统一刷新一次，节省 ~640ms
+    // 正常在线换装时才做即时刷新
+    if (player->IsInWorld())
+    {
+        player->UpdateAllStats();
+        player->UpdateAttackPowerAndDamage();
+        player->UpdateAttackPowerAndDamage(true);
+        player->UpdateSpellDamageAndHealingBonus();
+    }
+
+    auto perfEnd = high_resolution_clock::now();
+    auto perfMs = duration_cast<milliseconds>(perfEnd - perfStart).count();
+    LOG_INFO("module", "[性能监控-物品属性-OnEquip] 玩家 {}(GUID={}) 槽位 {} 物品ID={} GUID={} - 总耗时: {}ms",
+             player->GetName(), playerGuid, uint32(slot), itemEntry, itemGuid, perfMs);
+}
+
+void ItemAttributesEvents::OnPlayerAfterSetVisibleItemSlot(Player* player, uint8 slot, Item* item)
+{
+    if (!player || !sConfigMgr->GetOption<bool>("ItemAttributes.Enable", true))
+        return;
+
+    // 这个钩子在装备槽的可见物品改变时触发
+    // 穿戴装备时：item != nullptr
+    // 卸下装备时：item == nullptr
+    
+    if (item == nullptr)
+    {
+        uint64 playerGuid = player->GetGUID().GetCounter();
+        
+        // 从映射表中获取该槽位之前的物品GUID
+        auto playerIt = _equippedItems.find(playerGuid);
+        if (playerIt != _equippedItems.end())
+        {
+            auto& playerEquipMap = playerIt->second;
+            auto slotIt = playerEquipMap.find(slot);
+            if (slotIt != playerEquipMap.end())
+            {
+                uint64 oldItemGuid = slotIt->second;
+                
+                // 直接根据GUID移除属性，不需要查找Item对象
+                sItemAttributesEffects->RemoveItemAttributeEffectsByGuid(player, oldItemGuid);
+                
+                // 刷新玩家属性面板
+                player->UpdateAllStats();
+                player->UpdateAttackPowerAndDamage();
+                player->UpdateAttackPowerAndDamage(true);
+                player->UpdateSpellDamageAndHealingBonus();
+                
+                // 从映射表中移除
+                playerEquipMap.erase(slotIt);
+            }
+        }
+    }
+}
+
+// OnDummyEffect 不是 ItemScript 的虚函数，已移除
+
+bool ItemAttributesEvents::OnQuestAccept(Player* player, Item* item, Quest const* quest)
+{
+    // 这里可以处理物品接受任务时的逻辑
+    return false; // 返回true表示处理了事件，返回false表示继续处理
+}
+
+bool ItemAttributesEvents::OnUse(Player* player, Item* item, SpellCastTargets const& targets)
+{
+    // 这里可以处理物品使用时的逻辑
+    return false; // 返回true表示处理了事件，返回false表示继续处理
+}
+
+bool ItemAttributesEvents::OnExpire(Player* player, ItemTemplate const* proto)
+{
+    // 这里可以处理物品过期时的逻辑
+    return false; // 返回true表示处理了事件，返回false表示继续处理
+}
+
+bool ItemAttributesEvents::OnRemove(Player* player, Item* item)
+{
+    // 注意：这个事件不会在物品删除时触发
+    // 物品删除时的清理由 ItemAttributesGlobalScript::OnItemDelFromDB 处理
+    return false;
+}
+
+void ItemAttributesEvents::OnGossipSelect(Player* player, Item* item, uint32 sender, uint32 action)
+{
+    // 这里可以处理物品对话选择时的逻辑
+}
+

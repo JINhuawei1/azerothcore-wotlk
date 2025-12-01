@@ -717,8 +717,9 @@ bool ItemEnhancementMgr::EnhanceItem(Player* player, Item* item, uint32 group)
     }
 }
 
-// 为鉴定系统初始化强化（直接创建等级1，不依赖随机判定）
-bool ItemEnhancementMgr::InitializeEnhancementForIdentification(Player* player, Item* item, uint32 group)
+// 为鉴定系统初始化强化（直接创建等级1，不依赖随机判定，并按鉴定模板约束条目数量与数值范围）
+bool ItemEnhancementMgr::InitializeEnhancementForIdentification(Player* player, Item* item, uint32 group,
+    uint32 minAttrCount, uint32 maxAttrCount, uint32 minAttrValue, uint32 maxAttrValue)
 {
     if (!CanEnhanceItem(player, item))
         return false;
@@ -811,6 +812,86 @@ bool ItemEnhancementMgr::InitializeEnhancementForIdentification(Player* player, 
 
     if (!initialStats.empty())
     {
+        // 如果配置了约束，则对生成的属性做一次性裁剪
+        if (maxAttrCount > 0 || minAttrCount > 0 || minAttrValue > 0 || maxAttrValue > 0)
+        {
+            std::map<uint32, int32> statsMap = ParseStatValues(initialStats);
+
+            if (!statsMap.empty())
+            {
+                // 转成vector以便随机抽取
+                std::vector<std::pair<uint32, int32>> stats(statsMap.begin(), statsMap.end());
+                uint32 availableCount = static_cast<uint32>(stats.size());
+                uint32 targetCount = availableCount;
+
+                // 1) 随机决定本次要保留的强化属性条目数量
+                if (minAttrCount > 0 || maxAttrCount > 0)
+                {
+                    uint32 minCount = minAttrCount;
+                    uint32 maxCount = maxAttrCount ? maxAttrCount : availableCount;
+
+                    if (minCount == 0)
+                        minCount = 1;
+
+                    if (minCount > maxCount)
+                        std::swap(minCount, maxCount);
+
+                    targetCount = urand(minCount, maxCount);
+                    if (targetCount > availableCount)
+                        targetCount = availableCount;
+                }
+
+                // 当可用条目数大于目标条目数时，从中随机抽取 targetCount 条
+                if (availableCount > targetCount && targetCount > 0)
+                {
+                    for (uint32 i = 0; i < targetCount; ++i)
+                    {
+                        uint32 j = urand(i, availableCount - 1);
+                        std::swap(stats[i], stats[j]);
+                    }
+                    stats.resize(targetCount);
+                }
+
+                // 2) 限制数值范围
+                bool hasRange = (minAttrValue > 0 || maxAttrValue > 0);
+                if (hasRange)
+                {
+                    if (maxAttrValue > 0 && minAttrValue > maxAttrValue)
+                        std::swap(minAttrValue, maxAttrValue);
+
+                    for (auto& kv : stats)
+                    {
+                        int32 v = kv.second;
+
+                        if (minAttrValue > 0 && v < static_cast<int32>(minAttrValue))
+                            v = static_cast<int32>(minAttrValue);
+
+                        if (maxAttrValue > 0 && v > static_cast<int32>(maxAttrValue))
+                            v = static_cast<int32>(maxAttrValue);
+
+                        kv.second = v;
+                    }
+                }
+
+                // 3) 重新格式化为字符串
+                std::ostringstream oss;
+                for (size_t i = 0; i < stats.size(); ++i)
+                {
+                    if (i > 0)
+                        oss << ",";
+                    oss << stats[i].first << " " << stats[i].second;
+                }
+
+                initialStats = oss.str();
+
+                if (_debugMode)
+                {
+                    LOG_DEBUG("module.itemenhancement", "[鉴定初始化] 约束后强化属性='{}' (minCount={}, maxCount={}, minValue={}, maxValue={})",
+                              initialStats, minAttrCount, maxAttrCount, minAttrValue, maxAttrValue);
+                }
+            }
+        }
+
         record.statValues = initialStats;
     }
     else
@@ -862,9 +943,6 @@ bool ItemEnhancementMgr::InitializeEnhancementForIdentification(Player* player, 
         player->SetVisibleItemSlot(item->GetSlot(), item);
         ApplyOfficialItemEnhancement(player, item, record.level);
     }
-
-    // 发送成功消息
-    ChatHandler(player->GetSession()).PSendSysMessage("物品强化初始化成功，当前等级: +{}", record.level);
 
     // 从数据库重新获取最新的强化数据发送给客户端
     EnhancementRecord const* updatedRecord = GetEnhancementRecord(itemGuid);
@@ -980,11 +1058,18 @@ void ItemEnhancementMgr::ApplyOfficialItemEnhancement(Player* player, Item* item
     TrackAppliedEnhancement(player, item, record->statValues);
 
     // 更新玩家属性
-    player->UpdateAllStats();
-    player->UpdateAttackPowerAndDamage();
-    player->UpdateAttackPowerAndDamage(true);
-    player->UpdateMaxHealth();
-    player->UpdateMaxPower(POWER_MANA);
+    // 【性能优化】登录加载阶段不做全量刷新，交给 OnPlayerLogin 统一刷新一次
+    // 原因：登录时每件装备都会触发 OnPlayerEquip -> ApplyOfficialItemEnhancement，
+    //       如果每次都刷新属性，9件装备 × 60ms = 540ms 浪费在重复刷新上
+    // 优化后：登录阶段跳过刷新，OnPlayerLogin 最后统一刷新一次，节省 ~480ms
+    if (player->IsInWorld())
+    {
+        player->UpdateAllStats();
+        player->UpdateAttackPowerAndDamage();
+        player->UpdateAttackPowerAndDamage(true);
+        player->UpdateMaxHealth();
+        player->UpdateMaxPower(POWER_MANA);
+    }
 
     // ChatHandler(player->GetSession()).PSendSysMessage("强化等级 {} 已应用，属性加成已生效", level);
 }
@@ -1467,7 +1552,8 @@ void ItemEnhancementMgr::ClearSlotEnhancements(Player* player, uint8 slot)
     }
 
     // 如果移除了效果，更新玩家属性
-    if (hasRemovedEffects)
+    // 【性能优化】登录加载阶段不做全量刷新，交给 OnPlayerLogin 统一刷新一次
+    if (hasRemovedEffects && player->IsInWorld())
     {
         player->UpdateAllStats();
         player->UpdateAttackPowerAndDamage();
@@ -1513,11 +1599,15 @@ void ItemEnhancementMgr::OnPlayerEquipItem(Player* player, Item* item)
         TrackAppliedEnhancement(player, item, record->statValues);
 
         // 更新玩家属性
-        player->UpdateAllStats();
-        player->UpdateAttackPowerAndDamage();
-        player->UpdateAttackPowerAndDamage(true);
-        player->UpdateMaxHealth();
-        player->UpdateMaxPower(POWER_MANA);
+        // 【性能优化】登录加载阶段不做全量刷新
+        if (player->IsInWorld())
+        {
+            player->UpdateAllStats();
+            player->UpdateAttackPowerAndDamage();
+            player->UpdateAttackPowerAndDamage(true);
+            player->UpdateMaxHealth();
+            player->UpdateMaxPower(POWER_MANA);
+        }
 
         // 发送强化数据给客户端UI插件
         SendEnhancementDataToClient(player, item, *record);
@@ -1563,11 +1653,15 @@ void ItemEnhancementMgr::OnPlayerUnequipItem(Player* player, Item* item)
     UntrackAppliedEnhancement(player, item);
 
     // 更新玩家属性
-    player->UpdateAllStats();
-    player->UpdateAttackPowerAndDamage();
-    player->UpdateAttackPowerAndDamage(true);
-    player->UpdateMaxHealth();
-    player->UpdateMaxPower(POWER_MANA);
+    // 【性能优化】登录加载阶段不做全量刷新
+    if (player->IsInWorld())
+    {
+        player->UpdateAllStats();
+        player->UpdateAttackPowerAndDamage();
+        player->UpdateAttackPowerAndDamage(true);
+        player->UpdateMaxHealth();
+        player->UpdateMaxPower(POWER_MANA);
+    }
 
     // 获取强化等级用于显示
     EnhancementRecord const* record = GetEnhancementRecord(itemGuid);
@@ -1637,11 +1731,15 @@ void ItemEnhancementMgr::RemoveOfficialItemEnhancement(Player* player, Item* ite
     }
 
     // 更新玩家属性
-    player->UpdateAllStats();
-    player->UpdateAttackPowerAndDamage();
-    player->UpdateAttackPowerAndDamage(true);
-    player->UpdateMaxHealth();
-    player->UpdateMaxPower(POWER_MANA);
+    // 【性能优化】登录加载阶段不做全量刷新
+    if (player->IsInWorld())
+    {
+        player->UpdateAllStats();
+        player->UpdateAttackPowerAndDamage();
+        player->UpdateAttackPowerAndDamage(true);
+        player->UpdateMaxHealth();
+        player->UpdateMaxPower(POWER_MANA);
+    }
 
     // ChatHandler(player->GetSession()).PSendSysMessage("强化效果已移除");
 }
@@ -1826,6 +1924,120 @@ void ItemEnhancementMgr::ApplyStatModifier(Player* player, uint32 statType, int3
             break;
         default:
             // ChatHandler(player->GetSession()).PSendSysMessage("警告：未知的属性类型 {}", statType);
+            break;
+    }
+}
+
+// 批量应用属性修正（不立即更新，用于批量优化）
+void ItemEnhancementMgr::ApplyStatModifierBatch(Player* player, uint32 statType, int32 value, bool apply)
+{
+    if (!player || value == 0)
+        return;
+
+    // 批量版本：只设置属性值，不调用任何Update函数
+    switch (statType)
+    {
+        case ITEM_MOD_MANA:
+            player->HandleStatModifier(UNIT_MOD_MANA, BASE_VALUE, float(value), apply);
+            break;
+        case ITEM_MOD_HEALTH:
+            player->HandleStatModifier(UNIT_MOD_HEALTH, BASE_VALUE, float(value), apply);
+            break;
+        case ITEM_MOD_AGILITY:
+            player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, BASE_VALUE, float(value), apply);
+            player->ApplyStatBuffMod(STAT_AGILITY, float(value), apply);
+            break;
+        case ITEM_MOD_STRENGTH:
+            player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, BASE_VALUE, float(value), apply);
+            player->ApplyStatBuffMod(STAT_STRENGTH, float(value), apply);
+            break;
+        case ITEM_MOD_INTELLECT:
+            player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, BASE_VALUE, float(value), apply);
+            player->ApplyStatBuffMod(STAT_INTELLECT, float(value), apply);
+            break;
+        case ITEM_MOD_SPIRIT:
+            player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, BASE_VALUE, float(value), apply);
+            player->ApplyStatBuffMod(STAT_SPIRIT, float(value), apply);
+            break;
+        case ITEM_MOD_STAMINA:
+            player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, BASE_VALUE, float(value), apply);
+            player->ApplyStatBuffMod(STAT_STAMINA, float(value), apply);
+            break;
+        case ITEM_MOD_DEFENSE_SKILL_RATING:
+            player->ApplyRatingMod(CR_DEFENSE_SKILL, value, apply);
+            break;
+        case ITEM_MOD_DODGE_RATING:
+            player->ApplyRatingMod(CR_DODGE, value, apply);
+            break;
+        case ITEM_MOD_PARRY_RATING:
+            player->ApplyRatingMod(CR_PARRY, value, apply);
+            break;
+        case ITEM_MOD_BLOCK_RATING:
+            player->ApplyRatingMod(CR_BLOCK, value, apply);
+            break;
+        case ITEM_MOD_HIT_MELEE_RATING:
+            player->ApplyRatingMod(CR_HIT_MELEE, value, apply);
+            break;
+        case ITEM_MOD_HIT_RANGED_RATING:
+            player->ApplyRatingMod(CR_HIT_RANGED, value, apply);
+            break;
+        case ITEM_MOD_HIT_SPELL_RATING:
+            player->ApplyRatingMod(CR_HIT_SPELL, value, apply);
+            break;
+        case ITEM_MOD_CRIT_MELEE_RATING:
+            player->ApplyRatingMod(CR_CRIT_MELEE, value, apply);
+            break;
+        case ITEM_MOD_CRIT_RANGED_RATING:
+            player->ApplyRatingMod(CR_CRIT_RANGED, value, apply);
+            break;
+        case ITEM_MOD_CRIT_SPELL_RATING:
+            player->ApplyRatingMod(CR_CRIT_SPELL, value, apply);
+            break;
+        case ITEM_MOD_HASTE_MELEE_RATING:
+            player->ApplyRatingMod(CR_HASTE_MELEE, value, apply);
+            break;
+        case ITEM_MOD_HASTE_RANGED_RATING:
+            player->ApplyRatingMod(CR_HASTE_RANGED, value, apply);
+            break;
+        case ITEM_MOD_HASTE_SPELL_RATING:
+            player->ApplyRatingMod(CR_HASTE_SPELL, value, apply);
+            break;
+        case ITEM_MOD_HIT_RATING:
+            player->ApplyRatingMod(CR_HIT_MELEE, value, apply);
+            player->ApplyRatingMod(CR_HIT_RANGED, value, apply);
+            player->ApplyRatingMod(CR_HIT_SPELL, value, apply);
+            break;
+        case ITEM_MOD_CRIT_RATING:
+            player->ApplyRatingMod(CR_CRIT_MELEE, value, apply);
+            player->ApplyRatingMod(CR_CRIT_RANGED, value, apply);
+            player->ApplyRatingMod(CR_CRIT_SPELL, value, apply);
+            break;
+        case ITEM_MOD_RESILIENCE_RATING:
+            player->ApplyRatingMod(CR_CRIT_TAKEN_MELEE, value, apply);
+            player->ApplyRatingMod(CR_CRIT_TAKEN_RANGED, value, apply);
+            player->ApplyRatingMod(CR_CRIT_TAKEN_SPELL, value, apply);
+            break;
+        case ITEM_MOD_HASTE_RATING:
+            player->ApplyRatingMod(CR_HASTE_MELEE, value, apply);
+            player->ApplyRatingMod(CR_HASTE_RANGED, value, apply);
+            player->ApplyRatingMod(CR_HASTE_SPELL, value, apply);
+            break;
+        case ITEM_MOD_EXPERTISE_RATING:
+            player->ApplyRatingMod(CR_EXPERTISE, value, apply);
+            break;
+        case ITEM_MOD_ATTACK_POWER:
+            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, BASE_VALUE, float(value), apply);
+            break;
+        case ITEM_MOD_RANGED_ATTACK_POWER:
+            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, BASE_VALUE, float(value), apply);
+            break;
+        case ITEM_MOD_SPELL_POWER:
+            player->ApplySpellPowerBonus(value, apply);
+            break;
+        case ITEM_MOD_ARMOR_PENETRATION_RATING:
+            player->ApplyRatingMod(CR_ARMOR_PENETRATION, value, apply);
+            break;
+        default:
             break;
     }
 }
