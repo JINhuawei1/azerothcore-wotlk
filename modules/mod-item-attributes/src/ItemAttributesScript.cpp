@@ -24,7 +24,7 @@ public:
         WorldScript("ItemAttributesWorldScript"),
         _initialized(false),
         _loadTimer(0),
-        _delayTime(5 * IN_MILLISECONDS) // 5秒延迟
+        _delayTime(500) // 0.5秒延迟，确保在其他依赖模块（如mod-item-enhancement 1秒延迟）之前初始化
     {
     }
 
