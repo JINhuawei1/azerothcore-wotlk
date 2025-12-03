@@ -138,8 +138,8 @@ local UnifiedFramesByKey = {}
 local HuanJingState = {
     cache = {},   -- key -> { itemID, guid, multiplier, attributeData, identificationData, timestamp }
     pending = {}, -- key -> lastQueryTime
-    COOLDOWN = 3, -- 查询冷却（秒）
-    EXPIRE = 60   -- 缓存有效期（秒）
+    COOLDOWN = 1, -- 查询冷却（秒）- 降低到1秒加快响应
+    EXPIRE = 300  -- 缓存有效期（秒）- 增加到5分钟
 }
 
 -- 记录当前正在显示的“官方”提示框（GameTooltip / ItemRefTooltip / ShoppingTooltip）
@@ -244,7 +244,7 @@ local function RenderHuanJingAttributes(tooltip, hjData, meta)
     tooltip:Show()
 end
 
--- 发送幻境倍率查询（带简单冷却，避免刷屏）
+-- 发送幻境倍率查询（已移除冷却限制）
 local function HuanJingRequest(itemID, guid, key, now)
     if not itemID or not guid or guid == 0 then return end
 
@@ -253,10 +253,7 @@ local function HuanJingRequest(itemID, guid, key, now)
         return
     end
 
-    local last = HuanJingState.pending[key]
-    if last and (now - last) < HuanJingState.COOLDOWN then
-        return
-    end
+    -- 已移除冷却时间限制
 
     local addonMessage = string.format("HUANJING_QUERY:%d:%d", itemID, guid)
 
@@ -540,6 +537,76 @@ MakeKey = function(itemID, guid, bag, slot, equipFlag)
     return string.format("U:%d", itemID)
 end
 
+-- 从物品链接字符串中提取GUID的通用函数
+local function ExtractGuidFromItemString(itemString)
+    if not itemString then return nil end
+    
+    local parts = { strsplit(":", itemString) }
+    local guid = nil
+    
+    -- 调试输出：显示物品链接的完整结构
+    if DB.debug then
+        local partsStr = ""
+        for i = 1, math.min(#parts, 15) do
+            partsStr = partsStr .. string.format("[%d]=%s ", i, tostring(parts[i]))
+        end
+        DebugPrint("[ExtractGuidFromItemString] parts=" .. partsStr)
+    end
+    
+    -- 尝试多个可能的位置提取GUID
+    -- WoW 3.3.5 物品链接格式: item:itemId:enchantId:gem1:gem2:gem3:gem4:suffixId:uniqueId:level:...
+    -- 位置7是suffixId（随机附魔），位置8是uniqueId（可能存储GUID）
+    
+    -- 优先尝试位置8（uniqueId）- 这是最常见的GUID存储位置
+    if #parts >= 8 then
+        local val = tonumber(parts[8])
+        if val and val ~= 0 then
+            -- 取绝对值（服务器可能使用负数存储GUID）
+            guid = math.abs(val)
+            -- 某些服务器会在GUID上加1000000来区分
+            if guid > 1000000 then
+                guid = guid - 1000000
+            end
+            DebugPrint(string.format("[ExtractGuidFromItemString] 从位置8提取GUID: %d (原始值=%d)", guid, val))
+        end
+    end
+    
+    -- 如果位置8没有，尝试位置7（suffixId，某些服务器可能在这里存储GUID）
+    if not guid and #parts >= 7 then
+        local val = tonumber(parts[7])
+        if val and val ~= 0 then
+            -- 取绝对值
+            guid = math.abs(val)
+            if guid > 1000000 then
+                guid = guid - 1000000
+            end
+            DebugPrint(string.format("[ExtractGuidFromItemString] 从位置7提取GUID: %d (原始值=%d)", guid, val))
+        end
+    end
+    
+    -- 尝试更多位置（9, 10, 11...）
+    if not guid then
+        for i = 9, math.min(#parts, 15) do
+            local val = tonumber(parts[i])
+            if val and val ~= 0 then
+                -- 取绝对值
+                guid = math.abs(val)
+                if guid > 1000000 then
+                    guid = guid - 1000000
+                end
+                DebugPrint(string.format("[ExtractGuidFromItemString] 从位置%d提取GUID: %d (原始值=%d)", i, guid, val))
+                break
+            end
+        end
+    end
+    
+    if not guid then
+        DebugPrint("[ExtractGuidFromItemString] 未找到有效GUID")
+    end
+    
+    return guid
+end
+
 -- 扫描背包查找物品的 GUID
 local function ScanBagsForItem(itemID)
     if not itemID then return nil end
@@ -550,28 +617,12 @@ local function ScanBagsForItem(itemID)
         for slot = 1, numSlots do
             local link = GetContainerItemLink(bag, slot)
             if link then
-                local bagItemID, bagGUID = tonumber(string.match(link, "item:(%d+)")), nil
+                local bagItemID = tonumber(string.match(link, "item:(%d+)"))
 
                 if bagItemID == itemID then
                     -- 尝试从链接中提取 GUID
                     local itemString = string.match(link, "item[%-?%d:]+")
-                    if itemString then
-                        local parts = { strsplit(":", itemString) }
-                        if #parts >= 7 then
-                            local val = tonumber(parts[7])
-                            if val and val > 1000000 then
-                                bagGUID = val - 1000000
-                            elseif val and val > 0 then
-                                bagGUID = val
-                            end
-                        end
-                        if not bagGUID and #parts >= 8 then
-                            local val = tonumber(parts[8])
-                            if val and val > 0 then
-                                bagGUID = val
-                            end
-                        end
-                    end
+                    local bagGUID = ExtractGuidFromItemString(itemString)
 
                     if bagGUID and bagGUID > 0 then
                         return bagGUID, bag, slot
@@ -584,36 +635,23 @@ local function ScanBagsForItem(itemID)
     return nil
 end
 
--- 扫描装备栏查找物品的 GUID
-local function ScanEquipmentForItem(itemID)
+-- 扫描装备栏查找物品的 GUID（支持扫描其他玩家）
+-- unit: 要扫描的单位，默认为 "player"，可传入 "target" 或检查目标单位
+local function ScanEquipmentForItem(itemID, unit)
     if not itemID then return nil end
+    
+    unit = unit or "player"
 
     -- 遍历所有装备槽位
     for slot = 0, 19 do
-        local link = GetInventoryItemLink("player", slot)
+        local link = GetInventoryItemLink(unit, slot)
         if link then
-            local equipItemID, equipGUID = tonumber(string.match(link, "item:(%d+)")), nil
+            local equipItemID = tonumber(string.match(link, "item:(%d+)"))
 
             if equipItemID == itemID then
                 -- 尝试从链接中提取 GUID
                 local itemString = string.match(link, "item[%-?%d:]+")
-                if itemString then
-                    local parts = { strsplit(":", itemString) }
-                    if #parts >= 7 then
-                        local val = tonumber(parts[7])
-                        if val and val > 1000000 then
-                            equipGUID = val - 1000000
-                        elseif val and val > 0 then
-                            equipGUID = val
-                        end
-                    end
-                    if not equipGUID and #parts >= 8 then
-                        local val = tonumber(parts[8])
-                        if val and val > 0 then
-                            equipGUID = val
-                        end
-                    end
-                end
+                local equipGUID = ExtractGuidFromItemString(itemString)
 
                 if equipGUID and equipGUID > 0 then
                     return equipGUID, nil, slot, true
@@ -625,6 +663,18 @@ local function ScanEquipmentForItem(itemID)
     return nil
 end
 
+-- 获取当前正在检查的玩家单位（如果正在检查其他玩家）
+local function GetInspectUnit()
+    -- 检查 InspectFrame 是否打开
+    if InspectFrame and InspectFrame:IsShown() then
+        local inspectUnit = InspectFrame.unit
+        if inspectUnit and UnitExists(inspectUnit) and not UnitIsUnit(inspectUnit, "player") then
+            return inspectUnit
+        end
+    end
+    return nil
+end
+
 -- 从物品链接提取ID和GUID
 local function ExtractItemInfo(itemLink)
     if not itemLink then return nil end
@@ -633,44 +683,14 @@ local function ExtractItemInfo(itemLink)
     if not itemID then return nil end
 
     local itemString = string.match(itemLink, "item[%-?%d:]+")
-    local guid = nil
-
-    if itemString then
-        local parts = { strsplit(":", itemString) }
-
-        -- 尝试从多个位置提取GUID
-        -- 位置7: suffixID/uniqueID（随机附魔或唯一ID）
-        -- 位置8: uniqueID（唯一ID）
-        -- 位置9: level
-        -- 位置10-13: bonusIDs等
-
-        local possibleGuidPositions = {7, 8, 9, 10, 11, 12, 13}
-
-        for _, pos in ipairs(possibleGuidPositions) do
-            if parts[pos] then
-                local val = tonumber(parts[pos])
-                if val then
-                    -- 检查是否是有效的GUID
-                    -- GUID通常是一个大于0的整数
-                    -- 有些服务器会在GUID上加1000000
-                    if val > 1000000 then
-                        guid = val - 1000000
-                        break
-                    elseif val > 0 and val < 1000000 then
-                        -- 可能的GUID范围
-                        guid = val
-                        break
-                    end
-                end
-            end
-        end
-    end
+    local guid = ExtractGuidFromItemString(itemString)
 
     return itemID, guid
 end
 
 -- 增强版物品信息提取 - 如果链接中没有 GUID，尝试从背包/装备栏查找
-local function ExtractItemInfoEnhanced(itemLink)
+-- inspectUnit: 可选参数，如果正在检查其他玩家，传入该玩家的单位ID
+local function ExtractItemInfoEnhanced(itemLink, inspectUnit)
     if not itemLink then return nil end
 
     local itemID, guid = ExtractItemInfo(itemLink)
@@ -682,12 +702,24 @@ local function ExtractItemInfoEnhanced(itemLink)
     end
 
     -- 没有 GUID，尝试从装备栏查找
-    local equipGUID, _, equipSlot, isEquipped = ScanEquipmentForItem(itemID)
+    -- 优先检查是否正在查看其他玩家
+    if inspectUnit and UnitExists(inspectUnit) and not UnitIsUnit(inspectUnit, "player") then
+        -- 扫描其他玩家的装备栏
+        local equipGUID, _, equipSlot, isEquipped = ScanEquipmentForItem(itemID, inspectUnit)
+        if equipGUID and equipGUID > 0 then
+            return itemID, equipGUID, nil, equipSlot, true
+        end
+        -- 其他玩家的物品无法从背包获取，直接返回
+        return itemID, nil, nil, nil, false
+    end
+
+    -- 扫描自己的装备栏
+    local equipGUID, _, equipSlot, isEquipped = ScanEquipmentForItem(itemID, "player")
     if equipGUID and equipGUID > 0 then
         return itemID, equipGUID, nil, equipSlot, true
     end
 
-    -- 从背包查找
+    -- 从自己的背包查找
     local bagGUID, bag, slot = ScanBagsForItem(itemID)
     if bagGUID and bagGUID > 0 then
         return itemID, bagGUID, bag, slot, false
@@ -1540,16 +1572,27 @@ end
 local function ShouldSkipQuery(key)
     local now = GetTime()
 
-    -- 正在查询中（包括短时间内已发送过查询）
+    -- 正在查询中，但如果超过1秒仍未返回，允许重新查询（避免用户感觉无响应）
     if State.pending[key] then
+        local pending = State.pending[key]
+        if pending.queryStartTime then
+            local waitTime = now - pending.queryStartTime
+            if waitTime < 1.0 then
+                -- 查询刚发送不久（1秒内），跳过避免重复查询
+                DebugPrint(string.format("[ShouldSkipQuery] %s 正在查询中，等待%.1f秒", key, waitTime))
+                return true
+            else
+                -- 已经等待超过1秒，清除pending状态，允许重新查询
+                DebugPrint(string.format("[ShouldSkipQuery] %s 等待超时%.1f秒，清除pending", key, waitTime))
+                State.pending[key] = nil
+                return false
+            end
+        end
+        DebugPrint(string.format("[ShouldSkipQuery] %s pending但无queryStartTime，跳过", key))
         return true
     end
 
-    -- 检查最近查询时间（防止短时间内重复查询）
-    -- 即使没有缓存，也要等待至少0.5秒才能再次查询
-    if State.lastQuery[key] and (now - State.lastQuery[key]) < 0.5 then
-        return true
-    end
+    -- 已移除最近查询时间限制，允许立即重新查询
 
     -- 检查是否所有启用的系统都已有缓存数据
     if State.cache[key] then
@@ -1557,43 +1600,65 @@ local function ShouldSkipQuery(key)
 
         -- 如果整个缓存对象被标记为isEmpty，清除它并允许重新查询
         if cached.isEmpty then
+            DebugPrint(string.format("[ShouldSkipQuery] %s 缓存为空，清除并允许查询", key))
             State.cache[key] = nil
             State.cacheTime[key] = nil
             return false  -- 允许查询
         end
 
         local allSystemsCached = true
+        local missingCount = 0
+        local hasOnlyEmpty = true  -- 检查是否所有系统都是isEmpty
 
         -- 检查每个启用的系统是否都有数据
         for systemName, enabled in pairs(DB.systems) do
             if enabled then
                 local systemData = cached.systems[systemName]
-                -- 只有当系统数据完全不存在时才需要重新查询
-                -- isEmpty标记表示服务器确认没有数据，这也是有效的缓存
                 if not systemData then
                     allSystemsCached = false
-                    break
+                    missingCount = missingCount + 1
+                else
+                    -- 如果至少有一个系统不是isEmpty，说明有真实数据
+                    if not systemData.isEmpty then
+                        hasOnlyEmpty = false
+                    end
                 end
             end
         end
 
         -- 只有当所有启用的系统都有数据时才检查缓存时间
         if allSystemsCached then
+            -- 如果所有系统都是isEmpty，立即清除缓存（因为GUID可能被重用）
+            if hasOnlyEmpty then
+                DebugPrint(string.format("[ShouldSkipQuery] %s 检测到isEmpty缓存，立即清除并允许查询（GUID可能被重用）", key))
+                State.cache[key] = nil
+                State.cacheTime[key] = nil
+                return false  -- 允许查询
+            end
+            
             local cacheAge = State.cacheTime[key] and (now - State.cacheTime[key]) or 999
-
+            
             -- 如果缓存超过配置的有效期，清除缓存并允许重新查询
             if cacheAge >= DB.cacheExpiration then
+                DebugPrint(string.format("[ShouldSkipQuery] %s 缓存过期(%.0f秒)，清除并允许查询", key, cacheAge))
                 State.cache[key] = nil
                 State.cacheTime[key] = nil
                 return false  -- 允许查询
             else
+                DebugPrint(string.format("[ShouldSkipQuery] %s 缓存完整且有效(%.0f秒)，跳过", key, cacheAge))
                 return true
             end
+        else
+            DebugPrint(string.format("[ShouldSkipQuery] %s 缺少%d个系统数据，允许查询", key, missingCount))
         end
+    else
+        DebugPrint(string.format("[ShouldSkipQuery] %s 无缓存，允许查询", key))
     end
 
     -- 在冷却期
     if State.noDataUntil[key] and now < State.noDataUntil[key] then
+        local cooldown = State.noDataUntil[key] - now
+        DebugPrint(string.format("[ShouldSkipQuery] %s 在冷却期，剩余%.1f秒", key, cooldown))
         return true
     end
 
@@ -1611,6 +1676,8 @@ local function DoSendQuery(itemID, guid, key)
     -- 立即标记为查询中，防止重复发送
     State.queryId = State.queryId + 1
     local queryId = State.queryId
+    
+    DebugPrint(string.format("[DoSendQuery] Q%d 准备发送查询 itemID=%d guid=%d key=%s", queryId, itemID, guid, key))
     
     State.lastQuery[key] = now
     State.pending[key] = { 
@@ -1648,6 +1715,8 @@ local function DoSendQuery(itemID, guid, key)
         pendingCount = pendingCount + 1
     end
 
+    DebugPrint(string.format("[DoSendQuery] Q%d 发送消息: %s (pending=%d)", queryId, addonMessage, pendingCount))
+
     -- 记录发送前的时间
     local sendBeforeTime = GetTime()
 
@@ -1657,49 +1726,20 @@ local function DoSendQuery(itemID, guid, key)
     if SendAddonMessage then
         SendAddonMessage(ADDON_PREFIX, addonMessage, "WHISPER", UnitName("player"))
         sendSuccess = true
+        DebugPrint(string.format("[DoSendQuery] Q%d 使用SendAddonMessage发送成功", queryId))
     elseif C_ChatInfo and C_ChatInfo.SendAddonMessage then
         C_ChatInfo.SendAddonMessage(ADDON_PREFIX, addonMessage, "WHISPER", UnitName("player"))
         sendSuccess = true
+        DebugPrint(string.format("[DoSendQuery] Q%d 使用C_ChatInfo.SendAddonMessage发送成功", queryId))
+    else
+        DebugPrint(string.format("[DoSendQuery] Q%d 无可用的SendAddonMessage API！", queryId))
     end
     
-    -- 记录发送后的时间
+    -- 记录发送后的时间（仅用于调试，不输出）
     local sendAfterTime = GetTime()
     local sendDuration = (sendAfterTime - sendBeforeTime) * 1000  -- 转换为毫秒
     
-    -- 输出发送耗时
-    if sendDuration > 10 then
-        print(string.format("|cff00ffff[统一提示框]|r |cffff8000[Q%d 发送耗时]|r %.0fms |cffff0000(异常)|r",
-            queryId, sendDuration))
-    end
-
-    -- 如果pending查询过多，显示警告
-    if pendingCount > 5 then
-        print(string.format("|cff00ffff[统一提示框]|r |cffff0000[警告]|r 当前有 %d 个查询等待响应，可能存在查询堆积", pendingCount))
-
-        -- 显示等待最久的5个查询
-        local sortedPending = {}
-        for pKey, pData in pairs(State.pending) do
-            if pData.queryStartTime then
-                table.insert(sortedPending, {
-                    key = pKey,
-                    queryId = pData.queryId,
-                    startTime = pData.queryStartTime,
-                    waitTime = now - pData.queryStartTime
-                })
-            end
-        end
-
-        -- 按等待时间排序
-        table.sort(sortedPending, function(a, b) return a.waitTime > b.waitTime end)
-
-        -- 显示前5个
-        print("  |cffffcc00等待最久的查询:|r")
-        for i = 1, math.min(5, #sortedPending) do
-            local item = sortedPending[i]
-            print(string.format("    Q%s: %s 已等待 %.1fs",
-                item.queryId or "?", item.key, item.waitTime))
-        end
-    end
+    -- 已移除发送耗时和pending查询警告输出，避免干扰用户
 
     -- 设置超时机制
     C_Timer.After(DB.timeout, function()
@@ -1732,16 +1772,22 @@ local function DoSendQuery(itemID, guid, key)
     end)
 end
 
--- 发送查询（直接发送，Addon消息不受速率限制）
+-- 发送查询（已移除限流机制）
 local function SendQuery(itemID, guid)
-    if not itemID or not guid or guid == 0 then return end
+    if not itemID or not guid or guid == 0 then 
+        DebugPrint(string.format("[SendQuery] 参数无效 itemID=%s guid=%s", tostring(itemID), tostring(guid)))
+        return 
+    end
 
     local key = MakeKey(itemID, guid, nil, nil, false)
     local now = GetTime()
 
-    -- 先检查是否应该跳过
+    DebugPrint(string.format("[SendQuery] 开始处理 itemID=%d guid=%d key=%s", itemID, guid, key))
+
+    -- 先检查是否应该跳过（缓存命中等）
     if ShouldSkipQuery(key) then
         -- 跳过查询（缓存命中或正在查询中）
+        DebugPrint(string.format("[SendQuery] 跳过查询 itemID=%d guid=%d", itemID, guid))
         -- 如果是因为pending而跳过，且等待时间过长，显示警告
         if State.pending[key] and State.pending[key].queryStartTime then
             local waitTime = now - State.pending[key].queryStartTime
@@ -1754,7 +1800,8 @@ local function SendQuery(itemID, guid)
         return
     end
 
-    -- 直接发送查询（Addon消息不受聊天速率限制）
+    -- 发送查询
+    DebugPrint(string.format("[SendQuery] 调用DoSendQuery itemID=%d guid=%d", itemID, guid))
     DoSendQuery(itemID, guid, key)
 end
 
@@ -2143,6 +2190,20 @@ RenderTooltip = function(tooltip, itemID, guid)
         end
     end
 
+    -- 如果正在查询中且缓存不完整，在底部显示提示
+    if isPending and not hasCompleteCache then
+        local waitTime = 0
+        if State.pending[key] and State.pending[key].queryStartTime then
+            waitTime = now - State.pending[key].queryStartTime
+        end
+        if waitTime > 0.5 then
+            -- 超过0.5秒才显示提示，避免闪烁
+            tooltip:AddLine(" ")
+            tooltip:AddLine(string.format("%s正在加载更多属性...%s", 
+                DB.colors.special, DB.colors.reset))
+        end
+    end
+
     -- 如果缓存标记为无数据，直接返回不显示任何额外内容
     if cached.noData then
         return
@@ -2380,15 +2441,38 @@ elseif C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
     DebugPrint("[初始化] 已注册前缀:", ADDON_PREFIX, "和", ADDON_PREFIX_ALT)
 end
 
+-- 处理玩家登录/重新进入世界事件 - 清除缓存确保数据刷新
+local function OnPlayerEnteringWorld(self, event, isLogin, isReload)
+    -- 清除所有缓存，确保重新登录后能正确获取最新数据
+    State.cache = {}
+    State.pending = {}
+    State.lastQuery = {}
+    State.noDataUntil = {}
+    State.cacheTime = {}
+    State.tooltips = {}
+    
+    -- 清除幻境系统缓存
+    HuanJingState.cache = {}
+    HuanJingState.pending = {}
+    
+    -- 清除统一框架映射
+    UnifiedFramesByKey = {}
+    
+    DebugPrint("[登录事件] 已清除所有缓存，准备重新查询数据")
+end
+
 -- 注册Addon消息事件
 EventFrame:RegisterEvent("CHAT_MSG_ADDON")
 EventFrame:RegisterEvent("CHAT_MSG_SYSTEM")
+EventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 
 EventFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "CHAT_MSG_ADDON" then
         OnAddonMessage(self, event, ...)
     elseif event == "CHAT_MSG_SYSTEM" then
         OnSystemMessage(self, event, ...)
+    elseif event == "PLAYER_ENTERING_WORLD" then
+        OnPlayerEnteringWorld(self, event, ...)
     end
 end)
 
@@ -2463,7 +2547,7 @@ local function GetUnifiedTooltipFrame(ownerTooltip)
     local totalWidth = columnWidth * 2 + sidePadding + columnSpacing
 
     mainFrame:SetWidth(totalWidth)
-    mainFrame:SetHeight(800)
+    mainFrame:SetHeight(350)
 
     -- 创建2个内容区域
     local columns = {}
@@ -3021,6 +3105,27 @@ local function FixExtraTooltipOffscreen(extra, ownerTooltip)
 	end
 end
 
+-- 获取当前鼠标悬停的背包位置
+local function GetTooltipBagSlot(tooltip)
+    local owner = tooltip:GetOwner()
+    if not owner then return nil end
+    
+    local ownerName = owner.GetName and owner:GetName() or ""
+    
+    -- 检查是否是背包格子
+    -- ContainerFrameItemButton格式: ContainerFrame{bag}Item{slot}
+    local bag, slot = ownerName:match("^ContainerFrame(%d+)Item(%d+)$")
+    if bag and slot then
+        bag = tonumber(bag)
+        slot = tonumber(slot)
+        -- bag索引转换：UI上的bag1=背包4, bag2=背包3, bag3=背包2, bag4=背包1, bag5=背包0(主背包)
+        local actualBag = (5 - bag)
+        return actualBag, slot
+    end
+    
+    return nil
+end
+
 local function OnTooltipSetItem(tooltip)
 	-- 从聊天框悬停/点击时，屏蔽"当前装备"对比
 	local tName = tooltip.GetName and tooltip:GetName() or ""
@@ -3094,14 +3199,78 @@ local function OnTooltipSetItem(tooltip)
 		return
 	end
 
+    -- 检测是否正在检查其他玩家的装备
+    local inspectUnit = GetInspectUnit()
+
     -- 使用增强版提取逻辑，优先从链接中取GUID，不存在时再从装备栏/背包扫描
-    local itemID, guid = ExtractItemInfoEnhanced(itemLink)
+    -- 如果正在检查其他玩家，传入检查单位以支持扫描其他玩家的装备
+    local itemID, guid = ExtractItemInfoEnhanced(itemLink, inspectUnit)
     if not itemID then
         return
     end
 
+    -- 调试输出：显示提取的GUID信息
+    DebugPrint(string.format("[OnTooltipSetItem] itemID=%s, guid=%s, itemLink=%s", 
+        tostring(itemID), tostring(guid), tostring(itemLink)))
+
+    -- 如果GUID无效，检查是否是背包物品，尝试从容器API获取
+    local bagNum, slotNum = nil, nil
+    if not (guid and guid > 0) then
+        bagNum, slotNum = GetTooltipBagSlot(tooltip)
+        if bagNum and slotNum then
+            -- 这是背包物品，尝试从容器API重新获取链接
+            local containerLink = GetContainerItemLink(bagNum, slotNum)
+            if containerLink then
+                DebugPrint(string.format("[OnTooltipSetItem] 背包物品 bag=%d slot=%d, 尝试重新提取GUID", bagNum, slotNum))
+                
+                -- 重新提取GUID
+                local containerItemID, containerGUID = ExtractItemInfo(containerLink)
+                if containerItemID == itemID and containerGUID and containerGUID > 0 then
+                    guid = containerGUID
+                    DebugPrint(string.format("[OnTooltipSetItem] 从容器API提取到GUID: %d", guid))
+                else
+                    DebugPrint(string.format("[OnTooltipSetItem] 容器API也无法提取GUID，containerItemID=%s, containerGUID=%s", 
+                        tostring(containerItemID), tostring(containerGUID)))
+                    
+                    -- 尝试触发物品信息更新（通过PickupContainerItem + ClearCursor）
+                    -- 这可能会让服务器重新发送包含GUID的物品链接
+                    DebugPrint(string.format("[OnTooltipSetItem] 尝试刷新背包物品信息 bag=%d slot=%d", bagNum, slotNum))
+                    
+                    -- 保存当前拾取状态
+                    local cursorType, cursorID = GetCursorInfo()
+                    
+                    -- 拾取物品（不实际移动，只是触发服务器更新）
+                    PickupContainerItem(bagNum, slotNum)
+                    
+                    -- 立即放回
+                    PickupContainerItem(bagNum, slotNum)
+                    
+                    -- 恢复鼠标状态
+                    if cursorType then
+                        DebugPrint("[OnTooltipSetItem] 恢复鼠标拾取状态")
+                    else
+                        ClearCursor()
+                    end
+                    
+                    -- 重新获取链接
+                    local refreshedLink = GetContainerItemLink(bagNum, slotNum)
+                    if refreshedLink then
+                        local refreshedItemID, refreshedGUID = ExtractItemInfo(refreshedLink)
+                        if refreshedItemID == itemID and refreshedGUID and refreshedGUID > 0 then
+                            guid = refreshedGUID
+                            DebugPrint(string.format("[OnTooltipSetItem] 刷新后提取到GUID: %d", guid))
+                        else
+                            DebugPrint(string.format("[OnTooltipSetItem] 刷新后仍无GUID，可能需要服务器端修复"))
+                        end
+                    end
+                end
+            end
+        end
+    end
+
     -- 没有有效 GUID 说明没有自定义属性，仅保持官方提示框原样
     if not (guid and guid > 0) then
+        DebugPrint(string.format("[OnTooltipSetItem] 无效GUID，跳过 itemID=%s", tostring(itemID)))
         if tooltip.UIT_Tooltip2 then
             tooltip.UIT_Tooltip2:Hide()
             ClearTooltipMeta(tooltip.UIT_Tooltip2)
@@ -3118,6 +3287,8 @@ local function OnTooltipSetItem(tooltip)
     end
 
     local key = MakeKey(itemID, guid, nil, nil, false)
+    
+    DebugPrint(string.format("[OnTooltipSetItem] 生成key=%s, 准备查询", key))
 
     -- 先触发幻境/批量查询，只利用官方tooltip作为事件入口，不在其上追加自定义属性
     local now = GetTime()
@@ -3125,17 +3296,50 @@ local function OnTooltipSetItem(tooltip)
 
     local cached = GetCachedData(itemID, guid)
     local hasCompleteCache = false
+    local hasOnlyEmpty = true
+    
     if cached and cached.systems then
         hasCompleteCache = true
+        
+        -- 调试：显示缓存的系统数据
+        local systemsInfo = "{"
         for systemName, enabled in pairs(DB.systems) do
-            if enabled and not cached.systems[systemName] then
-                hasCompleteCache = false
-                break
+            if enabled then
+                local systemData = cached.systems[systemName]
+                if systemData then
+                    if systemData.isEmpty then
+                        systemsInfo = systemsInfo .. systemName .. "=isEmpty, "
+                    else
+                        systemsInfo = systemsInfo .. systemName .. "=ok, "
+                        hasOnlyEmpty = false  -- 至少有一个系统有真实数据
+                    end
+                else
+                    systemsInfo = systemsInfo .. systemName .. "=missing, "
+                    hasCompleteCache = false
+                end
             end
         end
+        systemsInfo = systemsInfo .. "}"
+        
+        DebugPrint(string.format("[OnTooltipSetItem] 缓存系统: %s", systemsInfo))
+        
+        -- 如果所有系统都是isEmpty，立即清除缓存并重新查询（因为GUID可能被重用）
+        if hasCompleteCache and hasOnlyEmpty then
+            DebugPrint(string.format("[OnTooltipSetItem] 检测到isEmpty缓存，立即清除并重新查询（GUID可能被重用）"))
+            State.cache[key] = nil
+            State.cacheTime[key] = nil
+            hasCompleteCache = false
+        end
     end
+    
+    DebugPrint(string.format("[OnTooltipSetItem] cached=%s, hasCompleteCache=%s, hasOnlyEmpty=%s", 
+        tostring(cached ~= nil), tostring(hasCompleteCache), tostring(hasOnlyEmpty)))
+    
     if not hasCompleteCache then
+        DebugPrint(string.format("[OnTooltipSetItem] 缓存不完整或已过期，调用SendQuery"))
         SendQuery(itemID, guid)
+    else
+        DebugPrint(string.format("[OnTooltipSetItem] 缓存完整且有效，跳过SendQuery"))
     end
 
     -- 记录该官方提示框当前对应的装备，用于在收到幻境倍率时回写左侧属性
@@ -3541,5 +3745,5 @@ end
 -- 插件加载完成
 -- ============================================================================
 
--- 插件加载完成
-print("|cFF00FF00[统一提示框]|r 四联提示框系统已加载")
+-- 插件加载完成（仅在调试模式下输出）
+DebugPrint("四联提示框系统已加载")

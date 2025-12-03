@@ -20,6 +20,7 @@
 #include <string>
 #include <random>
 #include <ctime>
+#include <mutex>
 
 // 物品鉴定记录结构
 struct ItemIdentificationRecord
@@ -113,8 +114,6 @@ public:
         {
             auto end = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - _start).count();
-            LOG_INFO("module.itemidentification.perf", "[性能监控] {} 耗时: {} 微秒 ({:.2f} 毫秒)",
-                     _name, duration, duration / 1000.0);
         }
 
     private:
@@ -173,6 +172,9 @@ public:
     bool _enableAnnounce;
     bool _debugMode;
 
+    // 线程安全保护（用于异步预加载，需要public访问）
+    mutable std::mutex _batchCacheMutex;
+
     // 属性数据缓存结构（用于查询命令优化）
     struct ItemAttrCache {
         uint32 itemID;
@@ -190,10 +192,17 @@ public:
         time_t cacheTime;
     };
     std::unordered_map<uint64, BatchQueryCache> _batchQueryCache;  // key = (itemID << 32) | guid
-    const uint32 BATCH_CACHE_EXPIRE_TIME = 300;  // 5分钟过期
+    const uint32 BATCH_CACHE_EXPIRE_TIME = 86400;  // 【性能优化】24小时过期（物品数据通常不频繁变化）
 
     // 清理过期缓存（定期调用）
     void CleanExpiredCache();
+
+    // 【性能优化】主动清除特定物品的缓存（当物品被修改时调用）
+    void ClearItemCache(uint32 itemID, uint32 guid)
+    {
+        uint64 key = (static_cast<uint64>(itemID) << 32) | guid;
+        _batchQueryCache.erase(key);
+    }
 
     // 新增：预加载玩家装备数据（登录时调用）
     void PreloadPlayerEquipment(Player* player);
@@ -279,9 +288,6 @@ private:
     // 应用技能套装（返回实际分配的套装ID，0表示未分配）
     uint32 ApplySkillSets(Player* player, Item* item, const struct IdentificationTemplate& tmpl);
 
-    // 应用名称和描述
-    void ApplyNameAndDescription(Item* item, const struct IdentificationTemplate& tmpl);
-
     // 鉴定记录管理（私有）
     void SaveIdentificationRecord(const ItemIdentificationRecord& record);
     ItemIdentificationRecord* GetIdentificationRecord(uint32 itemGuid);
@@ -308,7 +314,7 @@ class ItemIdentificationCommandScript : public CommandScript
 public:
     ItemIdentificationCommandScript();
 
-    std::vector<ChatCommand> GetCommands() const override;
+    Acore::ChatCommands::ChatCommandTable GetCommands() const override;
 
 private:
     static bool HandleIdentifyCommand(ChatHandler* handler, const char* args);

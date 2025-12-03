@@ -6,8 +6,6 @@
 #define REQUIREMENT_INTERFACE_H
 
 #include "Player.h"
-#include <string>
-#include <vector>
 
 /**
  * @class RequirementInterface
@@ -39,15 +37,6 @@ public:
      */
     virtual bool ConsumeRequirements(Player* player, uint32 templateId) = 0;
 
-    /**
-     * 获取最近一次检查失败时的详细原因列表（可选实现）
-     *
-     * 默认返回空列表，具体需求模块可重写该接口以返回更详细的信息
-     */
-    virtual std::vector<std::string> GetLastFailureReasons(Player* /*player*/) const
-    {
-        return {};
-    }
 };
 
 #endif // REQUIREMENT_INTERFACE_H

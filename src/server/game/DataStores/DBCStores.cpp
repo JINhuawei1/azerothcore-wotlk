@@ -892,25 +892,16 @@ uint32 GetDefaultMapLight(uint32 mapId)
     return 0;
 }
 
-SkillRaceClassInfoEntry const* GetSkillRaceClassInfo(uint32 skill, uint8 race, uint8 class_)
+SkillRaceClassInfoEntry const* GetSkillRaceClassInfo(uint32 skill, uint8 /*race*/, uint8 /*class_*/)
 {
     SkillRaceClassInfoBounds bounds = SkillRaceClassInfoBySkill.equal_range(skill);
-    for (SkillRaceClassInfoMap::iterator itr = bounds.first; itr != bounds.second; ++itr)
+
+    if (bounds.first == bounds.second)
     {
-        if (itr->second->RaceMask && !(itr->second->RaceMask & (1 << (race - 1))))
-        {
-            continue;
-        }
-
-        if (itr->second->ClassMask && !(itr->second->ClassMask & (1 << (class_ - 1))))
-        {
-            continue;
-        }
-
-        return itr->second;
+        return nullptr;
     }
 
-    return nullptr;
+    return bounds.first->second;
 }
 
 const std::vector<SkillLineAbilityEntry const*>& GetSkillLineAbilitiesBySkillLine(uint32 skillLine)

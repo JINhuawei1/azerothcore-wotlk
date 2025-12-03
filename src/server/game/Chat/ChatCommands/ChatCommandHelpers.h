@@ -124,6 +124,11 @@ namespace Acore::Impl::ChatCommands
     template <typename... Ts>
     std::string FormatAcoreString(ChatHandler const* handler, AcoreStrings which, Ts&&... args)
     {
+        // 防御性检查：如果 handler 为 nullptr，返回错误信息
+        if (!handler)
+        {
+            return "Error: handler is null in FormatAcoreString";
+        }
         return Acore::StringFormat(GetAcoreString(handler, which), std::forward<Ts>(args)...);
     }
 }

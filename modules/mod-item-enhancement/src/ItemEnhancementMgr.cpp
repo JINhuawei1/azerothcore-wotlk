@@ -14,6 +14,7 @@
 #include "RequirementSystem.h"
 #include <algorithm>
 #include <sstream>
+#include <set>
 
 // 统一物品提示框 / 鉴定系统集成（用于发送 ALL_MODULE_DATA 批量数据）
 #if __has_include("mod-item-identification-system/src/ItemIdentificationSystem.h")
@@ -29,6 +30,11 @@
         #define MODULE_ITEM_ATTRIBUTES
     #endif
     #include "ItemAttributesLoader.h"
+#endif
+
+#ifdef MODULE_ITEM_ATTRIBUTES
+#include "ItemAttributesDBHelper.h"
+#include "ItemAttributesEffects.h"
 #endif
 
 ItemEnhancementMgr* ItemEnhancementMgr::instance()
@@ -462,6 +468,9 @@ bool ItemEnhancementMgr::EnhanceItem(Player* player, Item* item, uint32 group)
         isNewRecord = true;
     }
 
+    // 备份旧的属性字符串，便于与物品属性系统进行增量同步
+    std::string oldStatValuesSnapshot = record.statValues;
+
     // 检查是否达到最大等级
     uint32 maxLevel = _maxLevel;
     if (record.level >= maxLevel)
@@ -605,15 +614,20 @@ bool ItemEnhancementMgr::EnhanceItem(Player* player, Item* item, uint32 group)
             // ChatHandler(player->GetSession()).PSendSysMessage("强化后累计属性: '{}'", record.statValues);
         }
 
-        // 先移除之前的强化效果（如果有的话）
-        if (record.level > 1 && !oldStatValues.empty()) // 如果不是第一次强化，需要移除之前的效果
-        {
-            // 移除之前等级的属性（基于之前保存的oldStatValues）
-            RemovePreviousEnhancementStats(player, oldStatValues);
-        }
-
         // 保存记录到数据库
         SaveEnhancementRecord(record);
+
+#ifdef MODULE_ITEM_ATTRIBUTES
+        // 同步到物品属性系统，由物品属性模块统一应用/移除强化属性
+        SyncEnhancementAttributesToItemAttributes(player, item, record.statValues, oldStatValuesSnapshot);
+#else
+        // 先移除之前的强化效果（如果有的话）
+        if (record.level > 1 && !oldStatValuesSnapshot.empty())
+        {
+            // 移除之前等级的属性（基于之前保存的旧属性）
+            RemovePreviousEnhancementStats(player, oldStatValuesSnapshot);
+        }
+#endif
 
         // 不再向随机附魔字段写入GUID，避免与随机附魔系统和聊天链接冲突
         if (item->IsEquipped())
@@ -628,34 +642,33 @@ bool ItemEnhancementMgr::EnhanceItem(Player* player, Item* item, uint32 group)
 
         // 强化成功后，从数据库重新获取最新的强化数据发送给客户端
         EnhancementRecord const* updatedRecord = GetEnhancementRecord(itemGuid);
-        if (updatedRecord)
-        {
-            SendEnhancementDataToClient(player, item, *updatedRecord);
-
-            // 检查装备是否已穿戴，如果穿戴则应用新的强化效果
-            bool isEquipped = false;
-            for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+            if (updatedRecord)
             {
-                Item* equippedItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
-                if (equippedItem && equippedItem->GetGUID().GetCounter() == itemGuid)
+                SendEnhancementDataToClient(player, item, *updatedRecord);
+
+#ifndef MODULE_ITEM_ATTRIBUTES
+                // 检查装备是否已穿戴，如果穿戴则应用新的强化效果
+                bool isEquipped = false;
+                for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
                 {
-                    isEquipped = true;
-                    // ChatHandler(player->GetSession()).PSendSysMessage("强化系统：装备已穿戴，应用新的强化效果");
-
-                    // 关键修复：先移除旧的强化效果，再应用新的强化效果
-                    // 但不要使用OnPlayerUnequipItem和OnPlayerEquipItem，因为它们会重复处理
-                    // 直接应用新的强化效果即可，因为之前已经移除了旧效果
-                    ApplyOfficialItemEnhancement(player, item, record.level);
-                    break;
+                    Item* equippedItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+                    if (equippedItem && equippedItem->GetGUID().GetCounter() == itemGuid)
+                    {
+                        isEquipped = true;
+                        // 关键修复：先移除旧的强化效果，再应用新的强化效果
+                        // 但不要使用OnPlayerUnequipItem和OnPlayerEquipItem，因为它们会重复处理
+                        // 直接应用新的强化效果即可，因为之前已经移除了旧效果
+                        ApplyOfficialItemEnhancement(player, item, record.level);
+                        break;
+                    }
                 }
-            }
 
-            if (!isEquipped)
-            {
-                // ChatHandler(player->GetSession()).PSendSysMessage("强化系统：装备未穿戴，强化效果将在穿戴时应用");
+                if (!isEquipped)
+                {
+                    // ChatHandler(player->GetSession()).PSendSysMessage("强化系统：装备未穿戴，强化效果将在穿戴时应用");
+                }
+#endif
             }
-        }
-        else
         {
             // ChatHandler(player->GetSession()).PSendSysMessage("警告：无法获取最新的强化数据");
         }
@@ -676,6 +689,45 @@ bool ItemEnhancementMgr::EnhanceItem(Player* player, Item* item, uint32 group)
         record.lastEnhanceTime = static_cast<uint32>(GameTime::GetGameTime().count());
 
         // 根据失败处理类型处理
+#ifdef MODULE_ITEM_ATTRIBUTES
+        switch (failureType)
+        {
+            case 0: // 不变
+                ChatHandler(player->GetSession()).PSendSysMessage("物品强化失败，等级保持不变");
+                break;
+            case 1: // 等级清0
+                if (record.level > 0)
+                {
+                    // 重置等级并清空强化属性
+                    record.level = 0;
+                    record.statValues.clear();
+                    ChatHandler(player->GetSession()).PSendSysMessage("物品强化失败，强化等级清零");
+                }
+                break;
+            case 2: // 摧毁
+                if (!_failureProtectionEnabled)
+                {
+                    // 先从物品属性系统中移除强化属性
+                    SyncEnhancementAttributesToItemAttributes(player, item, "", oldStatValuesSnapshot);
+
+                    player->DestroyItem(item->GetBagSlot(), item->GetSlot(), true);
+                    DeleteEnhancementRecord(itemGuid);
+                    ChatHandler(player->GetSession()).PSendSysMessage("物品强化失败，物品已摧毁");
+                    return false;
+                }
+                else
+                {
+                    ChatHandler(player->GetSession()).PSendSysMessage("物品强化失败，但受到保护未被摧毁");
+                }
+                break;
+        }
+
+        // 保存记录
+        SaveEnhancementRecord(record);
+
+        // 同步失败后的状态到物品属性系统（类型0和1）
+        SyncEnhancementAttributesToItemAttributes(player, item, record.statValues, oldStatValuesSnapshot);
+#else
         switch (failureType)
         {
             case 0: // 不变
@@ -709,6 +761,7 @@ bool ItemEnhancementMgr::EnhanceItem(Player* player, Item* item, uint32 group)
 
         // 保存记录
         SaveEnhancementRecord(record);
+#endif
 
         // 发送失败消息
         ChatHandler(player->GetSession()).PSendSysMessage("物品强化失败");
@@ -937,12 +990,17 @@ bool ItemEnhancementMgr::InitializeEnhancementForIdentification(Player* player, 
     // 保存记录到数据库
     SaveEnhancementRecord(record);
 
+#ifdef MODULE_ITEM_ATTRIBUTES
+    // 初次鉴定时，将强化属性同步到物品属性系统
+    SyncEnhancementAttributesToItemAttributes(player, item, record.statValues, "");
+#else
     // 如果物品已装备，立即应用效果
     if (item->IsEquipped())
     {
         player->SetVisibleItemSlot(item->GetSlot(), item);
         ApplyOfficialItemEnhancement(player, item, record.level);
     }
+#endif
 
     // 从数据库重新获取最新的强化数据发送给客户端
     EnhancementRecord const* updatedRecord = GetEnhancementRecord(itemGuid);
@@ -1062,7 +1120,7 @@ void ItemEnhancementMgr::ApplyOfficialItemEnhancement(Player* player, Item* item
     // 原因：登录时每件装备都会触发 OnPlayerEquip -> ApplyOfficialItemEnhancement，
     //       如果每次都刷新属性，9件装备 × 60ms = 540ms 浪费在重复刷新上
     // 优化后：登录阶段跳过刷新，OnPlayerLogin 最后统一刷新一次，节省 ~480ms
-    if (player->IsInWorld())
+    if (!player->isBeingLoaded())
     {
         player->UpdateAllStats();
         player->UpdateAttackPowerAndDamage();
@@ -1464,7 +1522,109 @@ std::map<uint32, int32> ItemEnhancementMgr::ParseStatValues(const std::string& s
     return stats;
 }
 
-// 注意：不再需要单独应用/移除属性，因为属性已经直接修改到装备上
+void ItemEnhancementMgr::SyncEnhancementAttributesToItemAttributes(Player* player, Item* item,
+    const std::string& newStatValues, const std::string& oldStatValues)
+{
+#ifdef MODULE_ITEM_ATTRIBUTES
+    if (!item)
+        return;
+
+    uint64 itemGuid = item->GetGUID().GetCounter();
+    uint32 itemId = item->GetEntry();
+
+    std::map<uint32, int32> newStats = ParseStatValues(newStatValues);
+    std::map<uint32, int32> oldStats = ParseStatValues(oldStatValues);
+
+    if (newStats.empty() && oldStats.empty())
+        return;
+
+    ItemAttributesDBHelper::ItemAttributeData* existing = ItemAttributesDBHelper::LoadItemAttributes(itemGuid);
+    ItemAttributesDBHelper::ItemAttributeData data;
+
+    if (existing)
+    {
+        data = *existing;
+        delete existing;
+    }
+    else
+    {
+        data.itemGuid = itemGuid;
+        data.itemId = itemId;
+    }
+
+    auto& ids = data.additionalAttributeIds;
+    auto& values = data.additionalAttributeValues;
+
+    std::set<uint32> keys;
+    for (auto const& kv : newStats)
+        keys.insert(kv.first);
+    for (auto const& kv : oldStats)
+        keys.insert(kv.first);
+
+    for (uint32 statType : keys)
+    {
+        int32 oldValue = 0;
+        auto itOld = oldStats.find(statType);
+        if (itOld != oldStats.end())
+            oldValue = itOld->second;
+
+        int32 newValue = 0;
+        auto itNew = newStats.find(statType);
+        if (itNew != newStats.end())
+            newValue = itNew->second;
+
+        int32 delta = newValue - oldValue;
+        if (delta == 0)
+            continue;
+
+        bool found = false;
+        for (size_t i = 0; i < ids.size(); ++i)
+        {
+            if (ids[i] == statType)
+            {
+                values[i] += delta;
+                if (values[i] <= 0)
+                {
+                    ids.erase(ids.begin() + i);
+                    values.erase(values.begin() + i);
+                }
+                found = true;
+                break;
+            }
+        }
+
+        if (!found && delta > 0)
+        {
+            ids.push_back(statType);
+            values.push_back(delta);
+        }
+    }
+
+    ItemAttributesDBHelper::SaveItemAttributes(data);
+
+    if (player && item->IsEquipped())
+    {
+        if (sItemAttributesEffects)
+        {
+            sItemAttributesEffects->RemoveItemAttributeEffects(player, item);
+            sItemAttributesEffects->ApplyItemAttributeEffects(player, item);
+        }
+
+        player->UpdateAllStats();
+        player->UpdateAttackPowerAndDamage();
+        player->UpdateAttackPowerAndDamage(true);
+        player->UpdateMaxHealth();
+        player->UpdateMaxPower(POWER_MANA);
+    }
+#else
+    (void)player;
+    (void)item;
+    (void)newStatValues;
+    (void)oldStatValues;
+#endif
+}
+
+// 注意：不再需要单独应用/移除属性，因为属性已经直接修改到装备上（或由物品属性系统统一处理）
 
 // 清理指定装备槽位的所有强化效果
 void ItemEnhancementMgr::ClearSlotEnhancements(Player* player, uint8 slot)
@@ -1553,7 +1713,7 @@ void ItemEnhancementMgr::ClearSlotEnhancements(Player* player, uint8 slot)
 
     // 如果移除了效果，更新玩家属性
     // 【性能优化】登录加载阶段不做全量刷新，交给 OnPlayerLogin 统一刷新一次
-    if (hasRemovedEffects && player->IsInWorld())
+    if (hasRemovedEffects && !player->isBeingLoaded())
     {
         player->UpdateAllStats();
         player->UpdateAttackPowerAndDamage();
@@ -1600,7 +1760,7 @@ void ItemEnhancementMgr::OnPlayerEquipItem(Player* player, Item* item)
 
         // 更新玩家属性
         // 【性能优化】登录加载阶段不做全量刷新
-        if (player->IsInWorld())
+        if (!player->isBeingLoaded())
         {
             player->UpdateAllStats();
             player->UpdateAttackPowerAndDamage();
@@ -1654,7 +1814,7 @@ void ItemEnhancementMgr::OnPlayerUnequipItem(Player* player, Item* item)
 
     // 更新玩家属性
     // 【性能优化】登录加载阶段不做全量刷新
-    if (player->IsInWorld())
+    if (!player->isBeingLoaded())
     {
         player->UpdateAllStats();
         player->UpdateAttackPowerAndDamage();
@@ -1732,7 +1892,7 @@ void ItemEnhancementMgr::RemoveOfficialItemEnhancement(Player* player, Item* ite
 
     // 更新玩家属性
     // 【性能优化】登录加载阶段不做全量刷新
-    if (player->IsInWorld())
+    if (!player->isBeingLoaded())
     {
         player->UpdateAllStats();
         player->UpdateAttackPowerAndDamage();

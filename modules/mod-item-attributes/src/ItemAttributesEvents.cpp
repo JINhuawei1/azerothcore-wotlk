@@ -17,24 +17,29 @@ ItemAttributesEvents::ItemAttributesEvents() :
 void ItemAttributesEvents::OnPlayerLogin(Player* player)
 {
     auto loginStart = std::chrono::high_resolution_clock::now();
-    LOG_INFO("module", "[性能监控-物品属性] 玩家 {} 开始登录处理", player ? player->GetName() : "NULL");
 
     if (!player || !sConfigMgr->GetOption<bool>("ItemAttributes.Enable", true))
         return;
 
-    // 注意：登录时 OnPlayerEquip 已经为每个装备触发过了
-    // 所以这里不需要再次应用属性，否则会重复叠加！
-    // 我们只需要刷新一次属性面板即可
+    // 【性能优化】登录时不再刷新玩家属性
+    // 原因：
+    // 1. OnPlayerEquip 已经为每个装备应用了属性（已优化为跳过Update）
+    // 2. 幻境系统的 OnPlayerLogin 会在最后统一刷新所有属性
+    // 3. 避免多个系统重复调用 UpdateAllStats，节省约 39ms
+    //
+    // 如果需要单独刷新，可以在配置中启用 ItemAttributes.ForceRefreshOnLogin
 
-    // 刷新玩家属性（确保面板显示正确）
     auto step1Start = std::chrono::high_resolution_clock::now();
-    player->UpdateAllStats();
-    player->UpdateAttackPowerAndDamage();
-    player->UpdateAttackPowerAndDamage(true);
-    player->UpdateSpellDamageAndHealingBonus();
+    bool forceRefresh = sConfigMgr->GetOption<bool>("ItemAttributes.ForceRefreshOnLogin", false);
+    if (forceRefresh)
+    {
+        player->UpdateAllStats();
+        player->UpdateAttackPowerAndDamage();
+        player->UpdateAttackPowerAndDamage(true);
+        player->UpdateSpellDamageAndHealingBonus();
+    }
     auto step1End = std::chrono::high_resolution_clock::now();
     auto step1Duration = std::chrono::duration_cast<std::chrono::milliseconds>(step1End - step1Start).count();
-    LOG_INFO("module", "[性能监控-物品属性] 玩家 {} - 刷新玩家属性耗时: {}ms", player->GetName(), step1Duration);
 
     // 可以在这里添加登录消息
     if (sConfigMgr->GetOption<bool>("ItemAttributes.LoginMessage", false))
@@ -44,7 +49,6 @@ void ItemAttributesEvents::OnPlayerLogin(Player* player)
 
     auto loginEnd = std::chrono::high_resolution_clock::now();
     auto totalDuration = std::chrono::duration_cast<std::chrono::milliseconds>(loginEnd - loginStart).count();
-    LOG_INFO("module", "[性能监控-物品属性] 玩家 {} - 登录处理总耗时: {}ms", player->GetName(), totalDuration);
 }
 
 void ItemAttributesEvents::OnPlayerLogout(Player* player)
@@ -138,12 +142,12 @@ void ItemAttributesEvents::OnPlayerEquip(Player* player, Item* item, uint8 bag, 
     sItemAttributesEffects->ApplyItemAttributeEffects(player, item);
 
     // 刷新玩家属性：
-    // 【性能优化】登录加载阶段（未进世界）不做全量刷新，交给 OnPlayerLogin 统一刷新一次
+    // 【性能优化】登录加载阶段不做全量刷新，交给 OnPlayerLogin 统一刷新一次
     // 原因：登录时每件装备都会触发 OnPlayerEquip，如果每次都刷新属性，
     //       9件装备 × 80ms = 720ms 浪费在重复刷新上
     // 优化后：登录阶段跳过刷新，OnPlayerLogin 最后统一刷新一次，节省 ~640ms
     // 正常在线换装时才做即时刷新
-    if (player->IsInWorld())
+    if (!player->isBeingLoaded())
     {
         player->UpdateAllStats();
         player->UpdateAttackPowerAndDamage();
@@ -153,8 +157,6 @@ void ItemAttributesEvents::OnPlayerEquip(Player* player, Item* item, uint8 bag, 
 
     auto perfEnd = high_resolution_clock::now();
     auto perfMs = duration_cast<milliseconds>(perfEnd - perfStart).count();
-    LOG_INFO("module", "[性能监控-物品属性-OnEquip] 玩家 {}(GUID={}) 槽位 {} 物品ID={} GUID={} - 总耗时: {}ms",
-             player->GetName(), playerGuid, uint32(slot), itemEntry, itemGuid, perfMs);
 }
 
 void ItemAttributesEvents::OnPlayerAfterSetVisibleItemSlot(Player* player, uint8 slot, Item* item)

@@ -10,6 +10,13 @@
 #include <unordered_map>
 #include <chrono>
 
+// 可选集成：物品属性系统（用于在启用时让其统一处理强化带来的属性）
+#if __has_include("ItemAttributesLoader.h")
+#ifndef MODULE_ITEM_ATTRIBUTES
+#define MODULE_ITEM_ATTRIBUTES
+#endif
+#endif
+
 // 外部函数声明
 extern void DeleteEnhancementRecord(uint32 itemGuid);
 
@@ -45,15 +52,13 @@ public:
         if (!sItemEnhancementMgr->IsEnabled() || !player)
             return;
 
-        // 【性能优化】延迟2秒加载强化数据，减少登录峰值压力
-        // 原代码：立即加载 → 100人同时登录 = 100次同时数据库查询 → 数据库压力峰值
-        // 优化后：延迟2秒执行 → 100人登录分散在100+秒内 → 数据库压力平滑
-        //
-        // 参考突破系统的延迟加载策略（BreakthroughLoginHandler.cpp:25-34）
-        player->m_Events.AddEventAtOffset([player]()
+        // 【紧急修复】禁用延迟加载，改为同步执行
+        // 原因：延迟任务捕获裸指针存在严重安全隐患（悬空指针崩溃）
+        // 2秒内玩家断线 → Player对象被删除 → 延迟任务访问已释放内存 → 崩溃
+        // 修复：立即执行，确保 player 指针有效
+        auto loginFunc = [](Player* player)
         {
             auto loginStart = std::chrono::high_resolution_clock::now();
-            LOG_INFO("module", "[性能监控-物品强化] 玩家 {} 开始登录处理", player->GetName());
 
             if (!player || !player->IsInWorld() || !sItemEnhancementMgr->IsEnabled())
                 return;
@@ -63,16 +68,15 @@ public:
             sItemEnhancementMgr->PreloadPlayerEnhancementRecords(player);
             auto step1End = std::chrono::high_resolution_clock::now();
             auto step1Duration = std::chrono::duration_cast<std::chrono::milliseconds>(step1End - step1Start).count();
-            LOG_INFO("module", "[性能监控-物品强化] 玩家 {} - 预加载强化记录耗时: {}ms", player->GetName(), step1Duration);
+
+#ifndef MODULE_ITEM_ATTRIBUTES
+            // 【旧模式】在未启用物品属性系统时，由强化模块自己批量应用属性
 
             // 【性能优化】移除登录时的清理步骤
             // 原因：玩家刚登录，内存中不可能有残留的强化效果，清理是多余的
-            // 移除前：清理耗时425ms（移除24个属性385ms + 更新属性39ms）
-            // 移除后：节省425ms
             // sItemEnhancementMgr->ClearPlayerAppliedEnhancements(player);  // 已禁用
 
             // 初始化装备跟踪
-            // 注意：需要在延迟执行中调用，因为依赖于PreloadPlayerEnhancementRecords
             if (!player)
                 return;
 
@@ -91,11 +95,8 @@ public:
             }
             auto step3End = std::chrono::high_resolution_clock::now();
             auto step3Duration = std::chrono::duration_cast<std::chrono::milliseconds>(step3End - step3Start).count();
-            LOG_INFO("module", "[性能监控-物品强化] 玩家 {} - 初始化装备跟踪耗时: {}ms", player->GetName(), step3Duration);
 
-            // 【性能优化】登录时批量应用强化效果，避免 OnPlayerEquip 中的重复属性刷新
-            // 原因：OnPlayerEquip 被跳过了，需要在这里统一应用强化效果
-            // 优化：使用 ApplyStatModifierBatch 避免每次都更新属性，最后统一刷新一次
+            // 登录时批量应用强化效果
             auto step4Start = std::chrono::high_resolution_clock::now();
             for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
             {
@@ -107,7 +108,6 @@ public:
                 EnhancementRecord const* record = sItemEnhancementMgr->GetEnhancementRecord(itemGuid);
                 if (record && record->level > 0 && !record->statValues.empty())
                 {
-                    // 使用批量版本，不触发属性更新
                     std::map<uint32, int32> stats = sItemEnhancementMgr->ParseStatValues(record->statValues);
                     for (const auto& stat : stats)
                     {
@@ -116,7 +116,6 @@ public:
                             sItemEnhancementMgr->ApplyStatModifierBatch(player, stat.first, stat.second, true);
                         }
                     }
-                    // 跟踪已应用的强化效果
                     sItemEnhancementMgr->TrackAppliedEnhancement(player, item, record->statValues);
                 }
             }
@@ -130,7 +129,7 @@ public:
 
             auto step4End = std::chrono::high_resolution_clock::now();
             auto step4Duration = std::chrono::duration_cast<std::chrono::milliseconds>(step4End - step4Start).count();
-            LOG_INFO("module", "[性能监控-物品强化] 玩家 {} - 批量应用强化效果耗时: {}ms", player->GetName(), step4Duration);
+#endif
 
             // 发送登录完成消息给客户端UI插件
             // 注意：需要确保SendLoginCompleteMessage函数可以访问player
@@ -141,13 +140,13 @@ public:
             player->GetSession()->SendPacket(&data);
             auto step5End = std::chrono::high_resolution_clock::now();
             auto step5Duration = std::chrono::duration_cast<std::chrono::milliseconds>(step5End - step5Start).count();
-            LOG_INFO("module", "[性能监控-物品强化] 玩家 {} - 发送完成消息耗时: {}ms", player->GetName(), step5Duration);
 
             auto loginEnd = std::chrono::high_resolution_clock::now();
             auto totalDuration = std::chrono::duration_cast<std::chrono::milliseconds>(loginEnd - loginStart).count();
-            LOG_INFO("module", "[性能监控-物品强化] 玩家 {} - 登录处理总耗时: {}ms", player->GetName(), totalDuration);
+        };
 
-        }, Milliseconds(2000)); // 延迟2秒执行
+        // 立即执行，不再延迟
+        loginFunc(player);
     }
 
     void OnPlayerLogout(Player* player) override
@@ -168,6 +167,7 @@ public:
         if (!sItemEnhancementMgr->IsEnabled() || !player)
             return;
 
+#ifndef MODULE_ITEM_ATTRIBUTES
         // 每1秒检查一次装备变化，确保能捕获到装备卸载
         static std::unordered_map<uint32, uint32> lastCheckTime;
         uint32 playerGuid = player->GetGUID().GetCounter();
@@ -178,6 +178,7 @@ public:
             CheckEquipmentChanges(player);
             lastCheckTime[playerGuid] = currentTime;
         }
+#endif
     }
 
 private:
@@ -423,13 +424,6 @@ public:
         if (!sItemEnhancementMgr->IsEnabled() || !player || !item)
             return;
 
-        // 【性能优化】登录加载阶段完全跳过，避免 ClearSlotEnhancements 遍历装备槽
-        // 原因：登录时每件装备都触发 OnPlayerEquip，ClearSlotEnhancements 会遍历所有槽位
-        //       9件装备累计耗时约 230ms，阻塞世界线程
-        // 优化后：登录阶段完全跳过，OnPlayerLogin 已经预加载了强化记录
-        if (player->GetSession()->PlayerLoading())
-            return;
-
         using namespace std::chrono;
         auto perfStart = high_resolution_clock::now();
 
@@ -443,32 +437,29 @@ public:
 
         // 检查是否有强化记录
         EnhancementRecord const* record = sItemEnhancementMgr->GetEnhancementRecord(itemGuid);
+#ifndef MODULE_ITEM_ATTRIBUTES
+        if (player->GetSession()->PlayerLoading())
+            return;
+
         if (record && record->level > 0)
         {
-            // 关键修复：先清理该槽位的所有强化效果，再应用新装备的强化效果
-            // 1. 先清理该槽位可能存在的任何强化效果（包括旧装备的）
+            // 先清理该槽位的所有强化效果，再应用新装备的强化效果
             sItemEnhancementMgr->ClearSlotEnhancements(player, slot);
 
-            // 2. 不再将GUID写入随机附魔字段，避免破坏随机附魔与聊天链接
-            // 若需要，刷新可见槽位
             if (item->IsEquipped())
                 player->SetVisibleItemSlot(item->GetSlot(), item);
 
-            // 3. 然后使用统一的应用函数
             sItemEnhancementMgr->ApplyOfficialItemEnhancement(player, item, record->level);
         }
         else
         {
             // 即使没有强化效果，也要清理槽位，防止旧装备的效果残留
             sItemEnhancementMgr->ClearSlotEnhancements(player, slot);
-
-            // 不再使用随机附魔字段校验/同步GUID
         }
+#endif
 
         auto perfEnd = high_resolution_clock::now();
         auto perfMs = duration_cast<milliseconds>(perfEnd - perfStart).count();
-        LOG_INFO("module", "[性能监控-物品强化-OnEquip] 玩家GUID={} 槽位 {} 物品ID={} GUID={} 强化等级={} - 总耗时: {}ms",
-                 playerGuid, uint32(slot), itemEntry, itemGuid, record ? record->level : 0, perfMs);
     }
 
     void OnPlayerAfterMoveItemFromInventory(Player* player, Item* item, uint8 bag, uint8 slot, bool /*update*/) override
@@ -476,6 +467,7 @@ public:
         if (!sItemEnhancementMgr->IsEnabled() || !player || !item)
             return;
 
+#ifndef MODULE_ITEM_ATTRIBUTES
         // 如果物品从装备槽移出，移除强化效果
         if (bag == INVENTORY_SLOT_BAG_0 && slot < EQUIPMENT_SLOT_END)
         {
@@ -493,6 +485,7 @@ public:
                 sItemEnhancementMgr->RemoveOfficialItemEnhancement(player, item);
             }
         }
+#endif
     }
 
     // 移除不存在的钩子方法
@@ -513,6 +506,10 @@ public:
         if (!sItemEnhancementMgr->IsEnabled() || !player || !item)
             return true; // 允许移除
 
+#ifdef MODULE_ITEM_ATTRIBUTES
+        // 物品属性系统启用时，由物品属性模块统一处理属性移除
+        return true;
+#else
         // 检查物品是否从装备槽移除
         uint8 slot = item->GetSlot();
         if (slot >= EQUIPMENT_SLOT_END)
@@ -533,6 +530,7 @@ public:
         }
 
         return true; // 允许移除物品
+#endif
     }
 };
 

@@ -1882,7 +1882,6 @@ ItemIdentificationPlayerScript::ItemIdentificationPlayerScript() : PlayerScript(
 void ItemIdentificationPlayerScript::OnLogin(Player* player, bool firstLogin)
 {
     auto loginStart = std::chrono::high_resolution_clock::now();
-    LOG_INFO("module", "[性能监控-物品鉴定] 玩家 {} 开始登录处理", player ? player->GetName() : "NULL");
 
     if (!player || !sItemIdentificationSystem->_enabled)
         return;
@@ -1900,7 +1899,6 @@ void ItemIdentificationPlayerScript::OnLogin(Player* player, bool firstLogin)
 
     auto loginEnd = std::chrono::high_resolution_clock::now();
     auto totalDuration = std::chrono::duration_cast<std::chrono::milliseconds>(loginEnd - loginStart).count();
-    LOG_INFO("module", "[性能监控-物品鉴定] 玩家 {} - 登录处理总耗时: {}ms", player->GetName(), totalDuration);
 }
 
 // 鉴定记录管理实现
@@ -2068,12 +2066,12 @@ public:
         }
 
         // 刷新玩家属性
-        // 【性能优化】登录加载阶段（未进世界）不做全量刷新，交给 OnPlayerLogin 统一刷新一次
+        // 【性能优化】登录加载阶段不做全量刷新，交给 OnPlayerLogin 统一刷新一次
         // 原因：登录时每件装备都会触发 OnPlayerEquip，如果每次都刷新属性，
         //       9件装备 × 35ms = 315ms 浪费在重复刷新上
         // 优化后：登录阶段跳过刷新，OnPlayerLogin 最后统一刷新一次，节省 ~280ms
         // 正常在线换装时才做即时刷新
-        if (player->IsInWorld())
+        if (!player->isBeingLoaded())
         {
             player->UpdateAllStats();
             player->UpdateAttackPowerAndDamage();
@@ -2082,8 +2080,6 @@ public:
 
         auto perfEnd = high_resolution_clock::now();
         auto perfMs = duration_cast<milliseconds>(perfEnd - perfStart).count();
-        LOG_INFO("module", "[性能监控-物品鉴定-OnEquip] 玩家 {} 槽位 {} 物品ID={} GUID={} - 总耗时: {}ms",
-                 player->GetName(), uint32(slot), item->GetEntry(), itemGuid, perfMs);
     }
 
     // 在脱下装备时触发
@@ -2432,9 +2428,6 @@ private:
         // 无论是否开启调试，当批量查询耗时较长时输出性能日志（阈值：>= 20ms）
         if (duration >= 20000)
         {
-            LOG_WARN("module.itemidentification",
-                     "[性能监控-统一批量查询] 玩家 {} itemID={} guid={} 缓存命中={} 耗时={}μs (~{}ms)",
-                     player ? player->GetName() : "NULL", itemID, guid, cacheHit, duration, duration / 1000);
         }
 
         if (sItemIdentificationSystem->_debugMode)
@@ -2536,7 +2529,7 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
             hasAnyQuery = true;
         }
 
-        // 2. 成长系统数据
+        // 2. 成长系统数据（包含百分比属性，避免额外查询）
         if (TableExists("物品成长_玩家记录"))
         {
             if (hasAnyQuery) unionQuery << " UNION ALL ";
@@ -2545,7 +2538,7 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
                        << "CAST(`当前经验` AS CHAR) COLLATE utf8mb4_general_ci as field2, "
                        << "CAST(`升级经验` AS CHAR) COLLATE utf8mb4_general_ci as field3, "
                        << "CAST(`成长属性` AS CHAR) COLLATE utf8mb4_general_ci as field4, "
-                       << "'' COLLATE utf8mb4_general_ci as field5 "
+                       << "CAST(IFNULL(`百分比属性`, '') AS CHAR) COLLATE utf8mb4_general_ci as field5 "
                        << "FROM `物品成长_玩家记录` "
                        << "WHERE `物品GUID` = " << guid;
             hasAnyQuery = true;
@@ -2665,14 +2658,16 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
                         uint32 currentExp = std::stoul(fields[2].Get<std::string>());
                         uint32 requiredExp = std::stoul(fields[3].Get<std::string>());
                         std::string attrs = fields[4].Get<std::string>();
+                        std::string percentAttrs = fields[5].Get<std::string>();  // 【性能优化】新增百分比属性
 
                         std::ostringstream growthStream;
-                        growthStream << level << "|" << currentExp << "|" << requiredExp << "|" << attrs;
+                        // 格式：level|curExp|requiredExp|attrs|percentAttrs
+                        growthStream << level << "|" << currentExp << "|" << requiredExp << "|" << attrs << "|" << percentAttrs;
                         result.growthData = growthStream.str();
                         result.hasData = true;
 
-                        DebugLog("[批量查询-优化-成长] level={}, exp={}/{}, attrs=[{}]",
-                                 level, currentExp, requiredExp, attrs);
+                        DebugLog("[批量查询-优化-成长] level={}, exp={}/{}, attrs=[{}], percentAttrs=[{}]",
+                                 level, currentExp, requiredExp, attrs, percentAttrs);
                     }
                     else if (source == "enhancement")
                     {
@@ -3235,12 +3230,8 @@ void ItemIdentificationSystem::PreloadPlayerEquipment(Player* player)
     // 如果没有需要预加载的装备，直接返回
     if (itemsToPreload.empty())
     {
-        LOG_INFO("module.itemidentification", "[性能优化] 玩家 {} 上线，无需预加载装备数据", playerName);
         return;
     }
-
-    LOG_INFO("module.itemidentification", "[性能优化] 玩家 {} 上线，加载 {} 个装备的技能数据",
-             playerName, itemsToPreload.size());
 
     // 【异步线程】在后台线程中执行数据库查询，不阻塞主线程
     std::thread([this, itemsToPreload, playerName]() {
@@ -3292,13 +3283,7 @@ void ItemIdentificationSystem::PreloadPlayerEquipment(Player* player)
         auto endTime = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
 
-        LOG_INFO("module.itemidentification",
-                 "[批量查询] 总物品数={}, 缓存命中={}, 需查询={}",
-                 itemsToPreload.size(), cacheHitCount, preloadCount);
 
-        LOG_INFO("module.itemidentification",
-                 "[性能优化] 玩家 {} 批量加载完成，成功加载 {} 个物品的技能",
-                 playerName, preloadCount);
 
         DebugLog("[预加载-异步] 玩家={}, 装备总数={}, 缓存命中={}, 查询数={}, 耗时={}ms",
                  playerName, itemsToPreload.size(), cacheHitCount, preloadCount, duration);

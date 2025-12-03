@@ -667,6 +667,9 @@ void WorldSession::HandleCharDeleteOpcode(WorldPacket& recvData)
 
 void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recvData)
 {
+    using namespace std::chrono;
+    auto loginTotalStart = high_resolution_clock::now();
+
     m_playerLoading = true;
     ObjectGuid playerGuid;
     recvData >> playerGuid;
@@ -785,14 +788,21 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recvData)
         return;
     }
 
-    AddQueryHolderCallback(CharacterDatabase.DelayQueryHolder(holder)).AfterComplete([this](SQLQueryHolderBase const& holder)
+    AddQueryHolderCallback(CharacterDatabase.DelayQueryHolder(holder)).AfterComplete([this, loginTotalStart, playerGuid](SQLQueryHolderBase const& holder)
     {
         HandlePlayerLoginFromDB(static_cast<LoginQueryHolder const&>(holder));
+
+        auto loginTotalEnd = std::chrono::high_resolution_clock::now();
+        auto totalMs = std::chrono::duration_cast<std::chrono::milliseconds>(loginTotalEnd - loginTotalStart).count();
+        LOG_INFO("perf.login", "[性能监控-登录总耗时] 账号={} 角色GUID={} 总耗时: {}ms", GetAccountId(), playerGuid.ToString(), totalMs);
     });
 }
 
 void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
 {
+    using namespace std::chrono;
+    auto phaseStart = high_resolution_clock::now();
+
     ObjectGuid playerGuid = holder.GetGuid();
 
     Player* pCurrChar = new Player(this);
@@ -800,6 +810,7 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     ChatHandler chH = ChatHandler(pCurrChar->GetSession());
 
     // "GetAccountId() == db stored account id" checked in LoadFromDB (prevent login not own character using cheating tools)
+    auto loadDbStart = high_resolution_clock::now();
     if (!pCurrChar->LoadFromDB(playerGuid, holder))
     {
         SetPlayer(nullptr);
@@ -808,6 +819,10 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         m_playerLoading = false;
         return;
     }
+
+    auto loadDbEnd = high_resolution_clock::now();
+    auto loadDbMs = std::chrono::duration_cast<std::chrono::milliseconds>(loadDbEnd - loadDbStart).count();
+    LOG_INFO("perf.login", "[性能监控-登录阶段] 账号={} 角色GUID={} 阶段=LoadFromDB 耗时: {}ms", GetAccountId(), playerGuid.ToString(), loadDbMs);
 
     pCurrChar->GetMotionMaster()->Initialize();
     pCurrChar->SendDungeonDifficulty(false);
@@ -863,7 +878,11 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     data << uint32(0);
     SendPacket(&data);
 
+    auto beforePacketsStart = high_resolution_clock::now();
     pCurrChar->SendInitialPacketsBeforeAddToMap();
+    auto beforePacketsEnd = high_resolution_clock::now();
+    auto beforePacketsMs = std::chrono::duration_cast<std::chrono::milliseconds>(beforePacketsEnd - beforePacketsStart).count();
+    LOG_INFO("perf.login", "[性能监控-登录阶段] 账号={} 角色GUID={} 阶段=SendInitialPacketsBeforeAddToMap 耗时: {}ms", GetAccountId(), playerGuid.ToString(), beforePacketsMs);
 
     //Show cinematic at the first time that player login
     if (!pCurrChar->getCinematic())
@@ -886,6 +905,17 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     // Xinef: moved this from below
     ObjectAccessor::AddObject(pCurrChar);
 
+    // 【关键修复】强制刷新属性，确保数据结构在进入地图前已初始化
+    // 原因：性能优化跳过了 ApplyOfficialItemEnhancement 中的 UpdateAllStats，
+    //       导致某些依赖这些数据结构的代码访问了未初始化的内存（空指针崩溃）
+    // 时机：必须在 AddPlayerToMap 之前执行，确保进入地图时所有属性已就绪
+    pCurrChar->UpdateAllStats();
+    pCurrChar->UpdateAttackPowerAndDamage();
+    pCurrChar->UpdateAttackPowerAndDamage(true);
+    pCurrChar->UpdateMaxHealth();
+    pCurrChar->UpdateMaxPower(POWER_MANA);
+
+    auto addToMapStart = high_resolution_clock::now();
     if (!pCurrChar->GetMap()->AddPlayerToMap(pCurrChar) || !pCurrChar->CheckInstanceLoginValid())
     {
         AreaTriggerTeleport const* at = sObjectMgr->GetGoBackTrigger(pCurrChar->GetMapId());
@@ -898,7 +928,15 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         pCurrChar->GetSession()->SendNameQueryOpcode(pCurrChar->GetGUID());
     }
 
+    auto addToMapEnd = high_resolution_clock::now();
+    auto addToMapMs = std::chrono::duration_cast<std::chrono::milliseconds>(addToMapEnd - addToMapStart).count();
+    LOG_INFO("perf.login", "[性能监控-登录阶段] 账号={} 角色GUID={} 阶段=AddPlayerToMap+CheckInstance 耗时: {}ms", GetAccountId(), playerGuid.ToString(), addToMapMs);
+
+    auto afterPacketsStart = high_resolution_clock::now();
     pCurrChar->SendInitialPacketsAfterAddToMap();
+    auto afterPacketsEnd = high_resolution_clock::now();
+    auto afterPacketsMs = std::chrono::duration_cast<std::chrono::milliseconds>(afterPacketsEnd - afterPacketsStart).count();
+    LOG_INFO("perf.login", "[性能监控-登录阶段] 账号={} 角色GUID={} 阶段=SendInitialPacketsAfterAddToMap 耗时: {}ms", GetAccountId(), playerGuid.ToString(), afterPacketsMs);
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHAR_ONLINE);
     stmt->SetData(0, pCurrChar->GetGUID().GetCounter());

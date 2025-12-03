@@ -20,11 +20,21 @@
 
 void Acore::Impl::ChatCommands::SendErrorMessageToHandler(ChatHandler* handler, std::string_view str)
 {
+    // 防御性检查：如果 handler 为 nullptr，直接返回
+    if (!handler)
+    {
+        return;
+    }
     handler->SendSysMessage(str);
     handler->SetSentErrorMessage(true);
 }
 
 std::string Acore::Impl::ChatCommands::GetAcoreString(ChatHandler const* handler, AcoreStrings which)
 {
+    // 防御性检查：如果 handler 为 nullptr（例如在全局初始化阶段），返回默认字符串
+    if (!handler)
+    {
+        return "Error: handler is null";
+    }
     return handler->GetAcoreString(which);
 }

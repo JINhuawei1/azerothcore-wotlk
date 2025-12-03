@@ -28,6 +28,7 @@ EndScriptData */
 #include "CommandScript.h"
 #include "DBCStores.h"
 #include "DatabaseEnv.h"
+#include <thread>
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
@@ -280,6 +281,12 @@ public:
 
     static bool HandleCharacterTitlesCommand(ChatHandler* handler, Optional<PlayerIdentifier> player)
     {
+        if (!handler)
+        {
+            LOG_FATAL("commands.gm", "HandleCharacterTitlesCommand: handler is NULL!");
+            return false;
+        }
+
         if (!player)
             player = PlayerIdentifier::FromTargetOrSelf(handler);
 
@@ -328,6 +335,12 @@ public:
     //rename characters
     static bool HandleCharacterRenameCommand(ChatHandler* handler, Optional<PlayerIdentifier> player, Optional<bool> reserveName, Optional<std::string_view> newNameV)
     {
+        if (!handler)
+        {
+            LOG_FATAL("commands.gm", "HandleCharacterRenameCommand: handler is NULL!");
+            return false;
+        }
+
         if (!player && newNameV)
             return false;
 
@@ -435,6 +448,12 @@ public:
 
     static bool HandleCharacterLevelCommand(ChatHandler* handler, Optional<PlayerIdentifier> player, int16 newlevel)
     {
+        if (!handler)
+        {
+            LOG_FATAL("commands.gm", "HandleCharacterLevelCommand: handler is NULL!");
+            return false;
+        }
+
         if (!player)
             player = PlayerIdentifier::FromTargetOrSelf(handler);
 
@@ -460,6 +479,25 @@ public:
     // customize characters
     static bool HandleCharacterCustomizeCommand(ChatHandler* handler, Optional<PlayerIdentifier> player)
     {
+        if (!handler)
+        {
+            LOG_FATAL("commands.gm", "========== CRITICAL BUG DETECTED ==========");
+            LOG_FATAL("commands.gm", "HandleCharacterCustomizeCommand: handler is NULL!");
+            LOG_FATAL("commands.gm", "Player parameter valid: {}", player.has_value());
+            if (player)
+            {
+                LOG_FATAL("commands.gm", "Player GUID: {}, Name: {}, IsConnected: {}",
+                    player->GetGUID().ToString(),
+                    player->GetName(),
+                    player->IsConnected());
+            }
+            std::hash<std::thread::id> hasher;
+            LOG_FATAL("commands.gm", "Thread ID Hash: {}", hasher(std::this_thread::get_id()));
+            LOG_FATAL("commands.gm", "Time: {}", uint32(time(nullptr)));
+            LOG_FATAL("commands.gm", "===========================================");
+            return false;
+        }
+
         if (!player)
             player = PlayerIdentifier::FromTarget(handler);
         if (!player)
@@ -484,6 +522,25 @@ public:
 
     static bool HandleCharacterChangeFactionCommand(ChatHandler* handler, Optional<PlayerIdentifier> player)
     {
+        if (!handler)
+        {
+            LOG_FATAL("commands.gm", "========== CRITICAL BUG DETECTED ==========");
+            LOG_FATAL("commands.gm", "HandleCharacterChangeFactionCommand: handler is NULL!");
+            LOG_FATAL("commands.gm", "Player parameter valid: {}", player.has_value());
+            if (player)
+            {
+                LOG_FATAL("commands.gm", "Player GUID: {}, Name: {}, IsConnected: {}",
+                    player->GetGUID().ToString(),
+                    player->GetName(),
+                    player->IsConnected());
+            }
+            std::hash<std::thread::id> hasher;
+            LOG_FATAL("commands.gm", "Thread ID Hash: {}", hasher(std::this_thread::get_id()));
+            LOG_FATAL("commands.gm", "Time: {}", uint32(time(nullptr)));
+            LOG_FATAL("commands.gm", "===========================================");
+            return false;
+        }
+
         if (!player)
             player = PlayerIdentifier::FromTarget(handler);
         if (!player)
@@ -508,6 +565,25 @@ public:
 
     static bool HandleCharacterChangeRaceCommand(ChatHandler* handler, Optional<PlayerIdentifier> player)
     {
+        if (!handler)
+        {
+            LOG_FATAL("commands.gm", "========== CRITICAL BUG DETECTED ==========");
+            LOG_FATAL("commands.gm", "HandleCharacterChangeRaceCommand: handler is NULL!");
+            LOG_FATAL("commands.gm", "Player parameter valid: {}", player.has_value());
+            if (player)
+            {
+                LOG_FATAL("commands.gm", "Player GUID: {}, Name: {}, IsConnected: {}",
+                    player->GetGUID().ToString(),
+                    player->GetName(),
+                    player->IsConnected());
+            }
+            std::hash<std::thread::id> hasher;
+            LOG_FATAL("commands.gm", "Thread ID Hash: {}", hasher(std::this_thread::get_id()));
+            LOG_FATAL("commands.gm", "Time: {}", uint32(time(nullptr)));
+            LOG_FATAL("commands.gm", "===========================================");
+            return false;
+        }
+
         if (!player)
             player = PlayerIdentifier::FromTarget(handler);
         if (!player)
@@ -532,6 +608,12 @@ public:
 
     static bool HandleCharacterReputationCommand(ChatHandler* handler, Optional<PlayerIdentifier> player)
     {
+        if (!handler)
+        {
+            LOG_FATAL("commands.gm", "HandleCharacterReputationCommand: handler is NULL!");
+            return false;
+        }
+
         if (!player)
             player = PlayerIdentifier::FromTargetOrSelf(handler);
         if (!player || !player->IsConnected())
