@@ -1602,19 +1602,29 @@ void ItemEnhancementMgr::SyncEnhancementAttributesToItemAttributes(Player* playe
 
     ItemAttributesDBHelper::SaveItemAttributes(data);
 
+    // 【关键修复】参考 ItemAttributesEvents 的实现模式：
+    // 1. 只负责数据库同步，不直接调用 Apply/Remove
+    // 2. 如果装备已穿戴，需要重新应用属性，但必须安全地进行
+    // 3. 添加完整的安全检查，避免在加载阶段或无效状态下操作
     if (player && item->IsEquipped())
     {
-        if (sItemAttributesEffects)
+        // 安全检查：确保玩家已完全加载且在世界中
+        if (!player->isBeingLoaded() && player->IsInWorld() && player->GetSession())
         {
-            sItemAttributesEffects->RemoveItemAttributeEffects(player, item);
-            sItemAttributesEffects->ApplyItemAttributeEffects(player, item);
-        }
+            if (sItemAttributesEffects)
+            {
+                // 重新应用该物品的所有属性（包括强化属性）
+                sItemAttributesEffects->RemoveItemAttributeEffects(player, item);
+                sItemAttributesEffects->ApplyItemAttributeEffects(player, item);
+            }
 
-        player->UpdateAllStats();
-        player->UpdateAttackPowerAndDamage();
-        player->UpdateAttackPowerAndDamage(true);
-        player->UpdateMaxHealth();
-        player->UpdateMaxPower(POWER_MANA);
+            // 刷新玩家属性
+            player->UpdateAllStats();
+            player->UpdateAttackPowerAndDamage();
+            player->UpdateAttackPowerAndDamage(true);
+            player->UpdateMaxHealth();
+            player->UpdateMaxPower(POWER_MANA);
+        }
     }
 #else
     (void)player;
