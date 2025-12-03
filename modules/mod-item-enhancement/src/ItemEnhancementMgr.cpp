@@ -1538,13 +1538,13 @@ void ItemEnhancementMgr::SyncEnhancementAttributesToItemAttributes(Player* playe
     if (newStats.empty() && oldStats.empty())
         return;
 
-    ItemAttributesDBHelper::ItemAttributeData* existing = ItemAttributesDBHelper::LoadItemAttributes(itemGuid);
+    auto existing = ItemAttributesDBHelper::LoadItemAttributes(itemGuid);  // 【智能指针修复】
     ItemAttributesDBHelper::ItemAttributeData data;
 
     if (existing)
     {
         data = *existing;
-        delete existing;
+        // 【智能指针修复】移除 delete，自动清理
     }
     else
     {

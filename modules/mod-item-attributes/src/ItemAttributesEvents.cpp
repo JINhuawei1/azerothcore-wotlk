@@ -154,8 +154,7 @@ void ItemAttributesEvents::OnPlayerEquip(Player* player, Item* item, uint8 bag, 
         }
     }
 
-    // 记录新装备
-    playerEquipMap[slot] = itemGuid;
+    // 【修复】移除重复代码：playerEquipMap[slot] = itemGuid 已在上面的lock作用域中执行
 
     // 【关键修复】添加空指针检查和安全性验证
     // 应用新装备的属性

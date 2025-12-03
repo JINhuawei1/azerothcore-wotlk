@@ -1049,17 +1049,16 @@ void ItemIdentificationSystem::ApplyBaseAttributes(Player* player, Item* item, c
         uint64 itemGuid = item->GetGUID().GetCounter();
 
         // ✅ 尝试一次读取（不重试，不等待）
-        ItemAttributesDBHelper::ItemAttributeData* data = ItemAttributesDBHelper::LoadItemAttributes(itemGuid);
+        auto data = ItemAttributesDBHelper::LoadItemAttributes(itemGuid);  // 【智能指针修复】
         if (data && !data->baseAttributeIds.empty())
         {
             baseAttributes = data->baseAttributeIds;
             baseValues = data->baseAttributeValues;
-            delete data;
+            // 【智能指针修复】移除 delete，自动清理
         }
         else
         {
-            if (data)
-                delete data;
+            // 【智能指针修复】移除 delete，自动清理
 
             // 读取失败也不影响鉴定，玩家重新登录或查询时会加载
             DebugLog("基础属性生成成功，但立即读取失败（属性将在下次查询时加载）");

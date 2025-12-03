@@ -315,7 +315,7 @@ public:
         uint64 realGuid = item ? item->GetGUID().GetCounter() : clientGuid;
 
         std::string attributesStr;
-        ItemAttributesDBHelper::ItemAttributeData* data = ItemAttributesDBHelper::LoadItemAttributes(realGuid);
+        auto data = ItemAttributesDBHelper::LoadItemAttributes(realGuid);  // 【智能指针修复】
         if (data)
         {
             std::string baseAttrs = ItemAttributesDBHelper::ItemAttributeData::ToCompactString(data->baseAttributeIds, data->baseAttributeValues);
@@ -330,7 +330,7 @@ public:
                 attributesStr += additionalAttrs;
             }
 
-            delete data;
+            // 【智能指针修复】移除 delete，自动清理
         }
 
         // 计算物品位置信息
@@ -882,16 +882,15 @@ public:
         }
 
         uint64 itemGuid = item->GetGUID().GetCounter();
-        
+
         // 读取物品属性
-        ItemAttributesDBHelper::ItemAttributeData* data = ItemAttributesDBHelper::LoadItemAttributes(itemGuid);
-        
+        auto data = ItemAttributesDBHelper::LoadItemAttributes(itemGuid);  // 【智能指针修复】
+
         if (!data || (data->baseAttributeIds.empty() && data->additionalAttributeIds.empty()))
         {
-            handler->PSendSysMessage("物品 [{}] (GUID: {}) 没有自定义属性", 
+            handler->PSendSysMessage("物品 [{}] (GUID: {}) 没有自定义属性",
                 item->GetTemplate()->Name1, itemGuid);
-            if (data)
-                delete data;
+            // 【智能指针修复】移除 delete，自动清理
             return true;
         }
 
@@ -945,8 +944,8 @@ public:
         }
 
         handler->PSendSysMessage("========================");
-        
-        delete data;
+
+        // 【智能指针修复】移除 delete，自动清理
         return true;
     }
 

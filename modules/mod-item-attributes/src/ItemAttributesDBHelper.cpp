@@ -336,24 +336,24 @@ bool ItemAttributesDBHelper::HasAttributes(uint64 itemGuid)
     if (TryGetCachedData(itemGuid, cached))
         return !cached.baseAttributeIds.empty() || !cached.additionalAttributeIds.empty();
 
-    ItemAttributeData* data = LoadItemAttributes(itemGuid);
+    auto data = LoadItemAttributes(itemGuid);  // 【智能指针修复】
     if (!data)
         return false;
 
     bool hasAttributes = !data->baseAttributeIds.empty() || !data->additionalAttributeIds.empty();
-    delete data;
+    // 【智能指针修复】移除 delete，自动清理
     return hasAttributes;
 }
 
 // 获取物品属性数量（基础+追加）
 uint32 ItemAttributesDBHelper::GetAttributeCount(uint64 itemGuid)
 {
-    ItemAttributeData* data = LoadItemAttributes(itemGuid);
+    auto data = LoadItemAttributes(itemGuid);  // 【智能指针修复】
     if (!data)
         return 0;
 
     uint32 count = static_cast<uint32>(data->baseAttributeIds.size() + data->additionalAttributeIds.size());
-    delete data;
+    // 【智能指针修复】移除 delete，自动清理
     return count;
 }
 
