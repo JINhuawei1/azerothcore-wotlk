@@ -10,11 +10,20 @@ ItemAttributesDisplay* ItemAttributesDisplay::instance()
 
 void ItemAttributesDisplay::Initialize()
 {
-    
+    // 【根本性修复】标记初始化完成
+    _isInitialized = true;
+    LOG_INFO("module.item-attributes", "物品属性显示系统初始化完成");
 }
 
 void ItemAttributesDisplay::AddItemAttributesToTooltip(Player* player, Item* item, std::vector<std::string>& lines)
 {
+    // 【根本性修复】检查依赖系统是否已初始化
+    if (!_isInitialized || !sItemAttributesLoader || !sItemAttributesLoader->IsInitialized())
+    {
+        LOG_ERROR("module.item-attributes", "【致命错误】AddItemAttributesToTooltip 被调用，但系统或依赖未初始化！");
+        return;
+    }
+
     if (!player || !item)
         return;
 

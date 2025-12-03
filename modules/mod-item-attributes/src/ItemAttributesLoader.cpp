@@ -15,15 +15,22 @@
 #include <iomanip>
 #include <algorithm>
 
-// 将时间戳转换为可读的时间字符串
+// 【根本性修复】将时间戳转换为可读的时间字符串（线程安全版本）
 std::string TimeToTimestampStr(time_t t)
 {
     if (t == 0)
         return "未知";
 
-    std::tm* timeinfo = std::localtime(&t);
+    // 【根本性修复】使用线程安全的localtime_s (Windows) 或 localtime_r (Linux)
+    std::tm timeinfo;
+    #ifdef _WIN32
+        localtime_s(&timeinfo, &t);
+    #else
+        localtime_r(&t, &timeinfo);
+    #endif
+
     std::ostringstream ss;
-    ss << std::put_time(timeinfo, "{Y}-{m}-{d} {H}:{M}:{S}");
+    ss << std::put_time(&timeinfo, "%Y-%m-%d %H:%M:%S");  // 修复格式字符串
     return ss.str();
 }
 
@@ -33,8 +40,22 @@ ItemAttributesLoader* ItemAttributesLoader::instance()
     return &instance;
 }
 
+// 【根本性修复】安全获取实例方法
+ItemAttributesLoader* ItemAttributesLoader::SafeInstance()
+{
+    ItemAttributesLoader* inst = instance();
+    return (inst && inst->IsInitialized()) ? inst : nullptr;
+}
+
 void ItemAttributesLoader::LoadItemAttributeTemplates()
 {
+    // 【根本性修复】防止重复初始化
+    if (_isInitialized)
+    {
+        LOG_WARN("module.item-attributes", "LoadItemAttributeTemplates() 被重复调用，跳过加载");
+        return;
+    }
+
     _itemAttributeTemplateStore.clear();
 
     uint32 oldMSTime = getMSTime();
@@ -45,6 +66,7 @@ void ItemAttributesLoader::LoadItemAttributeTemplates()
     {
         LOG_ERROR("module.item-attributes", ">> 表 `物品属性_模板` 不存在，请导入SQL文件");
         LOG_ERROR("module.item-attributes", ">> 请确保已导入 modules/mod-item-attributes/data/sql/db_world/ 目录下的所有SQL文件");
+        _isInitialized = false;  // 【根本性修复】标记初始化失败
         return;
     }
 
@@ -53,6 +75,7 @@ void ItemAttributesLoader::LoadItemAttributeTemplates()
     if (!result)
     {
         LOG_WARN("module.item-attributes", ">> 未找到任何物品属性模板数据");
+        _isInitialized = false;  // 【根本性修复】标记初始化失败
         return;
     }
 
@@ -82,13 +105,23 @@ void ItemAttributesLoader::LoadItemAttributeTemplates()
         ++count;
     } while (result->NextRow());
 
-    LOG_INFO("module.item-attributes", ">> 已加载 {} 个物品属性模板", count);
+    // 【根本性修复】标记初始化成功
+    _isInitialized = true;
+
+    LOG_INFO("module.item-attributes", ">> 已加载 {} 个物品属性模板，系统初始化完成", count);
 
 
 }
 
 ItemAttributeTemplate const* ItemAttributesLoader::GetItemAttributeTemplate(uint32 id) const
 {
+    // 【根本性修复】检查初始化状态
+    if (!_isInitialized)
+    {
+        LOG_ERROR("module.item-attributes", "【致命错误】GetItemAttributeTemplate 被调用，但系统尚未初始化！");
+        return nullptr;
+    }
+
     auto itr = _itemAttributeTemplateStore.find(id);
     if (itr != _itemAttributeTemplateStore.end())
         return &itr->second;
@@ -99,6 +132,13 @@ ItemAttributeTemplate const* ItemAttributesLoader::GetItemAttributeTemplate(uint
 std::vector<ItemAttributeTemplate const*> ItemAttributesLoader::GetItemAttributeTemplatesByGroup(uint32 group) const
 {
     std::vector<ItemAttributeTemplate const*> result;
+
+    // 【根本性修复】检查初始化状态
+    if (!_isInitialized)
+    {
+        LOG_ERROR("module.item-attributes", "【致命错误】GetItemAttributeTemplatesByGroup 被调用，但系统尚未初始化！");
+        return result;
+    }
 
     for (auto const& pair : _itemAttributeTemplateStore)
     {
@@ -124,6 +164,13 @@ std::vector<ItemAttributeTemplate const*> ItemAttributesLoader::GetItemAttribute
 
 ItemAttributeTemplate const* ItemAttributesLoader::GetItemAttributeTemplateByType(uint32 type) const
 {
+    // 【根本性修复】检查初始化状态（这是最高频调用的方法）
+    if (!_isInitialized)
+    {
+        LOG_ERROR("module.item-attributes", "【致命错误】GetItemAttributeTemplateByType 被调用，但系统尚未初始化！type={}", type);
+        return nullptr;
+    }
+
     for (auto const& pair : _itemAttributeTemplateStore)
     {
         if (pair.second.attributeType == type)

@@ -56,10 +56,13 @@ void ItemAttributesEvents::OnPlayerLogout(Player* player)
     if (!player)
         return;
 
-    // 清理该玩家的装备跟踪数据
+    // 【根本性修复】线程安全地清理该玩家的装备跟踪数据
     uint64 playerGuid = player->GetGUID().GetCounter();
-    _equippedItems.erase(playerGuid);
-    
+    {
+        std::lock_guard<std::mutex> lock(_equippedItemsMutex);
+        _equippedItems.erase(playerGuid);
+    }
+
     // 玩家登出时清理孤立的属性数据
     // 这会清理所有已删除物品但属性数据仍存在的记录
     // 
@@ -105,13 +108,25 @@ void ItemAttributesEvents::OnPlayerEquip(Player* player, Item* item, uint8 bag, 
     if (bag != INVENTORY_SLOT_BAG_0 || slot >= EQUIPMENT_SLOT_END)
         return;
 
-    // 检查该槽位是否已有装备（需要先移除旧装备的属性）
-    auto& playerEquipMap = _equippedItems[playerGuid];
-    auto it = playerEquipMap.find(slot);
-    if (it != playerEquipMap.end())
+    // 【根本性修复】线程安全地检查和更新装备映射
+    uint64 oldItemGuid = 0;
+    bool hasOldItem = false;
     {
-        uint64 oldItemGuid = it->second;
-        
+        std::lock_guard<std::mutex> lock(_equippedItemsMutex);
+        auto& playerEquipMap = _equippedItems[playerGuid];
+        auto it = playerEquipMap.find(slot);
+        if (it != playerEquipMap.end())
+        {
+            oldItemGuid = it->second;
+            hasOldItem = true;
+        }
+        // 记录新装备
+        playerEquipMap[slot] = itemGuid;
+    }
+
+    // 如果有旧装备，移除其属性效果
+    if (hasOldItem)
+    {
         // 通过 GUID 查找旧物品
         // 注意：此时旧物品可能已经不在装备槽了，可能在背包中
         // 我们需要遍历玩家的所有物品来查找
@@ -179,33 +194,41 @@ void ItemAttributesEvents::OnPlayerAfterSetVisibleItemSlot(Player* player, uint8
     if (item == nullptr)
     {
         uint64 playerGuid = player->GetGUID().GetCounter();
-        
-        // 从映射表中获取该槽位之前的物品GUID
-        auto playerIt = _equippedItems.find(playerGuid);
-        if (playerIt != _equippedItems.end())
+        uint64 oldItemGuid = 0;
+        bool found = false;
+
+        // 【根本性修复】线程安全地从映射表中获取该槽位之前的物品GUID
         {
-            auto& playerEquipMap = playerIt->second;
-            auto slotIt = playerEquipMap.find(slot);
-            if (slotIt != playerEquipMap.end())
+            std::lock_guard<std::mutex> lock(_equippedItemsMutex);
+            auto playerIt = _equippedItems.find(playerGuid);
+            if (playerIt != _equippedItems.end())
             {
-                uint64 oldItemGuid = slotIt->second;
-
-                // 【关键修复】添加空指针检查
-                // 直接根据GUID移除属性，不需要查找Item对象
-                if (sItemAttributesEffects)
+                auto& playerEquipMap = playerIt->second;
+                auto slotIt = playerEquipMap.find(slot);
+                if (slotIt != playerEquipMap.end())
                 {
-                    sItemAttributesEffects->RemoveItemAttributeEffectsByGuid(player, oldItemGuid);
+                    oldItemGuid = slotIt->second;
+                    found = true;
+                    // 从映射表中移除
+                    playerEquipMap.erase(slotIt);
                 }
-
-                // 刷新玩家属性面板
-                player->UpdateAllStats();
-                player->UpdateAttackPowerAndDamage();
-                player->UpdateAttackPowerAndDamage(true);
-                player->UpdateSpellDamageAndHealingBonus();
-                
-                // 从映射表中移除
-                playerEquipMap.erase(slotIt);
             }
+        }
+
+        if (found)
+        {
+            // 【关键修复】添加空指针检查
+            // 直接根据GUID移除属性，不需要查找Item对象
+            if (sItemAttributesEffects)
+            {
+                sItemAttributesEffects->RemoveItemAttributeEffectsByGuid(player, oldItemGuid);
+            }
+
+            // 刷新玩家属性面板
+            player->UpdateAllStats();
+            player->UpdateAttackPowerAndDamage();
+            player->UpdateAttackPowerAndDamage(true);
+            player->UpdateSpellDamageAndHealingBonus();
         }
     }
 }
