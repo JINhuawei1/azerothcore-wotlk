@@ -12,8 +12,24 @@ ItemAttributesEffects* ItemAttributesEffects::instance()
     return &instance;
 }
 
+// 【根本性修复】安全获取实例方法
+ItemAttributesEffects* ItemAttributesEffects::SafeInstance()
+{
+    ItemAttributesEffects* inst = instance();
+    return (inst && inst->IsInitialized()) ? inst : nullptr;
+}
+
 void ItemAttributesEffects::Initialize()
 {
+    // 防止重复初始化
+    if (_isInitialized)
+    {
+        LOG_WARN("module.itemattributes", "ItemAttributesEffects::Initialize() 被重复调用，跳过初始化");
+        return;
+    }
+
+    LOG_INFO("module.itemattributes", "开始初始化物品属性效果系统...");
+
     // 注册基础属性效果处理器
 
     // 力量属性 (类型 4)
@@ -517,7 +533,11 @@ void ItemAttributesEffects::Initialize()
         }
     );
 
-    
+    // 【根本性修复】标记为已初始化
+    _isInitialized = true;
+
+    LOG_INFO("module.itemattributes", "物品属性效果系统初始化完成，已注册 {} 个属性处理器",
+             _attributeEffectHandlers.size());
 }
 
 void ItemAttributesEffects::RegisterAttributeEffectHandler(uint32 attributeType, AttributeEffectHandler handler, AttributeEffectRemover remover, AttributeDescriptionGenerator descGenerator)
@@ -529,6 +549,17 @@ void ItemAttributesEffects::RegisterAttributeEffectHandler(uint32 attributeType,
 
 void ItemAttributesEffects::ApplyItemAttributeEffects(Player* player, Item* item)
 {
+    // 【根本性修复】检查初始化状态
+    if (!_isInitialized)
+    {
+        LOG_ERROR("module.itemattributes", "【致命错误】ApplyItemAttributeEffects 被调用，但系统尚未初始化！");
+        LOG_ERROR("module.itemattributes", "  → 这通常表示模块初始化顺序错误");
+        LOG_ERROR("module.itemattributes", "  → Player: {}, Item: {}",
+                 player ? player->GetName() : "nullptr",
+                 item ? item->GetEntry() : 0);
+        return;
+    }
+
     if (!player || !item)
         return;
 
@@ -599,6 +630,14 @@ void ItemAttributesEffects::ApplyItemAttributeEffects(Player* player, Item* item
 
 void ItemAttributesEffects::RemoveItemAttributeEffects(Player* player, Item* item)
 {
+    // 【根本性修复】检查初始化状态
+    if (!_isInitialized)
+    {
+        LOG_ERROR("module.itemattributes", "【致命错误】RemoveItemAttributeEffects 被调用，但系统尚未初始化！");
+        LOG_ERROR("module.itemattributes", "  → 这通常表示模块初始化顺序错误");
+        return;
+    }
+
     if (!player || !item)
         return;
 
@@ -691,6 +730,13 @@ void ItemAttributesEffects::UpdateItemAttributeEffects(Player* player)
 
 void ItemAttributesEffects::RemoveItemAttributeEffectsByGuid(Player* player, uint64 itemGuid)
 {
+    // 【根本性修复】检查初始化状态
+    if (!_isInitialized)
+    {
+        LOG_ERROR("module.itemattributes", "【致命错误】RemoveItemAttributeEffectsByGuid 被调用，但系统尚未初始化！");
+        return;
+    }
+
     if (!player || itemGuid == 0)
         return;
 
@@ -755,6 +801,13 @@ void ItemAttributesEffects::RemoveItemAttributeEffectsByGuid(Player* player, uin
 
 std::string ItemAttributesEffects::GetAttributeDescription(Item* item, uint32 attributeId)
 {
+    // 【根本性修复】检查初始化状态
+    if (!_isInitialized)
+    {
+        LOG_ERROR("module.itemattributes", "【致命错误】GetAttributeDescription 被调用，但系统尚未初始化！");
+        return "【未初始化】";
+    }
+
     if (!item)
         return "";
 
