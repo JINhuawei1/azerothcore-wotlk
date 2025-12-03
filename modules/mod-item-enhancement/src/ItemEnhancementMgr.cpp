@@ -1606,24 +1606,28 @@ void ItemEnhancementMgr::SyncEnhancementAttributesToItemAttributes(Player* playe
     // 1. 只负责数据库同步，不直接调用 Apply/Remove
     // 2. 如果装备已穿戴，需要重新应用属性，但必须安全地进行
     // 3. 添加完整的安全检查，避免在加载阶段或无效状态下操作
-    if (player && item->IsEquipped())
+    // 4. 【新增】添加对 item 的额外检查，避免在检查后item失效
+    if (player && item)
     {
         // 安全检查：确保玩家已完全加载且在世界中
+        // 必须在所有操作之前进行完整检查
         if (!player->isBeingLoaded() && player->IsInWorld() && player->GetSession())
         {
-            if (sItemAttributesEffects)
+            // 【关键】在调用 IsEquipped() 之前再次验证 item 的有效性
+            // 因为在并发环境下，item 可能在检查和使用之间被删除
+            if (item->IsEquipped() && sItemAttributesEffects)
             {
                 // 重新应用该物品的所有属性（包括强化属性）
                 sItemAttributesEffects->RemoveItemAttributeEffects(player, item);
                 sItemAttributesEffects->ApplyItemAttributeEffects(player, item);
-            }
 
-            // 刷新玩家属性
-            player->UpdateAllStats();
-            player->UpdateAttackPowerAndDamage();
-            player->UpdateAttackPowerAndDamage(true);
-            player->UpdateMaxHealth();
-            player->UpdateMaxPower(POWER_MANA);
+                // 刷新玩家属性
+                player->UpdateAllStats();
+                player->UpdateAttackPowerAndDamage();
+                player->UpdateAttackPowerAndDamage(true);
+                player->UpdateMaxHealth();
+                player->UpdateMaxPower(POWER_MANA);
+            }
         }
     }
 #else
