@@ -1975,16 +1975,25 @@ void ItemIdentificationSystem::RefreshItem(Player* player, Item* item)
         // 刷新物品显示到客户端
         player->SetVisibleItemSlot(item->GetSlot(), item);
 
-        // 如果属性系统可用，应用属性效果
+        // 【关键修复】参考 ItemAttributesEvents 和 ItemEnhancementMgr 的安全检查模式
+        // 只在玩家完全加载且在世界中时才应用属性效果
+        // 避免在登录加载阶段调用导致空指针崩溃
 #ifdef MODULE_ITEM_ATTRIBUTES
-        if (sItemAttributesEffects)
+        if (!player->isBeingLoaded() && player->IsInWorld() && player->GetSession())
         {
-            sItemAttributesEffects->ApplyItemAttributeEffects(player, item);
+            if (sItemAttributesEffects)
+            {
+                sItemAttributesEffects->ApplyItemAttributeEffects(player, item);
+            }
         }
 #endif
 
-        // 更新玩家属性
-        player->UpdateAllStats();
+        // 【关键修复】同样的安全检查应用于属性刷新
+        // 避免在玩家未完全初始化时刷新属性
+        if (!player->isBeingLoaded() && player->IsInWorld())
+        {
+            player->UpdateAllStats();
+        }
 
         DebugLog("刷新已装备物品: GUID={}, 槽位={}",
                  item->GetGUID().GetCounter(), item->GetSlot());
