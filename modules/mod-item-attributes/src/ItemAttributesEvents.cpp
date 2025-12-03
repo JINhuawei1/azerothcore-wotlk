@@ -131,15 +131,23 @@ void ItemAttributesEvents::OnPlayerEquip(Player* player, Item* item, uint8 bag, 
         
         if (oldItem)
         {
-            sItemAttributesEffects->RemoveItemAttributeEffects(player, oldItem);
+            // 【关键修复】添加空指针检查
+            if (sItemAttributesEffects)
+            {
+                sItemAttributesEffects->RemoveItemAttributeEffects(player, oldItem);
+            }
         }
     }
 
     // 记录新装备
     playerEquipMap[slot] = itemGuid;
 
+    // 【关键修复】添加空指针检查和安全性验证
     // 应用新装备的属性
-    sItemAttributesEffects->ApplyItemAttributeEffects(player, item);
+    if (sItemAttributesEffects)
+    {
+        sItemAttributesEffects->ApplyItemAttributeEffects(player, item);
+    }
 
     // 刷新玩家属性：
     // 【性能优化】登录加载阶段不做全量刷新，交给 OnPlayerLogin 统一刷新一次
@@ -181,10 +189,14 @@ void ItemAttributesEvents::OnPlayerAfterSetVisibleItemSlot(Player* player, uint8
             if (slotIt != playerEquipMap.end())
             {
                 uint64 oldItemGuid = slotIt->second;
-                
+
+                // 【关键修复】添加空指针检查
                 // 直接根据GUID移除属性，不需要查找Item对象
-                sItemAttributesEffects->RemoveItemAttributeEffectsByGuid(player, oldItemGuid);
-                
+                if (sItemAttributesEffects)
+                {
+                    sItemAttributesEffects->RemoveItemAttributeEffectsByGuid(player, oldItemGuid);
+                }
+
                 // 刷新玩家属性面板
                 player->UpdateAllStats();
                 player->UpdateAttackPowerAndDamage();
