@@ -34,6 +34,8 @@ std::string TimeToTimestampStr(time_t t)
     return ss.str();
 }
 
+// 【线程安全】Meyer's Singleton - C++11保证静态局部变量初始化的线程安全性
+// 编译器会自动添加同步机制，确保多线程并发调用时只初始化一次
 ItemAttributesLoader* ItemAttributesLoader::instance()
 {
     static ItemAttributesLoader instance;
@@ -314,7 +316,7 @@ bool ItemAttributesLoader::GetItemAttributesWithValues(Item* item, std::vector<u
         return false;
 
     uint64 itemGuid = item->GetGUID().GetCounter();
-    ItemAttributesDBHelper::ItemAttributeData* data = ItemAttributesDBHelper::LoadItemAttributes(itemGuid);
+    auto data = ItemAttributesDBHelper::LoadItemAttributes(itemGuid);  // 【智能指针修复】自动管理内存
 
     if (!data)
         return false;
@@ -331,7 +333,7 @@ bool ItemAttributesLoader::GetItemAttributesWithValues(Item* item, std::vector<u
     values.insert(values.end(), data->baseAttributeValues.begin(), data->baseAttributeValues.end());
     values.insert(values.end(), data->additionalAttributeValues.begin(), data->additionalAttributeValues.end());
 
-    delete data;
+    // 【智能指针修复】移除手动 delete，unique_ptr 自动清理
     return true;
 }
 
@@ -491,9 +493,19 @@ void ItemAttributesLoader::DeleteItemAttributeData(uint64 itemGuid)
 
 void ItemAttributesLoader::CleanupOrphanedAttributeData()
 {
-    CharacterDatabase.Execute(
-        "DELETE FROM `物品属性_数据` WHERE `物品GUID` NOT IN (SELECT `guid` FROM `item_instance`)"
-    );
-    ItemAttributesDBHelper::FlushCache();
+    // 【数据库错误处理】添加 try-catch 保护
+    try
+    {
+        CharacterDatabase.Execute(
+            "DELETE FROM `物品属性_数据` WHERE `物品GUID` NOT IN (SELECT `guid` FROM `item_instance`)"
+        );
+        ItemAttributesDBHelper::FlushCache();
+        LOG_DEBUG("module.item-attributes", "CleanupOrphanedAttributeData 完成");
+    }
+    catch (const std::exception& ex)
+    {
+        LOG_ERROR("module.item-attributes", "【数据库错误】CleanupOrphanedAttributeData 失败: {}",
+                  ex.what());
+    }
 }
 

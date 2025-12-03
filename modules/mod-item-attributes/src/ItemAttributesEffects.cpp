@@ -6,6 +6,8 @@
 #include <sstream>
 #include <chrono>
 
+// 【线程安全】Meyer's Singleton - C++11保证静态局部变量初始化的线程安全性
+// 编译器会自动添加同步机制，确保多线程并发调用时只初始化一次
 ItemAttributesEffects* ItemAttributesEffects::instance()
 {
     static ItemAttributesEffects instance;
@@ -741,22 +743,22 @@ void ItemAttributesEffects::RemoveItemAttributeEffectsByGuid(Player* player, uin
         return;
 
     // 使用DBHelper读取属性
-    ItemAttributesDBHelper::ItemAttributeData* data = ItemAttributesDBHelper::LoadItemAttributes(itemGuid);
-    
+    auto data = ItemAttributesDBHelper::LoadItemAttributes(itemGuid);  // 【智能指针修复】自动管理内存
+
     if (!data)
         return;
 
     // 合并基础属性和追加属性
     std::vector<uint32> attributes;
     std::vector<int32> values;
-    
+
     attributes.insert(attributes.end(), data->baseAttributeIds.begin(), data->baseAttributeIds.end());
     attributes.insert(attributes.end(), data->additionalAttributeIds.begin(), data->additionalAttributeIds.end());
-    
+
     values.insert(values.end(), data->baseAttributeValues.begin(), data->baseAttributeValues.end());
     values.insert(values.end(), data->additionalAttributeValues.begin(), data->additionalAttributeValues.end());
-    
-    delete data;
+
+    // 【智能指针修复】移除手动 delete，unique_ptr 自动清理
 
     if (attributes.empty())
         return;

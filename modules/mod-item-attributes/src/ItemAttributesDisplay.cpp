@@ -2,6 +2,8 @@
 #include "Logging/Log.h"
 #include <sstream>
 
+// 【线程安全】Meyer's Singleton - C++11保证静态局部变量初始化的线程安全性
+// 编译器会自动添加同步机制，确保多线程并发调用时只初始化一次
 ItemAttributesDisplay* ItemAttributesDisplay::instance()
 {
     static ItemAttributesDisplay instance;
