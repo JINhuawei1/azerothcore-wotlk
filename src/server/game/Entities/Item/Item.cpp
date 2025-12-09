@@ -269,6 +269,7 @@ Item::Item()
     m_slot = 0;
     uState = ITEM_NEW;
     uQueuePos = -1;
+    m_updateOwner = nullptr;
     m_container = nullptr;
     m_lootGenerated = false;
     mb_in_trade = false;
@@ -277,6 +278,24 @@ Item::Item()
     m_refundRecipient = 0;
     m_paidMoney = 0;
     m_paidExtendedCost = 0;
+}
+
+Item::~Item()
+{
+    if (IsInUpdateQueue())
+    {
+        Player* owner = m_updateOwner ? m_updateOwner : GetOwner();
+        if (owner)
+        {
+            RemoveFromUpdateQueueOf(owner);
+        }
+        else
+        {
+            LOG_WARN("entities.player.items", "Item::~Item - Item is in update queue but owner is nullptr! GUID: {}, uQueuePos: {}. Cannot clean up queue pointer.",
+                     AreValuesInitialized() ? GetGUID().ToString() : "uninitialized", uQueuePos);
+            uQueuePos = -1;
+        }
+    }
 }
 
 bool Item::Create(ObjectGuid::LowType guidlow, uint32 itemid, Player const* owner)
@@ -389,6 +408,22 @@ void Item::SaveToDB(CharacterDatabaseTransaction trans)
             }
         case ITEM_REMOVED:
             {
+                Player* owner = m_updateOwner ? m_updateOwner : GetOwner();
+                if (owner && IsInUpdateQueue())
+                {
+                    RemoveFromUpdateQueueOf(owner);
+
+                    if (IsInUpdateQueue())
+                    {
+                        LOG_FATAL("entities.player.items",
+                                 "【致命错误】Item::SaveToDB(ITEM_REMOVED) - 物品 {} 在delete前仍在更新队列中！uQueuePos: {}",
+                                 AreValuesInitialized() ? GetGUID().ToString() : "uninitialized",
+                                 uQueuePos);
+                        // 强制标记为不在队列
+                        uQueuePos = -1;
+                    }
+                }
+
                 CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_ITEM_INSTANCE);
                 stmt->SetData(0, guid);
                 trans->Append(stmt);
@@ -716,11 +751,24 @@ void Item::SetState(ItemUpdateState state, Player* forplayer)
     if (uState == ITEM_NEW && state == ITEM_REMOVED)
     {
         // pretend the item never existed
-        if (forplayer)
+        Player* owner = forplayer ? forplayer : m_updateOwner;
+        if (owner && IsInUpdateQueue())
         {
-            RemoveFromUpdateQueueOf(forplayer);
-            forplayer->DeleteRefundReference(GetGUID());
+            RemoveFromUpdateQueueOf(owner);
+
+            if (IsInUpdateQueue())
+            {
+                LOG_FATAL("entities.player.items",
+                         "【致命错误】Item::SetState - 物品 {} 在delete前仍在更新队列中！uQueuePos: {}",
+                         AreValuesInitialized() ? GetGUID().ToString() : "uninitialized",
+                         uQueuePos);
+                // 强制标记为不在队列（避免悬空指针，但队列中仍有nullptr）
+                uQueuePos = -1;
+            }
         }
+
+        if (forplayer)
+            forplayer->DeleteRefundReference(GetGUID());
         delete this;
         return;
     }
@@ -734,8 +782,14 @@ void Item::SetState(ItemUpdateState state, Player* forplayer)
     }
     else
     {
+        Player* owner = forplayer;
+        if (!owner && m_updateOwner)
+            owner = m_updateOwner;
+
+        if (owner && IsInUpdateQueue())
+            RemoveFromUpdateQueueOf(owner);
+
         // unset in queue
-        // the item must be removed from the queue manually
         uQueuePos = -1;
         uState = ITEM_UNCHANGED;
     }
@@ -757,6 +811,7 @@ void Item::AddToUpdateQueueOf(Player* player)
     if (player->m_itemUpdateQueueBlocked)
         return;
 
+    m_updateOwner = player;
     player->m_itemUpdateQueue.push_back(this);
     uQueuePos = player->m_itemUpdateQueue.size() - 1;
 }
@@ -766,19 +821,50 @@ void Item::RemoveFromUpdateQueueOf(Player* player)
     if (!IsInUpdateQueue())
         return;
 
-    ASSERT(player);
-
-    if (player->GetGUID() != GetOwnerGUID())
+    // 【关键修复】如果 player 为 nullptr，直接返回，不能继续
+    // 这种情况可能发生在物品的owner已经被删除的场景
+    if (!player)
     {
-        LOG_DEBUG("entities.player.items", "Item::RemoveFromUpdateQueueOf - Owner's guid ({}) and player's guid ({}) don't match!", GetOwnerGUID().ToString(), player->GetGUID().ToString());
+        LOG_ERROR("entities.player.items", "Item::RemoveFromUpdateQueueOf - player is nullptr! Item GUID: {}, uQueuePos: {}",
+                  AreValuesInitialized() ? GetGUID().ToString() : "uninitialized", uQueuePos);
+        uQueuePos = -1;
+        m_updateOwner = nullptr;
         return;
     }
 
-    if (player->m_itemUpdateQueueBlocked)
+    // 检查队列位置有效性
+    if (uQueuePos < 0 || static_cast<std::size_t>(uQueuePos) >= player->m_itemUpdateQueue.size())
+    {
+        // 安全地获取 GUID，避免在对象未初始化时崩溃
+        std::string itemGuid = AreValuesInitialized() ? GetGUID().ToString() : "uninitialized";
+        std::string playerGuid = player->AreValuesInitialized() ? player->GetGUID().ToString() : "uninitialized";
+
+        LOG_ERROR("entities.player.items", "Item::RemoveFromUpdateQueueOf - queue position {} is out of range (size: {}) for item {} of player {}",
+            uQueuePos, player->m_itemUpdateQueue.size(), itemGuid, playerGuid);
+        uQueuePos = -1;
         return;
+    }
+
+    // 警告：GUID 不匹配但仍然清理队列，防止悬空指针
+    if (player->GetGUID() != GetOwnerGUID())
+    {
+        LOG_WARN("entities.player.items", "Item::RemoveFromUpdateQueueOf - Owner's guid ({}) and player's guid ({}) don't match! Cleaning up queue anyway to prevent dangling pointer.",
+                 GetOwnerGUID().ToString(), player->GetGUID().ToString());
+    }
+
+    // 【关键修复】即使队列被阻塞，也必须强制清理指针，防止在对象销毁后留下悬空指针
+    // 队列阻塞只应影响添加操作，不应阻止删除操作
+    // 这是一个严重的内存安全问题，必须优先处理
+    if (player->m_itemUpdateQueueBlocked)
+    {
+        LOG_WARN("entities.player.items", "Item::RemoveFromUpdateQueueOf - Queue is blocked but forcing removal to prevent dangling pointer for item {}. This is critical for memory safety!",
+                 AreValuesInitialized() ? GetGUID().ToString() : "uninitialized");
+        // 继续清理，不要return！
+    }
 
     player->m_itemUpdateQueue[uQueuePos] = nullptr;
     uQueuePos = -1;
+    m_updateOwner = nullptr;
 }
 
 uint8 Item::GetBagSlot() const

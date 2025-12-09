@@ -171,10 +171,36 @@ void ItemAttributesEvents::OnPlayerEquip(Player* player, Item* item, uint8 bag, 
     // 正常在线换装时才做即时刷新
     if (!player->isBeingLoaded())
     {
+        // 【关键修复】UpdateAllStats会清除自定义属性,所以需要先移除再重新应用
+        // 步骤1: 移除所有装备的自定义属性
+        for (uint8 i = EQUIPMENT_SLOT_START; i < EQUIPMENT_SLOT_END; ++i)
+        {
+            if (Item* equippedItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i))
+            {
+                if (sItemAttributesEffects)
+                {
+                    sItemAttributesEffects->RemoveItemAttributeEffects(player, equippedItem);
+                }
+            }
+        }
+
+        // 步骤2: 刷新基础属性
         player->UpdateAllStats();
         player->UpdateAttackPowerAndDamage();
         player->UpdateAttackPowerAndDamage(true);
         player->UpdateSpellDamageAndHealingBonus();
+
+        // 步骤3: 重新应用所有装备的自定义属性
+        for (uint8 i = EQUIPMENT_SLOT_START; i < EQUIPMENT_SLOT_END; ++i)
+        {
+            if (Item* equippedItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i))
+            {
+                if (sItemAttributesEffects)
+                {
+                    sItemAttributesEffects->ApplyItemAttributeEffects(player, equippedItem);
+                }
+            }
+        }
     }
 
     auto perfEnd = high_resolution_clock::now();
@@ -223,11 +249,36 @@ void ItemAttributesEvents::OnPlayerAfterSetVisibleItemSlot(Player* player, uint8
                 sItemAttributesEffects->RemoveItemAttributeEffectsByGuid(player, oldItemGuid);
             }
 
-            // 刷新玩家属性面板
+            // 【关键修复】UpdateAllStats会清除自定义属性,需要先移除所有装备属性再重新应用
+            // 步骤1: 移除所有装备的自定义属性
+            for (uint8 i = EQUIPMENT_SLOT_START; i < EQUIPMENT_SLOT_END; ++i)
+            {
+                if (Item* equippedItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i))
+                {
+                    if (sItemAttributesEffects)
+                    {
+                        sItemAttributesEffects->RemoveItemAttributeEffects(player, equippedItem);
+                    }
+                }
+            }
+
+            // 步骤2: 刷新玩家属性面板
             player->UpdateAllStats();
             player->UpdateAttackPowerAndDamage();
             player->UpdateAttackPowerAndDamage(true);
             player->UpdateSpellDamageAndHealingBonus();
+
+            // 步骤3: 重新应用所有剩余装备的自定义属性
+            for (uint8 i = EQUIPMENT_SLOT_START; i < EQUIPMENT_SLOT_END; ++i)
+            {
+                if (Item* equippedItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i))
+                {
+                    if (sItemAttributesEffects)
+                    {
+                        sItemAttributesEffects->ApplyItemAttributeEffects(player, equippedItem);
+                    }
+                }
+            }
         }
     }
 }

@@ -4910,6 +4910,46 @@ void Player::SetHomebind(WorldLocation const& loc, uint32 areaId)
     CharacterDatabase.Execute(stmt);
 }
 
+void Player::PreloadBopTradeDataForLogin()
+{
+    _loginBopTradeCache.clear();
+
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ITEM_BOP_TRADE_FOR_OWNER);
+    stmt->SetData(0, GetGUID().GetCounter());
+
+    if (PreparedQueryResult result = CharacterDatabase.Query(stmt))
+    {
+        do
+        {
+            Field* fields = result->Fetch();
+            ObjectGuid::LowType itemGuid = fields[0].Get<uint32>();
+            std::string_view allowed = fields[1].Get<std::string_view>();
+
+            AllowedLooterSet looters;
+            for (std::string_view guidStr : Acore::Tokenize(allowed, ' ', false))
+            {
+                if (Optional<ObjectGuid::LowType> guid = Acore::StringTo<ObjectGuid::LowType>(guidStr))
+                {
+                    looters.insert(ObjectGuid::Create<HighGuid::Player>(*guid));
+                }
+                else
+                {
+                    LOG_WARN("entities.player.loading", "Player::PreloadBopTradeDataForLogin: invalid GUID '{}' for item {}. Skipped.", guidStr, itemGuid);
+                }
+            }
+
+            if (!looters.empty())
+                _loginBopTradeCache[itemGuid] = std::move(looters);
+        }
+        while (result->NextRow());
+    }
+}
+
+void Player::ClearBopTradeDataAfterLogin()
+{
+    _loginBopTradeCache.clear();
+}
+
 bool Player::isBeingLoaded() const
 {
     return GetSession()->PlayerLoading();
@@ -5009,6 +5049,7 @@ bool Player::LoadFromDB(ObjectGuid playerGuid, CharacterDatabaseQueryHolder cons
 
     // load achievements before anything else to prevent multiple gains for the same achievement/criteria on every loading (as loading does call UpdateAchievementCriteria)
     m_achievementMgr->LoadFromDB(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACHIEVEMENTS), holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_CRITERIA_PROGRESS), holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_OFFLINE_ACHIEVEMENTS_UPDATES));
+
 
     uint32 money = fields[8].Get<uint32>();
     if (money > MAX_MONEY_AMOUNT)
@@ -5306,6 +5347,7 @@ bool Player::LoadFromDB(ObjectGuid playerGuid, CharacterDatabaseQueryHolder cons
 
     SaveRecallPosition();
 
+
     time_t now = GameTime::GetGameTime().count();
     time_t logoutTime = time_t(fields[27].Get<uint32>());
 
@@ -5411,6 +5453,7 @@ bool Player::LoadFromDB(ObjectGuid playerGuid, CharacterDatabaseQueryHolder cons
         SetRestFlag(REST_FLAG_IN_TAVERN, innTriggerId);
     }
 
+
     // load skills after InitStatsForLevel because it triggering aura apply also
     _LoadSkills(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_SKILLS));
     UpdateSkillsForLevel(); //update skills after load, to make sure they are correctly update at player load
@@ -5419,6 +5462,7 @@ bool Player::LoadFromDB(ObjectGuid playerGuid, CharacterDatabaseQueryHolder cons
 
     m_specsCount = fields[64].Get<uint8>();
     m_activeSpec = fields[65].Get<uint8>();
+
 
     LearnDefaultSkills();
     LearnCustomSpells();
@@ -5439,6 +5483,7 @@ bool Player::LoadFromDB(ObjectGuid playerGuid, CharacterDatabaseQueryHolder cons
     // pussywizard: remove auras that are removed at map change (after _LoadAuras)
     RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_CHANGE_MAP);
 
+
     // after spell load, learn rewarded spell if need also
     _LoadQuestStatus(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_QUEST_STATUS));
     _LoadQuestStatusRewarded(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_QUEST_STATUS_REW));
@@ -5454,13 +5499,18 @@ bool Player::LoadFromDB(ObjectGuid playerGuid, CharacterDatabaseQueryHolder cons
     // after spell, bonus talents, and quest load
     InitTalentForLevel();
 
+
     // must be before inventory (some items required reputation check)
     m_reputationMgr->LoadFromDB(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_REPUTATION));
 
     // xinef: load mails before inventory, so problematic items can be added to already loaded mails
     _LoadMail(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_MAILS), holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_MAIL_ITEMS));
 
+
+    // 在加载玩家背包前预读取一次该玩家所有 BOP 可交易物品的共享数据，避免在 _LoadItem 中对每个物品执行单独查询
+    PreloadBopTradeDataForLogin();
     _LoadInventory(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_INVENTORY), time_diff);
+    ClearBopTradeDataAfterLogin();
 
     // update items with duration and realtime
     UpdateItemDuration(time_diff, true);
@@ -5476,6 +5526,7 @@ bool Player::LoadFromDB(ObjectGuid playerGuid, CharacterDatabaseQueryHolder cons
         curTitle = 0;
 
     SetUInt32Value(PLAYER_CHOSEN_TITLE, curTitle);
+
 
     // has to be called after last Relocate() in Player::LoadFromDB
     SetFallInformation(GameTime::GetGameTime().count(), GetPositionZ());
@@ -5501,6 +5552,7 @@ bool Player::LoadFromDB(ObjectGuid playerGuid, CharacterDatabaseQueryHolder cons
         uint32 savedPower = fields[56 + i].Get<uint32>();
         SetPower(Powers(i), savedPower > GetMaxPower(Powers(i)) ? GetMaxPower(Powers(i)) : savedPower);
     }
+
 
     LOG_DEBUG("entities.player.loading", "The value of player {} after load item and aura is: ", m_name);
     outDebugValues();
@@ -5614,6 +5666,7 @@ bool Player::LoadFromDB(ObjectGuid playerGuid, CharacterDatabaseQueryHolder cons
         if (!HasAuraState((AuraStateType)m_spellInfo->CasterAuraState))
             aura->HandleAllEffects(itr->second, AURA_EFFECT_HANDLE_REAL, false);
     }
+
     return true;
 }
 
@@ -5840,6 +5893,8 @@ void Player::_LoadInventory(PreparedQueryResult result, uint32 timeDiff)
     //NOTE2: the "order by `slot`" is needed because mainhand weapons are (wrongly?)
     //expected to be equipped before offhand items (TODO: fixme)
 
+    uint32 loadedItemCount = 0;
+
     if (result)
     {
         uint32 zoneId = GetZoneId();
@@ -5856,6 +5911,7 @@ void Player::_LoadInventory(PreparedQueryResult result, uint32 timeDiff)
             Field* fields = result->Fetch();
             if (Item* item = _LoadItem(trans, zoneId, timeDiff, fields))
             {
+                ++loadedItemCount;
                 ObjectGuid::LowType bagGuid  = fields[11].Get<uint32>();
                 uint8  slot     = fields[12].Get<uint8>();
 
@@ -5969,8 +6025,10 @@ Item* Player::_LoadItem(CharacterDatabaseTransaction trans, uint32 zoneId, uint3
     Item* item = nullptr;
     ObjectGuid::LowType itemGuid  = fields[13].Get<uint32>();
     uint32 itemEntry = fields[14].Get<uint32>();
+
     if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemEntry))
     {
+
         bool remove = false;
         item = NewItemOrBag(proto);
         if (item->LoadFromDB(itemGuid, GetGUID(), fields, itemEntry))
@@ -5993,57 +6051,72 @@ Item* Player::_LoadItem(CharacterDatabaseTransaction trans, uint32 zoneId, uint3
             }
             else if (item->IsRefundable())
             {
+                // 登录阶段仅做过期清理与引用登记，延迟加载具体退款数据到真正需要时（SendRefundInfo/RefundItem），
+                // 避免对每个可退款物品在主线程上执行同步数据库查询。
+
                 if (item->GetPlayedTime() > (2 * HOUR))
                 {
                     LOG_DEBUG("entities.player.loading", "Player::_LoadInventory: player ({}, name: '{}') has item ({}, entry: {}) with expired refund time ({}). Deleting refund data and removing refundable flag.",
                               GetGUID().ToString(), GetName(), item->GetGUID().ToString(), item->GetEntry(), item->GetPlayedTime());
-                    stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_ITEM_REFUND_INSTANCE);
-                    stmt->SetData(0, item->GetGUID().GetCounter());
-                    trans->Append(stmt);
 
-                    item->RemoveFlag(ITEM_FIELD_FLAGS, ITEM_FIELD_FLAG_REFUNDABLE);
+                    // 使用统一的 SetNotRefundable 逻辑清理内存标记和 item_refund_instance 表中的数据
+                    item->SetNotRefundable(this, false, &trans);
                 }
                 else
                 {
-                    // xinef: sync query
-                    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ITEM_REFUNDS);
-                    stmt->SetData(0, item->GetGUID().GetCounter());
-                    stmt->SetData(1, GetGUID().GetCounter());
-                    if (PreparedQueryResult result = CharacterDatabase.Query(stmt))
-                    {
-                        item->SetRefundRecipient((*result)[0].Get<uint32>());
-                        item->SetPaidMoney((*result)[1].Get<uint32>());
-                        item->SetPaidExtendedCost((*result)[2].Get<uint16>());
-                        AddRefundReference(item->GetGUID());
-                    }
-                    else
-                    {
-                        LOG_DEBUG("entities.player.loading", "Player::_LoadInventory: player ({}, name: '{}') has item ({}, entry: {}) with refundable flags, but without data in item_refund_instance. Removing flag.",
-                                  GetGUID().ToString(), GetName(), item->GetGUID().ToString(), item->GetEntry());
-                        item->RemoveFlag(ITEM_FIELD_FLAGS, ITEM_FIELD_FLAG_REFUNDABLE);
-                    }
+                    // 仍然将物品加入 m_refundableItems，便于后续保存时更新计时；
+                    // 具体的退款金额与扩展花费信息在真正请求退款信息时再从数据库按需加载。
+                    AddRefundReference(item->GetGUID());
                 }
             }
             else if (item->IsBOPTradable())
             {
-                stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ITEM_BOP_TRADE);
-                stmt->SetData(0, item->GetGUID().GetCounter());
+                AllowedLooterSet looters;
+                bool hasData = false;
 
-                if (PreparedQueryResult result = CharacterDatabase.Query(stmt))
+                // 优先使用登录前预加载的共享数据，避免对每个物品单独查询数据库
+                if (!_loginBopTradeCache.empty())
                 {
-                    AllowedLooterSet looters;
-                    for (std::string_view guidStr : Acore::Tokenize((*result)[0].Get<std::string_view>(), ' ', false))
+                    auto it = _loginBopTradeCache.find(item->GetGUID().GetCounter());
+                    if (it != _loginBopTradeCache.end())
                     {
-                        if (Optional<ObjectGuid::LowType> guid = Acore::StringTo<ObjectGuid::LowType>(guidStr))
-                        {
-                            looters.insert(ObjectGuid::Create<HighGuid::Player>(*guid));
-                        }
-                        else
-                        {
-                            LOG_WARN("entities.player.loading", "Player::_LoadInventory: invalid item_soulbound_trade_data GUID '{}' for item {}. Skipped.", guidStr, item->GetGUID().ToString());
-                        }
+                        looters = it->second;
+                        hasData = true;
                     }
+                }
 
+                // 安全兜底：若预加载未命中，则退回到旧的逐物品查询逻辑，保证功能不变
+                if (!hasData)
+                {
+                    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ITEM_BOP_TRADE);
+                    stmt->SetData(0, item->GetGUID().GetCounter());
+
+                    if (PreparedQueryResult result = CharacterDatabase.Query(stmt))
+                    {
+                        for (std::string_view guidStr : Acore::Tokenize((*result)[0].Get<std::string_view>(), ' ', false))
+                        {
+                            if (Optional<ObjectGuid::LowType> guid = Acore::StringTo<ObjectGuid::LowType>(guidStr))
+                            {
+                                looters.insert(ObjectGuid::Create<HighGuid::Player>(*guid));
+                            }
+                            else
+                            {
+                                LOG_WARN("entities.player.loading", "Player::_LoadInventory: invalid item_soulbound_trade_data GUID '{}' for item {}. Skipped.", guidStr, item->GetGUID().ToString());
+                            }
+                        }
+
+                        hasData = true;
+                    }
+                    else
+                    {
+                        LOG_DEBUG("entities.player.loading", "Player::_LoadInventory: player ({}, name: '{}') has item ({}, entry: {}) with ITEM_FIELD_FLAG_BOP_TRADEABLE flag, but without data in item_soulbound_trade_data. Removing flag.",
+                                  GetGUID().ToString(), GetName(), item->GetGUID().ToString(), item->GetEntry());
+                        item->RemoveFlag(ITEM_FIELD_FLAGS, ITEM_FIELD_FLAG_BOP_TRADEABLE);
+                    }
+                }
+
+                if (hasData)
+                {
                     if (looters.size() > 1 && item->GetTemplate()->GetMaxStackSize() == 1 && item->IsSoulBound())
                     {
                         item->SetSoulboundTradeable(looters);
@@ -6051,12 +6124,6 @@ Item* Player::_LoadItem(CharacterDatabaseTransaction trans, uint32 zoneId, uint3
                     }
                     else
                         item->ClearSoulboundTradeable(this);
-                }
-                else
-                {
-                    LOG_DEBUG("entities.player.loading", "Player::_LoadInventory: player ({}, name: '{}') has item ({}, entry: {}) with ITEM_FIELD_FLAG_BOP_TRADEABLE flag, but without data in item_soulbound_trade_data. Removing flag.",
-                              GetGUID().ToString(), GetName(), item->GetGUID().ToString(), item->GetEntry());
-                    item->RemoveFlag(ITEM_FIELD_FLAGS, ITEM_FIELD_FLAG_BOP_TRADEABLE);
                 }
             }
             else if (proto->HolidayId)
@@ -6096,6 +6163,7 @@ Item* Player::_LoadItem(CharacterDatabaseTransaction trans, uint32 zoneId, uint3
         Item::DeleteFromInventoryDB(trans, itemGuid);
         Item::DeleteFromDB(trans, itemGuid);
     }
+
     return item;
 }
 
@@ -7240,6 +7308,34 @@ void Player::_SaveAuras(CharacterDatabaseTransaction trans, bool logout)
 
 void Player::_SaveInventory(CharacterDatabaseTransaction trans)
 {
+    // 【关键修复】在整个 _SaveInventory 函数执行期间阻止队列修改
+    // 原因：防止在遍历 m_itemUpdateQueue 的过程中，脚本钩子或其他代码调用 DestroyItem，
+    //       导致物品被删除但队列仍在被遍历，引发悬空指针问题
+    //
+    // 修复说明：
+    // 1. 设置 m_itemUpdateQueueBlocked = true，阻止 AddToUpdateQueueOf 添加新物品
+    // 2. RemoveFromUpdateQueueOf 仍然可以工作（清理队列中的指针）
+    // 3. 在函数结束时恢复 m_itemUpdateQueueBlocked = false
+    //
+    // 注意：使用 RAII 模式确保异常安全
+    struct QueueBlocker
+    {
+        Player* player;
+        bool previousState;
+
+        QueueBlocker(Player* p) : player(p), previousState(p->m_itemUpdateQueueBlocked)
+        {
+            player->m_itemUpdateQueueBlocked = true;
+        }
+
+        ~QueueBlocker()
+        {
+            player->m_itemUpdateQueueBlocked = previousState;
+        }
+    };
+
+    QueueBlocker blocker(this);
+
     CharacterDatabasePreparedStatement* stmt = nullptr;
     // force items in buyback slots to new state
     // and remove those that aren't already
@@ -7309,6 +7405,17 @@ void Player::_SaveInventory(CharacterDatabaseTransaction trans)
         Item* item = m_itemUpdateQueue[i];
         if (!item)
             continue;
+
+        // 安全防御：跳过内部值数组已被释放/未初始化的物品，避免在 GetGUID()/GetGuidValue 中访问空指针
+        // 注意：不要访问任何对象成员，因为对象可能已经被部分或完全销毁
+        if (!item->AreValuesInitialized())
+        {
+            LOG_ERROR("entities.player",
+                      "Player(GUID: {} Name: {})::_SaveInventory - detected invalid item pointer {} at queue index {}, the item's values have been deallocated. Skipping this item.",
+                      lowGuid, GetName(), static_cast<void*>(item), i);
+            m_itemUpdateQueue[i] = nullptr;
+            continue;
+        }
 
         Bag* container = item->GetContainer();
         ObjectGuid::LowType bag_guid = container ? container->GetGUID().GetCounter() : 0;

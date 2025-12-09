@@ -38,10 +38,14 @@ void ItemAttributesEffects::Initialize()
     RegisterAttributeEffectHandler(4,
         // 应用效果
         [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+            LOG_DEBUG("module.itemattributes.effects", "【应用】力量 +{} (玩家:{}, 物品GUID:{})",
+                value, player->GetName(), item ? item->GetGUID().GetCounter() : 0);
             player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, TOTAL_VALUE, float(value), true);
         },
         // 移除效果
         [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+            LOG_DEBUG("module.itemattributes.effects", "【移除】力量 -{} (玩家:{}, 物品GUID:{})",
+                value, player->GetName(), item ? item->GetGUID().GetCounter() : 0);
             player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, TOTAL_VALUE, float(value), false);
         },
         // 生成描述
@@ -565,9 +569,6 @@ void ItemAttributesEffects::ApplyItemAttributeEffects(Player* player, Item* item
     if (!player || !item)
         return;
 
-    using namespace std::chrono;
-    auto perfStart = high_resolution_clock::now();
-
     uint64 itemGuid = item->GetGUID().GetCounter();
 
     std::vector<uint32> attributes;
@@ -625,9 +626,6 @@ void ItemAttributesEffects::ApplyItemAttributeEffects(Player* player, Item* item
             LOG_WARN("module.itemattributes", "未找到属性类型 {} 的处理器", attributeType);
         }
     }
-
-    auto perfEnd = high_resolution_clock::now();
-    auto perfMs = duration_cast<milliseconds>(perfEnd - perfStart).count();
 }
 
 void ItemAttributesEffects::RemoveItemAttributeEffects(Player* player, Item* item)
@@ -642,9 +640,6 @@ void ItemAttributesEffects::RemoveItemAttributeEffects(Player* player, Item* ite
 
     if (!player || !item)
         return;
-
-    using namespace std::chrono;
-    auto perfStart = high_resolution_clock::now();
 
     uint64 itemGuid = item->GetGUID().GetCounter();
 
@@ -701,9 +696,6 @@ void ItemAttributesEffects::RemoveItemAttributeEffects(Player* player, Item* ite
             LOG_WARN("module.itemattributes", "未找到属性类型 {} 的移除器", attributeType);
         }
     }
-
-    auto perfEnd = high_resolution_clock::now();
-    auto perfMs = duration_cast<milliseconds>(perfEnd - perfStart).count();
 }
 
 void ItemAttributesEffects::UpdateItemAttributeEffects(Player* player)

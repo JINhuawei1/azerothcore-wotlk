@@ -517,11 +517,11 @@ bool ItemIdentificationSystem::ApplyIdentification(Player* player, Item* item, u
         return false;
 
     const IdentificationTemplate& tmpl = _identificationTemplates[templateId];
-    
 
 
     // 0. 检查物品是否已鉴定（防止重复鉴定）
-    uint32 itemGuid = item->GetGUID().GetCounter();
+    uint32 itemPropertySeed = item->GetGUID().GetCounter();
+    uint32 itemGuid = itemPropertySeed;  // 使用 PROPERTY_SEED 作为唯一标识
     if (IsItemIdentified(itemGuid))
     {
         DebugLog("物品已经被鉴定过了: GUID={}", itemGuid);
@@ -1974,7 +1974,6 @@ void ItemIdentificationSystem::RefreshItem(Player* player, Item* item)
         // 刷新物品显示到客户端
         player->SetVisibleItemSlot(item->GetSlot(), item);
 
-        // 【关键修复】参考 ItemAttributesEvents 和 ItemEnhancementMgr 的安全检查模式
         // 只在玩家完全加载且在世界中时才应用属性效果
         // 避免在登录加载阶段调用导致空指针崩溃
 #ifdef MODULE_ITEM_ATTRIBUTES
@@ -1982,17 +1981,12 @@ void ItemIdentificationSystem::RefreshItem(Player* player, Item* item)
         {
             if (sItemAttributesEffects)
             {
+                // 重新同步该装备的自定义属性效果（先移除再应用一次）
+                sItemAttributesEffects->RemoveItemAttributeEffects(player, item);
                 sItemAttributesEffects->ApplyItemAttributeEffects(player, item);
             }
         }
 #endif
-
-        // 【关键修复】同样的安全检查应用于属性刷新
-        // 避免在玩家未完全初始化时刷新属性
-        if (!player->isBeingLoaded() && player->IsInWorld())
-        {
-            player->UpdateAllStats();
-        }
 
         DebugLog("刷新已装备物品: GUID={}, 槽位={}",
                  item->GetGUID().GetCounter(), item->GetSlot());
@@ -2018,90 +2012,29 @@ private:
 public:
     ItemIdentificationEquipScript() : PlayerScript("ItemIdentificationEquipScript") {}
 
-    // 在装备物品后触发（此时官方属性已经被应用）
-    void OnPlayerEquip(Player* player, Item* item, uint8 bag, uint8 slot, bool update) override
+    // 在装备物品后触发：这里只记录装备信息，不再直接修改基础属性
+    void OnPlayerEquip(Player* player, Item* item, uint8 bag, uint8 slot, bool /*update*/) override
     {
         if (!player || !item)
             return;
 
-        using namespace std::chrono;
-        auto perfStart = high_resolution_clock::now();
-
-        // 检查物品是否已鉴定
         uint32 itemGuid = item->GetGUID().GetCounter();
         if (!sItemIdentificationSystem->IsItemIdentified(itemGuid))
             return;
 
-        ItemTemplate const* proto = item->GetTemplate();
-        if (!proto)
-            return;
-
-        // 记录这个槽位装备了已鉴定物品
         uint64 playerGuid = player->GetGUID().GetCounter();
         _identifiedEquippedItems[playerGuid][slot] = std::make_pair(itemGuid, item->GetEntry());
-
-        // 遍历物品模板的所有属性槽位，移除官方属性
-        for (uint8 i = 0; i < MAX_ITEM_PROTO_STATS; ++i)
-        {
-            if (proto->ItemStat[i].ItemStatType != 0 && proto->ItemStat[i].ItemStatValue != 0)
-            {
-                uint32 statType = proto->ItemStat[i].ItemStatType;
-                int32 statValue = proto->ItemStat[i].ItemStatValue;
-
-                // 根据属性类型移除对应的属性加成
-                switch (statType)
-                {
-                    case ITEM_MOD_STRENGTH:  // 4 - 力量
-                        player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, TOTAL_VALUE, float(statValue), false);
-                        break;
-                    case ITEM_MOD_AGILITY:   // 3 - 敏捷
-                        player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, TOTAL_VALUE, float(statValue), false);
-                        break;
-                    case ITEM_MOD_STAMINA:   // 7 - 耐力
-                        player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, TOTAL_VALUE, float(statValue), false);
-                        break;
-                    case ITEM_MOD_INTELLECT: // 5 - 智力
-                        player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, TOTAL_VALUE, float(statValue), false);
-                        break;
-                    case ITEM_MOD_SPIRIT:    // 6 - 精神
-                        player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, TOTAL_VALUE, float(statValue), false);
-                        break;
-                    // 可以添加更多属性类型的处理
-                    default:
-                        break;
-                }
-            }
-        }
-
-        // 刷新玩家属性
-        // 【性能优化】登录加载阶段不做全量刷新，交给 OnPlayerLogin 统一刷新一次
-        // 原因：登录时每件装备都会触发 OnPlayerEquip，如果每次都刷新属性，
-        //       9件装备 × 35ms = 315ms 浪费在重复刷新上
-        // 优化后：登录阶段跳过刷新，OnPlayerLogin 最后统一刷新一次，节省 ~280ms
-        // 正常在线换装时才做即时刷新
-        if (!player->isBeingLoaded())
-        {
-            player->UpdateAllStats();
-            player->UpdateAttackPowerAndDamage();
-            player->UpdateAttackPowerAndDamage(true);
-        }
-
-        auto perfEnd = high_resolution_clock::now();
-        auto perfMs = duration_cast<milliseconds>(perfEnd - perfStart).count();
     }
 
-    // 在脱下装备时触发
+    // 在脱下装备时触发：仅清理记录
     void OnPlayerAfterSetVisibleItemSlot(Player* player, uint8 slot, Item* item) override
     {
         if (!player)
             return;
 
-        // item == nullptr 表示脱下装备
         if (item == nullptr)
         {
             uint64 playerGuid = player->GetGUID().GetCounter();
-
-            // 检查这个槽位是否装备了已鉴定物品
             auto playerIt = _identifiedEquippedItems.find(playerGuid);
             if (playerIt == _identifiedEquippedItems.end())
                 return;
@@ -2111,48 +2044,30 @@ public:
             if (slotIt == playerSlots.end())
                 return;
 
-            uint32 itemEntry = slotIt->second.second;
-
-            // 通过itemEntry获取物品模板
-            ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemEntry);
-            if (proto)
-            {
-                // 恢复官方属性（因为游戏引擎会移除它们）
-                for (uint8 i = 0; i < MAX_ITEM_PROTO_STATS; ++i)
-                {
-                    if (proto->ItemStat[i].ItemStatType != 0 && proto->ItemStat[i].ItemStatValue != 0)
-                    {
-                        uint32 statType = proto->ItemStat[i].ItemStatType;
-                        int32 statValue = proto->ItemStat[i].ItemStatValue;
-
-                        // 根据属性类型恢复对应的属性加成
-                        switch (statType)
-                        {
-                            case ITEM_MOD_STRENGTH:  // 4 - 力量
-                                player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, TOTAL_VALUE, float(statValue), true);
-                                break;
-                            case ITEM_MOD_AGILITY:   // 3 - 敏捷
-                                player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, TOTAL_VALUE, float(statValue), true);
-                                break;
-                            case ITEM_MOD_STAMINA:   // 7 - 耐力
-                                player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, TOTAL_VALUE, float(statValue), true);
-                                break;
-                            case ITEM_MOD_INTELLECT: // 5 - 智力
-                                player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, TOTAL_VALUE, float(statValue), true);
-                                break;
-                            case ITEM_MOD_SPIRIT:    // 6 - 精神
-                                player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, TOTAL_VALUE, float(statValue), true);
-                                break;
-                            default:
-                                break;
-                        }
-                    }
-                }
-            }
-
-            // 从记录中移除
             playerSlots.erase(slotIt);
         }
+    }
+
+    // 通过钩子在应用物品基础属性前扩展逻辑（当前仅保留验收点，不再屏蔽官方五维属性）
+    void OnPlayerApplyItemModsBefore(Player* player, uint8 slot, bool /*apply*/, uint8 /*itemProtoStatNumber*/, uint32 /*statType*/, int32& val) override
+    {
+        if (!player || val == 0)
+            return;
+
+        // 只处理玩家身上已装备的物品槽位
+        if (slot >= EQUIPMENT_SLOT_END)
+            return;
+
+        Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!item)
+            return;
+
+        uint32 itemGuid = item->GetGUID().GetCounter();
+        if (!sItemIdentificationSystem->IsItemIdentified(itemGuid))
+            return;
+
+        // 现在不再修改 val，让官方模板中的力量/敏捷/耐力/智力/精神正常生效，
+        // 自定义属性系统只做"额外加成"，避免装备基础五维被清空。
     }
 
     // 玩家登出时清理数据

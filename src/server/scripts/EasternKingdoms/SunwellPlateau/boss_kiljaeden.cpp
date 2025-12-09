@@ -980,13 +980,20 @@ class spell_kiljaeden_sinister_reflection_clone : public SpellScript
 
     void FilterTargets(std::list<WorldObject*>& targets)
     {
-        targets.sort(Acore::ObjectDistanceOrderPred(GetCaster()));
+        Unit* caster = GetCaster();
+        if (!caster || targets.empty())
+        {
+            targets.clear();
+            return;
+        }
+
+        targets.sort(Acore::ObjectDistanceOrderPred(caster));
         WorldObject* target = targets.front();
 
         targets.clear();
         if (target && target->IsCreature())
         {
-            target->ToCreature()->AI()->SetData(1, GetCaster()->getClass());
+            target->ToCreature()->AI()->SetData(1, caster->getClass());
             targets.push_back(target);
         }
     }

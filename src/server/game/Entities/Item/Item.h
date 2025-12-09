@@ -223,6 +223,7 @@ public:
     Item* CloneItem(uint32 count, Player const* player = nullptr) const;
 
     Item();
+    virtual ~Item();
 
     virtual bool Create(ObjectGuid::LowType guidlow, uint32 itemid, Player const* owner);
 
@@ -370,6 +371,7 @@ private:
     Bag* m_container;
     ItemUpdateState uState;
     int32 uQueuePos;
+    Player* m_updateOwner;
     bool mb_in_trade;                                   // true if item is currently in trade-window
     time_t m_lastPlayedTimeUpdate;
     uint32 m_refundRecipient;

@@ -301,24 +301,56 @@ void Object::DestroyForPlayer(Player* target, bool onDeath) const
 [[nodiscard]] int32 Object::GetInt32Value(uint16 index) const
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, false));
+
+    // 检查 m_uint32Values 是否已初始化
+    if (!m_int32Values)
+    {
+        LOG_FATAL("entities.object", "Object::GetInt32Value called on uninitialized object (m_int32Values is null) at index {}", index);
+        return 0;
+    }
+
     return m_int32Values[index];
 }
 
 [[nodiscard]] uint32 Object::GetUInt32Value(uint16 index) const
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, false));
+
+    // 检查 m_uint32Values 是否已初始化
+    if (!m_uint32Values)
+    {
+        LOG_FATAL("entities.object", "Object::GetUInt32Value called on uninitialized object (m_uint32Values is null) at index {}", index);
+        return 0;
+    }
+
     return m_uint32Values[index];
 }
 
 [[nodiscard]] uint64 Object::GetUInt64Value(uint16 index) const
 {
     ASSERT(index + 1 < m_valuesCount || PrintIndexError(index, false));
+
+    // 检查 m_uint32Values 是否已初始化
+    if (!m_uint32Values)
+    {
+        LOG_FATAL("entities.object", "Object::GetUInt64Value called on uninitialized object (m_uint32Values is null) at index {}", index);
+        return 0;
+    }
+
     return *((uint64*) &(m_uint32Values[index]));
 }
 
 [[nodiscard]] float Object::GetFloatValue(uint16 index) const
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, false));
+
+    // 检查 m_uint32Values 是否已初始化
+    if (!m_floatValues)
+    {
+        LOG_FATAL("entities.object", "Object::GetFloatValue called on uninitialized object (m_floatValues is null) at index {}", index);
+        return 0.0f;
+    }
+
     return m_floatValues[index];
 }
 
@@ -326,6 +358,14 @@ void Object::DestroyForPlayer(Player* target, bool onDeath) const
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, false));
     ASSERT(offset < 4);
+
+    // 检查 m_uint32Values 是否已初始化
+    if (!m_uint32Values)
+    {
+        LOG_FATAL("entities.object", "Object::GetByteValue called on uninitialized object (m_uint32Values is null) at index {}", index);
+        return 0;
+    }
+
     return *(((uint8*) &m_uint32Values[index]) + offset);
 }
 
@@ -333,12 +373,28 @@ void Object::DestroyForPlayer(Player* target, bool onDeath) const
 {
     ASSERT(index < m_valuesCount || PrintIndexError(index, false));
     ASSERT(offset < 2);
+
+    // 检查 m_uint32Values 是否已初始化
+    if (!m_uint32Values)
+    {
+        LOG_FATAL("entities.object", "Object::GetUInt16Value called on uninitialized object (m_uint32Values is null) at index {}", index);
+        return 0;
+    }
+
     return *(((uint16*) &m_uint32Values[index]) + offset);
 }
 
 [[nodiscard]] ObjectGuid Object::GetGuidValue(uint16 index) const
 {
     ASSERT(index + 1 < m_valuesCount || PrintIndexError(index, false));
+
+    // 检查 m_uint32Values 是否已初始化，防止空指针解引用
+    if (!m_uint32Values)
+    {
+        LOG_FATAL("entities.object", "Object::GetGuidValue called on uninitialized object (m_uint32Values is null) at index {}", index);
+        return ObjectGuid::Empty;
+    }
+
     return *((ObjectGuid*) &(m_uint32Values[index]));
 }
 

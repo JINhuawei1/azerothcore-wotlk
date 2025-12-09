@@ -17782,6 +17782,10 @@ void Unit::Kill(Unit* killer, Unit* victim, bool durabilityLoss, WeaponAttackTyp
     Player* player = killer ? killer->GetCharmerOrOwnerPlayerOrPlayerItself() : nullptr;
     Creature* creature = victim->ToCreature();
 
+    // 允许脚本在致死前统一拦截（例如幻境血条多血条系统），返回 true 表示已接管本次致死
+    if (sScriptMgr->OnBeforeUnitKill(killer, victim, spellProto, spell))
+        return;
+
     bool isRewardAllowed = true;
     if (creature)
     {

@@ -561,6 +561,7 @@ public: /* UnitScript */
     void OnDisplayIdChange(Unit* unit, uint32 displayId);
     void OnUnitEnterEvadeMode(Unit* unit, uint8 why);
     void OnUnitEnterCombat(Unit* unit, Unit* victim);
+    bool OnBeforeUnitKill(Unit* killer, Unit* victim, SpellInfo const* spellInfo, Spell const* spell);
     void OnUnitDeath(Unit* unit, Unit* killer);
     void OnUnitSetShapeshiftForm(Unit* unit, uint8 form);
 

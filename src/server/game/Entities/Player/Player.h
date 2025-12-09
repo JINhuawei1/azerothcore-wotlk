@@ -2949,6 +2949,12 @@ private:
     RefundableItemsSet m_refundableItems;
     void SendRefundInfo(Item* item);
     void RefundItem(Item* item);
+    bool EnsureItemRefundData(Item* item);
+
+    using BopTradeCacheMap = std::unordered_map<ObjectGuid::LowType, AllowedLooterSet>;
+    BopTradeCacheMap _loginBopTradeCache;
+    void PreloadBopTradeDataForLogin();
+    void ClearBopTradeDataAfterLogin();
 
     // know currencies are not removed at any point (0 displayed)
     void AddKnownCurrency(uint32 itemId);

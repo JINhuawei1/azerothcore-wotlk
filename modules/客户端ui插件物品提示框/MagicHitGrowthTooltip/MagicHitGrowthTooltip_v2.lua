@@ -266,6 +266,35 @@ local function HuanJingRequest(itemID, guid, key, now)
     HuanJingState.pending[key] = now
 end
 
+-- 查询其他玩家装备的GUID（通过玩家名和装备槽位）
+-- 这个函数向服务器请求指定玩家指定槽位装备的真实GUID
+local InspectGuidCache = {}  -- 缓存查询到的GUID: "playerName:slot:itemID" -> guid
+
+local function RequestInspectItemGuid(playerName, slot, itemID)
+    if not playerName or not slot or not itemID then return end
+
+    local cacheKey = string.format("%s:%d:%d", playerName, slot, itemID)
+
+    -- 如果已经缓存，直接返回
+    if InspectGuidCache[cacheKey] then
+        return InspectGuidCache[cacheKey]
+    end
+
+    -- 向服务器发送查询请求
+    -- 格式: INSPECT_ITEM_GUID:playerName:slot:itemID
+    local addonMessage = string.format("INSPECT_ITEM_GUID:%s:%d:%d", playerName, slot, itemID)
+
+    if SendAddonMessage then
+        SendAddonMessage(ADDON_PREFIX, addonMessage, "WHISPER", UnitName("player"))
+        DebugPrint(string.format("[RequestInspectItemGuid] 已发送查询: player=%s slot=%d itemID=%d", playerName, slot, itemID))
+    elseif C_ChatInfo and C_ChatInfo.SendAddonMessage then
+        C_ChatInfo.SendAddonMessage(ADDON_PREFIX, addonMessage, "WHISPER", UnitName("player"))
+        DebugPrint(string.format("[RequestInspectItemGuid] 已发送查询: player=%s slot=%d itemID=%d", playerName, slot, itemID))
+    end
+
+    return nil
+end
+
 -- 将幻境倍率应用到“官方”物品提示框（左侧原版 GameTooltip）
 local function ApplyHuanJingToOfficialTooltip(tooltip)
     if not tooltip or not tooltip:IsShown() then return end
@@ -561,12 +590,8 @@ local function ExtractGuidFromItemString(itemString)
     if #parts >= 8 then
         local val = tonumber(parts[8])
         if val and val ~= 0 then
-            -- 取绝对值（服务器可能使用负数存储GUID）
+            -- 取绝对值（服务器可能使用负数存储GUID）；本服直接使用物品链接中的真实 GUID，不做任何偏移修正
             guid = math.abs(val)
-            -- 某些服务器会在GUID上加1000000来区分
-            if guid > 1000000 then
-                guid = guid - 1000000
-            end
             DebugPrint(string.format("[ExtractGuidFromItemString] 从位置8提取GUID: %d (原始值=%d)", guid, val))
         end
     end
@@ -577,9 +602,6 @@ local function ExtractGuidFromItemString(itemString)
         if val and val ~= 0 then
             -- 取绝对值
             guid = math.abs(val)
-            if guid > 1000000 then
-                guid = guid - 1000000
-            end
             DebugPrint(string.format("[ExtractGuidFromItemString] 从位置7提取GUID: %d (原始值=%d)", guid, val))
         end
     end
@@ -591,9 +613,6 @@ local function ExtractGuidFromItemString(itemString)
             if val and val ~= 0 then
                 -- 取绝对值
                 guid = math.abs(val)
-                if guid > 1000000 then
-                    guid = guid - 1000000
-                end
                 DebugPrint(string.format("[ExtractGuidFromItemString] 从位置%d提取GUID: %d (原始值=%d)", i, guid, val))
                 break
             end
@@ -637,9 +656,11 @@ end
 
 -- 扫描装备栏查找物品的 GUID（支持扫描其他玩家）
 -- unit: 要扫描的单位，默认为 "player"，可传入 "target" 或检查目标单位
+-- 返回: guid, bag(nil), slot, isEquipped
+-- 注意：对于其他玩家，只返回槽位信息，guid为nil（需要向服务器查询）
 local function ScanEquipmentForItem(itemID, unit)
     if not itemID then return nil end
-    
+
     unit = unit or "player"
 
     -- 遍历所有装备槽位
@@ -653,8 +674,13 @@ local function ScanEquipmentForItem(itemID, unit)
                 local itemString = string.match(link, "item[%-?%d:]+")
                 local equipGUID = ExtractGuidFromItemString(itemString)
 
-                if equipGUID and equipGUID > 0 then
+                -- 对于其他玩家，链接中的GUID不可信，返回nil
+                -- 只有自己的装备才返回GUID
+                if unit == "player" and equipGUID and equipGUID > 0 then
                     return equipGUID, nil, slot, true
+                else
+                    -- 其他玩家或没有GUID，只返回槽位信息
+                    return nil, nil, slot, true
                 end
             end
         end
@@ -696,24 +722,47 @@ local function ExtractItemInfoEnhanced(itemLink, inspectUnit)
     local itemID, guid = ExtractItemInfo(itemLink)
     if not itemID then return nil end
 
+    -- 【关键修复】如果正在观察其他玩家，链接中的GUID是无效的临时值
+    -- 需要强制向服务器查询真实GUID，即使链接中有值也要忽略
+    if inspectUnit and UnitExists(inspectUnit) and not UnitIsUnit(inspectUnit, "player") then
+        -- 扫描其他玩家的装备栏找到槽位
+        local _, _, equipSlot = ScanEquipmentForItem(itemID, inspectUnit)
+
+        if equipSlot then
+            -- 找到了装备槽位
+            local playerName = UnitName(inspectUnit)
+
+            DebugPrint(string.format("[ExtractItemInfoEnhanced] 检测到其他玩家装备(链接GUID=%s不可信): player=%s slot=%d itemID=%d",
+                tostring(guid), playerName, equipSlot, itemID))
+
+            -- 先检查缓存
+            local cacheKey = string.format("%s:%d:%d", playerName, equipSlot, itemID)
+            local cachedGuid = InspectGuidCache[cacheKey]
+
+            if cachedGuid then
+                DebugPrint(string.format("[ExtractItemInfoEnhanced] 使用缓存的GUID: %d", cachedGuid))
+                return itemID, cachedGuid, nil, equipSlot, true
+            else
+                -- 向服务器请求真实GUID
+                RequestInspectItemGuid(playerName, equipSlot, itemID)
+                -- 暂时返回nil GUID，等待服务器响应后刷新
+                DebugPrint(string.format("[ExtractItemInfoEnhanced] 已请求服务器查询真实GUID"))
+                return itemID, nil, nil, equipSlot, false
+            end
+        end
+
+        -- 没找到装备槽位，返回nil
+        return itemID, nil, nil, nil, false
+    end
+
+    -- 以下是自己的装备或背包物品，链接中的GUID是可信的
+
     -- 如果链接中已经有有效的 GUID，直接返回
     if guid and guid > 0 then
         return itemID, guid, nil, nil, false
     end
 
     -- 没有 GUID，尝试从装备栏查找
-    -- 优先检查是否正在查看其他玩家
-    if inspectUnit and UnitExists(inspectUnit) and not UnitIsUnit(inspectUnit, "player") then
-        -- 扫描其他玩家的装备栏
-        local equipGUID, _, equipSlot, isEquipped = ScanEquipmentForItem(itemID, inspectUnit)
-        if equipGUID and equipGUID > 0 then
-            return itemID, equipGUID, nil, equipSlot, true
-        end
-        -- 其他玩家的物品无法从背包获取，直接返回
-        return itemID, nil, nil, nil, false
-    end
-
-    -- 扫描自己的装备栏
     local equipGUID, _, equipSlot, isEquipped = ScanEquipmentForItem(itemID, "player")
     if equipGUID and equipGUID > 0 then
         return itemID, equipGUID, nil, equipSlot, true
@@ -2288,7 +2337,44 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
     local receiveTime = GetTime()
     
     -- 修复：忽略自己发出的查询消息（格式：QUERY:itemID:guid）
-    if message:match("^QUERY:") then
+    if message:match("^QUERY:") or message:match("^INSPECT_ITEM_GUID:") then
+        return
+    end
+
+    -- 处理检查装备GUID的响应
+    -- 格式: INSPECT_ITEM_GUID_RESPONSE:playerName:slot:itemID:guid
+    if message:match("^INSPECT_ITEM_GUID_RESPONSE:") then
+        local playerName, slot, itemID, guid = message:match("^INSPECT_ITEM_GUID_RESPONSE:([^:]+):(%d+):(%d+):(%d+)$")
+        if playerName and slot and itemID and guid then
+            slot = tonumber(slot)
+            itemID = tonumber(itemID)
+            guid = tonumber(guid)
+
+            local cacheKey = string.format("%s:%d:%d", playerName, slot, itemID)
+            InspectGuidCache[cacheKey] = guid
+
+            DebugPrint(string.format("[OnAddonMessage] 收到检查装备GUID响应: player=%s slot=%d itemID=%d guid=%d",
+                playerName, slot, itemID, guid))
+
+            -- 使用获取到的GUID重新渲染提示框
+            -- 查找当前正在显示的提示框,如果是同一物品则刷新
+            for tooltip, meta in pairs(State.tooltips) do
+                if tooltip:IsShown() then
+                    local _, itemLink = tooltip:GetItem()
+                    if itemLink then
+                        local tooltipItemID = ExtractItemInfo(itemLink)
+                        if tooltipItemID == itemID then
+                            -- 找到了对应的提示框,使用新的GUID重新渲染
+                            DebugPrint(string.format("[OnAddonMessage] 刷新提示框: itemID=%d guid=%d", itemID, guid))
+                            RenderTooltip(tooltip, itemID, guid)
+
+                            -- 同时发送查询获取自定义属性
+                            SendQuery(itemID, guid)
+                        end
+                    end
+                end
+            end
+        end
         return
     end
 

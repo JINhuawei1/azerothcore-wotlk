@@ -794,7 +794,7 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recvData)
 
         auto loginTotalEnd = std::chrono::high_resolution_clock::now();
         auto totalMs = std::chrono::duration_cast<std::chrono::milliseconds>(loginTotalEnd - loginTotalStart).count();
-        LOG_INFO("perf.login", "[性能监控-登录总耗时] 账号={} 角色GUID={} 总耗时: {}ms", GetAccountId(), playerGuid.ToString(), totalMs);
+        LOG_INFO("server.loading", "[性能监控-登录总耗时] 账号={} 角色GUID={} 总耗时: {}ms", GetAccountId(), playerGuid.ToString(), totalMs);
     });
 }
 
@@ -810,7 +810,6 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     ChatHandler chH = ChatHandler(pCurrChar->GetSession());
 
     // "GetAccountId() == db stored account id" checked in LoadFromDB (prevent login not own character using cheating tools)
-    auto loadDbStart = high_resolution_clock::now();
     if (!pCurrChar->LoadFromDB(playerGuid, holder))
     {
         SetPlayer(nullptr);
@@ -820,9 +819,7 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         return;
     }
 
-    auto loadDbEnd = high_resolution_clock::now();
-    auto loadDbMs = std::chrono::duration_cast<std::chrono::milliseconds>(loadDbEnd - loadDbStart).count();
-    LOG_INFO("perf.login", "[性能监控-登录阶段] 账号={} 角色GUID={} 阶段=LoadFromDB 耗时: {}ms", GetAccountId(), playerGuid.ToString(), loadDbMs);
+    // LoadFromDB completed
 
     pCurrChar->GetMotionMaster()->Initialize();
     pCurrChar->SendDungeonDifficulty(false);
@@ -878,11 +875,7 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     data << uint32(0);
     SendPacket(&data);
 
-    auto beforePacketsStart = high_resolution_clock::now();
     pCurrChar->SendInitialPacketsBeforeAddToMap();
-    auto beforePacketsEnd = high_resolution_clock::now();
-    auto beforePacketsMs = std::chrono::duration_cast<std::chrono::milliseconds>(beforePacketsEnd - beforePacketsStart).count();
-    LOG_INFO("perf.login", "[性能监控-登录阶段] 账号={} 角色GUID={} 阶段=SendInitialPacketsBeforeAddToMap 耗时: {}ms", GetAccountId(), playerGuid.ToString(), beforePacketsMs);
 
     //Show cinematic at the first time that player login
     if (!pCurrChar->getCinematic())
@@ -915,7 +908,6 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     pCurrChar->UpdateMaxHealth();
     pCurrChar->UpdateMaxPower(POWER_MANA);
 
-    auto addToMapStart = high_resolution_clock::now();
     if (!pCurrChar->GetMap()->AddPlayerToMap(pCurrChar) || !pCurrChar->CheckInstanceLoginValid())
     {
         AreaTriggerTeleport const* at = sObjectMgr->GetGoBackTrigger(pCurrChar->GetMapId());
@@ -928,15 +920,7 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         pCurrChar->GetSession()->SendNameQueryOpcode(pCurrChar->GetGUID());
     }
 
-    auto addToMapEnd = high_resolution_clock::now();
-    auto addToMapMs = std::chrono::duration_cast<std::chrono::milliseconds>(addToMapEnd - addToMapStart).count();
-    LOG_INFO("perf.login", "[性能监控-登录阶段] 账号={} 角色GUID={} 阶段=AddPlayerToMap+CheckInstance 耗时: {}ms", GetAccountId(), playerGuid.ToString(), addToMapMs);
-
-    auto afterPacketsStart = high_resolution_clock::now();
     pCurrChar->SendInitialPacketsAfterAddToMap();
-    auto afterPacketsEnd = high_resolution_clock::now();
-    auto afterPacketsMs = std::chrono::duration_cast<std::chrono::milliseconds>(afterPacketsEnd - afterPacketsStart).count();
-    LOG_INFO("perf.login", "[性能监控-登录阶段] 账号={} 角色GUID={} 阶段=SendInitialPacketsAfterAddToMap 耗时: {}ms", GetAccountId(), playerGuid.ToString(), afterPacketsMs);
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHAR_ONLINE);
     stmt->SetData(0, pCurrChar->GetGUID().GetCounter());

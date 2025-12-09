@@ -185,6 +185,7 @@ public:
     void ClearUpdateMask(bool remove);
 
     [[nodiscard]] uint16 GetValuesCount() const { return m_valuesCount; }
+    [[nodiscard]] bool AreValuesInitialized() const { return m_uint32Values != nullptr && m_valuesCount > 0; }
 
     [[nodiscard]] virtual bool hasQuest(uint32 /* quest_id */) const { return false; }
     [[nodiscard]] virtual bool hasInvolvedQuest(uint32 /* quest_id */) const { return false; }

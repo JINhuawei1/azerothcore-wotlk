@@ -21,6 +21,10 @@
 #include "ScriptObject.h"
 #include <vector>
 
+// 前置声明，避免在此头文件中直接包含所有法术相关头
+class Spell;
+struct SpellInfo;
+
 enum UnitHook
 {
     UNITHOOK_ON_HEAL,
@@ -44,6 +48,7 @@ enum UnitHook
     UNITHOOK_ON_DISPLAYID_CHANGE,
     UNITHOOK_ON_UNIT_ENTER_EVADE_MODE,
     UNITHOOK_ON_UNIT_ENTER_COMBAT,
+    UNITHOOK_ON_BEFORE_UNIT_KILL,
     UNITHOOK_ON_UNIT_DEATH,
     UNITHOOK_ON_UNIT_SET_SHAPESHIFT_FORM,
     UNITHOOK_END
@@ -115,6 +120,8 @@ public:
 
     virtual void OnUnitEnterEvadeMode(Unit* /*unit*/, uint8 /*evadeReason*/) { }
     virtual void OnUnitEnterCombat(Unit* /*unit*/, Unit* /*victim*/) { }
+    // 在 Unit::Kill 中真正执行致死逻辑之前调用；返回 true 则拦截后续核心死亡流程
+    [[nodiscard]] virtual bool OnBeforeUnitKill(Unit* /*killer*/, Unit* /*victim*/, SpellInfo const* /*spellProto*/, Spell const* /*spell*/) { return false; }
     virtual void OnUnitDeath(Unit* /*unit*/, Unit* /*killer*/) { }
     virtual void OnUnitSetShapeshiftForm(Unit* /*unit*/, uint8 /*form*/) { }
 };

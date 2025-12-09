@@ -140,6 +140,8 @@ bool Player::UpdateStats(Stats stat)
     // value = ((base_value * base_pct) + total_value) * total_pct
     float value  = GetTotalStatValue(stat);
 
+    // （调试日志已移除）
+
     // Apply attribute limits from database
     {
         Player* player = ToPlayer();
@@ -226,6 +228,8 @@ bool Player::UpdateStats(Stats stat)
 
     UpdateSpellDamageAndHealingBonus();
     UpdateManaRegen();
+
+    // （调试日志已移除）
 
     // Update ratings in exist SPELL_AURA_MOD_RATING_FROM_STAT and only depends from stat
     uint32 mask = 0;

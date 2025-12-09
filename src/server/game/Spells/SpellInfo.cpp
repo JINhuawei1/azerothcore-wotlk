@@ -506,13 +506,33 @@ int32 SpellEffectInfo::CalcValue(Unit const* caster, int32 const* bp, Unit const
 
             if (canEffectScale)
             {
-                CreatureTemplate const* cInfo = caster->ToCreature()->GetCreatureTemplate();
+                // 安全检查: 确保 caster 是生物类型，而不是玩家
+                Creature const* creature = caster->ToCreature();
+                if (creature)
+                {
+                    CreatureTemplate const* cInfo = creature->GetCreatureTemplate();
+                    if (cInfo)
+                    {
+                        CreatureBaseStats const* pCBS = sObjectMgr->GetCreatureBaseStats(caster->GetLevel(), caster->getClass());
+                        if (pCBS)
+                        {
+                            float CBSPowerCreature = pCBS->BaseDamage[cInfo->expansion];
+                            CreatureBaseStats const* spellCBS = sObjectMgr->GetCreatureBaseStats(_spellInfo->SpellLevel, caster->getClass());
+                            if (spellCBS)
+                            {
+                                float CBSPowerSpell = spellCBS->BaseDamage[cInfo->expansion];
 
-                CreatureBaseStats const* pCBS = sObjectMgr->GetCreatureBaseStats(caster->GetLevel(), caster->getClass());
-                float CBSPowerCreature = pCBS->BaseDamage[cInfo->expansion];
-                CreatureBaseStats const* spellCBS = sObjectMgr->GetCreatureBaseStats(_spellInfo->SpellLevel, caster->getClass());
-                float CBSPowerSpell = spellCBS->BaseDamage[cInfo->expansion];
-                value *= CBSPowerCreature / CBSPowerSpell;
+                                // 避免除以零
+                                if (CBSPowerSpell > 0.0f)
+                                {
+                                    value *= CBSPowerCreature / CBSPowerSpell;
+                                }
+                            }
+                        }
+                    }
+                }
+                // 如果不是生物（可能是玩家或其他单位类型），静默跳过缩放逻辑
+                // 这种情况理论上不应该发生，因为前面有 IsControlledByPlayer 检查
             }
         }
     }

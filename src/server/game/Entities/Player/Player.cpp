@@ -15551,6 +15551,38 @@ void Player::DeleteRefundReference(ObjectGuid itemGUID)
         m_refundableItems.erase(itr);
 }
 
+bool Player::EnsureItemRefundData(Item* item)
+{
+    if (!item)
+        return false;
+
+    if (!item->IsRefundable())
+        return false;
+
+    // 如果已经有完整的退款数据，则无需再次访问数据库
+    if (item->GetRefundRecipient() != 0 || item->GetPaidMoney() != 0 || item->GetPaidExtendedCost() != 0)
+        return true;
+
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ITEM_REFUNDS);
+    stmt->SetData(0, item->GetGUID().GetCounter());
+    stmt->SetData(1, GetGUID().GetCounter());
+
+    if (PreparedQueryResult result = CharacterDatabase.Query(stmt))
+    {
+        item->SetRefundRecipient((*result)[0].Get<uint32>());
+        item->SetPaidMoney((*result)[1].Get<uint32>());
+        item->SetPaidExtendedCost((*result)[2].Get<uint16>());
+
+        AddRefundReference(item->GetGUID());
+        return true;
+    }
+
+    LOG_DEBUG("entities.player.items", "Player::EnsureItemRefundData: player {} has item {} marked refundable but without data in item_refund_instance. Clearing refundable flag.",
+              GetGUID().ToString(), item->GetGUID().ToString());
+    item->SetNotRefundable(this);
+    return false;
+}
+
 void Player::SendRefundInfo(Item* item)
 {
     // This function call unsets ITEM_FLAGS_REFUNDABLE if played time is over 2 hours.
@@ -15561,6 +15593,9 @@ void Player::SendRefundInfo(Item* item)
         LOG_DEBUG("entities.player.items", "Item refund: item not refundable!");
         return;
     }
+
+    if (!EnsureItemRefundData(item))
+        return;
 
     if (GetGUID().GetCounter() != item->GetRefundRecipient()) // Formerly refundable item got traded
     {
@@ -15639,6 +15674,9 @@ void Player::RefundItem(Item* item)
         GetSession()->SendPacket(&data);
         return;
     }
+
+    if (!EnsureItemRefundData(item))
+        return;
 
     if (GetGUID().GetCounter() != item->GetRefundRecipient()) // Formerly refundable item got traded
     {

@@ -143,6 +143,12 @@ void ScriptMgr::OnUnitEnterCombat(Unit* unit, Unit* victim)
     CALL_ENABLED_HOOKS(UnitScript, UNITHOOK_ON_UNIT_ENTER_COMBAT, script->OnUnitEnterCombat(unit, victim));
 }
 
+bool ScriptMgr::OnBeforeUnitKill(Unit* killer, Unit* victim, SpellInfo const* spellInfo, Spell const* spell)
+{
+    CALL_ENABLED_BOOLEAN_HOOKS_WITH_DEFAULT_FALSE(UnitScript, UNITHOOK_ON_BEFORE_UNIT_KILL,
+        script->OnBeforeUnitKill(killer, victim, spellInfo, spell));
+}
+
 void ScriptMgr::OnUnitDeath(Unit* unit, Unit* killer)
 {
     CALL_ENABLED_HOOKS(UnitScript, UNITHOOK_ON_UNIT_DEATH, script->OnUnitDeath(unit, killer));
