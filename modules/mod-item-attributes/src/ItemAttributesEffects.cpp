@@ -38,14 +38,26 @@ void ItemAttributesEffects::Initialize()
     RegisterAttributeEffectHandler(4,
         // 应用效果
         [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+            // 【关键修复】安全获取物品GUID用于日志
+            uint64 itemGuid = 0;
+            if (item) {
+                ObjectGuid guidObj = item->GetGUID();
+                if (!guidObj.IsEmpty()) itemGuid = guidObj.GetCounter();
+            }
             LOG_DEBUG("module.itemattributes.effects", "【应用】力量 +{} (玩家:{}, 物品GUID:{})",
-                value, player->GetName(), item ? item->GetGUID().GetCounter() : 0);
+                value, player->GetName(), itemGuid);
             player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, TOTAL_VALUE, float(value), true);
         },
         // 移除效果
         [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+            // 【关键修复】安全获取物品GUID用于日志
+            uint64 itemGuid = 0;
+            if (item) {
+                ObjectGuid guidObj = item->GetGUID();
+                if (!guidObj.IsEmpty()) itemGuid = guidObj.GetCounter();
+            }
             LOG_DEBUG("module.itemattributes.effects", "【移除】力量 -{} (玩家:{}, 物品GUID:{})",
-                value, player->GetName(), item ? item->GetGUID().GetCounter() : 0);
+                value, player->GetName(), itemGuid);
             player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, TOTAL_VALUE, float(value), false);
         },
         // 生成描述
@@ -587,8 +599,11 @@ void ItemAttributesEffects::ApplyItemAttributeEffects(Player* player, Item* item
     // 确保属性和值的数量匹配
     if (attributes.size() != values.size())
     {
+        // 【关键修复】安全获取物品GUID用于日志
+        ObjectGuid itemGuidObj = item->GetGUID();
+        uint64 itemGuid = itemGuidObj.IsEmpty() ? 0 : itemGuidObj.GetCounter();
         LOG_ERROR("module.itemattributes", "【应用属性】错误 - 物品 GUID {} 的属性数量({})和值数量({})不匹配！",
-            item->GetGUID().GetCounter(), attributes.size(), values.size());
+            itemGuid, attributes.size(), values.size());
         return;
     }
 
@@ -685,8 +700,11 @@ void ItemAttributesEffects::RemoveItemAttributeEffects(Player* player, Item* ite
     // 确保属性和值的数量匹配
     if (attributes.size() != values.size())
     {
+        // 【关键修复】安全获取物品GUID用于日志
+        ObjectGuid itemGuidObj = item->GetGUID();
+        uint64 itemGuid = itemGuidObj.IsEmpty() ? 0 : itemGuidObj.GetCounter();
         LOG_ERROR("module.itemattributes", "【移除属性】错误 - 物品 GUID {} 的属性数量({})和值数量({})不匹配！",
-            item->GetGUID().GetCounter(), attributes.size(), values.size());
+            itemGuid, attributes.size(), values.size());
         return;
     }
 

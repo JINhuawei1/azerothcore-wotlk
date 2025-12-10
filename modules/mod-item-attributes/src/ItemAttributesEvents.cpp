@@ -97,16 +97,28 @@ void ItemAttributesEvents::OnPlayerEquip(Player* player, Item* item, uint8 bag, 
     if (!player || !item || !sConfigMgr->GetOption<bool>("ItemAttributes.Enable", true))
         return;
 
+    // 只处理真正的装备槽位（背包装备、银行等忽略），避免不必要的属性应用
+    // 【性能优化】提前检查，避免不必要的GUID获取
+    if (bag != INVENTORY_SLOT_BAG_0 || slot >= EQUIPMENT_SLOT_END)
+        return;
+
     using namespace std::chrono;
     auto perfStart = high_resolution_clock::now();
 
+    // 【关键修复】检查物品是否已完全初始化
+    // 在玩家登录时加载装备的过程中，Item对象的m_uint32Values可能还未初始化
+    // 此时调用GetGUID()会触发"GetGuidValue called on uninitialized object"错误
+    ObjectGuid itemGuidObj = item->GetGUID();
+    if (itemGuidObj.IsEmpty())
+    {
+        // 物品尚未初始化，跳过此次处理
+        // 注意：这不是错误，只是初始化顺序问题，后续会再次触发OnPlayerEquip
+        return;
+    }
+
     uint64 playerGuid = player->GetGUID().GetCounter();
     uint32 itemEntry = item->GetEntry();
-    uint64 itemGuid = item->GetGUID().GetCounter();
-
-    // 只处理真正的装备槽位（背包装备、银行等忽略），避免不必要的属性应用
-    if (bag != INVENTORY_SLOT_BAG_0 || slot >= EQUIPMENT_SLOT_END)
-        return;
+    uint64 itemGuid = itemGuidObj.GetCounter();
 
     // 【根本性修复】线程安全地检查和更新装备映射
     uint64 oldItemGuid = 0;
@@ -136,7 +148,9 @@ void ItemAttributesEvents::OnPlayerEquip(Player* player, Item* item, uint8 bag, 
         {
             if (Item* bagItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i))
             {
-                if (bagItem->GetGUID().GetCounter() == oldItemGuid)
+                // 【关键修复】检查物品是否已完全初始化
+                ObjectGuid bagItemGuid = bagItem->GetGUID();
+                if (!bagItemGuid.IsEmpty() && bagItemGuid.GetCounter() == oldItemGuid)
                 {
                     oldItem = bagItem;
                     break;
