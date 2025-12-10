@@ -49,6 +49,18 @@ void ItemAttributesEvents::OnPlayerLogin(Player* player)
 
     auto loginEnd = std::chrono::high_resolution_clock::now();
     auto totalDuration = std::chrono::duration_cast<std::chrono::milliseconds>(loginEnd - loginStart).count();
+
+    // 【性能诊断】记录登录处理耗时
+    if (totalDuration > 100)
+    {
+        LOG_WARN("module.itemattributes.perf", "OnPlayerLogin 耗时过长: {}ms (玩家={}, 强制刷新={})",
+            totalDuration, player->GetName(), forceRefresh);
+    }
+    else if (sConfigMgr->GetOption<bool>("ItemAttributes.Debug.Performance", false))
+    {
+        LOG_DEBUG("module.itemattributes.perf", "OnPlayerLogin 完成: {}ms (强制刷新={}ms)",
+            totalDuration, step1Duration);
+    }
 }
 
 void ItemAttributesEvents::OnPlayerLogout(Player* player)
@@ -102,6 +114,7 @@ void ItemAttributesEvents::OnPlayerEquip(Player* player, Item* item, uint8 bag, 
     if (bag != INVENTORY_SLOT_BAG_0 || slot >= EQUIPMENT_SLOT_END)
         return;
 
+    // 【性能诊断】记录开始时间
     using namespace std::chrono;
     auto perfStart = high_resolution_clock::now();
 
@@ -119,6 +132,14 @@ void ItemAttributesEvents::OnPlayerEquip(Player* player, Item* item, uint8 bag, 
     uint64 playerGuid = player->GetGUID().GetCounter();
     uint32 itemEntry = item->GetEntry();
     uint64 itemGuid = itemGuidObj.GetCounter();
+
+    // 【性能诊断】是否在加载状态
+    bool isLoading = player->isBeingLoaded();
+    if (sConfigMgr->GetOption<bool>("ItemAttributes.Debug.Performance", false))
+    {
+        LOG_DEBUG("module.itemattributes.perf", "OnPlayerEquip: 玩家={} 物品={} 槽位={} 加载中={}",
+            player->GetName(), itemEntry, slot, isLoading);
+    }
 
     // 【根本性修复】线程安全地检查和更新装备映射
     uint64 oldItemGuid = 0;
@@ -219,6 +240,17 @@ void ItemAttributesEvents::OnPlayerEquip(Player* player, Item* item, uint8 bag, 
 
     auto perfEnd = high_resolution_clock::now();
     auto perfMs = duration_cast<milliseconds>(perfEnd - perfStart).count();
+
+    // 【性能诊断】如果耗时超过阈值，记录警告
+    if (perfMs > 50)  // 超过50ms记录警告
+    {
+        LOG_WARN("module.itemattributes.perf", "OnPlayerEquip 耗时过长: {}ms (玩家={}, 物品={}, 槽位={}, 加载中={})",
+            perfMs, player->GetName(), itemEntry, slot, isLoading);
+    }
+    else if (sConfigMgr->GetOption<bool>("ItemAttributes.Debug.Performance", false))
+    {
+        LOG_DEBUG("module.itemattributes.perf", "OnPlayerEquip 完成: {}ms", perfMs);
+    }
 }
 
 void ItemAttributesEvents::OnPlayerAfterSetVisibleItemSlot(Player* player, uint8 slot, Item* item)
