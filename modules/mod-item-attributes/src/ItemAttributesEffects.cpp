@@ -831,13 +831,6 @@ void ItemAttributesEffects::RemoveItemAttributeEffectsByGuid(Player* player, uin
         return;
     }
 
-    // 【关键修复】添加 sItemAttributesLoader 的空指针检查
-    if (!sItemAttributesLoader)
-    {
-        LOG_ERROR("module.itemattributes", "【根据GUID移除属性】错误 - sItemAttributesLoader 未初始化！");
-        return;
-    }
-
     // 移除每个属性效果
     // 【重要】数据库中保存的是属性类型，不是属性模板ID
     for (size_t i = 0; i < attributes.size(); ++i)
@@ -879,13 +872,6 @@ std::string ItemAttributesEffects::GetAttributeDescription(Item* item, uint32 at
 
     if (!item)
         return "";
-
-    // 【关键修复】添加 sItemAttributesLoader 的空指针检查
-    if (!sItemAttributesLoader)
-    {
-        LOG_ERROR("module.itemattributes", "【获取属性描述】错误 - sItemAttributesLoader 未初始化！");
-        return "【未初始化】";
-    }
 
     // 【重要】attributeId实际上是属性类型，不是模板ID
     ItemAttributeTemplate const* attributeTemplate = sItemAttributesLoader->GetItemAttributeTemplateByType(attributeId);

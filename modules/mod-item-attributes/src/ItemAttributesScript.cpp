@@ -54,9 +54,10 @@ public:
 
             // 在服务器完全启动后初始化物品属性系统
 
+            // 【关键修复】使用不安全的版本进行初始化，因为此时系统尚未标记为已初始化
             // 加载物品属性模板
-            sItemAttributesLoader->LoadItemAttributeTemplates();
-            uint32 templateCount = sItemAttributesLoader->GetAllItemAttributeTemplates().size();
+            sItemAttributesLoaderUnsafe->LoadItemAttributeTemplates();
+            uint32 templateCount = sItemAttributesLoaderUnsafe->GetAllItemAttributeTemplates().size();
 
             // 初始化物品属性效果系统
             sItemAttributesEffects->Initialize();
@@ -1143,7 +1144,8 @@ public:
 
     static bool HandleAttributesReloadCommand(ChatHandler* handler, const char* /*args*/)
     {
-        sItemAttributesLoader->LoadItemAttributeTemplates();
+        // 【关键修复】使用不安全的版本进行重新加载
+        sItemAttributesLoaderUnsafe->LoadItemAttributeTemplates();
         handler->SendSysMessage("物品属性模板已重新加载");
         return true;
     }
