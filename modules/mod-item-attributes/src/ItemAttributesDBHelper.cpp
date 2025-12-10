@@ -360,6 +360,13 @@ uint32 ItemAttributesDBHelper::GetAttributeCount(uint64 itemGuid)
 // 格式化属性数据为响应字符串
 std::string ItemAttributesDBHelper::FormatAttributesForClient(const ItemAttributeData& data)
 {
+    // 【关键修复】添加 sItemAttributesLoader 的空指针检查
+    if (!sItemAttributesLoader)
+    {
+        LOG_ERROR("module.itemattributes", "【格式化属性】错误 - sItemAttributesLoader 未初始化！");
+        return "";
+    }
+
     std::string result;
     bool first = true;
 

@@ -24,25 +24,36 @@ public:
 
     // 应用物品属性效果
     void ApplyItemAttributeEffects(Player* player, Item* item);
-    
+
     // 移除物品的属性效果
     void RemoveItemAttributeEffects(Player* player, Item* item);
-    
+
     // 根据物品GUID移除属性效果（用于无法获取Item对象的情况）
     void RemoveItemAttributeEffectsByGuid(Player* player, uint64 itemGuid);
-    
+
     // 更新物品属性效果
     void UpdateItemAttributeEffects(Player* player);
-    
+
     // 获取物品属性描述
     std::string GetAttributeDescription(Item* item, uint32 attributeId);
 
 private:
-    ItemAttributesEffects() : _isInitialized(false) {}
+    ItemAttributesEffects() : _isInitialized(false), _batchUpdateInProgress(false), _lastPlayerGuid(0), _pendingUpdateCount(0) {}
     ~ItemAttributesEffects() = default;
 
     // 【根本性修复】初始化状态标志
     bool _isInitialized;
+
+    // 【性能优化】批量更新进行中标志
+    bool _batchUpdateInProgress;
+
+    // 【性能优化-防抖】防抖机制：短时间内连续调用时延迟UpdateStats
+    uint64 _lastPlayerGuid;          // 上次操作的玩家GUID
+    uint32 _pendingUpdateCount;      // 待处理的更新计数
+    std::chrono::steady_clock::time_point _lastOperationTime;  // 上次操作时间
+
+    // 【性能优化-防抖】检查是否需要立即更新
+    bool ShouldUpdateImmediately(Player* player);
 
     // 属性效果处理函数类型
     using AttributeEffectHandler = std::function<void(Player*, Item*, ItemAttributeTemplate const*, int32)>;

@@ -569,13 +569,10 @@ void ItemAttributesEffects::ApplyItemAttributeEffects(Player* player, Item* item
     if (!player || !item)
         return;
 
-    uint64 itemGuid = item->GetGUID().GetCounter();
-
     std::vector<uint32> attributes;
     std::vector<int32> values;
 
     // 【关键修复】添加 sItemAttributesLoader 的空指针检查
-    // 虽然是单例，但在某些极端情况下可能未初始化
     if (!sItemAttributesLoader)
     {
         LOG_ERROR("module.itemattributes", "【应用属性】错误 - sItemAttributesLoader 未初始化！");
@@ -583,37 +580,39 @@ void ItemAttributesEffects::ApplyItemAttributeEffects(Player* player, Item* item
     }
 
     if (!sItemAttributesLoader->GetItemAttributesWithValues(item, attributes, values))
+    {
         return;
+    }
 
     // 确保属性和值的数量匹配
     if (attributes.size() != values.size())
     {
         LOG_ERROR("module.itemattributes", "【应用属性】错误 - 物品 GUID {} 的属性数量({})和值数量({})不匹配！",
-            itemGuid, attributes.size(), values.size());
+            item->GetGUID().GetCounter(), attributes.size(), values.size());
         return;
     }
 
     if (attributes.empty())
-    {
         return;
+
+    // 【性能优化-批量更新】禁用自动属性更新，所有属性应用完后统一更新一次
+    bool needsUpdate = !_batchUpdateInProgress;
+    if (needsUpdate)
+    {
+        player->SetCanModifyStats(false);
     }
 
     // 应用每个属性效果
-    // 【重要】数据库中保存的是属性类型，不是属性模板ID
     for (size_t i = 0; i < attributes.size(); ++i)
     {
-        uint32 attributeType = attributes[i];  // 这是属性类型
+        uint32 attributeType = attributes[i];
         int32 value = values[i];
 
-        // 查找属性类型对应的效果处理器
         auto handlerItr = _attributeEffectHandlers.find(attributeType);
         if (handlerItr != _attributeEffectHandlers.end())
         {
-            // 【关键修复】添加函数指针有效性检查
             if (handlerItr->second)
             {
-                // 使用数据库中保存的值，而不是重新计算
-                // 注意：这里传递nullptr作为attributeTemplate，因为我们只需要attributeType
                 handlerItr->second(player, item, nullptr, value);
             }
             else
@@ -624,6 +623,33 @@ void ItemAttributesEffects::ApplyItemAttributeEffects(Player* player, Item* item
         else
         {
             LOG_WARN("module.itemattributes", "未找到属性类型 {} 的处理器", attributeType);
+        }
+    }
+
+    // 【性能优化-防抖】检查是否应该立即更新
+    auto now = std::chrono::steady_clock::now();
+    uint64 playerGuid = player->GetGUID().GetCounter();
+    bool samePlayer = (playerGuid == _lastPlayerGuid);
+    auto timeSinceLastOp = std::chrono::duration_cast<std::chrono::milliseconds>(now - _lastOperationTime).count();
+
+    bool shouldDelay = false;
+    if (needsUpdate && samePlayer && timeSinceLastOp < 50)
+    {
+        shouldDelay = true;
+        _pendingUpdateCount++;
+    }
+
+    _lastPlayerGuid = playerGuid;
+    _lastOperationTime = now;
+
+    if (needsUpdate && !shouldDelay)
+    {
+        player->SetCanModifyStats(true);
+        player->UpdateAllStats();
+
+        if (_pendingUpdateCount > 0)
+        {
+            _pendingUpdateCount = 0;
         }
     }
 }
@@ -641,13 +667,10 @@ void ItemAttributesEffects::RemoveItemAttributeEffects(Player* player, Item* ite
     if (!player || !item)
         return;
 
-    uint64 itemGuid = item->GetGUID().GetCounter();
-
     std::vector<uint32> attributes;
     std::vector<int32> values;
 
     // 【关键修复】添加 sItemAttributesLoader 的空指针检查
-    // 虽然是单例，但在某些极端情况下可能未初始化
     if (!sItemAttributesLoader)
     {
         LOG_ERROR("module.itemattributes", "【移除属性】错误 - sItemAttributesLoader 未初始化！");
@@ -655,35 +678,39 @@ void ItemAttributesEffects::RemoveItemAttributeEffects(Player* player, Item* ite
     }
 
     if (!sItemAttributesLoader->GetItemAttributesWithValues(item, attributes, values))
+    {
         return;
+    }
 
     // 确保属性和值的数量匹配
     if (attributes.size() != values.size())
     {
         LOG_ERROR("module.itemattributes", "【移除属性】错误 - 物品 GUID {} 的属性数量({})和值数量({})不匹配！",
-            itemGuid, attributes.size(), values.size());
+            item->GetGUID().GetCounter(), attributes.size(), values.size());
         return;
     }
 
     if (attributes.empty())
         return;
 
+    // 【性能优化-批量更新】禁用自动属性更新，所有属性移除完后统一更新一次
+    bool needsUpdate = !_batchUpdateInProgress;
+    if (needsUpdate)
+    {
+        player->SetCanModifyStats(false);
+    }
+
     // 移除每个属性效果
-    // 【重要】数据库中保存的是属性类型，不是属性模板ID
     for (size_t i = 0; i < attributes.size(); ++i)
     {
-        uint32 attributeType = attributes[i];  // 这是属性类型
+        uint32 attributeType = attributes[i];
         int32 value = values[i];
 
-        // 查找属性类型对应的效果移除器
         auto removerItr = _attributeEffectRemovers.find(attributeType);
         if (removerItr != _attributeEffectRemovers.end())
         {
-            // 【关键修复】添加函数指针有效性检查
             if (removerItr->second)
             {
-                // 使用数据库中保存的值，而不是重新计算
-                // 注意：这里传递nullptr作为attributeTemplate，因为我们只需要attributeType
                 removerItr->second(player, item, nullptr, value);
             }
             else
@@ -696,12 +723,45 @@ void ItemAttributesEffects::RemoveItemAttributeEffects(Player* player, Item* ite
             LOG_WARN("module.itemattributes", "未找到属性类型 {} 的移除器", attributeType);
         }
     }
+
+    // 【性能优化-防抖】检查是否应该立即更新
+    auto now = std::chrono::steady_clock::now();
+    uint64 playerGuid = player->GetGUID().GetCounter();
+    bool samePlayer = (playerGuid == _lastPlayerGuid);
+    auto timeSinceLastOp = std::chrono::duration_cast<std::chrono::milliseconds>(now - _lastOperationTime).count();
+
+    bool shouldDelay = false;
+    if (needsUpdate && samePlayer && timeSinceLastOp < 50)
+    {
+        shouldDelay = true;
+        _pendingUpdateCount++;
+    }
+
+    _lastPlayerGuid = playerGuid;
+    _lastOperationTime = now;
+
+    if (needsUpdate && !shouldDelay)
+    {
+        player->SetCanModifyStats(true);
+        player->UpdateAllStats();
+
+        if (_pendingUpdateCount > 0)
+        {
+            _pendingUpdateCount = 0;
+        }
+    }
 }
 
 void ItemAttributesEffects::UpdateItemAttributeEffects(Player* player)
 {
     if (!player)
         return;
+
+    // 【性能优化-批量更新】设置批量更新标志，防止每个装备都触发UpdateAllStats
+    _batchUpdateInProgress = true;
+
+    // 【性能优化-批量更新】禁用自动属性更新，处理完所有装备后统一更新一次
+    player->SetCanModifyStats(false);
 
     // 移除所有物品属性效果
     for (uint8 i = EQUIPMENT_SLOT_START; i < EQUIPMENT_SLOT_END; ++i)
@@ -720,6 +780,14 @@ void ItemAttributesEffects::UpdateItemAttributeEffects(Player* player)
             ApplyItemAttributeEffects(player, item);
         }
     }
+
+    // 【性能优化-批量更新】恢复批量更新标志
+    _batchUpdateInProgress = false;
+
+    // 【性能优化-批量更新】重新启用属性更新并统一计算一次
+    // 这样所有装备的属性变化只触发一次UpdateStats
+    player->SetCanModifyStats(true);
+    player->UpdateAllStats();
 }
 
 void ItemAttributesEffects::RemoveItemAttributeEffectsByGuid(Player* player, uint64 itemGuid)
@@ -760,6 +828,13 @@ void ItemAttributesEffects::RemoveItemAttributeEffectsByGuid(Player* player, uin
     {
         LOG_ERROR("module.itemattributes", "【根据GUID移除属性】错误 - 物品 GUID {} 的属性数量({})和值数量({})不匹配！", 
             itemGuid, attributes.size(), values.size());
+        return;
+    }
+
+    // 【关键修复】添加 sItemAttributesLoader 的空指针检查
+    if (!sItemAttributesLoader)
+    {
+        LOG_ERROR("module.itemattributes", "【根据GUID移除属性】错误 - sItemAttributesLoader 未初始化！");
         return;
     }
 
@@ -804,6 +879,13 @@ std::string ItemAttributesEffects::GetAttributeDescription(Item* item, uint32 at
 
     if (!item)
         return "";
+
+    // 【关键修复】添加 sItemAttributesLoader 的空指针检查
+    if (!sItemAttributesLoader)
+    {
+        LOG_ERROR("module.itemattributes", "【获取属性描述】错误 - sItemAttributesLoader 未初始化！");
+        return "【未初始化】";
+    }
 
     // 【重要】attributeId实际上是属性类型，不是模板ID
     ItemAttributeTemplate const* attributeTemplate = sItemAttributesLoader->GetItemAttributeTemplateByType(attributeId);
