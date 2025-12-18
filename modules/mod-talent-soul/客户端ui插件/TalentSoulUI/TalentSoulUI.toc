@@ -1,0 +1,22 @@
+## Interface: 30300
+## Title: |cff9933FF天赋之魂|r
+## Title-zhCN: |cff9933FF天赋之魂|r
+## Title-enUS: Talent Soul UI
+## Notes: 天赋之魂系统界面 - 强化你的技能
+## Notes-zhCN: 天赋之魂系统界面 - 强化你的技能
+## Notes-enUS: Talent Soul system interface - Enhance your skills
+## Author: Talent Soul System Team
+## Version: 1.0.0
+## SavedVariables: TalentSoulUIDB
+## Dependencies:
+## OptionalDeps: PluginManagerClient
+
+# 配置文件（必须最先加载）
+Config.lua
+
+# 核心模块
+Communication.lua
+DataManager.lua
+
+# UI文件（XML会自动加载Lua）
+TalentSoulUI.xml

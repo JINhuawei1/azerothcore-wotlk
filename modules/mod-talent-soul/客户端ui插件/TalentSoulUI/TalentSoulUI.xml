@@ -1,0 +1,467 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.blizzard.com/wow/ui/ ..\FrameXML\UI.xsd">
+
+    <!-- 主Lua文件 -->
+    <Script file="TalentSoulUI.lua"/>
+
+    <!-- 主窗口框架 -->
+    <Frame name="TalentSoulMainFrame" parent="UIParent" frameStrata="HIGH" movable="true" enableMouse="true" hidden="true">
+        <Size x="700" y="550"/>
+        <Anchors>
+            <Anchor point="CENTER"/>
+        </Anchors>
+
+        <!-- 暗黑背景 -->
+        <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background-Dark" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
+            <BackgroundInsets>
+                <AbsInset left="11" right="12" top="12" bottom="11"/>
+            </BackgroundInsets>
+            <TileSize>
+                <AbsValue val="32"/>
+            </TileSize>
+            <EdgeSize>
+                <AbsValue val="32"/>
+            </EdgeSize>
+        </Backdrop>
+
+        <Layers>
+            <!-- 标题背景 -->
+            <Layer level="ARTWORK">
+                <Texture name="$parentTitleBg">
+                    <Size x="680" y="40"/>
+                    <Anchors>
+                        <Anchor point="TOP" relativeTo="$parent" relativePoint="TOP">
+                            <Offset x="0" y="-10"/>
+                        </Anchor>
+                    </Anchors>
+                    <Color r="0.1" g="0.08" b="0.15" a="0.9"/>
+                </Texture>
+
+                <!-- 标题文字 -->
+                <FontString name="$parentTitleText" inherits="GameFontNormalLarge" text="天赋之魂">
+                    <Anchors>
+                        <Anchor point="TOP" relativeTo="$parent" relativePoint="TOP">
+                            <Offset x="0" y="-18"/>
+                        </Anchor>
+                    </Anchors>
+                    <Color r="0.6" g="0.2" b="1" a="1"/>
+                </FontString>
+
+                <!-- 天赋点显示 -->
+                <FontString name="$parentPointsText" inherits="GameFontNormal" text="天赋点: 0 / 0">
+                    <Anchors>
+                        <Anchor point="TOPRIGHT" relativeTo="$parent" relativePoint="TOPRIGHT">
+                            <Offset x="-60" y="-18"/>
+                        </Anchor>
+                    </Anchors>
+                    <Color r="1" g="0.84" b="0" a="1"/>
+                </FontString>
+            </Layer>
+        </Layers>
+
+        <Frames>
+            <!-- 关闭按钮 -->
+            <Button name="$parentCloseButton" inherits="UIPanelCloseButton">
+                <Anchors>
+                    <Anchor point="TOPRIGHT" relativeTo="$parent" relativePoint="TOPRIGHT">
+                        <Offset x="-5" y="-5"/>
+                    </Anchor>
+                </Anchors>
+                <Scripts>
+                    <OnClick>
+                        TalentSoulMainFrame:Hide()
+                    </OnClick>
+                </Scripts>
+            </Button>
+
+            <!-- 职业标签栏区域 -->
+            <Frame name="$parentClassTabFrame">
+                <Size x="660" y="35"/>
+                <Anchors>
+                    <Anchor point="TOPLEFT" relativeTo="$parent" relativePoint="TOPLEFT">
+                        <Offset x="20" y="-55"/>
+                    </Anchor>
+                </Anchors>
+                <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
+                    <BackgroundInsets>
+                        <AbsInset left="3" right="3" top="3" bottom="3"/>
+                    </BackgroundInsets>
+                    <TileSize>
+                        <AbsValue val="16"/>
+                    </TileSize>
+                    <EdgeSize>
+                        <AbsValue val="12"/>
+                    </EdgeSize>
+                </Backdrop>
+                <Scripts>
+                    <OnLoad>
+                        self:SetBackdropColor(0.03, 0.03, 0.05, 0.95)
+                        self:SetBackdropBorderColor(0.25, 0.25, 0.35, 1)
+                    </OnLoad>
+                </Scripts>
+            </Frame>
+
+            <!-- 左侧技能列表区域 -->
+            <Frame name="$parentSkillListFrame">
+                <Size x="240" y="395"/>
+                <Anchors>
+                    <Anchor point="TOPLEFT" relativeTo="$parent" relativePoint="TOPLEFT">
+                        <Offset x="20" y="-95"/>
+                    </Anchor>
+                </Anchors>
+                <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
+                    <BackgroundInsets>
+                        <AbsInset left="4" right="4" top="4" bottom="4"/>
+                    </BackgroundInsets>
+                    <TileSize>
+                        <AbsValue val="16"/>
+                    </TileSize>
+                    <EdgeSize>
+                        <AbsValue val="16"/>
+                    </EdgeSize>
+                </Backdrop>
+                <Scripts>
+                    <OnLoad>
+                        self:SetBackdropColor(0.05, 0.05, 0.08, 0.95)
+                        self:SetBackdropBorderColor(0.3, 0.3, 0.4, 1)
+                    </OnLoad>
+                </Scripts>
+
+                <Layers>
+                    <Layer level="OVERLAY">
+                        <FontString name="$parentTitle" inherits="GameFontNormal" text="可强化技能">
+                            <Anchors>
+                                <Anchor point="TOP">
+                                    <Offset x="0" y="-8"/>
+                                </Anchor>
+                            </Anchors>
+                            <Color r="0.8" g="0.8" b="0.8" a="1"/>
+                        </FontString>
+                    </Layer>
+                </Layers>
+
+                <!-- 技能滚动框架 -->
+                <Frames>
+                    <ScrollFrame name="$parentScrollFrame" inherits="FauxScrollFrameTemplate">
+                        <Size x="210" y="355"/>
+                        <Anchors>
+                            <Anchor point="TOPLEFT">
+                                <Offset x="5" y="-25"/>
+                            </Anchor>
+                        </Anchors>
+                        <Scripts>
+                            <OnVerticalScroll>
+                                FauxScrollFrame_OnVerticalScroll(self, offset, 50, TalentSoulUI_UpdateSkillList)
+                            </OnVerticalScroll>
+                        </Scripts>
+                    </ScrollFrame>
+                </Frames>
+            </Frame>
+
+            <!-- 右侧技能详情区域 -->
+            <Frame name="$parentDetailFrame">
+                <Size x="400" y="300"/>
+                <Anchors>
+                    <Anchor point="TOPRIGHT" relativeTo="$parent" relativePoint="TOPRIGHT">
+                        <Offset x="-20" y="-95"/>
+                    </Anchor>
+                </Anchors>
+                <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
+                    <BackgroundInsets>
+                        <AbsInset left="4" right="4" top="4" bottom="4"/>
+                    </BackgroundInsets>
+                    <TileSize>
+                        <AbsValue val="16"/>
+                    </TileSize>
+                    <EdgeSize>
+                        <AbsValue val="16"/>
+                    </EdgeSize>
+                </Backdrop>
+                <Scripts>
+                    <OnLoad>
+                        self:SetBackdropColor(0.05, 0.05, 0.08, 0.95)
+                        self:SetBackdropBorderColor(0.3, 0.3, 0.4, 1)
+                    </OnLoad>
+                </Scripts>
+
+                <Layers>
+                    <Layer level="OVERLAY">
+                        <!-- 技能图标 -->
+                        <Texture name="$parentSkillIcon">
+                            <Size x="50" y="50"/>
+                            <Anchors>
+                                <Anchor point="TOPLEFT">
+                                    <Offset x="15" y="-15"/>
+                                </Anchor>
+                            </Anchors>
+                        </Texture>
+
+                        <!-- 技能名称 -->
+                        <FontString name="$parentSkillName" inherits="GameFontNormalLarge" text="选择一个技能">
+                            <Anchors>
+                                <Anchor point="TOPLEFT" relativeTo="$parentSkillIcon" relativePoint="TOPRIGHT">
+                                    <Offset x="10" y="-5"/>
+                                </Anchor>
+                            </Anchors>
+                            <Color r="1" g="1" b="1" a="1"/>
+                        </FontString>
+
+                        <!-- 技能描述 -->
+                        <FontString name="$parentSkillDesc" inherits="GameFontNormalSmall" text="" justifyH="LEFT" justifyV="TOP">
+                            <Size x="300" y="40"/>
+                            <Anchors>
+                                <Anchor point="TOPLEFT" relativeTo="$parentSkillIcon" relativePoint="TOPRIGHT">
+                                    <Offset x="10" y="-25"/>
+                                </Anchor>
+                            </Anchors>
+                            <Color r="0.7" g="0.7" b="0.7" a="1"/>
+                        </FontString>
+
+                        <!-- 分隔线 -->
+                        <Texture name="$parentSeparator">
+                            <Size x="370" y="2"/>
+                            <Anchors>
+                                <Anchor point="TOPLEFT">
+                                    <Offset x="15" y="-75"/>
+                                </Anchor>
+                            </Anchors>
+                            <Color r="0.3" g="0.3" b="0.4" a="0.8"/>
+                        </Texture>
+
+                        <!-- 属性标题 -->
+                        <FontString name="$parentAttrTitle" inherits="GameFontNormal" text="技能强化">
+                            <Anchors>
+                                <Anchor point="TOPLEFT">
+                                    <Offset x="15" y="-85"/>
+                                </Anchor>
+                            </Anchors>
+                            <Color r="0.9" g="0.7" b="1" a="1"/>
+                        </FontString>
+                    </Layer>
+                </Layers>
+            </Frame>
+
+            <!-- 底部按钮区域 -->
+            <Frame name="$parentButtonFrame">
+                <Size x="400" y="80"/>
+                <Anchors>
+                    <Anchor point="BOTTOMRIGHT" relativeTo="$parent" relativePoint="BOTTOMRIGHT">
+                        <Offset x="-20" y="20"/>
+                    </Anchor>
+                </Anchors>
+                <Backdrop bgFile="Interface\Tooltips\UI-Tooltip-Background" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="true">
+                    <BackgroundInsets>
+                        <AbsInset left="4" right="4" top="4" bottom="4"/>
+                    </BackgroundInsets>
+                    <TileSize>
+                        <AbsValue val="16"/>
+                    </TileSize>
+                    <EdgeSize>
+                        <AbsValue val="16"/>
+                    </EdgeSize>
+                </Backdrop>
+                <Scripts>
+                    <OnLoad>
+                        self:SetBackdropColor(0.05, 0.05, 0.08, 0.95)
+                        self:SetBackdropBorderColor(0.3, 0.3, 0.4, 1)
+                    </OnLoad>
+                </Scripts>
+
+                <Frames>
+                    <!-- 刷新按钮 -->
+                    <Button name="$parentRefreshButton" inherits="UIPanelButtonTemplate" text="刷新数据">
+                        <Size x="100" y="30"/>
+                        <Anchors>
+                            <Anchor point="LEFT">
+                                <Offset x="20" y="0"/>
+                            </Anchor>
+                        </Anchors>
+                        <Scripts>
+                            <OnClick>
+                                TalentSoulUI_RefreshData()
+                            </OnClick>
+                        </Scripts>
+                    </Button>
+
+                    <!-- 重置天赋按钮 -->
+                    <Button name="$parentResetButton" inherits="UIPanelButtonTemplate" text="重置天赋">
+                        <Size x="100" y="30"/>
+                        <Anchors>
+                            <Anchor point="RIGHT">
+                                <Offset x="-20" y="0"/>
+                            </Anchor>
+                        </Anchors>
+                        <Scripts>
+                            <OnClick>
+                                TalentSoulUI_ShowResetConfirm()
+                            </OnClick>
+                        </Scripts>
+                    </Button>
+                </Frames>
+            </Frame>
+        </Frames>
+
+        <Scripts>
+            <OnLoad>
+                TalentSoulUI_OnLoad(self)
+            </OnLoad>
+            <OnShow>
+                TalentSoulUI_OnShow(self)
+            </OnShow>
+            <OnHide>
+                TalentSoulUI_OnHide(self)
+            </OnHide>
+            <OnDragStart>
+                self:StartMoving()
+            </OnDragStart>
+            <OnDragStop>
+                self:StopMovingOrSizing()
+            </OnDragStop>
+        </Scripts>
+    </Frame>
+
+    <!-- 重置确认对话框 -->
+    <Frame name="TalentSoulResetConfirmFrame" parent="UIParent" frameStrata="DIALOG" movable="true" enableMouse="true" hidden="true">
+        <Size x="300" y="150"/>
+        <Anchors>
+            <Anchor point="CENTER"/>
+        </Anchors>
+        <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background-Dark" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
+            <BackgroundInsets>
+                <AbsInset left="11" right="12" top="12" bottom="11"/>
+            </BackgroundInsets>
+            <TileSize>
+                <AbsValue val="32"/>
+            </TileSize>
+            <EdgeSize>
+                <AbsValue val="32"/>
+            </EdgeSize>
+        </Backdrop>
+
+        <Layers>
+            <Layer level="ARTWORK">
+                <FontString name="$parentTitle" inherits="GameFontNormalLarge" text="确认重置">
+                    <Anchors>
+                        <Anchor point="TOP">
+                            <Offset x="0" y="-20"/>
+                        </Anchor>
+                    </Anchors>
+                    <Color r="1" g="0.3" b="0.3" a="1"/>
+                </FontString>
+
+                <FontString name="$parentText" inherits="GameFontNormal" justifyH="CENTER">
+                    <Size x="260" y="50"/>
+                    <Anchors>
+                        <Anchor point="CENTER">
+                            <Offset x="0" y="10"/>
+                        </Anchor>
+                    </Anchors>
+                    <Color r="1" g="1" b="1" a="1"/>
+                </FontString>
+            </Layer>
+        </Layers>
+
+        <Frames>
+            <!-- 确认按钮 -->
+            <Button name="$parentConfirmButton" inherits="UIPanelButtonTemplate" text="确认重置">
+                <Size x="100" y="25"/>
+                <Anchors>
+                    <Anchor point="BOTTOMLEFT">
+                        <Offset x="30" y="20"/>
+                    </Anchor>
+                </Anchors>
+                <Scripts>
+                    <OnClick>
+                        TalentSoulUI_DoReset()
+                        TalentSoulResetConfirmFrame:Hide()
+                    </OnClick>
+                </Scripts>
+            </Button>
+
+            <!-- 取消按钮 -->
+            <Button name="$parentCancelButton" inherits="UIPanelButtonTemplate" text="取消">
+                <Size x="100" y="25"/>
+                <Anchors>
+                    <Anchor point="BOTTOMRIGHT">
+                        <Offset x="-30" y="20"/>
+                    </Anchor>
+                </Anchors>
+                <Scripts>
+                    <OnClick>
+                        TalentSoulResetConfirmFrame:Hide()
+                    </OnClick>
+                </Scripts>
+            </Button>
+        </Frames>
+
+        <Scripts>
+            <OnShow>
+                TalentSoulResetConfirmFrameText:SetText(TalentSoulConfig.Messages.ResetConfirm)
+            </OnShow>
+        </Scripts>
+    </Frame>
+
+    <!-- 小地图按钮 -->
+    <Button name="TalentSoulMinimapButton" parent="Minimap" frameStrata="MEDIUM" movable="true" enableMouse="true">
+        <Size x="32" y="32"/>
+        <Anchors>
+            <Anchor point="TOPLEFT" relativeTo="Minimap" relativePoint="TOPLEFT">
+                <Offset x="0" y="0"/>
+            </Anchor>
+        </Anchors>
+
+        <Layers>
+            <Layer level="BACKGROUND">
+                <Texture name="$parentBackground">
+                    <Size x="32" y="32"/>
+                    <Anchors>
+                        <Anchor point="CENTER"/>
+                    </Anchors>
+                    <TexCoords left="0" right="1" top="0" bottom="1"/>
+                </Texture>
+            </Layer>
+            <Layer level="ARTWORK">
+                <Texture name="$parentIcon" file="Interface\Icons\Spell_Holy_InnerFire">
+                    <Size x="20" y="20"/>
+                    <Anchors>
+                        <Anchor point="CENTER"/>
+                    </Anchors>
+                </Texture>
+            </Layer>
+            <Layer level="OVERLAY">
+                <Texture name="$parentBorder" file="Interface\Minimap\MiniMap-TrackingBorder">
+                    <Size x="56" y="56"/>
+                    <Anchors>
+                        <Anchor point="TOPLEFT"/>
+                    </Anchors>
+                </Texture>
+            </Layer>
+        </Layers>
+
+        <HighlightTexture file="Interface\Minimap\UI-Minimap-ZoomButton-Highlight" alphaMode="ADD"/>
+
+        <Scripts>
+            <OnLoad>
+                TalentSoulUI_MinimapButton_OnLoad(self)
+            </OnLoad>
+            <OnClick>
+                TalentSoulUI_Toggle()
+            </OnClick>
+            <OnEnter>
+                GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+                GameTooltip:AddLine("|cff9933FF天赋之魂|r")
+                GameTooltip:AddLine("点击打开天赋之魂界面", 1, 1, 1)
+                GameTooltip:Show()
+            </OnEnter>
+            <OnLeave>
+                GameTooltip:Hide()
+            </OnLeave>
+            <OnDragStart>
+                self:StartMoving()
+            </OnDragStart>
+            <OnDragStop>
+                self:StopMovingOrSizing()
+            </OnDragStop>
+        </Scripts>
+    </Button>
+
+</Ui>

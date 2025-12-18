@@ -873,7 +873,8 @@ public:
     [[nodiscard]] uint32 GetAttackTime(WeaponAttackType att) const
     {
         float f_BaseAttackTime = GetFloatValue(static_cast<uint16>(UNIT_FIELD_BASEATTACKTIME) + att) / m_modAttackSpeedPct[att];
-        return (uint32)f_BaseAttackTime;
+        // 限制最小攻击时间为100ms（0.1秒），防止急速过高导致问题
+        return std::max((uint32)f_BaseAttackTime, (uint32)100);
     }
 
     void SetAttackTime(WeaponAttackType att, uint32 val) { SetFloatValue(static_cast<uint16>(UNIT_FIELD_BASEATTACKTIME) + att, val * m_modAttackSpeedPct[att]); }

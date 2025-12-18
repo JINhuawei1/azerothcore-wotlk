@@ -565,6 +565,43 @@ void ItemAttributesEffects::RegisterAttributeEffectHandler(uint32 attributeType,
     _attributeDescriptionGenerators[attributeType] = descGenerator;
 }
 
+void ItemAttributesEffects::RequestDeferredStatsUpdate(Player* player)
+{
+    if (!player)
+        return;
+
+    // 登录加载阶段尽量不刷新，交给登录流程/其他系统统一刷新一次
+    if (player->isBeingLoaded())
+        return;
+
+    uint64 playerGuid = player->GetGUID().GetCounter();
+
+    {
+        std::lock_guard<std::mutex> lock(_deferredUpdateMutex);
+        if (!_deferredUpdatePlayers.insert(playerGuid).second)
+            return; // 已经安排过更新
+    }
+
+    player->m_Events.AddEventAtOffset([this, player, playerGuid]()
+    {
+        {
+            std::lock_guard<std::mutex> lock(_deferredUpdateMutex);
+            _deferredUpdatePlayers.erase(playerGuid);
+        }
+
+        if (!player || !player->IsInWorld() || player->isBeingLoaded())
+            return;
+
+        if (!player->CanModifyStats())
+            return;
+
+        player->UpdateAllStats();
+        player->UpdateAttackPowerAndDamage();
+        player->UpdateAttackPowerAndDamage(true);
+        player->UpdateSpellDamageAndHealingBonus();
+    }, std::chrono::milliseconds(1));
+}
+
 void ItemAttributesEffects::ApplyItemAttributeEffects(Player* player, Item* item)
 {
     // 【根本性修复】检查初始化状态
@@ -610,12 +647,11 @@ void ItemAttributesEffects::ApplyItemAttributeEffects(Player* player, Item* item
     if (attributes.empty())
         return;
 
-    // 【性能优化-批量更新】禁用自动属性更新，所有属性应用完后统一更新一次
-    bool needsUpdate = !_batchUpdateInProgress;
-    if (needsUpdate)
-    {
+    // 【性能优化】批量应用期间由上层统一刷新；普通情况下合并到一次延迟刷新
+    bool canModifyBefore = player->CanModifyStats();
+    bool needsDeferUpdate = !_batchUpdateInProgress;
+    if (needsDeferUpdate && canModifyBefore)
         player->SetCanModifyStats(false);
-    }
 
     // 应用每个属性效果
     for (size_t i = 0; i < attributes.size(); ++i)
@@ -641,32 +677,11 @@ void ItemAttributesEffects::ApplyItemAttributeEffects(Player* player, Item* item
         }
     }
 
-    // 【性能优化-防抖】检查是否应该立即更新
-    auto now = std::chrono::steady_clock::now();
-    uint64 playerGuid = player->GetGUID().GetCounter();
-    bool samePlayer = (playerGuid == _lastPlayerGuid);
-    auto timeSinceLastOp = std::chrono::duration_cast<std::chrono::milliseconds>(now - _lastOperationTime).count();
-
-    bool shouldDelay = false;
-    if (needsUpdate && samePlayer && timeSinceLastOp < 50)
-    {
-        shouldDelay = true;
-        _pendingUpdateCount++;
-    }
-
-    _lastPlayerGuid = playerGuid;
-    _lastOperationTime = now;
-
-    if (needsUpdate && !shouldDelay)
-    {
+    if (needsDeferUpdate && canModifyBefore)
         player->SetCanModifyStats(true);
-        player->UpdateAllStats();
 
-        if (_pendingUpdateCount > 0)
-        {
-            _pendingUpdateCount = 0;
-        }
-    }
+    if (needsDeferUpdate)
+        RequestDeferredStatsUpdate(player);
 }
 
 void ItemAttributesEffects::RemoveItemAttributeEffects(Player* player, Item* item)
@@ -711,12 +726,10 @@ void ItemAttributesEffects::RemoveItemAttributeEffects(Player* player, Item* ite
     if (attributes.empty())
         return;
 
-    // 【性能优化-批量更新】禁用自动属性更新，所有属性移除完后统一更新一次
-    bool needsUpdate = !_batchUpdateInProgress;
-    if (needsUpdate)
-    {
+    bool canModifyBefore = player->CanModifyStats();
+    bool needsDeferUpdate = !_batchUpdateInProgress;
+    if (needsDeferUpdate && canModifyBefore)
         player->SetCanModifyStats(false);
-    }
 
     // 移除每个属性效果
     for (size_t i = 0; i < attributes.size(); ++i)
@@ -742,32 +755,11 @@ void ItemAttributesEffects::RemoveItemAttributeEffects(Player* player, Item* ite
         }
     }
 
-    // 【性能优化-防抖】检查是否应该立即更新
-    auto now = std::chrono::steady_clock::now();
-    uint64 playerGuid = player->GetGUID().GetCounter();
-    bool samePlayer = (playerGuid == _lastPlayerGuid);
-    auto timeSinceLastOp = std::chrono::duration_cast<std::chrono::milliseconds>(now - _lastOperationTime).count();
-
-    bool shouldDelay = false;
-    if (needsUpdate && samePlayer && timeSinceLastOp < 50)
-    {
-        shouldDelay = true;
-        _pendingUpdateCount++;
-    }
-
-    _lastPlayerGuid = playerGuid;
-    _lastOperationTime = now;
-
-    if (needsUpdate && !shouldDelay)
-    {
+    if (needsDeferUpdate && canModifyBefore)
         player->SetCanModifyStats(true);
-        player->UpdateAllStats();
 
-        if (_pendingUpdateCount > 0)
-        {
-            _pendingUpdateCount = 0;
-        }
-    }
+    if (needsDeferUpdate)
+        RequestDeferredStatsUpdate(player);
 }
 
 void ItemAttributesEffects::UpdateItemAttributeEffects(Player* player)
@@ -849,6 +841,10 @@ void ItemAttributesEffects::RemoveItemAttributeEffectsByGuid(Player* player, uin
         return;
     }
 
+    bool canModifyBefore = player->CanModifyStats();
+    if (canModifyBefore)
+        player->SetCanModifyStats(false);
+
     // 移除每个属性效果
     // 【重要】数据库中保存的是属性类型，不是属性模板ID
     for (size_t i = 0; i < attributes.size(); ++i)
@@ -877,6 +873,12 @@ void ItemAttributesEffects::RemoveItemAttributeEffectsByGuid(Player* player, uin
             LOG_WARN("module.itemattributes", "未找到属性类型 {} 的移除器", attributeTemplate->attributeType);
         }
     }
+
+    if (canModifyBefore)
+        player->SetCanModifyStats(true);
+
+    // 根据GUID移除时同样请求一次合并刷新，避免客户端属性不同步
+    RequestDeferredStatsUpdate(player);
 }
 
 std::string ItemAttributesEffects::GetAttributeDescription(Item* item, uint32 attributeId)

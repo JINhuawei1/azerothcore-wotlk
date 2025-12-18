@@ -86,6 +86,7 @@ public:
     uint32 GetGlobalCooldown(SpellInfo const* spellInfo) const;
     void AddGlobalCooldown(SpellInfo const* spellInfo, uint32 gcd);
     void CancelGlobalCooldown(SpellInfo const* spellInfo);
+    void ModifyGlobalCooldown(SpellInfo const* spellInfo, int32 modification);  // 模块支持：修改GCD
 
 private:
     GlobalCooldownList m_GlobalCooldowns;

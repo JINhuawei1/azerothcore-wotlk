@@ -12019,7 +12019,7 @@ int32 Unit::SpellBaseDamageBonusDone(SpellSchoolMask schoolMask)
         // Apply ClassAttributes spell damage multiplier
         if (sConfigMgr->GetOption<bool>("ClassAttributes.Enable", false))
         {
-            QueryResult result = WorldDatabase.Query("SELECT `法强倍率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", ToPlayer()->getClass());
+            QueryResult result = WorldDatabase.Query("SELECT `法强倍率` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", ToPlayer()->getClass());
             if (result)
             {
                 Field* fields = result->Fetch();
@@ -12794,7 +12794,7 @@ int32 Unit::SpellBaseHealingBonusDone(SpellSchoolMask schoolMask)
         // Apply ClassAttributes healing multiplier
         if (sConfigMgr->GetOption<bool>("ClassAttributes.Enable", false))
         {
-            QueryResult result = WorldDatabase.Query("SELECT `治疗倍率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", ToPlayer()->getClass());
+            QueryResult result = WorldDatabase.Query("SELECT `治疗倍率` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", ToPlayer()->getClass());
             if (result)
             {
                 Field* fields = result->Fetch();

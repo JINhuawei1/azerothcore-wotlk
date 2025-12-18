@@ -63,16 +63,16 @@ void ItemAttributesLoader::LoadItemAttributeTemplates()
     uint32 oldMSTime = getMSTime();
 
     // 检查表是否存在，如果不存在则跳过加载
-    QueryResult checkTable = WorldDatabase.Query("SHOW TABLES LIKE '物品属性_模板'");
+    QueryResult checkTable = WorldDatabase.Query("SHOW TABLES LIKE '_物品属性_模板'");
     if (!checkTable || checkTable->GetRowCount() == 0)
     {
-        LOG_ERROR("module.item-attributes", ">> 表 `物品属性_模板` 不存在，请导入SQL文件");
+        LOG_ERROR("module.item-attributes", ">> 表 `_物品属性_模板` 不存在，请导入SQL文件");
         LOG_ERROR("module.item-attributes", ">> 请确保已导入 modules/mod-item-attributes/data/sql/db_world/ 目录下的所有SQL文件");
         _isInitialized = false;  // 【根本性修复】标记初始化失败
         return;
     }
 
-    QueryResult result = WorldDatabase.Query("SELECT `id`, `注释`, `客户端显示`, `组`, `属性类型`, `获取几率`, `属性最小百分比`, `属性最大百分比`, `属性计算方式`, `技能模板_组`, `属性品质要求`, `属性等级要求`, `属性职业要求`, `属性颜色` FROM `物品属性_模板`");
+    QueryResult result = WorldDatabase.Query("SELECT `id`, `注释`, `客户端显示`, `组`, `属性类型`, `获取几率`, `属性最小百分比`, `属性最大百分比`, `属性计算方式`, `技能模板_组`, `属性品质要求`, `属性等级要求`, `属性职业要求`, `属性颜色` FROM `_物品属性_模板`");
 
     if (!result)
     {

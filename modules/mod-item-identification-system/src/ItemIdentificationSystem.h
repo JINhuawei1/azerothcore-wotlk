@@ -124,6 +124,12 @@ public:
     // 清除已鉴定物品缓存（在物品被销毁或交易时调用）
     void ClearIdentifiedCache(uint32 itemGuid);
 
+    // 添加物品到已鉴定缓存（鉴定成功后调用，确保缓存同步）
+    void AddToIdentifiedCache(uint32 itemGuid)
+    {
+        _identifiedItemsCache.insert(itemGuid);
+    }
+
     // 批量检查物品是否已鉴定（优化版，减少数据库查询）
     std::set<uint32> BatchCheckIdentified(const std::vector<uint32>& itemGuids);
 
@@ -150,6 +156,9 @@ public:
 
         // 套装系统数据
         std::string setData;             // 格式：setId:setName:attrs:effects
+
+        // 幻境系统数据（新增）
+        std::string huanjingData;        // 格式：multiplier|enhancedAttrs  例如：3|3 10 30,4 20 60
 
         bool hasData;                    // 是否有任何数据
     };
@@ -318,7 +327,7 @@ public:
 
 private:
     static bool HandleIdentifyCommand(ChatHandler* handler, const char* args);
-    
+
     // 已删除旧的查询命令：
     // static bool HandleQueryAttributesCommand(ChatHandler* handler, const char* args);  // 旧格式，已废弃
     // static bool HandleQueryCommand(ChatHandler* handler, const char* args);  // 旧格式，已废弃
@@ -328,6 +337,14 @@ private:
 
     // 新增：性能统计命令
     static bool HandlePerformanceStatsCommand(ChatHandler* handler, const char* args);
+
+    // ========== 【新增】手动鉴定相关命令 ==========
+    // 手动鉴定单个物品（使用物品GUID）
+    static bool HandleManualIdentifyCommand(ChatHandler* handler, const char* args);
+    // 查询待鉴定物品列表
+    static bool HandleListPendingCommand(ChatHandler* handler, const char* args);
+    // 批量鉴定所有待鉴定物品
+    static bool HandleBatchIdentifyCommand(ChatHandler* handler, const char* args);
 };
 
 // 物品鉴定系统模块加载器
@@ -345,6 +362,9 @@ public:
 private:
     bool _loaded;        // 是否已加载
     uint32 _startTime;   // 开始时间
+
+    // 清理孤立的物品数据（服务器启动时执行）
+    void CleanupOrphanedItemData();
 };
 
 // 玩家登录时自动发送属性数据

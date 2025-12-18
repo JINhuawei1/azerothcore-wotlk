@@ -80,13 +80,13 @@ void Unit::UpdateDamagePhysical(WeaponAttackType attType)
             switch (attType)
             {
                 case BASE_ATTACK:
-                    result = WorldDatabase.Query("SELECT `主手伤害上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
+                    result = WorldDatabase.Query("SELECT `主手伤害上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
                     break;
                 case OFF_ATTACK:
-                    result = WorldDatabase.Query("SELECT `副手伤害上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
+                    result = WorldDatabase.Query("SELECT `副手伤害上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
                     break;
                 case RANGED_ATTACK:
-                    result = WorldDatabase.Query("SELECT `远程伤害上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
+                    result = WorldDatabase.Query("SELECT `远程伤害上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
                     break;
             }
 
@@ -147,7 +147,7 @@ bool Player::UpdateStats(Stats stat)
         Player* player = ToPlayer();
         if (player)
         {
-            QueryResult result = WorldDatabase.Query("SELECT * FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
+            QueryResult result = WorldDatabase.Query("SELECT * FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
             if (result)
             {
                 Field* fields = result->Fetch();
@@ -355,7 +355,7 @@ void Player::UpdateArmor()
         Player* player = ToPlayer();
         if (player)
         {
-            QueryResult result = WorldDatabase.Query("SELECT `护甲上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
+            QueryResult result = WorldDatabase.Query("SELECT `护甲上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
             if (result)
             {
                 Field* fields = result->Fetch();
@@ -382,7 +382,7 @@ float Player::GetHealthBonusFromStamina()
 
     // Apply stamina to health conversion rate from database
     float staminaToHealthRate = 1.0f; // Default 100% conversion rate
-    QueryResult result = WorldDatabase.Query("SELECT `耐力转生命转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `耐力转生命转换率` > 0 ORDER BY `class_` DESC LIMIT 1", getClass());
+    QueryResult result = WorldDatabase.Query("SELECT `耐力转生命转换率` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `耐力转生命转换率` > 0 ORDER BY `class_` DESC LIMIT 1", getClass());
     if (result)
     {
         Field* fields = result->Fetch();
@@ -401,7 +401,7 @@ float Player::GetManaBonusFromIntellect()
 
     // Apply intellect to mana conversion rate from database
     float intellectToManaRate = 1.0f; // Default 100% conversion rate
-    QueryResult result = WorldDatabase.Query("SELECT `智力转法力转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `智力转法力转换率` > 0 ORDER BY `class_` DESC LIMIT 1", getClass());
+    QueryResult result = WorldDatabase.Query("SELECT `智力转法力转换率` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `智力转法力转换率` > 0 ORDER BY `class_` DESC LIMIT 1", getClass());
     if (result)
     {
         Field* fields = result->Fetch();
@@ -421,7 +421,7 @@ void Player::UpdateMaxHealth()
     value *= GetModifierValue(unitMod, TOTAL_PCT);
 
     // Apply health limit from database
-    QueryResult result = WorldDatabase.Query("SELECT `血量上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+    QueryResult result = WorldDatabase.Query("SELECT `血量上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
     if (result)
     {
         Field* fields = result->Fetch();
@@ -457,7 +457,7 @@ void Player::UpdateMaxPower(Powers power)
     // Apply mana limit from database (only for mana power type)
     if (power == POWER_MANA)
     {
-        QueryResult result = WorldDatabase.Query("SELECT `法力上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+        QueryResult result = WorldDatabase.Query("SELECT `法力上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
         if (result)
         {
             Field* fields = result->Fetch();
@@ -507,7 +507,7 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
 
         // Get agility to attack power conversion rate from database
         float agilityToAPRate = 1.0f; // Default 100% conversion rate
-        QueryResult result = WorldDatabase.Query("SELECT `敏捷转攻强转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `敏捷转攻强转换率` > 0 ORDER BY `class_` DESC LIMIT 1", getClass());
+        QueryResult result = WorldDatabase.Query("SELECT `敏捷转攻强转换率` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `敏捷转攻强转换率` > 0 ORDER BY `class_` DESC LIMIT 1", getClass());
         if (result)
         {
             Field* fields = result->Fetch();
@@ -545,7 +545,7 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
     {
         // Get strength to attack power conversion rate from database
         float strengthToAPRate = 1.0f; // Default 100% conversion rate
-        QueryResult strengthResult = WorldDatabase.Query("SELECT `力量转攻强转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `力量转攻强转换率` > 0 ORDER BY `class_` DESC LIMIT 1", getClass());
+        QueryResult strengthResult = WorldDatabase.Query("SELECT `力量转攻强转换率` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `力量转攻强转换率` > 0 ORDER BY `class_` DESC LIMIT 1", getClass());
         if (strengthResult)
         {
             Field* fields = strengthResult->Fetch();
@@ -554,7 +554,7 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
 
         // Get agility to attack power conversion rate from database (for melee)
         float agilityToAPRate = 1.0f; // Default 100% conversion rate
-        QueryResult agilityResult = WorldDatabase.Query("SELECT `敏捷转攻强转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `敏捷转攻强转换率` > 0 ORDER BY `class_` DESC LIMIT 1", getClass());
+        QueryResult agilityResult = WorldDatabase.Query("SELECT `敏捷转攻强转换率` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `敏捷转攻强转换率` > 0 ORDER BY `class_` DESC LIMIT 1", getClass());
         if (agilityResult)
         {
             Field* fields = agilityResult->Fetch();
@@ -695,11 +695,11 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
         QueryResult result;
         if (ranged)
         {
-            result = WorldDatabase.Query("SELECT `远程攻强倍率`, `远程攻强上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+            result = WorldDatabase.Query("SELECT `远程攻强倍率`, `远程攻强上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
         }
         else
         {
-            result = WorldDatabase.Query("SELECT `攻强倍率`, `攻强上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+            result = WorldDatabase.Query("SELECT `攻强倍率`, `攻强上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
         }
 
         if (result)
@@ -862,7 +862,7 @@ void Player::UpdateBlockPercentage()
 
         // Check for custom block rating conversion rate
         {
-            QueryResult result = WorldDatabase.Query("SELECT `格挡等级转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+            QueryResult result = WorldDatabase.Query("SELECT `格挡等级转换率` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
             if (result)
             {
                 Field* fields = result->Fetch();
@@ -885,7 +885,7 @@ void Player::UpdateBlockPercentage()
     bool limitApplied = false;
 
     // First try database limits
-    QueryResult result = WorldDatabase.Query("SELECT `格挡几率上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+    QueryResult result = WorldDatabase.Query("SELECT `格挡几率上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
     if (result)
     {
         Field* fields = result->Fetch();
@@ -946,7 +946,7 @@ void Player::UpdateCritPercentage(WeaponAttackType attType)
         if (player)
         {
             // First try database limits
-            QueryResult result = WorldDatabase.Query("SELECT `暴击几率上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
+            QueryResult result = WorldDatabase.Query("SELECT `暴击几率上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
             if (result)
             {
                 Field* fields = result->Fetch();
@@ -1060,7 +1060,7 @@ void Player::UpdateParryPercentage()
 
         // Check for custom parry rating conversion rate
         {
-            QueryResult result = WorldDatabase.Query("SELECT `招架等级转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+            QueryResult result = WorldDatabase.Query("SELECT `招架等级转换率` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
             if (result)
             {
                 Field* fields = result->Fetch();
@@ -1089,7 +1089,7 @@ void Player::UpdateParryPercentage()
         bool limitApplied = false;
 
         // First try database limits
-        QueryResult result = WorldDatabase.Query("SELECT `招架几率上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+        QueryResult result = WorldDatabase.Query("SELECT `招架几率上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
         if (result)
         {
             Field* fields = result->Fetch();
@@ -1154,7 +1154,7 @@ void Player::UpdateDodgePercentage()
     LOG_DEBUG("entities.player", "UpdateDodgePercentage: Checking dodge limit for class {}", getClass());
 
     // First try database limits
-    QueryResult result = WorldDatabase.Query("SELECT `闪避几率上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+    QueryResult result = WorldDatabase.Query("SELECT `闪避几率上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
     if (result)
     {
         Field* fields = result->Fetch();
@@ -1214,7 +1214,7 @@ void Player::UpdateSpellCritChance(uint32 school)
     bool limitApplied = false;
     {
         // First try database limits
-        QueryResult result = WorldDatabase.Query("SELECT `暴击几率上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+        QueryResult result = WorldDatabase.Query("SELECT `暴击几率上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
         if (result)
         {
             Field* fields = result->Fetch();
@@ -1255,7 +1255,7 @@ void Player::UpdateMeleeHitChances()
 
     // Check for custom hit rating conversion rate
     float hitRating = GetRatingBonusValue(CR_HIT_MELEE);
-    QueryResult result = WorldDatabase.Query("SELECT `命中等级转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+    QueryResult result = WorldDatabase.Query("SELECT `命中等级转换率` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
     if (result)
     {
         Field* fields = result->Fetch();
@@ -1278,7 +1278,7 @@ void Player::UpdateRangedHitChances()
     // Check for custom hit rating conversion rate
     float hitRating = GetRatingBonusValue(CR_HIT_RANGED);
 
-    QueryResult result = WorldDatabase.Query("SELECT `命中等级转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+    QueryResult result = WorldDatabase.Query("SELECT `命中等级转换率` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
     if (result)
     {
         Field* fields = result->Fetch();
@@ -1301,7 +1301,7 @@ void Player::UpdateSpellHitChances()
 
     // Check for custom hit rating conversion rate
     float hitRating = GetRatingBonusValue(CR_HIT_SPELL);
-    QueryResult result = WorldDatabase.Query("SELECT `命中等级转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+    QueryResult result = WorldDatabase.Query("SELECT `命中等级转换率` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
     if (result)
     {
         Field* fields = result->Fetch();

@@ -1,5 +1,5 @@
-DROP TABLE IF EXISTS `物品_鉴定系统`;
-CREATE TABLE `物品_鉴定系统`  (
+DROP TABLE IF EXISTS `_物品鉴定_模板`;
+CREATE TABLE `_物品鉴定_模板`  (
   `注释` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT '',
   `id` int NOT NULL,
   `组` int UNSIGNED NOT NULL DEFAULT 1,
@@ -44,12 +44,12 @@ CREATE TABLE `物品_鉴定系统`  (
   `技能模板_套装_组` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '关联mod-item-sets模块套装系统表的组字段，多个组用逗号隔开，随机取一个组后再随机分配该组内的套装',
   `公告模板` int UNSIGNED NULL DEFAULT 0 COMMENT '成功后公告',
   PRIMARY KEY (`id`) USING BTREE
-) ENGINE = MyISAM AUTO_INCREMENT = 1 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = 'Item System' ROW_FORMAT = DYNAMIC;
+) ENGINE = MyISAM AUTO_INCREMENT = 1 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '物品鉴定模板' ROW_FORMAT = DYNAMIC;
 
 -- ----------------------------
--- Records of 物品_鉴定系统
+-- Records of _物品鉴定_模板
 -- ----------------------------
-INSERT INTO `物品_鉴定系统` (
+INSERT INTO `_物品鉴定_模板` (
     `注释`, `id`, `组`, `等级`, `随机几率`,
     `物品成长_系统`, `成长属性最小数量`, `成长属性最大数量`, `成长属性最小属性值`, `成长属性最大属性值`,
     `物品强化_系统`, `强化属性最小数量`, `强化属性最大数量`, `强化属性最小属性值`, `强化属性最大属性值`,

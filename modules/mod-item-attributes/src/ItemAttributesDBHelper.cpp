@@ -97,10 +97,17 @@ bool ItemAttributesDBHelper::SaveItemAttributes(const ItemAttributeData& data)
     // 【数据库错误处理】添加 try-catch 保护，防止数据库异常导致崩溃
     try
     {
-        // 使用 DirectExecute 实现同步插入或更新（确保立即写入）
+        // 避免 REPLACE 的 delete+insert 行为（更易引发锁竞争/死锁），改用 UPSERT
+        // 【修复】使用 DirectExecute 同步写入数据库
+        // 原因：异步写入时，后续的鉴定系统查询可能还没有写入完成
+        // 导致鉴定后需要重启服务器才能看到属性数据
         CharacterDatabase.DirectExecute(
-            "REPLACE INTO `物品属性_数据` (`物品GUID`, `物品ID`, `基础属性`, `追加属性`) "
-            "VALUES ({}, {}, '{}', '{}')",
+            "INSERT INTO `物品属性_数据` (`物品GUID`, `物品ID`, `基础属性`, `追加属性`) "
+            "VALUES ({}, {}, '{}', '{}') "
+            "ON DUPLICATE KEY UPDATE "
+            "`物品ID` = VALUES(`物品ID`), "
+            "`基础属性` = VALUES(`基础属性`), "
+            "`追加属性` = VALUES(`追加属性`)",
             data.itemGuid,
             data.itemId,
             baseAttrStr,

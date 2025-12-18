@@ -702,7 +702,7 @@ void Object::SetInt32Value(uint16 index, int32 value)
         Player* player = ToPlayer();
         if (player)
         {
-            QueryResult result = WorldDatabase.Query("SELECT `远程攻强上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
+            QueryResult result = WorldDatabase.Query("SELECT `远程攻强上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
             if (result)
             {
                 Field* fields = result->Fetch();

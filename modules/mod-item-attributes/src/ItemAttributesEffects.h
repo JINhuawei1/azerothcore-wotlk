@@ -6,6 +6,9 @@
 #include "Item.h"
 #include <map>
 #include <functional>
+#include <chrono>
+#include <mutex>
+#include <unordered_set>
 
 // 物品属性效果处理器
 class ItemAttributesEffects
@@ -51,6 +54,12 @@ private:
     uint64 _lastPlayerGuid;          // 上次操作的玩家GUID
     uint32 _pendingUpdateCount;      // 待处理的更新计数
     std::chrono::steady_clock::time_point _lastOperationTime;  // 上次操作时间
+
+    // 【性能优化】合并短时间内重复的属性刷新请求
+    std::mutex _deferredUpdateMutex;
+    std::unordered_set<uint64> _deferredUpdatePlayers;
+
+    void RequestDeferredStatsUpdate(Player* player);
 
     // 【性能优化-防抖】检查是否需要立即更新
     bool ShouldUpdateImmediately(Player* player);

@@ -5101,7 +5101,7 @@ uint32 Player::GetShieldBlockValue() const
     value = (value < 0) ? 0 : value;
 
     // Apply block value limits from database
-    QueryResult result = WorldDatabase.Query("SELECT `格挡值上限` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+    QueryResult result = WorldDatabase.Query("SELECT `格挡值上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
     if (result)
     {
         Field* fields = result->Fetch();
@@ -5182,7 +5182,7 @@ void Player::GetDodgeFromAgility(float& diminishing, float& nondiminishing)
 
     // Apply agility to dodge conversion rate from database
     float agilityToDodgeRate = 1.0f; // Default 100% conversion rate
-    QueryResult result = WorldDatabase.Query("SELECT `敏捷转躲闪转换率` FROM `属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `敏捷转躲闪转换率` > 0 ORDER BY `class_` DESC LIMIT 1", getClass());
+    QueryResult result = WorldDatabase.Query("SELECT `敏捷转躲闪转换率` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `敏捷转躲闪转换率` > 0 ORDER BY `class_` DESC LIMIT 1", getClass());
     if (result)
     {
         Field* fields = result->Fetch();
@@ -10928,7 +10928,7 @@ void Player::AddSpellAndCategoryCooldowns(SpellInfo const* spellInfo, uint32 ite
     if (itemId && HasSpellCooldown(spellInfo->Id))
     {
         uint32 remainingMs = GetSpellCooldownDelay(spellInfo->Id);
-        LOG_ERROR("spells", "[Core-AddSpellAndCategory] 物品技能已在冷却中: SpellId={}, ItemId={}, 剩余={}ms, 跳过添加", 
+        LOG_DEBUG("spells", "[Core-AddSpellAndCategory] 物品技能已在冷却中: SpellId={}, ItemId={}, 剩余={}ms, 跳过添加",
             spellInfo->Id, itemId, remainingMs);
         return;
     }

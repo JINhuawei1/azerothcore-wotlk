@@ -425,3 +425,18 @@ void GlobalCooldownMgr::CancelGlobalCooldown(SpellInfo const* spellInfo)
 {
     m_GlobalCooldowns[spellInfo->StartRecoveryCategory].duration = 0;
 }
+
+// 模块支持：修改GCD时长
+void GlobalCooldownMgr::ModifyGlobalCooldown(SpellInfo const* spellInfo, int32 modification)
+{
+    auto itr = m_GlobalCooldowns.find(spellInfo->StartRecoveryCategory);
+    if (itr == m_GlobalCooldowns.end())
+        return;
+
+    // modification 为负值表示减少GCD
+    int32 newDuration = static_cast<int32>(itr->second.duration) + modification;
+    if (newDuration < 0)
+        newDuration = 0;
+
+    itr->second.duration = static_cast<uint32>(newDuration);
+}

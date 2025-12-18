@@ -116,23 +116,23 @@ void ItemEnhancementMgr::LoadEnhancementTemplates()
     //LOG_INFO("server.loading", "正在加载物品强化模板数据...");
 
     // 首先检查表是否存在
-    QueryResult checkTable = WorldDatabase.Query("SHOW TABLES LIKE '物品强化_系统'");
+    QueryResult checkTable = WorldDatabase.Query("SHOW TABLES LIKE '_物品强化_模板'");
     if (!checkTable)
     {
-         //LOG_ERROR("server.loading", ">> 数据库表 '物品强化_系统' 不存在！");
+         //LOG_ERROR("server.loading", ">> 数据库表 '_物品强化_模板' 不存在！");
         return;
     }
 
     // 检查表中是否有数据
-    QueryResult countResult = WorldDatabase.Query("SELECT COUNT(*) FROM 物品强化_系统");
+    QueryResult countResult = WorldDatabase.Query("SELECT COUNT(*) FROM _物品强化_模板");
     if (countResult)
     {
         Field* countFields = countResult->Fetch();
         uint32 totalCount = countFields[0].Get<uint32>();
-        //LOG_INFO("server.loading", ">> 数据库表 '物品强化_系统' 中共有 {} 条记录", totalCount);
+        //LOG_INFO("server.loading", ">> 数据库表 '_物品强化_模板' 中共有 {} 条记录", totalCount);
     }
 
-    QueryResult result = WorldDatabase.Query("SELECT * FROM 物品强化_系统 ORDER BY `组`, `等级`");
+    QueryResult result = WorldDatabase.Query("SELECT * FROM _物品强化_模板 ORDER BY `组`, `等级`");
     if (!result)
     {
         //LOG_ERROR("server.loading", ">> 查询物品强化模板数据失败或数据为空");
