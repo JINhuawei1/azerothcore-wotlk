@@ -15516,33 +15516,47 @@ float Unit::GetTotalAttackPowerValue(WeaponAttackType attType, Unit* victim) con
 
     if (attType == RANGED_ATTACK)
     {
-        int32 ap = GetInt32Value(UNIT_FIELD_RANGED_ATTACK_POWER) + GetInt32Value(UNIT_FIELD_RANGED_ATTACK_POWER_MODS);
+        // 【重要】使用 int64 避免两个 int32 相加溢出
+        int64 ap64 = static_cast<int64>(GetInt32Value(UNIT_FIELD_RANGED_ATTACK_POWER))
+                   + static_cast<int64>(GetInt32Value(UNIT_FIELD_RANGED_ATTACK_POWER_MODS));
         if (victim)
-            ap += victim->GetTotalAuraModifier(SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS);
+            ap64 += victim->GetTotalAuraModifier(SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS);
 
-        if (ap < 0)
+        // 限制到安全范围
+        if (ap64 < 0)
             return 0.0f;
+        if (ap64 > static_cast<int64>(MAX_SAFE_AP))
+            ap64 = static_cast<int64>(MAX_SAFE_AP);
 
-        float result = static_cast<float>(ap) * (1.0f + GetFloatValue(UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER));
+        float multiplier = 1.0f + GetFloatValue(UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER);
+        double result = static_cast<double>(ap64) * static_cast<double>(multiplier);
+
         // 限制结果防止溢出
-        if (result < 0.0f || result > MAX_SAFE_AP)
-            result = MAX_SAFE_AP;
-        return result;
+        if (result < 0.0 || result > static_cast<double>(MAX_SAFE_AP))
+            return MAX_SAFE_AP;
+        return static_cast<float>(result);
     }
     else
     {
-        int32 ap = GetInt32Value(UNIT_FIELD_ATTACK_POWER) + GetInt32Value(UNIT_FIELD_ATTACK_POWER_MODS);
+        // 【重要】使用 int64 避免两个 int32 相加溢出
+        int64 ap64 = static_cast<int64>(GetInt32Value(UNIT_FIELD_ATTACK_POWER))
+                   + static_cast<int64>(GetInt32Value(UNIT_FIELD_ATTACK_POWER_MODS));
         if (victim)
-            ap += victim->GetTotalAuraModifier(SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS);
+            ap64 += victim->GetTotalAuraModifier(SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS);
 
-        if (ap < 0)
+        // 限制到安全范围
+        if (ap64 < 0)
             return 0.0f;
+        if (ap64 > static_cast<int64>(MAX_SAFE_AP))
+            ap64 = static_cast<int64>(MAX_SAFE_AP);
 
-        float result = static_cast<float>(ap) * (1.0f + GetFloatValue(UNIT_FIELD_ATTACK_POWER_MULTIPLIER));
+        float multiplier = 1.0f + GetFloatValue(UNIT_FIELD_ATTACK_POWER_MULTIPLIER);
+        double result = static_cast<double>(ap64) * static_cast<double>(multiplier);
+
         // 限制结果防止溢出
-        if (result < 0.0f || result > MAX_SAFE_AP)
-            result = MAX_SAFE_AP;
-        return result;
+        if (result < 0.0 || result > static_cast<double>(MAX_SAFE_AP))
+            return MAX_SAFE_AP;
+        return static_cast<float>(result);
     }
 }
 

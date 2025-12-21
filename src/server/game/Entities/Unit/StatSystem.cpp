@@ -67,6 +67,7 @@ void Unit::UpdateDamagePhysical(WeaponAttackType attType)
     for (uint8 i = 0; i < MAX_ITEM_PROTO_DAMAGES; ++i)
     {
         CalculateMinMaxDamage(attType, false, true, tmpMin, tmpMax, i);
+
         totalMin += tmpMin;
         totalMax += tmpMax;
     }
@@ -700,11 +701,18 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
 
     SetModifierValue(unitMod, BASE_VALUE, val2);
 
-    float base_attPower  = GetModifierValue(unitMod, BASE_VALUE) * GetModifierValue(unitMod, BASE_PCT);
+    // 使用 double 进行乘法计算，避免 float 精度溢出
+    double dBasePct = static_cast<double>(GetModifierValue(unitMod, BASE_PCT));
+    double dBaseValue = static_cast<double>(GetModifierValue(unitMod, BASE_VALUE));
+    double dBaseAttPower = dBaseValue * dBasePct;
 
-    // 【安全检查】限制base_attPower避免溢出
-    if (base_attPower < 0.0f || base_attPower > MAX_SAFE_VAL)
-        base_attPower = MAX_SAFE_VAL;
+    constexpr double MAX_SAFE_AP_D = 2000000000.0;
+
+    // 检查溢出
+    if (dBaseAttPower < 0.0 || dBaseAttPower > MAX_SAFE_AP_D || std::isnan(dBaseAttPower) || std::isinf(dBaseAttPower))
+        dBaseAttPower = MAX_SAFE_AP_D;
+
+    float base_attPower = static_cast<float>(dBaseAttPower);
 
     float attPowerMod = GetModifierValue(unitMod, TOTAL_VALUE);
 
@@ -734,15 +742,17 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
 
     sScriptMgr->OnPlayerAfterUpdateAttackPowerAndDamage(this, level, base_attPower, attPowerMod, attPowerMultiplier, ranged);
 
-    // 【重要】钩子后立即检查溢出 - 如果base_attPower变成负数说明溢出了
-    constexpr float MAX_SAFE_AP = 2000000000.0f;
-    if (base_attPower < 0.0f || base_attPower > MAX_SAFE_AP)
-        base_attPower = MAX_SAFE_AP;
-    if (attPowerMod < -MAX_SAFE_AP || attPowerMod > MAX_SAFE_AP)
-        attPowerMod = (attPowerMod < 0) ? -MAX_SAFE_AP : MAX_SAFE_AP;
+    // 钩子后立即检查溢出 - 使用 double 避免精度问题
+    double dBaseAP = static_cast<double>(base_attPower);
+    double dAttPowerMod = static_cast<double>(attPowerMod);
+
+    if (dBaseAP < 0.0 || dBaseAP > MAX_SAFE_AP_D || std::isnan(base_attPower) || std::isinf(base_attPower))
+        dBaseAP = MAX_SAFE_AP_D;
+    if (dAttPowerMod < -MAX_SAFE_AP_D || dAttPowerMod > MAX_SAFE_AP_D || std::isnan(attPowerMod) || std::isinf(attPowerMod))
+        dAttPowerMod = (dAttPowerMod < 0) ? -MAX_SAFE_AP_D : MAX_SAFE_AP_D;
 
     // Calculate final attack power
-    float finalAttackPower = base_attPower;
+    double dFinalAttackPower = dBaseAP;
 
     // Apply ClassAttributes attack power multiplier first
     {
@@ -759,39 +769,63 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
         if (result)
         {
             Field* fields = result->Fetch();
-            float apMultiplier = fields[0].Get<float>();
-            uint32 apLimit = fields[1].Get<uint32>();
+            double apMultiplier = static_cast<double>(fields[0].Get<float>());
+            double apLimit = static_cast<double>(fields[1].Get<uint32>());
 
             // Apply multiplier
-            if (apMultiplier != 100.0f && apMultiplier > 0.0f)
-            {
-                finalAttackPower = finalAttackPower * apMultiplier / 100.0f;
-            }
+            if (apMultiplier != 100.0 && apMultiplier > 0.0)
+                dFinalAttackPower = dFinalAttackPower * apMultiplier / 100.0;
 
-            // Apply limit (使用 double 比较避免精度问题)
-            double apDouble = static_cast<double>(finalAttackPower);
-            double limitDouble = static_cast<double>(apLimit);
-            if (apLimit > 0 && apDouble > limitDouble)
-            {
-                finalAttackPower = static_cast<float>(apLimit);
-            }
+            // Apply limit
+            if (apLimit > 0.0 && dFinalAttackPower > apLimit)
+                dFinalAttackPower = apLimit;
         }
     }
 
     // 最终安全检查 - 确保不超过 int32 最大值，防止溢出
-    // 注意：如果值变成负数，说明已经溢出，需要限制到安全值
-    if (finalAttackPower < 0.0f || finalAttackPower > MAX_SAFE_AP)
-        finalAttackPower = MAX_SAFE_AP;
+    if (dFinalAttackPower < 0.0 || dFinalAttackPower > MAX_SAFE_AP_D || std::isnan(dFinalAttackPower) || std::isinf(dFinalAttackPower))
+        dFinalAttackPower = MAX_SAFE_AP_D;
 
-    if (attPowerMod > MAX_SAFE_AP)
-        attPowerMod = MAX_SAFE_AP;
-    if (attPowerMod < -MAX_SAFE_AP)
-        attPowerMod = -MAX_SAFE_AP;
+    if (dAttPowerMod > MAX_SAFE_AP_D)
+        dAttPowerMod = MAX_SAFE_AP_D;
+    if (dAttPowerMod < -MAX_SAFE_AP_D)
+        dAttPowerMod = -MAX_SAFE_AP_D;
 
-    // 使用正确的类型转换，确保不溢出 int32 范围
-    SetInt32Value(index, static_cast<int32>(finalAttackPower));            //UNIT_FIELD_(RANGED)_ATTACK_POWER field
-    SetInt32Value(index_mod, static_cast<int32>(attPowerMod));          //UNIT_FIELD_(RANGED)_ATTACK_POWER_MODS field
-    SetFloatValue(index_mult, attPowerMultiplier);          //UNIT_FIELD_(RANGED)_ATTACK_POWER_MULTIPLIER field
+    // 【重要】客户端显示攻强 = (AP + Mod) * (1 + Multiplier)
+    // 必须确保这个最终显示值不超过 INT32_MAX (约21.47亿)
+    // 否则客户端会溢出显示为 0 或负数
+
+    // 先计算合并后的总攻强
+    double totalAP = dFinalAttackPower + dAttPowerMod;
+
+    // 客户端显示值 = totalAP * (1 + multiplier)
+    double displayMultiplier = 1.0 + static_cast<double>(attPowerMultiplier);
+    double clientDisplayValue = totalAP * displayMultiplier;
+
+    // 客户端使用 int32 显示，最大安全值约 21.47 亿，保守使用 20 亿
+    constexpr double MAX_CLIENT_DISPLAY = 2000000000.0;
+
+    if (clientDisplayValue > MAX_CLIENT_DISPLAY || clientDisplayValue < 0.0)
+    {
+        // 客户端显示值会溢出，需要调整
+        // 反推：totalAP = MAX_CLIENT_DISPLAY / (1 + multiplier)
+        if (displayMultiplier > 0.0)
+            totalAP = MAX_CLIENT_DISPLAY / displayMultiplier;
+        else
+            totalAP = MAX_CLIENT_DISPLAY;
+    }
+
+    // 将 totalAP 全部放入 base 字段，mod 设为 0
+    dFinalAttackPower = totalAP;
+    dAttPowerMod = 0.0;
+
+    int32 finalAP_int32 = static_cast<int32>(dFinalAttackPower);
+    int32 finalMod_int32 = static_cast<int32>(dAttPowerMod);
+
+    // 安全转换为 int32
+    SetInt32Value(index, finalAP_int32);          //UNIT_FIELD_(RANGED)_ATTACK_POWER field
+    SetInt32Value(index_mod, finalMod_int32);     //UNIT_FIELD_(RANGED)_ATTACK_POWER_MODS field
+    SetFloatValue(index_mult, attPowerMultiplier);                        //UNIT_FIELD_(RANGED)_ATTACK_POWER_MULTIPLIER field
 
     //automatically update weapon damage after attack power modification
     if (ranged)
@@ -851,10 +885,18 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
     // 获取攻击强度并检查溢出
     float attackPower = GetTotalAttackPowerValue(attType);
     constexpr float MAX_SAFE_VALUE = 2000000000.0f;
+
     if (attackPower < 0.0f || attackPower > MAX_SAFE_VALUE || std::isnan(attackPower) || std::isinf(attackPower))
         attackPower = MAX_SAFE_VALUE;
 
-    float baseValue  = GetModifierValue(unitMod, BASE_VALUE) + attackPower / 14.0f * attackSpeedMod;
+    float baseModValue = GetModifierValue(unitMod, BASE_VALUE);
+    float apContribution = attackPower / 14.0f * attackSpeedMod;
+
+    // 检查 apContribution 溢出
+    if (apContribution < 0.0f || apContribution > MAX_SAFE_VALUE || std::isnan(apContribution) || std::isinf(apContribution))
+        apContribution = MAX_SAFE_VALUE;
+
+    float baseValue = baseModValue + apContribution;
 
     // 检查baseValue溢出
     if (baseValue < 0.0f || baseValue > MAX_SAFE_VALUE || std::isnan(baseValue) || std::isinf(baseValue))
@@ -894,16 +936,29 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
         weaponMaxDamage += GetAmmoDPS() * attackSpeedMod;
     }
 
-    minDamage = ((weaponMinDamage + baseValue) * basePct + totalValue) * totalPct;
-    maxDamage = ((weaponMaxDamage + baseValue) * basePct + totalValue) * totalPct;
+    // 使用 double 进行计算以避免 float 精度溢出
+    double dBaseValue = static_cast<double>(baseValue);
+    double dBasePct = static_cast<double>(basePct);
+    double dTotalValue = static_cast<double>(totalValue);
+    double dTotalPct = static_cast<double>(totalPct);
+    double dWeaponMin = static_cast<double>(weaponMinDamage);
+    double dWeaponMax = static_cast<double>(weaponMaxDamage);
 
-    // 限制最终伤害到安全范围 - 检查溢出（负数、NaN、Inf都说明溢出了）
-    if (minDamage < 0.0f || minDamage > MAX_SAFE_VALUE || std::isnan(minDamage) || std::isinf(minDamage))
-        minDamage = MAX_SAFE_VALUE;
-    if (maxDamage < 0.0f || maxDamage > MAX_SAFE_VALUE || std::isnan(maxDamage) || std::isinf(maxDamage))
-        maxDamage = MAX_SAFE_VALUE;
-    if (minDamage > maxDamage)
-        minDamage = maxDamage;
+    double dMinDamage = ((dWeaponMin + dBaseValue) * dBasePct + dTotalValue) * dTotalPct;
+    double dMaxDamage = ((dWeaponMax + dBaseValue) * dBasePct + dTotalValue) * dTotalPct;
+
+    // 限制到安全范围
+    constexpr double MAX_SAFE_DAMAGE_D = 2000000000.0;
+    if (dMinDamage < 0.0 || dMinDamage > MAX_SAFE_DAMAGE_D || std::isnan(dMinDamage) || std::isinf(dMinDamage))
+        dMinDamage = MAX_SAFE_DAMAGE_D;
+    if (dMaxDamage < 0.0 || dMaxDamage > MAX_SAFE_DAMAGE_D || std::isnan(dMaxDamage) || std::isinf(dMaxDamage))
+        dMaxDamage = MAX_SAFE_DAMAGE_D;
+    if (dMinDamage > dMaxDamage)
+        dMinDamage = dMaxDamage;
+
+    // 转换回 float
+    minDamage = static_cast<float>(dMinDamage);
+    maxDamage = static_cast<float>(dMaxDamage);
 }
 
 void Player::UpdateDefenseBonusesMod()
