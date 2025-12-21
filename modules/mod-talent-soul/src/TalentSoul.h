@@ -95,6 +95,9 @@ public:
     // 加载配置数据
     void LoadTalentSoulData();
 
+    // 设置技能独立GCD类别（在加载配置后调用）
+    void SetupIndependentGCDCategories();
+
     // 获取技能配置
     TalentSoulData const* GetTalentSoulData(uint32 spellId) const;
     std::map<uint32, TalentSoulData> const& GetAllTalentSoulData() const { return _talentSoulData; }

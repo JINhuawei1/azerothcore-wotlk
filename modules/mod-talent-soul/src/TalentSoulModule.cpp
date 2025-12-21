@@ -4,8 +4,15 @@
  * 实现方式：
  * 1. 伤害加成 - 通过 UnitScript::ModifySpellDamageTaken hook
  * 2. 冷却减少 - 通过 AllSpellScript::OnSpellCast 在施法后修改冷却
- * 3. GCD减少 - 通过 AllSpellScript::OnSpellCast 修改GCD (需要核心支持)
+ * 3. GCD减少 - 通过多种机制协同工作：
+ *    a) OnCalcGlobalCooldown - 减少服务端GCD计算值
+ *    b) OnSpellCast - 发送 SMSG_CLEAR_COOLDOWN 清除客户端GCD动画
  * 4. 消耗减少 - 通过 AllSpellScript::OnSpellPrepare 修改消耗
+ *
+ * 关于客户端GCD的说明：
+ * WoW 3.3.5 客户端的 GCD 动画是基于本地 Spell.dbc 数据计算的。
+ * 我们通过发送 SMSG_CLEAR_COOLDOWN 包来清除客户端的 GCD 动画，
+ * 同时服务端通过 OnCalcGlobalCooldown 钩子正确计算减少后的 GCD 时间。
  */
 
 #include "TalentSoul.h"
@@ -14,10 +21,15 @@
 #include "Log.h"
 #include "World.h"
 #include "Player.h"
+#include "Unit.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "SpellAuraEffects.h"
 #include "Spell.h"
+#include "WorldPacket.h"
+#include "Opcodes.h"
+#include "WorldSession.h"
+#include "ObjectAccessor.h"
 
 // 世界脚本类，用于延迟加载天赋之魂数据
 class TalentSoulWorldScript : public WorldScript
@@ -46,6 +58,10 @@ public:
             }
 
             sTalentSoulMgr->LoadTalentSoulData();
+
+            // 设置独立GCD类别，使每个配置了GCD减少的技能有独立的GCD计时器
+            sTalentSoulMgr->SetupIndependentGCDCategories();
+
             LOG_INFO("server.loading", "→天赋之魂系统加载成功√");
             _loaded = true;
         }
@@ -63,6 +79,10 @@ public:
             }
 
             sTalentSoulMgr->LoadTalentSoulData();
+
+            // 重载时也需要重新设置独立GCD类别
+            sTalentSoulMgr->SetupIndependentGCDCategories();
+
             LOG_INFO("module", "┌───────────────────────────────────────┐");
             LOG_INFO("module", "│        天赋之魂配置已重载             │");
             LOG_INFO("module", "└───────────────────────────────────────┘");
@@ -102,11 +122,13 @@ public:
         if (!sConfigMgr->GetOption("TalentSoul.Enable", true))
             return;
 
+        uint32 playerGuid = player->GetGUID().GetCounter();
+
         // 保存玩家数据
         sTalentSoulMgr->SavePlayerData(player);
 
         // 清理内存数据
-        sTalentSoulMgr->OnPlayerLogout(player->GetGUID().GetCounter());
+        sTalentSoulMgr->OnPlayerLogout(playerGuid);
     }
 };
 
@@ -125,8 +147,22 @@ public:
         if (!sConfigMgr->GetOption("TalentSoul.Enable", true))
             return;
 
+        Player* player = attacker->ToPlayer();
+        if (!player)
+            return;
+
+        uint32 spellId = spellInfo->Id;
+        int32 originalDamage = damage;
+
         // 应用伤害加成
-        sTalentSoulMgr->ApplyDamageBonus(attacker, spellInfo->Id, damage);
+        sTalentSoulMgr->ApplyDamageBonus(attacker, spellId, damage);
+
+        if (damage != originalDamage)
+        {
+            LOG_DEBUG("module", "[天赋之魂-伤害] 玩家 {} 技能 {} 伤害 {} -> {} (+{:.1f}%)",
+                player->GetName(), spellId, originalDamage, damage,
+                ((float)(damage - originalDamage) / originalDamage) * 100.0f);
+        }
     }
 
     // 修改近战伤害
@@ -142,7 +178,7 @@ class TalentSoulAllSpellScript : public AllSpellScript
 public:
     TalentSoulAllSpellScript() : AllSpellScript("TalentSoulAllSpellScript") { }
 
-    // 技能准备时 - 修改消耗
+    // 技能准备时 - 处理消耗减少
     void OnSpellPrepare(Spell* spell, Unit* caster, SpellInfo const* spellInfo) override
     {
         if (!spell || !caster || !spellInfo)
@@ -157,6 +193,11 @@ public:
 
         uint32 spellId = spellInfo->Id;
 
+        // 检查是否有天赋之魂配置
+        TalentSoulData const* config = sTalentSoulMgr->GetTalentSoulData(spellId);
+        if (!config)
+            return;
+
         // 应用消耗减少
         int32 currentCost = spell->GetPowerCost();
         if (currentCost > 0)
@@ -168,15 +209,14 @@ public:
             {
                 spell->SetPowerCost(newCost);
 
-                if (sConfigMgr->GetOption("TalentSoul.Debug", false))
-                {
-                    LOG_INFO("module", "[天赋之魂] 技能 {} 消耗从 {} 减少到 {}", spellId, currentCost, newCost);
-                }
+                LOG_DEBUG("module", "[天赋之魂-消耗] 玩家 {} 技能 {} 消耗 {} -> {} (-{:.1f}%)",
+                    player->GetName(), spellId, currentCost, newCost,
+                    ((float)(currentCost - newCost) / currentCost) * 100.0f);
             }
         }
     }
 
-    // 技能施放时 - 修改冷却和GCD
+    // 技能施放时 - 修改冷却时间，并同步客户端GCD
     void OnSpellCast(Spell* spell, Unit* caster, SpellInfo const* spellInfo, bool /*skipCheck*/) override
     {
         if (!spell || !caster || !spellInfo)
@@ -190,6 +230,44 @@ public:
             return;
 
         uint32 spellId = spellInfo->Id;
+        uint32 playerGuid = player->GetGUID().GetCounter();
+
+        // 检查是否有天赋之魂配置
+        TalentSoulData const* config = sTalentSoulMgr->GetTalentSoulData(spellId);
+        if (!config)
+            return;
+
+        // 获取GCD减少百分比
+        float gcdReductionPercent = sTalentSoulMgr->GetPlayerGCDReduction(playerGuid, spellId);
+
+        // 如果有GCD减少，处理客户端同步
+        if (gcdReductionPercent > 0)
+        {
+            int32 originalGCD = spellInfo->StartRecoveryTime;
+            if (originalGCD <= 0)
+                originalGCD = 1500;
+
+            int32 reducedAmount = static_cast<int32>(originalGCD * gcdReductionPercent / 100.0f);
+            int32 newGCD = originalGCD - reducedAmount;
+            if (newGCD < 0)
+                newGCD = 0;
+
+            // 如果GCD减少到很低，发送清除包清除客户端GCD动画
+            if (newGCD < 500)
+            {
+                // 取消服务端的GCD记录
+                player->GetGlobalCooldownMgr().CancelGlobalCooldown(spellInfo);
+
+                // 发送SMSG_CLEAR_COOLDOWN清除客户端GCD动画
+                WorldPacket clearData(SMSG_CLEAR_COOLDOWN, 4 + 8);
+                clearData << uint32(spellId);
+                clearData << player->GetGUID();
+                player->SendDirectMessage(&clearData);
+
+                LOG_DEBUG("module", "[天赋之魂-GCD] 玩家 {} 技能 {} GCD {}ms -> {}ms, 已清除客户端GCD",
+                    player->GetName(), spellId, originalGCD, newGCD);
+            }
+        }
 
         // 应用冷却减少
         int32 cooldownReduction = 0;
@@ -200,30 +278,44 @@ public:
             // cooldownReduction 是负值表示减少的毫秒数
             player->ModifySpellCooldown(spellId, cooldownReduction);
 
-            if (sConfigMgr->GetOption("TalentSoul.Debug", false))
-            {
-                LOG_INFO("module", "[天赋之魂] 技能 {} 冷却减少 {} 毫秒", spellId, -cooldownReduction);
-            }
+            LOG_DEBUG("module", "[天赋之魂-冷却] 玩家 {} 技能 {} 冷却减少 {}ms",
+                player->GetName(), spellId, -cooldownReduction);
         }
+    }
 
-        // 应用GCD减少
-        int32 gcdReduction = 0;
-        sTalentSoulMgr->ApplyGCDReduction(player, spellId, gcdReduction);
+    // GCD计算时 - 修改服务端GCD
+    void OnCalcGlobalCooldown(Spell* spell, Unit* caster, SpellInfo const* spellInfo, int32& gcd) override
+    {
+        if (!spell || !caster || !spellInfo || gcd <= 0)
+            return;
 
-        if (gcdReduction < 0)
+        if (!sConfigMgr->GetOption("TalentSoul.Enable", true))
+            return;
+
+        Player* player = caster->ToPlayer();
+        if (!player)
+            return;
+
+        uint32 spellId = spellInfo->Id;
+
+        // 检查是否有天赋之魂配置
+        TalentSoulData const* config = sTalentSoulMgr->GetTalentSoulData(spellId);
+        if (!config)
+            return;
+
+        // 获取GCD减少百分比
+        float reductionPercent = sTalentSoulMgr->GetPlayerGCDReduction(player->GetGUID().GetCounter(), spellId);
+        if (reductionPercent > 0)
         {
-            // 尝试修改GCD
-            auto& gcdMgr = player->GetGlobalCooldownMgr();
-            if (gcdMgr.HasGlobalCooldown(spellInfo))
-            {
-                // 修改GCD结束时间
-                gcdMgr.ModifyGlobalCooldown(spellInfo, gcdReduction);
+            int32 originalGCD = gcd;
+            int32 reducedAmount = static_cast<int32>(gcd * reductionPercent / 100.0f);
+            gcd -= reducedAmount;
 
-                if (sConfigMgr->GetOption("TalentSoul.Debug", false))
-                {
-                    LOG_INFO("module", "[天赋之魂] 技能 {} GCD减少 {} 毫秒", spellId, -gcdReduction);
-                }
-            }
+            if (gcd < 0)
+                gcd = 0;
+
+            LOG_DEBUG("module", "[天赋之魂-GCD(服务端)] 玩家 {} 技能 {} GCD {} -> {} (-{:.1f}%)",
+                player->GetName(), spellId, originalGCD, gcd, reductionPercent);
         }
     }
 };

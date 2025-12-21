@@ -20,6 +20,7 @@
 
 #include "ScriptObject.h"
 #include "SharedDefines.h"
+#include "Unit.h"
 #include <vector>
 
 // TODO to remove
@@ -114,8 +115,15 @@ enum PlayerHook
     PLAYERHOOK_ON_AFTER_STORE_OR_EQUIP_NEW_ITEM,
     PLAYERHOOK_ON_AFTER_UPDATE_MAX_POWER,
     PLAYERHOOK_ON_AFTER_UPDATE_MAX_HEALTH,
+    PLAYERHOOK_ON_AFTER_UPDATE_STAT,
     PLAYERHOOK_ON_BEFORE_UPDATE_ATTACK_POWER_AND_DAMAGE,
     PLAYERHOOK_ON_AFTER_UPDATE_ATTACK_POWER_AND_DAMAGE,
+    PLAYERHOOK_ON_AFTER_UPDATE_ARMOR,
+    PLAYERHOOK_ON_AFTER_UPDATE_CRIT_PERCENTAGE,
+    PLAYERHOOK_ON_AFTER_UPDATE_SPELL_CRIT_CHANCE,
+    PLAYERHOOK_ON_AFTER_UPDATE_HIT_CHANCES,
+    PLAYERHOOK_ON_AFTER_UPDATE_SPELL_DAMAGE_AND_HEALING,
+    PLAYERHOOK_ON_AFTER_UPDATE_RATING,
     PLAYERHOOK_ON_BEFORE_INIT_TALENT_FOR_LEVEL,
     PLAYERHOOK_ON_FIRST_LOGIN,
     PLAYERHOOK_ON_SET_MAX_LEVEL,
@@ -461,8 +469,20 @@ public:
 
     virtual void OnPlayerAfterUpdateMaxHealth(Player* /*player*/, float& /*value*/) { }
 
+    // Called after UpdateStats() calculates a stat value, allows modifying the final value
+    virtual void OnPlayerAfterUpdateStat(Player* /*player*/, Stats /*stat*/, float& /*value*/) { }
+
     virtual void OnPlayerBeforeUpdateAttackPowerAndDamage(Player* /*player*/, float& /*level*/, float& /*val2*/, bool /*ranged*/) { }
     virtual void OnPlayerAfterUpdateAttackPowerAndDamage(Player* /*player*/, float& /*level*/, float& /*base_attPower*/, float& /*attPowerMod*/, float& /*attPowerMultiplier*/, bool /*ranged*/) { }
+
+    // 转身系统相关钩子 - 用于全属性百分比加成
+    virtual void OnPlayerAfterUpdateArmor(Player* /*player*/, float& /*value*/) { }
+    virtual void OnPlayerAfterUpdateCritPercentage(Player* /*player*/, WeaponAttackType /*attType*/, float& /*value*/) { }
+    virtual void OnPlayerAfterUpdateSpellCritChance(Player* /*player*/, uint32 /*school*/, float& /*value*/) { }
+    virtual void OnPlayerAfterUpdateHitChances(Player* /*player*/, float& /*meleeHit*/, float& /*rangedHit*/, float& /*spellHit*/) { }
+    virtual void OnPlayerAfterUpdateSpellDamageAndHealing(Player* /*player*/, int32& /*healingBonus*/, int32 /*spellDamage*/[7]) { }
+    // 评级属性钩子 - 用于修改命中、急速、精准等评级
+    virtual void OnPlayerAfterUpdateRating(Player* /*player*/, CombatRating /*cr*/, int32& /*amount*/) { }
 
     virtual void OnPlayerBeforeInitTalentForLevel(Player* /*player*/, uint8& /*level*/, uint32& /*talentPointsForLevel*/) { }
 

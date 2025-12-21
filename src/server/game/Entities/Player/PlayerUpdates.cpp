@@ -622,7 +622,11 @@ void Player::UpdateRating(CombatRating cr)
     if (amount < 0)
         amount = 0;
 
-    // Apply rating limits from database
+    // 调用钩子允许模块修改评级值
+    sScriptMgr->OnPlayerAfterUpdateRating(this, cr, amount);
+
+    // 【重要】在钩子之后应用评级上限限制，防止溢出
+    // 从数据库读取对应类型的上限
     if (cr == CR_HIT_RANGED)
     {
         QueryResult result = WorldDatabase.Query("SELECT `远程命中上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
@@ -630,12 +634,62 @@ void Player::UpdateRating(CombatRating cr)
         {
             Field* fields = result->Fetch();
             uint32 hitLimit = fields[0].Get<uint32>();
-            if (hitLimit > 0 && amount > hitLimit)
+            if (hitLimit > 0 && amount > static_cast<int32>(hitLimit))
             {
-                amount = hitLimit;
+                amount = static_cast<int32>(hitLimit);
             }
         }
     }
+    else if (cr == CR_CRIT_TAKEN_MELEE || cr == CR_CRIT_TAKEN_RANGED || cr == CR_CRIT_TAKEN_SPELL)
+    {
+        // 韧性上限 (WotLK中韧性使用CR_CRIT_TAKEN_MELEE/RANGED/SPELL三个评级)
+        QueryResult result = WorldDatabase.Query("SELECT `韧性上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+        if (result)
+        {
+            Field* fields = result->Fetch();
+            uint32 limit = fields[0].Get<uint32>();
+            if (limit > 0 && amount > static_cast<int32>(limit))
+            {
+                amount = static_cast<int32>(limit);
+            }
+        }
+    }
+    else if (cr == CR_HASTE_MELEE || cr == CR_HASTE_RANGED || cr == CR_HASTE_SPELL)
+    {
+        // 急速上限
+        QueryResult result = WorldDatabase.Query("SELECT `急速上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+        if (result)
+        {
+            Field* fields = result->Fetch();
+            uint32 limit = fields[0].Get<uint32>();
+            if (limit > 0 && amount > static_cast<int32>(limit))
+            {
+                amount = static_cast<int32>(limit);
+            }
+        }
+    }
+    else if (cr == CR_EXPERTISE)
+    {
+        // 精准上限
+        QueryResult result = WorldDatabase.Query("SELECT `精准上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+        if (result)
+        {
+            Field* fields = result->Fetch();
+            uint32 limit = fields[0].Get<uint32>();
+            if (limit > 0 && amount > static_cast<int32>(limit))
+            {
+                amount = static_cast<int32>(limit);
+            }
+        }
+    }
+
+    // 通用安全上限：防止所有评级溢出（最大 20 亿）
+    constexpr int32 MAX_SAFE_RATING = 2000000000;
+    if (amount > MAX_SAFE_RATING)
+        amount = MAX_SAFE_RATING;
+
+    // 调试：确认最终存储的评级值
+    LOG_INFO("module", "[评级存储调试] CR={} 最终存储值: {}", static_cast<int>(cr), amount);
 
     SetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + static_cast<uint16>(cr), uint32(amount));
 

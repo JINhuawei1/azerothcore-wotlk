@@ -35,11 +35,6 @@ local function PrintError(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cffFF0000[天赋之魂]|r " .. tostring(msg))
 end
 
--- 成功输出
-local function PrintSuccess(msg)
-    DEFAULT_CHAT_FRAME:AddMessage("|cff00FF00[天赋之魂]|r " .. tostring(msg))
-end
-
 -- 应用暗黑主题到按钮
 local function ApplyDarkThemeToButton(button, isReset)
     if not button then return end
@@ -386,6 +381,13 @@ function TalentSoulUI_SelectClassTab(classId)
     -- 清除选中的技能
     TalentSoulData:SetSelectedSkill(nil)
 
+    -- 清空缓存，确保显示新数据
+    TalentSoulData:InvalidateSkillCache()
+
+    -- 立即更新UI（显示空列表）
+    TalentSoulUI_UpdateSkillList()
+    UpdateSkillDetail()
+
     -- 请求该职业的技能数据
     PrintDebug("请求职业 " .. classId .. " 的技能数据...")
     TalentSoulData:EnsureSkillData(function(success, skills)
@@ -588,9 +590,6 @@ function TalentSoulUI_UpgradeAttribute(attrType)
         return
     end
 
-    local typeNames = { "公共CD", "技能冷却", "技能消耗", "伤害加成" }
-    PrintInfo(string.format("正在升级 %s 的 %s...", skill.name, typeNames[attrType]))
-
     TalentSoulComm:UpgradeSkill(skill.spellId, attrType, function(success, result, params)
         if success and result.upgrade then
             -- 更新本地数据
@@ -601,8 +600,7 @@ function TalentSoulUI_UpgradeAttribute(attrType)
             TalentSoulUI_UpdateSkillList()
             UpdateSkillDetail()
             UpdatePointsDisplay()
-
-            PrintSuccess(string.format("%s 的 %s 升级到 %d 级", skill.name, typeNames[attrType], result.level))
+            -- 服务器已发送升级成功消息，这里不再重复输出
         else
             local errorMsg = result and result.message or "升级失败"
             PrintError(errorMsg)
@@ -614,7 +612,7 @@ end
 function TalentSoulUI_ShowResetConfirm()
     local used = TalentSoulData:GetUsedPoints()
     if used <= 0 then
-        PrintInfo("你还没有使用任何天赋点")
+        -- 服务器会发送"你还没有使用任何天赋点"消息
         return
     end
 
@@ -623,19 +621,29 @@ end
 
 -- 执行重置
 function TalentSoulUI_DoReset()
-    PrintInfo("正在重置天赋...")
-
     TalentSoulComm:ResetTalent(function(success, result, params)
         if success and result.reset then
-            -- 清空本地缓存并刷新
+            -- 清空本地缓存
             TalentSoulData:ResetUsedPoints()
             TalentSoulData:InvalidateSkillCache()
             TalentSoulData:SetSelectedSkill(nil)
 
-            -- 重新加载数据
-            TalentSoulUI_RefreshData()
+            -- 立即更新UI显示（清空状态）
+            TalentSoulUI_UpdateSkillList()
+            UpdateSkillDetail()
+            UpdatePointsDisplay()
+            -- 服务器已发送重置成功消息，这里不再重复输出
 
-            PrintSuccess(result.message or "天赋重置成功")
+            -- 重新从服务器加载最新数据
+            local classId = selectedClassFilter or TalentSoulData:GetPlayerClass()
+            TalentSoulData:EnsureSkillData(function(loadSuccess, skills)
+                if loadSuccess then
+                    TalentSoulUI_UpdateSkillList()
+                    UpdateSkillDetail()
+                    UpdatePointsDisplay()
+                    PrintDebug("重置后数据刷新完成")
+                end
+            end, classId)
         else
             local errorMsg = result and result.message or "重置失败"
             PrintError(errorMsg)
@@ -645,18 +653,17 @@ end
 
 -- 刷新数据
 function TalentSoulUI_RefreshData()
-    PrintInfo("正在刷新数据...")
-
+    -- 使用当前选中的职业ID进行刷新
+    local classId = selectedClassFilter or TalentSoulData:GetPlayerClass()
     TalentSoulData:Refresh(function(success, skills)
         if success then
             TalentSoulUI_UpdateSkillList()
             UpdateSkillDetail()
             UpdatePointsDisplay()
-            PrintSuccess("数据刷新完成")
         else
             PrintError("数据刷新失败")
         end
-    end)
+    end, classId)
 end
 
 -- 切换窗口显示

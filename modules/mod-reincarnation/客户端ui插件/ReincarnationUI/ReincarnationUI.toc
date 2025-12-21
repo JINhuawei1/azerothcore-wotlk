@@ -1,0 +1,14 @@
+## Interface: 30300
+## Title: |cff9966FF转身系统|r
+## Title-zhCN: |cff9966FF转身系统|r
+## Notes: 转身系统客户端UI插件 - 暗黑主题
+## Notes-zhCN: 转身系统客户端UI插件 - 暗黑主题
+## Author: AzerothCore
+## Version: 1.0.0
+## SavedVariables: ReincarnationUIDB
+
+Config.lua
+Communication.lua
+DataManager.lua
+ReincarnationUI.lua
+ReincarnationUI.xml

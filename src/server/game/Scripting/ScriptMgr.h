@@ -374,8 +374,15 @@ public: /* PlayerScript */
     void OnPlayerAfterStoreOrEquipNewItem(Player* player, uint32 vendorslot, Item* item, uint8 count, uint8 bag, uint8 slot, ItemTemplate const* pProto, Creature* pVendor, VendorItem const* crItem, bool bStore);
     void OnPlayerAfterUpdateMaxPower(Player* player, Powers& power, float& value);
     void OnPlayerAfterUpdateMaxHealth(Player* player, float& value);
+    void OnPlayerAfterUpdateStat(Player* player, Stats stat, float& value);
     void OnPlayerBeforeUpdateAttackPowerAndDamage(Player* player, float& level, float& val2, bool ranged);
     void OnPlayerAfterUpdateAttackPowerAndDamage(Player* player, float& level, float& base_attPower, float& attPowerMod, float& attPowerMultiplier, bool ranged);
+    void OnPlayerAfterUpdateArmor(Player* player, float& value);
+    void OnPlayerAfterUpdateCritPercentage(Player* player, WeaponAttackType attType, float& value);
+    void OnPlayerAfterUpdateSpellCritChance(Player* player, uint32 school, float& value);
+    void OnPlayerAfterUpdateHitChances(Player* player, float& meleeHit, float& rangedHit, float& spellHit);
+    void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int32& healingBonus, int32 spellDamage[7]);
+    void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int32& amount);
     void OnPlayerBeforeInitTalentForLevel(Player* player, uint8& level, uint32& talentPointsForLevel);
     void OnPlayerFirstLogin(Player* player);
     void OnPlayerSetMaxLevel(Player* player, uint32& maxPlayerLevel);
@@ -626,6 +633,8 @@ public: /* SpellSC */
     void OnSpellCastCancel(Spell* spell, Unit* caster, SpellInfo const* spellInfo, bool bySelf);
     void OnSpellCast(Spell* spell, Unit* caster, SpellInfo const* spellInfo, bool skipCheck);
     void OnSpellPrepare(Spell* spell, Unit* caster, SpellInfo const* spellInfo);
+    void OnCalcGlobalCooldown(Spell* spell, Unit* caster, SpellInfo const* spellInfo, int32& gcd);
+    void OnModifyCastFlags(Spell* spell, Unit* caster, SpellInfo const* spellInfo, uint32& castFlags);
 
 public: /* GameEventScript */
     void OnGameEventStart(uint16 EventID);

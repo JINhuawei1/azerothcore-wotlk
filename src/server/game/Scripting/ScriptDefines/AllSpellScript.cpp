@@ -99,6 +99,16 @@ void ScriptMgr::OnSpellPrepare(Spell* spell, Unit* caster, SpellInfo const* spel
     CALL_ENABLED_HOOKS(AllSpellScript, ALLSPELLHOOK_ON_PREPARE, script->OnSpellPrepare(spell, caster, spellInfo));
 }
 
+void ScriptMgr::OnCalcGlobalCooldown(Spell* spell, Unit* caster, SpellInfo const* spellInfo, int32& gcd)
+{
+    CALL_ENABLED_HOOKS(AllSpellScript, ALLSPELLHOOK_ON_CALC_GLOBAL_COOLDOWN, script->OnCalcGlobalCooldown(spell, caster, spellInfo, gcd));
+}
+
+void ScriptMgr::OnModifyCastFlags(Spell* spell, Unit* caster, SpellInfo const* spellInfo, uint32& castFlags)
+{
+    CALL_ENABLED_HOOKS(AllSpellScript, ALLSPELLHOOK_ON_MODIFY_CAST_FLAGS, script->OnModifyCastFlags(spell, caster, spellInfo, castFlags));
+}
+
 AllSpellScript::AllSpellScript(char const* name, std::vector<uint16> enabledHooks)
     : ScriptObject(name, ALLSPELLHOOK_END)
 {

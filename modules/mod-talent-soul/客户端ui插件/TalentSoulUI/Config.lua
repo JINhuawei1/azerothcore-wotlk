@@ -6,7 +6,7 @@ TalentSoulConfig = {
     Version = "1.0.0",
 
     -- 调试模式
-    DebugMode = true,
+    DebugMode = false,
 
     -- UI设置
     UI = {

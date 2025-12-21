@@ -5,6 +5,7 @@
 #include "TalentSoul.h"
 #include "Log.h"
 #include "DatabaseEnv.h"
+#include "SpellMgr.h"
 
 TalentSoulMgr::TalentSoulMgr()
 {
@@ -64,6 +65,43 @@ void TalentSoulMgr::LoadTalentSoulData()
     } while (result->NextRow());
 
     LOG_INFO("server.loading", ">> 天赋之魂: 加载 {} 条配置数据，耗时 {} ms", count, GetMSTimeDiffToNow(oldMSTime));
+}
+
+void TalentSoulMgr::SetupIndependentGCDCategories()
+{
+    // 为配置了GCD减少的技能设置独立的StartRecoveryCategory
+    // 这样每个技能都有自己独立的GCD计时器，不会互相影响
+
+    uint32 setupCount = 0;
+
+    for (auto const& pair : _talentSoulData)
+    {
+        const TalentSoulData& data = pair.second;
+
+        // 只为配置了GCD减少的技能设置独立类别
+        if (data.gcdMaxLevel > 0 && data.gcdPerLevel > 0)
+        {
+            SpellInfo* spellInfo = const_cast<SpellInfo*>(sSpellMgr->GetSpellInfo(data.spellId));
+            if (spellInfo)
+            {
+                // 使用 10000 + spellId 作为独立类别，确保不与现有类别冲突
+                // 原始类别133是大多数技能共用的
+                uint32 oldCategory = spellInfo->StartRecoveryCategory;
+                uint32 newCategory = 10000 + data.spellId;
+
+                if (oldCategory != newCategory && oldCategory > 0)
+                {
+                    spellInfo->StartRecoveryCategory = newCategory;
+                    ++setupCount;
+                }
+            }
+        }
+    }
+
+    if (setupCount > 0)
+    {
+        LOG_INFO("server.loading", ">> 天赋之魂: 已为 {} 个技能设置独立GCD类别", setupCount);
+    }
 }
 
 TalentSoulData const* TalentSoulMgr::GetTalentSoulData(uint32 spellId) const
@@ -276,15 +314,20 @@ bool TalentSoulMgr::CanUpgradeSpell(Player* player, uint32 spellId, std::string&
         hasSkill = playerItr->second.skills.find(spellId) != playerItr->second.skills.end();
     }
 
-    // 如果是新技能，检查天赋点需求
+    // 计算本次升级需要的天赋点
+    uint32 requiredPoints = 1;  // 每次升级消耗1点
     if (!hasSkill && config->talentPointCost > 0)
     {
-        uint32 availablePoints = GetPlayerAvailableTalentPoints(const_cast<Player*>(player));
-        if (availablePoints < config->talentPointCost)
-        {
-            errorMsg = "天赋点不足，需要 " + std::to_string(config->talentPointCost) + " 点";
-            return false;
-        }
+        // 新技能首次解锁需要额外的前置天赋点
+        requiredPoints = config->talentPointCost;
+    }
+
+    // 检查是否有足够天赋点
+    uint32 availablePoints = GetPlayerAvailableTalentPoints(const_cast<Player*>(player));
+    if (availablePoints < requiredPoints)
+    {
+        errorMsg = "天赋点不足，需要 " + std::to_string(requiredPoints) + " 点";
+        return false;
     }
 
     return true;
@@ -368,6 +411,12 @@ bool TalentSoulMgr::UpgradePlayerSpell(Player* player, uint32 spellId, TalentSou
 
     if (success)
     {
+        // 每次升级消耗1点天赋点（新技能首次解锁时已在上面扣除）
+        if (!isNewSkill)
+        {
+            playerData.usedTalentPoints += 1;
+        }
+
         // 立即保存到数据库
         std::string compactData = GenerateCompactData(playerData);
         CharacterDatabase.Execute(
@@ -391,9 +440,8 @@ uint32 TalentSoulMgr::GetPlayerAvailableTalentPoints(Player* player) const
     if (!player)
         return 0;
 
-    // 可用天赋点 = 玩家等级 - 已使用的天赋点
-    // 这里假设每级获得1点天赋点，可以根据需求调整
-    uint32 totalPoints = player->GetLevel();
+    // 可用天赋点 = 总天赋点(含倍率) - 已使用的天赋点
+    uint32 totalPoints = player->CalculateTalentsPoints();
     uint32 usedPoints = GetPlayerUsedTalentPoints(player->GetGUID().GetCounter());
 
     return totalPoints > usedPoints ? totalPoints - usedPoints : 0;
@@ -467,35 +515,43 @@ float TalentSoulMgr::GetPlayerDamageBonus(uint32 playerGuid, uint32 spellId) con
     return config->damagePerLevel * skillItr->second.damageLevel;
 }
 
-void TalentSoulMgr::ApplyGCDReduction(Player* player, uint32 spellId, int32& gcd) const
+void TalentSoulMgr::ApplyGCDReduction(Player* player, uint32 spellId, int32& gcdReduction) const
 {
-    if (!player || gcd <= 0)
+    if (!player)
         return;
 
-    float reduction = GetPlayerGCDReduction(player->GetGUID().GetCounter(), spellId);
-    if (reduction > 0)
+    float reductionPercent = GetPlayerGCDReduction(player->GetGUID().GetCounter(), spellId);
+    if (reductionPercent > 0)
     {
-        int32 reducedAmount = static_cast<int32>(gcd * reduction / 100.0f);
-        gcd -= reducedAmount;
-
-        if (gcd < 0)
-            gcd = 0;
+        // 默认GCD是1500毫秒
+        int32 baseGCD = 1500;
+        int32 reducedAmount = static_cast<int32>(baseGCD * reductionPercent / 100.0f);
+        gcdReduction = -reducedAmount;  // 负值表示减少
     }
 }
 
-void TalentSoulMgr::ApplyCooldownReduction(Player* player, uint32 spellId, int32& cooldown) const
+void TalentSoulMgr::ApplyCooldownReduction(Player* player, uint32 spellId, int32& cooldownReduction) const
 {
-    if (!player || cooldown <= 0)
+    if (!player)
         return;
 
-    float reduction = GetPlayerCooldownReduction(player->GetGUID().GetCounter(), spellId);
-    if (reduction > 0)
+    float reductionPercent = GetPlayerCooldownReduction(player->GetGUID().GetCounter(), spellId);
+    if (reductionPercent > 0)
     {
-        int32 reducedAmount = static_cast<int32>(cooldown * reduction / 100.0f);
-        cooldown -= reducedAmount;
+        // 获取技能的基础冷却时间
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+        if (!spellInfo)
+            return;
 
-        if (cooldown < 0)
-            cooldown = 0;
+        int32 baseCooldown = spellInfo->RecoveryTime;
+        if (baseCooldown <= 0)
+            baseCooldown = spellInfo->CategoryRecoveryTime;
+
+        if (baseCooldown > 0)
+        {
+            int32 reducedAmount = static_cast<int32>(baseCooldown * reductionPercent / 100.0f);
+            cooldownReduction = -reducedAmount;  // 负值表示减少
+        }
     }
 }
 
@@ -504,10 +560,11 @@ void TalentSoulMgr::ApplyCostReduction(Player* player, uint32 spellId, int32& co
     if (!player || cost <= 0)
         return;
 
-    float reduction = GetPlayerCostReduction(player->GetGUID().GetCounter(), spellId);
-    if (reduction > 0)
+    float reductionPercent = GetPlayerCostReduction(player->GetGUID().GetCounter(), spellId);
+    if (reductionPercent > 0)
     {
-        int32 reducedAmount = static_cast<int32>(cost * reduction / 100.0f);
+        int32 originalCost = cost;
+        int32 reducedAmount = static_cast<int32>(cost * reductionPercent / 100.0f);
         cost -= reducedAmount;
 
         if (cost < 0)
@@ -524,13 +581,10 @@ void TalentSoulMgr::ApplyDamageBonus(Unit* attacker, uint32 spellId, int32& dama
     if (!player)
         return;
 
-    float bonus = GetPlayerDamageBonus(player->GetGUID().GetCounter(), spellId);
-    if (bonus != 0)
+    float bonusPercent = GetPlayerDamageBonus(player->GetGUID().GetCounter(), spellId);
+    if (bonusPercent > 0)
     {
-        int32 bonusAmount = static_cast<int32>(damage * bonus / 100.0f);
+        int32 bonusAmount = static_cast<int32>(damage * bonusPercent / 100.0f);
         damage += bonusAmount;
-
-        if (damage < 0)
-            damage = 0;
     }
 }

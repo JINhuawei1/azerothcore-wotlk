@@ -6,6 +6,14 @@ TalentSoulComm = TalentSoulComm or {}
 local pendingRequests = {}
 local requestId = 0
 
+-- 请求类型常量
+local REQUEST_TYPE = {
+    SKILL_LIST = "SKILL_LIST",
+    SKILL_UPGRADE = "SKILL_UPGRADE",
+    RESET_TALENT = "RESET_TALENT",
+    TALENT_POINTS = "TALENT_POINTS",
+}
+
 -- 分块消息缓存
 local chunkBuffer = {
     chunks = {},      -- 存储接收到的分块
@@ -92,7 +100,7 @@ local function ExecuteCommandThroughEditBox(command)
 end
 
 -- 通过 Addon 通道发送请求
-local function SendAddonRequest(message, callback, params)
+local function SendAddonRequest(message, callback, params, requestType)
     local reqId = GenerateRequestId()
 
     if callback then
@@ -100,10 +108,11 @@ local function SendAddonRequest(message, callback, params)
             callback = callback,
             time = GetTime(),
             params = params,
+            requestType = requestType,  -- 记录请求类型
         }
     end
 
-    PrintDebug(string.format("发送Addon请求[#%d]: %s", reqId, message))
+    PrintDebug(string.format("发送Addon请求[#%d][%s]: %s", reqId, requestType or "UNKNOWN", message))
 
     local playerName = UnitName("player")
     local sent = false
@@ -123,7 +132,7 @@ local function SendAddonRequest(message, callback, params)
     return reqId, sent
 end
 
-local function SendCommand(command, callback, params)
+local function SendCommand(command, callback, params, requestType)
     local reqId = GenerateRequestId()
 
     if callback then
@@ -131,10 +140,11 @@ local function SendCommand(command, callback, params)
             callback = callback,
             time = GetTime(),
             params = params,
+            requestType = requestType,  -- 记录请求类型
         }
     end
 
-    PrintDebug(string.format("发送命令[#%d]: %s", reqId, command))
+    PrintDebug(string.format("发送命令[#%d][%s]: %s", reqId, requestType or "UNKNOWN", command))
     if not ExecuteCommandThroughEditBox(command) then
         PrintError("编辑框执行失败，将通过 SendChatMessage 发送")
         local playerName = UnitName("player")
@@ -202,7 +212,31 @@ local function HandleResponse(message)
     local payload = message and message:match("^TALENTSOUL_SKILLS:(.*)$") or nil
     if payload then
         PrintDebug("识别为技能列表响应，开始解析")
+
+        -- 先解析响应中的职业ID
+        local requestedClass, playerClass, totalPoints, usedPoints, list = string.match(payload, "^(%d+):(%d+):(%d+):(%d+):(.*)$")
+        local responseClassId = tonumber(requestedClass)
+
+        -- 收集需要处理的请求
+        local matchedRequests = {}
+        local unmatchedRequests = {}
+
         for reqId, request in pairs(pendingRequests) do
+            if request.requestType == REQUEST_TYPE.SKILL_LIST then
+                local reqClassId = request.params and request.params.requestedClassId
+                -- 匹配条件：请求职业ID与响应职业ID相同，或者请求没有指定职业ID
+                if reqClassId == nil or reqClassId == responseClassId then
+                    table.insert(matchedRequests, {reqId = reqId, request = request})
+                else
+                    table.insert(unmatchedRequests, {reqId = reqId, request = request})
+                end
+            end
+        end
+
+        -- 处理匹配的请求
+        for _, item in ipairs(matchedRequests) do
+            local reqId = item.reqId
+            local request = item.request
             if request.callback then
                 local result = {
                     success = true,
@@ -210,15 +244,13 @@ local function HandleResponse(message)
                     data = {}
                 }
 
-                local requestedClass, playerClass, totalPoints, usedPoints, list = string.match(payload, "^(%d+):(%d+):(%d+):(%d+):(.*)$")
-                result.requestedClass = tonumber(requestedClass)
+                result.requestedClass = responseClassId
                 result.playerClass = tonumber(playerClass)
                 result.totalPoints = tonumber(totalPoints)
                 result.usedPoints = tonumber(usedPoints)
 
                 if list and #list > 0 then
                     for entry in string.gmatch(list, "[^;]+") do
-                        -- 新格式包含职业ID: 技能ID,职业ID,GCD等级,...
                         local spellId, skillClassId, gcdLevel, cdLevel, costLevel, damageLevel, gcdMax, cdMax, costMax, damageMax, reqPoints, desc =
                             string.match(entry, "^(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(%d+),(.*)$")
                         if spellId then
@@ -241,10 +273,18 @@ local function HandleResponse(message)
                 end
 
                 request.callback(true, result, request.params)
+                PrintDebug(string.format("请求[#%d] 已完成，职业=%d，回调已执行", reqId, responseClassId or -1))
             end
-            PrintDebug(string.format("请求[#%d] 已完成，回调已执行", reqId))
             pendingRequests[reqId] = nil
         end
+
+        -- 清理不匹配的旧请求（它们的响应可能已经丢失或者被新请求取代）
+        for _, item in ipairs(unmatchedRequests) do
+            PrintDebug(string.format("请求[#%d] 职业不匹配已清理: 请求=%s, 响应=%d",
+                item.reqId, tostring(item.request.params and item.request.params.requestedClassId), responseClassId or -1))
+            pendingRequests[item.reqId] = nil
+        end
+
         return
     end
 
@@ -256,7 +296,8 @@ local function HandleResponse(message)
     end
     if upSpell then
         for reqId, request in pairs(pendingRequests) do
-            if request.callback then
+            -- 只处理 SKILL_UPGRADE 类型的请求
+            if request.requestType == REQUEST_TYPE.SKILL_UPGRADE and request.callback then
                 request.callback(true, {
                     upgrade = true,
                     spellId = tonumber(upSpell),
@@ -280,7 +321,8 @@ local function HandleResponse(message)
     if failSpell then
         PrintDebug("收到升级失败响应: spellId=" .. failSpell .. " type=" .. failType .. " reason=" .. tostring(failReason))
         for reqId, request in pairs(pendingRequests) do
-            if request.callback then
+            -- 只处理 SKILL_UPGRADE 类型的请求
+            if request.requestType == REQUEST_TYPE.SKILL_UPGRADE and request.callback then
                 local reasonText = failReason or "UNKNOWN"
                 -- 转换失败原因为用户友好的文本
                 local reasonMap = {
@@ -313,7 +355,8 @@ local function HandleResponse(message)
     end
     if resetPoints then
         for reqId, request in pairs(pendingRequests) do
-            if request.callback then
+            -- 只处理 RESET_TALENT 类型的请求
+            if request.requestType == REQUEST_TYPE.RESET_TALENT and request.callback then
                 request.callback(true, {
                     reset = true,
                     returnedPoints = tonumber(resetPoints),
@@ -333,7 +376,8 @@ local function HandleResponse(message)
     end
     if resetFailReason then
         for reqId, request in pairs(pendingRequests) do
-            if request.callback then
+            -- 只处理 RESET_TALENT 类型的请求
+            if request.requestType == REQUEST_TYPE.RESET_TALENT and request.callback then
                 request.callback(false, {
                     reset = false,
                     reason = resetFailReason,
@@ -354,7 +398,8 @@ local function HandleResponse(message)
     if ptTotal then
         PrintDebug("收到天赋点查询响应: total=" .. ptTotal .. " used=" .. ptUsed .. " available=" .. ptAvailable)
         for reqId, request in pairs(pendingRequests) do
-            if request.callback then
+            -- 只处理 TALENT_POINTS 类型的请求
+            if request.requestType == REQUEST_TYPE.TALENT_POINTS and request.callback then
                 request.callback(true, {
                     points = true,
                     totalPoints = tonumber(ptTotal),
@@ -384,6 +429,10 @@ end
 -- 查询玩家技能数据
 -- classId: 职业ID，nil/不传表示玩家当前职业，0表示全部职业
 function TalentSoulComm:QuerySkills(callback, params, classId)
+    -- 将classId保存到params中，用于响应时验证
+    local requestParams = params or {}
+    requestParams.requestedClassId = classId
+
     if USE_ADDON then
         local payload
         if classId ~= nil then
@@ -391,14 +440,14 @@ function TalentSoulComm:QuerySkills(callback, params, classId)
         else
             payload = "SKILL_LIST"
         end
-        local _, sent = SendAddonRequest(payload, callback, params)
+        local _, sent = SendAddonRequest(payload, callback, requestParams, REQUEST_TYPE.SKILL_LIST)
         if not sent then
             local command = string.format("%s 查看", TalentSoulConfig.Communication.CommandPrefix)
-            SendCommand(command, callback, params)
+            SendCommand(command, callback, requestParams, REQUEST_TYPE.SKILL_LIST)
         end
     else
         local command = string.format("%s 查看", TalentSoulConfig.Communication.CommandPrefix)
-        SendCommand(command, callback, params)
+        SendCommand(command, callback, requestParams, REQUEST_TYPE.SKILL_LIST)
     end
 end
 
@@ -414,16 +463,16 @@ function TalentSoulComm:UpgradeSkill(spellId, upgradeType, callback, params)
 
     if USE_ADDON then
         local payload = string.format("SKILL_UPGRADE:%d:%d", sid, utype)
-        local _, sent = SendAddonRequest(payload, callback, params)
+        local _, sent = SendAddonRequest(payload, callback, params, REQUEST_TYPE.SKILL_UPGRADE)
         if not sent then
             local typeNames = { "公共cd", "冷却", "消耗", "伤害" }
             local command = string.format("%s 升级 %s %d", TalentSoulConfig.Communication.CommandPrefix, typeNames[utype] or "公共cd", sid)
-            SendCommand(command, callback, params)
+            SendCommand(command, callback, params, REQUEST_TYPE.SKILL_UPGRADE)
         end
     else
         local typeNames = { "公共cd", "冷却", "消耗", "伤害" }
         local command = string.format("%s 升级 %s %d", TalentSoulConfig.Communication.CommandPrefix, typeNames[utype] or "公共cd", sid)
-        SendCommand(command, callback, params)
+        SendCommand(command, callback, params, REQUEST_TYPE.SKILL_UPGRADE)
     end
 end
 
@@ -431,14 +480,14 @@ end
 function TalentSoulComm:ResetTalent(callback, params)
     if USE_ADDON then
         local payload = "RESET_TALENT"
-        local _, sent = SendAddonRequest(payload, callback, params)
+        local _, sent = SendAddonRequest(payload, callback, params, REQUEST_TYPE.RESET_TALENT)
         if not sent then
             local command = string.format("%s 重置", TalentSoulConfig.Communication.CommandPrefix)
-            SendCommand(command, callback, params)
+            SendCommand(command, callback, params, REQUEST_TYPE.RESET_TALENT)
         end
     else
         local command = string.format("%s 重置", TalentSoulConfig.Communication.CommandPrefix)
-        SendCommand(command, callback, params)
+        SendCommand(command, callback, params, REQUEST_TYPE.RESET_TALENT)
     end
 end
 
@@ -446,14 +495,14 @@ end
 function TalentSoulComm:QueryTalentPoints(callback, params)
     if USE_ADDON then
         local payload = "TALENT_POINTS"
-        local _, sent = SendAddonRequest(payload, callback, params)
+        local _, sent = SendAddonRequest(payload, callback, params, REQUEST_TYPE.TALENT_POINTS)
         if not sent then
             local command = string.format("%s 天赋点", TalentSoulConfig.Communication.CommandPrefix)
-            SendCommand(command, callback, params)
+            SendCommand(command, callback, params, REQUEST_TYPE.TALENT_POINTS)
         end
     else
         local command = string.format("%s 天赋点", TalentSoulConfig.Communication.CommandPrefix)
-        SendCommand(command, callback, params)
+        SendCommand(command, callback, params, REQUEST_TYPE.TALENT_POINTS)
     end
 end
 

@@ -494,7 +494,7 @@ uint32 ItemIdentificationSystem::SelectIdentificationTemplate(uint32 groupId, It
 
     if (templates.empty() || totalChance == 0)
     {
-        DebugLog("未找到组ID为 {} 的鉴定模板", groupId);
+        LOG_WARN("module.itemidentification", "[鉴定模板选择] 未找到组ID为 {} 的鉴定模板!", groupId);
         return 0;
     }
 
@@ -508,12 +508,12 @@ uint32 ItemIdentificationSystem::SelectIdentificationTemplate(uint32 groupId, It
         currentChance += pair.second;
         if (roll <= currentChance)
         {
-            DebugLog("选中鉴定模板ID: {} (组{}, roll={}/{})", pair.first, groupId, roll, totalChance);
             return pair.first;
         }
     }
 
     // 如果出现问题，返回第一个模板
+    LOG_WARN("module.itemidentification", "[鉴定模板选择] 未命中任何模板，返回第一个: ID={}", templates[0].first);
     return templates[0].first;
 }
 

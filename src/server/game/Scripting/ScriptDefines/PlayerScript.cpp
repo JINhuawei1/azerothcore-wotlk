@@ -464,6 +464,11 @@ void ScriptMgr::OnPlayerAfterUpdateMaxHealth(Player* player, float& value)
     CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_AFTER_UPDATE_MAX_HEALTH, script->OnPlayerAfterUpdateMaxHealth(player, value));
 }
 
+void ScriptMgr::OnPlayerAfterUpdateStat(Player* player, Stats stat, float& value)
+{
+    CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_AFTER_UPDATE_STAT, script->OnPlayerAfterUpdateStat(player, stat, value));
+}
+
 void ScriptMgr::OnPlayerBeforeUpdateAttackPowerAndDamage(Player* player, float& level, float& val2, bool ranged)
 {
     CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_BEFORE_UPDATE_ATTACK_POWER_AND_DAMAGE, script->OnPlayerBeforeUpdateAttackPowerAndDamage(player, level, val2, ranged));
@@ -472,6 +477,36 @@ void ScriptMgr::OnPlayerBeforeUpdateAttackPowerAndDamage(Player* player, float& 
 void ScriptMgr::OnPlayerAfterUpdateAttackPowerAndDamage(Player* player, float& level, float& base_attPower, float& attPowerMod, float& attPowerMultiplier, bool ranged)
 {
     CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_AFTER_UPDATE_ATTACK_POWER_AND_DAMAGE, script->OnPlayerAfterUpdateAttackPowerAndDamage(player, level, base_attPower, attPowerMod, attPowerMultiplier, ranged));
+}
+
+void ScriptMgr::OnPlayerAfterUpdateArmor(Player* player, float& value)
+{
+    CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_AFTER_UPDATE_ARMOR, script->OnPlayerAfterUpdateArmor(player, value));
+}
+
+void ScriptMgr::OnPlayerAfterUpdateCritPercentage(Player* player, WeaponAttackType attType, float& value)
+{
+    CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_AFTER_UPDATE_CRIT_PERCENTAGE, script->OnPlayerAfterUpdateCritPercentage(player, attType, value));
+}
+
+void ScriptMgr::OnPlayerAfterUpdateSpellCritChance(Player* player, uint32 school, float& value)
+{
+    CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_AFTER_UPDATE_SPELL_CRIT_CHANCE, script->OnPlayerAfterUpdateSpellCritChance(player, school, value));
+}
+
+void ScriptMgr::OnPlayerAfterUpdateHitChances(Player* player, float& meleeHit, float& rangedHit, float& spellHit)
+{
+    CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_AFTER_UPDATE_HIT_CHANCES, script->OnPlayerAfterUpdateHitChances(player, meleeHit, rangedHit, spellHit));
+}
+
+void ScriptMgr::OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int32& healingBonus, int32 spellDamage[7])
+{
+    CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_AFTER_UPDATE_SPELL_DAMAGE_AND_HEALING, script->OnPlayerAfterUpdateSpellDamageAndHealing(player, healingBonus, spellDamage));
+}
+
+void ScriptMgr::OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int32& amount)
+{
+    CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_AFTER_UPDATE_RATING, script->OnPlayerAfterUpdateRating(player, cr, amount));
 }
 
 void ScriptMgr::OnPlayerBeforeInitTalentForLevel(Player* player, uint8& level, uint32& talentPointsForLevel)

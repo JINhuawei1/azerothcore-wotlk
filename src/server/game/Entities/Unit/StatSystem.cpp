@@ -180,7 +180,8 @@ bool Player::UpdateStats(Stats stat)
         }
     }
 
-
+    // 调用脚本钩子，允许模块修改最终属性值
+    sScriptMgr->OnPlayerAfterUpdateStat(this, stat, value);
 
     SetStat(stat, int32(value));
 
@@ -350,6 +351,9 @@ void Player::UpdateArmor()
 
     value *= GetModifierValue(unitMod, TOTAL_PCT);
 
+    // 调用钩子允许模块修改护甲值
+    sScriptMgr->OnPlayerAfterUpdateArmor(this, value);
+
     // Apply armor limit from database
     {
         Player* player = ToPlayer();
@@ -420,27 +424,32 @@ void Player::UpdateMaxHealth()
     value += GetModifierValue(unitMod, TOTAL_VALUE) + GetHealthBonusFromStamina();
     value *= GetModifierValue(unitMod, TOTAL_PCT);
 
+    // 先调用钩子（转生模块等会在这里加成）
+    sScriptMgr->OnPlayerAfterUpdateMaxHealth(this, value);
+
+    // 【重要】在钩子之后应用血量上限限制
+    constexpr float MAX_SAFE_VALUE = 2000000000.0f;
+
+    // 检查溢出（负数说明溢出了）
+    if (value < 0.0f || value > MAX_SAFE_VALUE)
+        value = MAX_SAFE_VALUE;
+
     // Apply health limit from database
     QueryResult result = WorldDatabase.Query("SELECT `血量上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
     if (result)
     {
         Field* fields = result->Fetch();
-        float healthLimit = fields[0].Get<uint32>();
-        LOG_DEBUG("entities.player", "UpdateMaxHealth: Found health limit {} for class {}, current value: {}", healthLimit, getClass(), value);
+        uint32 healthLimitU32 = fields[0].Get<uint32>();
+        double valueD = static_cast<double>(value);
+        double limitD = static_cast<double>(healthLimitU32);
 
-        if (healthLimit > 0.0f && value > healthLimit)
+        if (healthLimitU32 > 0 && valueD > limitD)
         {
-            value = healthLimit;
-            LOG_DEBUG("entities.player", "UpdateMaxHealth: Applied health limit, new value: {}", value);
+            value = static_cast<float>(healthLimitU32);
         }
     }
-    else
-    {
-        LOG_DEBUG("entities.player", "UpdateMaxHealth: No health limit found for class {}", getClass());
-    }
 
-    sScriptMgr->OnPlayerAfterUpdateMaxHealth(this, value);
-    SetMaxHealth((uint32)value);
+    SetMaxHealth(static_cast<uint32>(value));
 }
 
 void Player::UpdateMaxPower(Powers power)
@@ -454,6 +463,16 @@ void Player::UpdateMaxPower(Powers power)
     value += GetModifierValue(unitMod, TOTAL_VALUE) +  bonusPower;
     value *= GetModifierValue(unitMod, TOTAL_PCT);
 
+    // 先调用钩子（转生模块等会在这里加成）
+    sScriptMgr->OnPlayerAfterUpdateMaxPower(this, power, value);
+
+    // 【重要】在钩子之后应用法力上限限制
+    constexpr float MAX_SAFE_VALUE = 2000000000.0f;
+
+    // 检查溢出（负数说明溢出了）
+    if (value < 0.0f || value > MAX_SAFE_VALUE)
+        value = MAX_SAFE_VALUE;
+
     // Apply mana limit from database (only for mana power type)
     if (power == POWER_MANA)
     {
@@ -461,23 +480,18 @@ void Player::UpdateMaxPower(Powers power)
         if (result)
         {
             Field* fields = result->Fetch();
-            float manaLimit = fields[0].Get<uint32>();
-            LOG_DEBUG("entities.player", "UpdateMaxPower: Found mana limit {} for class {}, current value: {}", manaLimit, getClass(), value);
+            uint32 manaLimitU32 = fields[0].Get<uint32>();
+            double valueD = static_cast<double>(value);
+            double limitD = static_cast<double>(manaLimitU32);
 
-            if (manaLimit > 0.0f && value > manaLimit)
+            if (manaLimitU32 > 0 && valueD > limitD)
             {
-                value = manaLimit;
-                LOG_DEBUG("entities.player", "UpdateMaxPower: Applied mana limit, new value: {}", value);
+                value = static_cast<float>(manaLimitU32);
             }
-        }
-        else
-        {
-            LOG_DEBUG("entities.player", "UpdateMaxPower: No mana limit found for class {}", getClass());
         }
     }
 
-    sScriptMgr->OnPlayerAfterUpdateMaxPower(this, power, value);
-    SetMaxPower(power, uint32(value));
+    SetMaxPower(power, static_cast<uint32>(value));
 }
 
 void Player::ApplyFeralAPBonus(int32 amount, bool apply)
@@ -687,6 +701,13 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
 
     sScriptMgr->OnPlayerAfterUpdateAttackPowerAndDamage(this, level, base_attPower, attPowerMod, attPowerMultiplier, ranged);
 
+    // 【重要】钩子后立即检查溢出 - 如果base_attPower变成负数说明溢出了
+    constexpr float MAX_SAFE_AP = 2000000000.0f;
+    if (base_attPower < 0.0f || base_attPower > MAX_SAFE_AP)
+        base_attPower = MAX_SAFE_AP;
+    if (attPowerMod < -MAX_SAFE_AP || attPowerMod > MAX_SAFE_AP)
+        attPowerMod = (attPowerMod < 0) ? -MAX_SAFE_AP : MAX_SAFE_AP;
+
     // Calculate final attack power
     float finalAttackPower = base_attPower;
 
@@ -707,7 +728,6 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
             Field* fields = result->Fetch();
             float apMultiplier = fields[0].Get<float>();
             uint32 apLimit = fields[1].Get<uint32>();
-            float originalAP = finalAttackPower;
 
             // Apply multiplier
             if (apMultiplier != 100.0f && apMultiplier > 0.0f)
@@ -715,20 +735,29 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
                 finalAttackPower = finalAttackPower * apMultiplier / 100.0f;
             }
 
-            // Apply limit
-            if (apLimit > 0 && finalAttackPower > apLimit)
+            // Apply limit (使用 double 比较避免精度问题)
+            double apDouble = static_cast<double>(finalAttackPower);
+            double limitDouble = static_cast<double>(apLimit);
+            if (apLimit > 0 && apDouble > limitDouble)
             {
-                finalAttackPower = apLimit;
+                finalAttackPower = static_cast<float>(apLimit);
             }
         }
     }
 
+    // 最终安全检查 - 确保不超过 int32 最大值，防止溢出
+    // 注意：如果值变成负数，说明已经溢出，需要限制到安全值
+    if (finalAttackPower < 0.0f || finalAttackPower > MAX_SAFE_AP)
+        finalAttackPower = MAX_SAFE_AP;
 
+    if (attPowerMod > MAX_SAFE_AP)
+        attPowerMod = MAX_SAFE_AP;
+    if (attPowerMod < -MAX_SAFE_AP)
+        attPowerMod = -MAX_SAFE_AP;
 
-
-
-    SetInt32Value(index, (uint32)finalAttackPower);            //UNIT_FIELD_(RANGED)_ATTACK_POWER field
-    SetInt32Value(index_mod, (uint32)attPowerMod);          //UNIT_FIELD_(RANGED)_ATTACK_POWER_MODS field
+    // 使用正确的类型转换，确保不溢出 int32 范围
+    SetInt32Value(index, static_cast<int32>(finalAttackPower));            //UNIT_FIELD_(RANGED)_ATTACK_POWER field
+    SetInt32Value(index_mod, static_cast<int32>(attPowerMod));          //UNIT_FIELD_(RANGED)_ATTACK_POWER_MODS field
     SetFloatValue(index_mult, attPowerMultiplier);          //UNIT_FIELD_(RANGED)_ATTACK_POWER_MULTIPLIER field
 
     //automatically update weapon damage after attack power modification
@@ -938,6 +967,9 @@ void Player::UpdateCritPercentage(WeaponAttackType attType)
     float value = GetTotalPercentageModValue(modGroup) + GetRatingBonusValue(cr);
     // Modify crit from weapon skill and maximized defense skill of same level victim difference
     value += (int32(GetWeaponSkillValue(attType)) - int32(GetMaxSkillValueForLevel())) * 0.04f;
+
+    // 调用钩子允许模块修改暴击率
+    sScriptMgr->OnPlayerAfterUpdateCritPercentage(this, attType, value);
 
     // Apply crit limits with priority: Database > Config file
     bool limitApplied = false;
@@ -1209,6 +1241,9 @@ void Player::UpdateSpellCritChance(uint32 school)
     crit += GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL, 1 << school);
     // Increase crit from spell crit ratings
     crit += GetRatingBonusValue(CR_CRIT_SPELL);
+
+    // 调用钩子允许模块修改法术暴击率
+    sScriptMgr->OnPlayerAfterUpdateSpellCritChance(this, school, crit);
 
     // Apply spell crit limits with priority: Database > Config file
     bool limitApplied = false;

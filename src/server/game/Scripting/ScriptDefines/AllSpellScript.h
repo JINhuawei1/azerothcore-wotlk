@@ -39,6 +39,8 @@ enum AllSpellHook
     ALLSPELLHOOK_ON_CAST_CANCEL,
     ALLSPELLHOOK_ON_CAST,
     ALLSPELLHOOK_ON_PREPARE,
+    ALLSPELLHOOK_ON_CALC_GLOBAL_COOLDOWN,
+    ALLSPELLHOOK_ON_MODIFY_CAST_FLAGS,
     ALLSPELLHOOK_END
 };
 
@@ -109,6 +111,27 @@ public:
     virtual void OnSpellCast(Spell* /*spell*/, Unit* /*caster*/, SpellInfo const* /*spellInfo*/, bool /*skipCheck*/) { }
 
     virtual void OnSpellPrepare(Spell* /*spell*/, Unit* /*caster*/, SpellInfo const* /*spellInfo*/) { }
+
+    /**
+     * @brief This hook called when calculating global cooldown
+     *
+     * @param spell Contains information about the Spell
+     * @param caster Contains information about the casting Unit
+     * @param spellInfo Contains information about the SpellInfo
+     * @param gcd Reference to global cooldown value in milliseconds, can be modified
+     */
+    virtual void OnCalcGlobalCooldown(Spell* /*spell*/, Unit* /*caster*/, SpellInfo const* /*spellInfo*/, int32& /*gcd*/) { }
+
+    /**
+     * @brief This hook called when building cast flags for SendSpellGo packet
+     *        Allows modifying castFlags to control client-side spell behavior like GCD animation
+     *
+     * @param spell Contains information about the Spell
+     * @param caster Contains information about the casting Unit
+     * @param spellInfo Contains information about the SpellInfo
+     * @param castFlags Reference to cast flags, can be modified (use CAST_FLAG_NO_GCD = 0x00040000 to disable GCD animation)
+     */
+    virtual void OnModifyCastFlags(Spell* /*spell*/, Unit* /*caster*/, SpellInfo const* /*spellInfo*/, uint32& /*castFlags*/) { }
 };
 
 // Compatibility for old scripts

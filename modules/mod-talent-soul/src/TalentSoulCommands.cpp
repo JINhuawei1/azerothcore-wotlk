@@ -1,4 +1,4 @@
-/*
+﻿/*
  * 天赋之魂系统 - GM命令
  */
 
@@ -77,7 +77,7 @@ public:
     static bool HandleTalentSoulReloadCommand(ChatHandler* handler, Optional<std::string> /*args*/)
     {
         sTalentSoulMgr->LoadTalentSoulData();
-        handler->PSendSysMessage("天赋之魂数据已重载，共加载 %u 条记录", sTalentSoulMgr->GetDataCount());
+        handler->PSendSysMessage("天赋之魂数据已重载，共加载 {} 条记录", sTalentSoulMgr->GetDataCount());
         return true;
     }
 
@@ -88,20 +88,20 @@ public:
 
         if (!data)
         {
-            handler->PSendSysMessage("未找到技能ID %u 的天赋之魂配置", spellId);
+            handler->PSendSysMessage("未找到技能ID {} 的天赋之魂配置", spellId);
             return true;
         }
 
         handler->PSendSysMessage("=== 天赋之魂配置信息 ===");
-        handler->PSendSysMessage("ID: %u", data->id);
-        handler->PSendSysMessage("职业: %s (%u)", GetClassName(data->classType), data->classType);
-        handler->PSendSysMessage("天赋点需求: %u", data->talentPointCost);
-        handler->PSendSysMessage("技能ID: %u", data->spellId);
-        handler->PSendSysMessage("公共CD: 每级-%.2f%% (上限%u级)", data->gcdPerLevel, data->gcdMaxLevel);
-        handler->PSendSysMessage("技能冷却: 每级-%.2f%% (上限%u级)", data->cooldownPerLevel, data->cooldownMaxLevel);
-        handler->PSendSysMessage("技能消耗: 每级-%.2f%% (上限%u级)", data->costPerLevel, data->costMaxLevel);
-        handler->PSendSysMessage("伤害加成: 每级+%.2f%% (上限%u级)", data->damagePerLevel, data->damageMaxLevel);
-        handler->PSendSysMessage("效果描述: %s", data->description.c_str());
+        handler->PSendSysMessage("ID: {}", data->id);
+        handler->PSendSysMessage("职业: {} ({})", GetClassName(data->classType), data->classType);
+        handler->PSendSysMessage("天赋点需求: {}", data->talentPointCost);
+        handler->PSendSysMessage("技能ID: {}", data->spellId);
+        handler->PSendSysMessage("公共CD: 每级-{:.2f}% (上限{}级)", data->gcdPerLevel, data->gcdMaxLevel);
+        handler->PSendSysMessage("技能冷却: 每级-{:.2f}% (上限{}级)", data->cooldownPerLevel, data->cooldownMaxLevel);
+        handler->PSendSysMessage("技能消耗: 每级-{:.2f}% (上限{}级)", data->costPerLevel, data->costMaxLevel);
+        handler->PSendSysMessage("伤害加成: 每级+{:.2f}% (上限{}级)", data->damagePerLevel, data->damageMaxLevel);
+        handler->PSendSysMessage("效果描述: {}", data->description);
 
         return true;
     }
@@ -129,7 +129,7 @@ public:
         uint32 startIndex = (pageNum - 1) * pageSize;
         uint32 endIndex = std::min(startIndex + pageSize, totalCount);
 
-        handler->PSendSysMessage("=== 天赋之魂配置列表 (第 %u/%u 页) ===", pageNum, totalPages);
+        handler->PSendSysMessage("=== 天赋之魂配置列表 (第 {}/{} 页) ===", pageNum, totalPages);
 
         uint32 index = 0;
         for (auto const& pair : allData)
@@ -137,13 +137,13 @@ public:
             if (index >= startIndex && index < endIndex)
             {
                 TalentSoulData const& data = pair.second;
-                handler->PSendSysMessage("[%u] 技能:%u 职业:%s 天赋点:%u",
+                handler->PSendSysMessage("[{}] 技能:{} 职业:{} 天赋点:{}",
                     data.id, data.spellId, GetClassName(data.classType), data.talentPointCost);
             }
             ++index;
         }
 
-        handler->PSendSysMessage("总计: %u 条数据", totalCount);
+        handler->PSendSysMessage("总计: {} 条数据", totalCount);
 
         return true;
     }
@@ -159,22 +159,22 @@ public:
 
         if (!config)
         {
-            handler->PSendSysMessage("技能ID %u 没有配置天赋之魂效果", spellId);
+            handler->PSendSysMessage("技能ID {} 没有配置天赋之魂效果", spellId);
             return true;
         }
 
         uint32 playerGuid = player->GetGUID().GetCounter();
         PlayerSkillData* skillData = sTalentSoulMgr->GetPlayerSkillData(playerGuid, spellId);
 
-        handler->PSendSysMessage("=== 技能 %u 天赋之魂 ===", spellId);
-        handler->PSendSysMessage("职业限制: %s | 天赋点需求: %u",
+        handler->PSendSysMessage("=== 技能 {} 天赋之魂 ===", spellId);
+        handler->PSendSysMessage("职业限制: {} | 天赋点需求: {}",
             GetClassName(config->classType), config->talentPointCost);
-        handler->PSendSysMessage("配置: GCD每级-%.2f%% CD每级-%.2f%% 消耗每级-%.2f%% 伤害每级+%.2f%%",
+        handler->PSendSysMessage("配置: GCD每级-{:.2f}% CD每级-{:.2f}% 消耗每级-{:.2f}% 伤害每级+{:.2f}%",
             config->gcdPerLevel, config->cooldownPerLevel, config->costPerLevel, config->damagePerLevel);
 
         if (skillData)
         {
-            handler->PSendSysMessage("你的等级: GCD:%u/%u CD:%u/%u 消耗:%u/%u 伤害:%u/%u",
+            handler->PSendSysMessage("你的等级: GCD:{}/{} CD:{}/{} 消耗:{}/{} 伤害:{}/{}",
                 skillData->gcdLevel, config->gcdMaxLevel,
                 skillData->cooldownLevel, config->cooldownMaxLevel,
                 skillData->costLevel, config->costMaxLevel,
@@ -185,7 +185,7 @@ public:
             float costReduction = sTalentSoulMgr->GetPlayerCostReduction(playerGuid, spellId);
             float damageBonus = sTalentSoulMgr->GetPlayerDamageBonus(playerGuid, spellId);
 
-            handler->PSendSysMessage("实际效果: GCD-%.2f%% CD-%.2f%% 消耗-%.2f%% 伤害+%.2f%%",
+            handler->PSendSysMessage("实际效果: GCD-{:.2f}% CD-{:.2f}% 消耗-{:.2f}% 伤害+{:.2f}%",
                 gcdReduction, cdReduction, costReduction, damageBonus);
         }
         else
@@ -203,14 +203,14 @@ public:
         if (!player)
             return false;
 
-        uint32 totalPoints = player->GetLevel();
+        uint32 totalPoints = player->CalculateTalentsPoints();
         uint32 usedPoints = sTalentSoulMgr->GetPlayerUsedTalentPoints(player->GetGUID().GetCounter());
         uint32 availablePoints = sTalentSoulMgr->GetPlayerAvailableTalentPoints(player);
 
         handler->PSendSysMessage("=== 天赋点信息 ===");
-        handler->PSendSysMessage("总天赋点: %u (等级)", totalPoints);
-        handler->PSendSysMessage("已使用: %u", usedPoints);
-        handler->PSendSysMessage("可用: %u", availablePoints);
+        handler->PSendSysMessage("总天赋点: {} (含倍率)", totalPoints);
+        handler->PSendSysMessage("已使用: {}", usedPoints);
+        handler->PSendSysMessage("可用: {}", availablePoints);
 
         return true;
     }
@@ -242,8 +242,8 @@ public:
         uint32 startIndex = (pageNum - 1) * pageSize;
         uint32 endIndex = std::min(startIndex + pageSize, totalCount);
 
-        handler->PSendSysMessage("=== 我的天赋之魂 (第 %u/%u 页) ===", pageNum, totalPages);
-        handler->PSendSysMessage("已使用天赋点: %u | 可用: %u",
+        handler->PSendSysMessage("=== 我的天赋之魂 (第 {}/{} 页) ===", pageNum, totalPages);
+        handler->PSendSysMessage("已使用天赋点: {} | 可用: {}",
             playerData->usedTalentPoints,
             sTalentSoulMgr->GetPlayerAvailableTalentPoints(player));
 
@@ -257,7 +257,7 @@ public:
 
                 if (config)
                 {
-                    handler->PSendSysMessage("技能%u: GCD:%u/%u CD:%u/%u 消耗:%u/%u 伤害:%u/%u",
+                    handler->PSendSysMessage("技能{}: GCD:{}/{} CD:{}/{} 消耗:{}/{} 伤害:{}/{}",
                         skill.spellId,
                         skill.gcdLevel, config->gcdMaxLevel,
                         skill.cooldownLevel, config->cooldownMaxLevel,
@@ -268,7 +268,7 @@ public:
             ++index;
         }
 
-        handler->PSendSysMessage("总计: %u 个技能", totalCount);
+        handler->PSendSysMessage("总计: {} 个技能", totalCount);
 
         return true;
     }
@@ -308,14 +308,14 @@ public:
         std::string errorMsg;
         if (!sTalentSoulMgr->CanUpgradeSpell(player, spellId, errorMsg))
         {
-            handler->PSendSysMessage("无法升级: %s", errorMsg.c_str());
+            handler->PSendSysMessage("无法升级: {}", errorMsg.c_str());
             return true;
         }
 
         TalentSoulData const* config = sTalentSoulMgr->GetTalentSoulData(spellId);
         if (!config)
         {
-            handler->PSendSysMessage("技能ID %u 没有配置天赋之魂效果", spellId);
+            handler->PSendSysMessage("技能ID {} 没有配置天赋之魂效果", spellId);
             return true;
         }
 
@@ -347,12 +347,12 @@ public:
                     break;
             }
 
-            handler->PSendSysMessage("技能 %u 的%s升级成功！当前等级: %u/%u",
+            handler->PSendSysMessage("技能 {} 的{}升级成功！当前等级: {}/{}",
                 spellId, typeName, currentLevel, maxLevel);
         }
         else
         {
-            handler->PSendSysMessage("技能 %u 的%s已达到最大等级，无法继续升级", spellId, typeName);
+            handler->PSendSysMessage("技能 {} 的{}已达到最大等级，无法继续升级", spellId, typeName);
         }
 
         return true;
@@ -373,7 +373,7 @@ public:
         TalentSoulData const* config = sTalentSoulMgr->GetTalentSoulData(spellId);
         if (!config)
         {
-            handler->PSendSysMessage("技能ID %u 没有配置天赋之魂效果", spellId);
+            handler->PSendSysMessage("技能ID {} 没有配置天赋之魂效果", spellId);
             return true;
         }
 
@@ -417,7 +417,7 @@ public:
             sTalentSoulMgr->SavePlayerData(target);
         }
 
-        handler->PSendSysMessage("已设置玩家 %s 的技能 %u: GCD:%u CD:%u 消耗:%u 伤害:%u",
+        handler->PSendSysMessage("已设置玩家 {} 的技能 {}: GCD:{} CD:{} 消耗:{} 伤害:{}",
             target->GetName().c_str(), spellId, gcdLv, cdLv, costLv, damageLv);
 
         return true;
@@ -456,20 +456,20 @@ public:
                     sTalentSoulMgr->SavePlayerData(target);
                 }
             }
-            handler->PSendSysMessage("已重置玩家 %s 的技能 %u 天赋之魂数据",
+            handler->PSendSysMessage("已重置玩家 {} 的技能 {} 天赋之魂数据",
                 target->GetName().c_str(), spellId.value());
         }
         else
         {
-            // 重置所有技能
-            CharacterDatabase.Execute(
+            // 重置所有技能 - 使用 DirectExecute 同步执行
+            CharacterDatabase.DirectExecute(
                 "DELETE FROM `_天赋之魂_玩家数据` WHERE `角色id` = {}",
                 targetGuid);
 
             // 重新加载玩家数据（会清空内存数据）
             sTalentSoulMgr->LoadPlayerData(target);
 
-            handler->PSendSysMessage("已重置玩家 %s 的所有天赋之魂数据",
+            handler->PSendSysMessage("已重置玩家 {} 的所有天赋之魂数据",
                 target->GetName().c_str());
         }
 
@@ -588,7 +588,8 @@ private:
 
         uint8 playerClass = player->getClass();
         uint32 playerGuid = player->GetGUID().GetCounter();
-        uint32 totalPoints = player->GetLevel();
+        // 使用官方API获取天赋点 (已包含rate.talent倍率)
+        uint32 totalPoints = player->CalculateTalentsPoints();
         uint32 usedPoints = sTalentSoulMgr->GetPlayerUsedTalentPoints(playerGuid);
 
         // 解析请求的职业ID
@@ -699,7 +700,7 @@ private:
             failResponse << "TALENTSOUL_UPGRADE_FAIL:" << spellId << ":" << upgradeType << ":NOT_ENOUGH_POINTS";
             SendAddonMessage(player, failResponse.str());
 
-            ChatHandler(player->GetSession()).PSendSysMessage("|cffff0000[天赋之魂]|r %s", errorMsg.c_str());
+            ChatHandler(player->GetSession()).PSendSysMessage("|cffff0000[天赋之魂]|r {}", errorMsg.c_str());
             return;
         }
 
@@ -744,7 +745,7 @@ private:
             SendAddonMessage(player, successResponse.str());
 
             const char* typeNames[] = { "公共CD", "技能冷却", "技能消耗", "伤害加成" };
-            ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff00[天赋之魂]|r 技能 %u 的%s升级成功，当前等级: %u",
+            ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff00[天赋之魂]|r 技能 {} 的{}升级成功，当前等级: {}",
                 spellId, typeNames[type], currentLevel);
         }
         else
@@ -780,8 +781,8 @@ private:
         // 计算返还的天赋点
         uint32 returnedPoints = playerData->usedTalentPoints;
 
-        // 清空所有技能数据
-        CharacterDatabase.Execute(
+        // 使用 DirectExecute 同步清空所有技能数据（确保在 LoadPlayerData 之前完成）
+        CharacterDatabase.DirectExecute(
             "DELETE FROM `_天赋之魂_玩家数据` WHERE `角色id` = {}",
             playerGuid);
 
@@ -793,7 +794,7 @@ private:
         successResponse << "TALENTSOUL_RESET:" << returnedPoints;
         SendAddonMessage(player, successResponse.str());
 
-        ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff00[天赋之魂]|r 天赋重置成功，返还 %u 点天赋点", returnedPoints);
+        ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff00[天赋之魂]|r 天赋重置成功，返还 {} 点天赋点", returnedPoints);
     }
 
     // 处理天赋点查询请求
@@ -802,7 +803,7 @@ private:
         if (!player)
             return;
 
-        uint32 totalPoints = player->GetLevel();
+        uint32 totalPoints = player->CalculateTalentsPoints();
         uint32 usedPoints = sTalentSoulMgr->GetPlayerUsedTalentPoints(player->GetGUID().GetCounter());
         uint32 availablePoints = sTalentSoulMgr->GetPlayerAvailableTalentPoints(player);
 

@@ -109,10 +109,26 @@ function TalentSoulData:ResetUsedPoints()
     return returned
 end
 
+-- 取消所有待处理的技能请求
+local function cancelAllSkillRequests()
+    for key, _ in pairs(pendingRequests) do
+        if key:match("^skills_") then
+            PrintDebug("取消待处理请求: " .. key)
+            pendingRequests[key] = nil
+        end
+    end
+end
+
 -- 请求技能数据
 -- classId: 职业ID，nil表示玩家当前职业，0表示全部职业
-local function requestSkillData(callback, classId)
+-- forceNew: 是否强制发送新请求（取消旧请求）
+local function requestSkillData(callback, classId, forceNew)
     local requestKey = "skills_" .. tostring(classId or "default")
+
+    -- 如果强制发送新请求，先取消所有旧的技能请求
+    if forceNew then
+        cancelAllSkillRequests()
+    end
 
     if pendingRequests[requestKey] then
         if callback then
@@ -200,9 +216,9 @@ end
 -- 确保技能数据已加载
 -- classId: 职业ID，nil表示玩家当前职业，0表示全部职业
 function TalentSoulData:EnsureSkillData(callback, classId)
-    -- 如果指定了classId，总是重新请求数据
+    -- 如果指定了classId，取消旧请求并发送新请求
     if classId ~= nil then
-        requestSkillData(callback, classId)
+        requestSkillData(callback, classId, true)  -- forceNew = true
         return false
     end
 
@@ -213,7 +229,7 @@ function TalentSoulData:EnsureSkillData(callback, classId)
         return true
     end
 
-    requestSkillData(callback, nil)
+    requestSkillData(callback, nil, false)
     return false
 end
 
@@ -221,7 +237,7 @@ end
 -- classId: 职业ID，nil表示玩家当前职业，0表示全部职业
 function TalentSoulData:Refresh(callback, classId)
     self:InvalidateSkillCache()
-    requestSkillData(callback, classId)
+    requestSkillData(callback, classId, true)  -- forceNew = true
 end
 
 -- 设置选中的技能
@@ -230,8 +246,23 @@ function TalentSoulData:SetSelectedSkill(skill)
     PrintDebug("选中技能: " .. (skill and skill.name or "无"))
 end
 
--- 获取选中的技能
+-- 获取选中的技能（从缓存中获取最新数据）
 function TalentSoulData:GetSelectedSkill()
+    if not selectedSkill then
+        return nil
+    end
+
+    -- 从缓存中查找最新的技能数据，避免使用过期的引用
+    local spellId = selectedSkill.spellId
+    if spellId and skillCache then
+        for _, skill in ipairs(skillCache) do
+            if skill.spellId == spellId then
+                return skill  -- 返回缓存中的最新数据
+            end
+        end
+    end
+
+    -- 如果缓存中找不到，返回原对象（可能是缓存已清空）
     return selectedSkill
 end
 
@@ -272,15 +303,15 @@ end
 function TalentSoulData:CanUpgradeAttribute(skill, attributeType)
     if not skill then return false, "未选择技能" end
 
-    -- 检查天赋点
-    if self:GetAvailablePoints() <= 0 then
-        return false, "天赋点不足"
-    end
-
     -- 检查技能是否首次学习需要天赋点
-    if not self:IsSkillLearned(skill) and skill.requiredPoints > 0 then
-        if self:GetUsedPoints() < skill.requiredPoints then
-            return false, string.format("需要 %d 天赋点才能学习", skill.requiredPoints)
+    if not self:IsSkillLearned(skill) and skill.requiredPoints and skill.requiredPoints > 0 then
+        if self:GetAvailablePoints() < skill.requiredPoints then
+            return false, string.format("需要 %d 天赋点解锁", skill.requiredPoints)
+        end
+    else
+        -- 已学习的技能，每次升级需要1点
+        if self:GetAvailablePoints() < 1 then
+            return false, "天赋点不足"
         end
     end
 

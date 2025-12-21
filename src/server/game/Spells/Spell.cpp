@@ -4787,6 +4787,9 @@ void Spell::SendSpellStart()
     if (m_spellInfo->RuneCostID && m_spellInfo->PowerType == POWER_RUNE)
         castFlags |= CAST_FLAG_NO_GCD; // not needed, but Blizzard sends it
 
+    // 模块支持: 允许修改施法标志（用于控制客户端GCD动画等）
+    sScriptMgr->OnModifyCastFlags(this, m_caster, m_spellInfo, castFlags);
+
     PackedGuid realCasterGUID = m_caster->GetPackGUID();
     if (TempSummon const* tempSummon = m_caster->ToTempSummon())
     {
@@ -4884,6 +4887,9 @@ void Spell::SendSpellGo()
 
     if (!m_spellInfo->StartRecoveryTime)
         castFlags |= CAST_FLAG_NO_GCD;
+
+    // 模块支持: 允许修改施法标志（用于控制客户端GCD动画等）
+    sScriptMgr->OnModifyCastFlags(this, m_caster, m_spellInfo, castFlags);
 
     PackedGuid realCasterGUID = m_caster->GetPackGUID();
     if (TempSummon const* tempSummon = m_caster->ToTempSummon())
@@ -8936,6 +8942,13 @@ void Spell::TriggerGlobalCooldown()
         else if (gcd > MAX_GCD)
             gcd = MAX_GCD;
     }
+
+    // 模块支持: 允许修改GCD (在限制检查后、添加GCD前)
+    sScriptMgr->OnCalcGlobalCooldown(this, m_caster, m_spellInfo, gcd);
+
+    // 确保模块修改后的值仍在有效范围内
+    if (gcd < 0)
+        gcd = 0;
 
     // Only players or controlled units have global cooldown
     if (m_caster->GetCharmInfo())

@@ -15511,6 +15511,9 @@ Powers Unit::GetPowerTypeByAuraGroup(UnitMods unitMod) const
 
 float Unit::GetTotalAttackPowerValue(WeaponAttackType attType, Unit* victim) const
 {
+    // 安全上限，防止溢出导致负数
+    constexpr float MAX_SAFE_AP = 2000000000.0f;
+
     if (attType == RANGED_ATTACK)
     {
         int32 ap = GetInt32Value(UNIT_FIELD_RANGED_ATTACK_POWER) + GetInt32Value(UNIT_FIELD_RANGED_ATTACK_POWER_MODS);
@@ -15519,7 +15522,12 @@ float Unit::GetTotalAttackPowerValue(WeaponAttackType attType, Unit* victim) con
 
         if (ap < 0)
             return 0.0f;
-        return ap * (1.0f + GetFloatValue(UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER));
+
+        float result = static_cast<float>(ap) * (1.0f + GetFloatValue(UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER));
+        // 限制结果防止溢出
+        if (result < 0.0f || result > MAX_SAFE_AP)
+            result = MAX_SAFE_AP;
+        return result;
     }
     else
     {
@@ -15529,7 +15537,12 @@ float Unit::GetTotalAttackPowerValue(WeaponAttackType attType, Unit* victim) con
 
         if (ap < 0)
             return 0.0f;
-        return ap * (1.0f + GetFloatValue(UNIT_FIELD_ATTACK_POWER_MULTIPLIER));
+
+        float result = static_cast<float>(ap) * (1.0f + GetFloatValue(UNIT_FIELD_ATTACK_POWER_MULTIPLIER));
+        // 限制结果防止溢出
+        if (result < 0.0f || result > MAX_SAFE_AP)
+            result = MAX_SAFE_AP;
+        return result;
     }
 }
 

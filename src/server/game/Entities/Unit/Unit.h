@@ -1009,8 +1009,13 @@ public:
     /***              METHODS RELATED TO STATS             ***/
     /*********************************************************/
     // stat system
+    // 注意：GetStat 返回 float，对于超过 16777216 的值会有精度损失
     [[nodiscard]] float GetStat(Stats stat) const { return float(GetUInt32Value(static_cast<uint16>(UNIT_FIELD_STAT0) + stat)); }
-    void SetStat(Stats stat, int32 val) { SetStatInt32Value(static_cast<uint16>(UNIT_FIELD_STAT0) + stat, val); }
+    // GetStatUInt32：直接返回 uint32，避免 float 精度损失，用于大数值比较
+    [[nodiscard]] uint32 GetStatUInt32(Stats stat) const { return GetUInt32Value(static_cast<uint16>(UNIT_FIELD_STAT0) + stat); }
+    // 支持 uint32 类型以避免大数值溢出（超过 21.47 亿）
+    void SetStat(Stats stat, uint32 val) { SetUInt32Value(static_cast<uint16>(UNIT_FIELD_STAT0) + stat, val); }
+    void SetStat(Stats stat, int32 val) { SetUInt32Value(static_cast<uint16>(UNIT_FIELD_STAT0) + stat, val > 0 ? uint32(val) : 0); }
 
     [[nodiscard]] Stats GetStatByAuraGroup(UnitMods unitMod) const;
 
