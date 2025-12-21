@@ -134,6 +134,9 @@ public:
             // 在登录完成后强制刷新所有属性
             player->UpdateAllStats();
 
+            // 强制刷新所有评级属性
+            player->UpdateAllRatings();
+
             // 显示转身信息
             std::string message = "|cff00ff00[转身系统]|r 当前转身等级: |cffffd700" +
                                   std::to_string(reincarnationLevel) + "转|r，全属性加成: |cff00ffff+" +
@@ -243,9 +246,7 @@ public:
         float bonusPercent = sReincarnationMgr->GetPlayerBonusStats(player->GetGUID().GetCounter());
         if (bonusPercent > 0)
         {
-            float oldValue = value;
             value *= (1.0f + bonusPercent / 100.0f);
-            LOG_INFO("module", "[转身系统调试] 护甲加成: {}% | 原值: {} | 新值: {}", bonusPercent, oldValue, value);
         }
     }
 
@@ -291,10 +292,31 @@ public:
         float bonusPercent = sReincarnationMgr->GetPlayerBonusStats(player->GetGUID().GetCounter());
         if (bonusPercent > 0 && amount > 0)
         {
-            int32 oldAmount = amount;
             // 对评级属性应用百分比加成
             amount = int32(amount * (1.0f + bonusPercent / 100.0f));
-            LOG_INFO("module", "[转身系统调试] 评级[{}]加成: {}% | 原值: {} | 新值: {}", static_cast<int>(cr), bonusPercent, oldAmount, amount);
+        }
+    }
+
+    // 计算法术强度和治疗强度时调用
+    void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int32& healingBonus, int32 spellDamage[7]) override
+    {
+        if (!player || !sConfigMgr->GetOption("Reincarnation.Enable", true))
+            return;
+
+        float bonusPercent = sReincarnationMgr->GetPlayerBonusStats(player->GetGUID().GetCounter());
+        if (bonusPercent > 0)
+        {
+            // 对治疗强度应用百分比加成
+            if (healingBonus > 0)
+                healingBonus = int32(healingBonus * (1.0f + bonusPercent / 100.0f));
+
+            // 对所有学派的法术强度应用百分比加成
+            // spellDamage[0] = 物理(不处理), [1]=神圣, [2]=火焰, [3]=自然, [4]=冰霜, [5]=暗影, [6]=奥术
+            for (int i = 1; i < 7; ++i)
+            {
+                if (spellDamage[i] > 0)
+                    spellDamage[i] = int32(spellDamage[i] * (1.0f + bonusPercent / 100.0f));
+            }
         }
     }
 };

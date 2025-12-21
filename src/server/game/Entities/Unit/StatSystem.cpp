@@ -71,6 +71,13 @@ void Unit::UpdateDamagePhysical(WeaponAttackType attType)
         totalMax += tmpMax;
     }
 
+    // 【重要】首先检查溢出 - 如果值为负数或无效，说明溢出了
+    constexpr float MAX_SAFE_DAMAGE = 2000000000.0f;
+    if (totalMin < 0.0f || totalMin > MAX_SAFE_DAMAGE || std::isnan(totalMin) || std::isinf(totalMin))
+        totalMin = MAX_SAFE_DAMAGE;
+    if (totalMax < 0.0f || totalMax > MAX_SAFE_DAMAGE || std::isnan(totalMax) || std::isinf(totalMax))
+        totalMax = MAX_SAFE_DAMAGE;
+
     // Apply damage limits from database
     {
         Player* player = ToPlayer();
@@ -93,20 +100,23 @@ void Unit::UpdateDamagePhysical(WeaponAttackType attType)
             if (result)
             {
                 Field* fields = result->Fetch();
-                float damageLimit = fields[0].Get<float>();
+                uint32 damageLimitU32 = fields[0].Get<uint32>();
+                double limitD = static_cast<double>(damageLimitU32);
 
-                if (damageLimit > 0.0f)
+                if (damageLimitU32 > 0)
                 {
-                    if (totalMin > damageLimit)
-                        totalMin = damageLimit;
-                    if (totalMax > damageLimit)
-                        totalMax = damageLimit;
+                    if (static_cast<double>(totalMin) > limitD)
+                        totalMin = static_cast<float>(damageLimitU32);
+                    if (static_cast<double>(totalMax) > limitD)
+                        totalMax = static_cast<float>(damageLimitU32);
                 }
             }
         }
     }
 
-
+    // 确保 min <= max
+    if (totalMin > totalMax)
+        totalMin = totalMax;
 
     switch (attType)
     {
@@ -140,50 +150,48 @@ bool Player::UpdateStats(Stats stat)
     // value = ((base_value * base_pct) + total_value) * total_pct
     float value  = GetTotalStatValue(stat);
 
-    // （调试日志已移除）
+    // 先调用脚本钩子，允许模块修改最终属性值（转生模块等会在这里加成）
+    sScriptMgr->OnPlayerAfterUpdateStat(this, stat, value);
 
-    // Apply attribute limits from database
+    // 【重要】在钩子之后应用属性上限限制
+    constexpr float MAX_SAFE_VALUE = 2000000000.0f;
+
+    // 检查溢出（负数说明溢出了）
+    if (value < 0.0f || value > MAX_SAFE_VALUE)
+        value = MAX_SAFE_VALUE;
+
+    // Apply attribute limits from database - 使用明确的字段名查询
     {
-        Player* player = ToPlayer();
-        if (player)
+        const char* limitFieldName = nullptr;
+        switch (stat)
         {
-            QueryResult result = WorldDatabase.Query("SELECT * FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
+            case STAT_STRENGTH:  limitFieldName = "力量上限"; break;
+            case STAT_AGILITY:   limitFieldName = "敏捷上限"; break;
+            case STAT_STAMINA:   limitFieldName = "耐力上限"; break;
+            case STAT_INTELLECT: limitFieldName = "智力上限"; break;
+            case STAT_SPIRIT:    limitFieldName = "精神上限"; break;
+            default: break;
+        }
+
+        if (limitFieldName)
+        {
+            QueryResult result = WorldDatabase.Query("SELECT `{}` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", limitFieldName, getClass());
             if (result)
             {
                 Field* fields = result->Fetch();
-                float limit = 0.0f;
+                uint32 limitU32 = fields[0].Get<uint32>();
+                double valueD = static_cast<double>(value);
+                double limitD = static_cast<double>(limitU32);
 
-                switch (stat)
+                if (limitU32 > 0 && valueD > limitD)
                 {
-                    case STAT_STRENGTH:
-                        limit = fields[14].Get<uint32>(); // 力量上限
-                        break;
-                    case STAT_AGILITY:
-                        limit = fields[17].Get<uint32>(); // 敏捷上限
-                        break;
-                    case STAT_STAMINA:
-                        limit = fields[26].Get<uint32>(); // 耐力上限
-                        break;
-                    case STAT_INTELLECT:
-                        limit = fields[20].Get<uint32>(); // 智力上限
-                        break;
-                    case STAT_SPIRIT:
-                        limit = fields[23].Get<uint32>(); // 精神上限
-                        break;
-                }
-
-                if (limit > 0.0f && value > limit)
-                {
-                    value = limit;
+                    value = static_cast<float>(limitU32);
                 }
             }
         }
     }
 
-    // 调用脚本钩子，允许模块修改最终属性值
-    sScriptMgr->OnPlayerAfterUpdateStat(this, stat, value);
-
-    SetStat(stat, int32(value));
+    SetStat(stat, static_cast<int32>(value));
 
     switch (stat)
     {
@@ -262,20 +270,33 @@ void Player::UpdateSpellDamageAndHealingBonus()
     // Magic damage modifiers implemented in Unit::SpellDamageBonusDone
     // This information for client side use only
     // Get healing bonus for all schools
-    SetStatInt32Value(PLAYER_FIELD_MOD_HEALING_DONE_POS, SpellBaseHealingBonusDone(SPELL_SCHOOL_MASK_ALL));
+    int32 healingBonus = SpellBaseHealingBonusDone(SPELL_SCHOOL_MASK_ALL);
+
     // Get damage bonus for all schools
+    int32 spellDamage[MAX_SPELL_SCHOOL];
+    spellDamage[SPELL_SCHOOL_NORMAL] = 0;  // 物理学派不计算法术伤害
     for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
-        SetStatInt32Value(PLAYER_FIELD_MOD_DAMAGE_DONE_POS + i, SpellBaseDamageBonusDone(SpellSchoolMask(1 << i)));
+        spellDamage[i] = SpellBaseDamageBonusDone(SpellSchoolMask(1 << i));
+
+    // 调用钩子允许模块修改法术强度和治疗强度
+    sScriptMgr->OnPlayerAfterUpdateSpellDamageAndHealing(this, healingBonus, spellDamage);
+
+    // 设置最终值到客户端显示字段
+    SetStatInt32Value(PLAYER_FIELD_MOD_HEALING_DONE_POS, healingBonus);
+    for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
+        SetStatInt32Value(PLAYER_FIELD_MOD_DAMAGE_DONE_POS + i, spellDamage[i]);
 }
 
 bool Player::UpdateAllStats()
 {
+    // 【重要】使用 UpdateStats 而非直接 SetStat，确保钩子能修改属性值
+    // 转身系统等模块通过 OnPlayerAfterUpdateStat 钩子应用加成
     for (int8 i = STAT_STRENGTH; i < MAX_STATS; ++i)
     {
-        float value = GetTotalStatValue(Stats(i));
-        SetStat(Stats(i), int32(value));
+        UpdateStats(Stats(i));
     }
 
+    // UpdateStats 已经调用了 UpdateArmor，但这里需要确保完整更新
     UpdateArmor();
     // calls UpdateAttackPowerAndDamage() in UpdateArmor for SPELL_AURA_MOD_ATTACK_POWER_OF_ARMOR
     UpdateAttackPowerAndDamage(true);
@@ -670,9 +691,21 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
         }
     }
 
+    // 【安全检查】限制val2避免后续计算溢出
+    constexpr float MAX_SAFE_VAL = 2000000000.0f;
+    if (val2 < 0.0f)
+        val2 = 0.0f;
+    else if (val2 > MAX_SAFE_VAL)
+        val2 = MAX_SAFE_VAL;
+
     SetModifierValue(unitMod, BASE_VALUE, val2);
 
     float base_attPower  = GetModifierValue(unitMod, BASE_VALUE) * GetModifierValue(unitMod, BASE_PCT);
+
+    // 【安全检查】限制base_attPower避免溢出
+    if (base_attPower < 0.0f || base_attPower > MAX_SAFE_VAL)
+        base_attPower = MAX_SAFE_VAL;
+
     float attPowerMod = GetModifierValue(unitMod, TOTAL_VALUE);
 
     //add dynamic flat mods
@@ -815,7 +848,18 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
 
     float attackSpeedMod = GetAPMultiplier(attType, normalized);
 
-    float baseValue  = GetModifierValue(unitMod, BASE_VALUE) + GetTotalAttackPowerValue(attType) / 14.0f * attackSpeedMod;
+    // 获取攻击强度并检查溢出
+    float attackPower = GetTotalAttackPowerValue(attType);
+    constexpr float MAX_SAFE_VALUE = 2000000000.0f;
+    if (attackPower < 0.0f || attackPower > MAX_SAFE_VALUE || std::isnan(attackPower) || std::isinf(attackPower))
+        attackPower = MAX_SAFE_VALUE;
+
+    float baseValue  = GetModifierValue(unitMod, BASE_VALUE) + attackPower / 14.0f * attackSpeedMod;
+
+    // 检查baseValue溢出
+    if (baseValue < 0.0f || baseValue > MAX_SAFE_VALUE || std::isnan(baseValue) || std::isinf(baseValue))
+        baseValue = MAX_SAFE_VALUE;
+
     float basePct    = GetModifierValue(unitMod, BASE_PCT);
     float totalValue = GetModifierValue(unitMod, TOTAL_VALUE);
     float totalPct   = addTotalPct ? GetModifierValue(unitMod, TOTAL_PCT) : 1.0f;
@@ -853,16 +897,11 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
     minDamage = ((weaponMinDamage + baseValue) * basePct + totalValue) * totalPct;
     maxDamage = ((weaponMaxDamage + baseValue) * basePct + totalValue) * totalPct;
 
-    // 限制最终伤害到安全范围，避免转成 uint32 时出现溢出或断言，同时保持超大属性时仍能造成伤害
-    constexpr float MAX_SAFE_DAMAGE = 1000000000.0f;
-    if (minDamage < 0.0f)
-        minDamage = 0.0f;
-    else if (minDamage > MAX_SAFE_DAMAGE)
-        minDamage = MAX_SAFE_DAMAGE;
-    if (maxDamage < 0.0f)
-        maxDamage = 0.0f;
-    else if (maxDamage > MAX_SAFE_DAMAGE)
-        maxDamage = MAX_SAFE_DAMAGE;
+    // 限制最终伤害到安全范围 - 检查溢出（负数、NaN、Inf都说明溢出了）
+    if (minDamage < 0.0f || minDamage > MAX_SAFE_VALUE || std::isnan(minDamage) || std::isinf(minDamage))
+        minDamage = MAX_SAFE_VALUE;
+    if (maxDamage < 0.0f || maxDamage > MAX_SAFE_VALUE || std::isnan(maxDamage) || std::isinf(maxDamage))
+        maxDamage = MAX_SAFE_VALUE;
     if (minDamage > maxDamage)
         minDamage = maxDamage;
 }

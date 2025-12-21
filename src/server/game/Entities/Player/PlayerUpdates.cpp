@@ -688,9 +688,6 @@ void Player::UpdateRating(CombatRating cr)
     if (amount > MAX_SAFE_RATING)
         amount = MAX_SAFE_RATING;
 
-    // 调试：确认最终存储的评级值
-    LOG_INFO("module", "[评级存储调试] CR={} 最终存储值: {}", static_cast<int>(cr), amount);
-
     SetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + static_cast<uint16>(cr), uint32(amount));
 
     bool affectStats = CanModifyStats();
