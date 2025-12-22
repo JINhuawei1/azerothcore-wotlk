@@ -874,6 +874,8 @@ void Object::SetStatFloatValue(uint16 index, float value)
 {
     if (value < 0)
         value = 0.0f;
+    else if (value > 2000000000.0f)
+        value = 2000000000.0f;
 
     SetFloatValue(index, value);
 }
@@ -882,6 +884,8 @@ void Object::SetStatInt32Value(uint16 index, int32 value)
 {
     if (value < 0)
         value = 0;
+    else if (value > 2000000000)
+        value = 2000000000;
 
     SetUInt32Value(index, uint32(value));
 }

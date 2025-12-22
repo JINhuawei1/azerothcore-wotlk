@@ -72,45 +72,36 @@ void Unit::UpdateDamagePhysical(WeaponAttackType attType)
         totalMax += tmpMax;
     }
 
-    // 【重要】首先检查溢出 - 如果值为负数或无效，说明溢出了
-    constexpr float MAX_SAFE_DAMAGE = 2000000000.0f;
-    if (totalMin < 0.0f || totalMin > MAX_SAFE_DAMAGE || std::isnan(totalMin) || std::isinf(totalMin))
-        totalMin = MAX_SAFE_DAMAGE;
-    if (totalMax < 0.0f || totalMax > MAX_SAFE_DAMAGE || std::isnan(totalMax) || std::isinf(totalMax))
-        totalMax = MAX_SAFE_DAMAGE;
-
-    // Apply damage limits from database
+    // 从数据库获取伤害上限（仅对玩家生效）
+    Player* player = ToPlayer();
+    if (player)
     {
-        Player* player = ToPlayer();
-        if (player)
+        QueryResult result;
+        switch (attType)
         {
-            QueryResult result;
-            switch (attType)
-            {
-                case BASE_ATTACK:
-                    result = WorldDatabase.Query("SELECT `主手伤害上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
-                    break;
-                case OFF_ATTACK:
-                    result = WorldDatabase.Query("SELECT `副手伤害上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
-                    break;
-                case RANGED_ATTACK:
-                    result = WorldDatabase.Query("SELECT `远程伤害上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", player->getClass());
-                    break;
-            }
+            case BASE_ATTACK:
+                result = WorldDatabase.Query("SELECT `主手伤害上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `主手伤害上限` > 0 ORDER BY `class_` DESC LIMIT 1", player->getClass());
+                break;
+            case OFF_ATTACK:
+                result = WorldDatabase.Query("SELECT `副手伤害上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `副手伤害上限` > 0 ORDER BY `class_` DESC LIMIT 1", player->getClass());
+                break;
+            case RANGED_ATTACK:
+                result = WorldDatabase.Query("SELECT `远程伤害上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `远程伤害上限` > 0 ORDER BY `class_` DESC LIMIT 1", player->getClass());
+                break;
+        }
 
-            if (result)
-            {
-                Field* fields = result->Fetch();
-                uint32 damageLimitU32 = fields[0].Get<uint32>();
-                double limitD = static_cast<double>(damageLimitU32);
+        if (result)
+        {
+            Field* fields = result->Fetch();
+            float damageLimit = fields[0].Get<float>();
 
-                if (damageLimitU32 > 0)
-                {
-                    if (static_cast<double>(totalMin) > limitD)
-                        totalMin = static_cast<float>(damageLimitU32);
-                    if (static_cast<double>(totalMax) > limitD)
-                        totalMax = static_cast<float>(damageLimitU32);
-                }
+            if (damageLimit > 0.0f)
+            {
+                // 检查溢出（负数或超过上限说明溢出了）
+                if (totalMin < 0.0f || totalMin > damageLimit || std::isnan(totalMin) || std::isinf(totalMin))
+                    totalMin = damageLimit;
+                if (totalMax < 0.0f || totalMax > damageLimit || std::isnan(totalMax) || std::isinf(totalMax))
+                    totalMax = damageLimit;
             }
         }
     }
@@ -882,25 +873,57 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
 
     float attackSpeedMod = GetAPMultiplier(attType, normalized);
 
-    // 获取攻击强度并检查溢出
-    float attackPower = GetTotalAttackPowerValue(attType);
-    constexpr float MAX_SAFE_VALUE = 2000000000.0f;
+    // 从数据库获取伤害上限，如果没有配置则使用默认值
+    double damageLimit = 0.0;
+    {
+        QueryResult result;
+        switch (attType)
+        {
+            case BASE_ATTACK:
+                result = WorldDatabase.Query("SELECT `主手伤害上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `主手伤害上限` > 0 ORDER BY `class_` DESC LIMIT 1", getClass());
+                break;
+            case OFF_ATTACK:
+                result = WorldDatabase.Query("SELECT `副手伤害上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `副手伤害上限` > 0 ORDER BY `class_` DESC LIMIT 1", getClass());
+                break;
+            case RANGED_ATTACK:
+                result = WorldDatabase.Query("SELECT `远程伤害上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 AND `远程伤害上限` > 0 ORDER BY `class_` DESC LIMIT 1", getClass());
+                break;
+        }
+        if (result)
+        {
+            Field* fields = result->Fetch();
+            damageLimit = static_cast<double>(fields[0].Get<float>());
+        }
+    }
 
-    if (attackPower < 0.0f || attackPower > MAX_SAFE_VALUE || std::isnan(attackPower) || std::isinf(attackPower))
-        attackPower = MAX_SAFE_VALUE;
+    // 获取攻击强度
+    float attackPower = GetTotalAttackPowerValue(attType);
+
+    // 如果有配置上限，检查攻击强度是否溢出
+    if (damageLimit > 0.0)
+    {
+        if (attackPower < 0.0f || static_cast<double>(attackPower) > damageLimit || std::isnan(attackPower) || std::isinf(attackPower))
+            attackPower = static_cast<float>(damageLimit);
+    }
 
     float baseModValue = GetModifierValue(unitMod, BASE_VALUE);
     float apContribution = attackPower / 14.0f * attackSpeedMod;
 
-    // 检查 apContribution 溢出
-    if (apContribution < 0.0f || apContribution > MAX_SAFE_VALUE || std::isnan(apContribution) || std::isinf(apContribution))
-        apContribution = MAX_SAFE_VALUE;
+    // 如果有配置上限，检查 apContribution 溢出
+    if (damageLimit > 0.0)
+    {
+        if (apContribution < 0.0f || static_cast<double>(apContribution) > damageLimit || std::isnan(apContribution) || std::isinf(apContribution))
+            apContribution = static_cast<float>(damageLimit);
+    }
 
     float baseValue = baseModValue + apContribution;
 
-    // 检查baseValue溢出
-    if (baseValue < 0.0f || baseValue > MAX_SAFE_VALUE || std::isnan(baseValue) || std::isinf(baseValue))
-        baseValue = MAX_SAFE_VALUE;
+    // 如果有配置上限，检查 baseValue 溢出
+    if (damageLimit > 0.0)
+    {
+        if (baseValue < 0.0f || static_cast<double>(baseValue) > damageLimit || std::isnan(baseValue) || std::isinf(baseValue))
+            baseValue = static_cast<float>(damageLimit);
+    }
 
     float basePct    = GetModifierValue(unitMod, BASE_PCT);
     float totalValue = GetModifierValue(unitMod, TOTAL_VALUE);
@@ -947,12 +970,14 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
     double dMinDamage = ((dWeaponMin + dBaseValue) * dBasePct + dTotalValue) * dTotalPct;
     double dMaxDamage = ((dWeaponMax + dBaseValue) * dBasePct + dTotalValue) * dTotalPct;
 
-    // 限制到安全范围
-    constexpr double MAX_SAFE_DAMAGE_D = 2000000000.0;
-    if (dMinDamage < 0.0 || dMinDamage > MAX_SAFE_DAMAGE_D || std::isnan(dMinDamage) || std::isinf(dMinDamage))
-        dMinDamage = MAX_SAFE_DAMAGE_D;
-    if (dMaxDamage < 0.0 || dMaxDamage > MAX_SAFE_DAMAGE_D || std::isnan(dMaxDamage) || std::isinf(dMaxDamage))
-        dMaxDamage = MAX_SAFE_DAMAGE_D;
+    // 如果有配置上限，限制到数据库配置的范围
+    if (damageLimit > 0.0)
+    {
+        if (dMinDamage < 0.0 || dMinDamage > damageLimit || std::isnan(dMinDamage) || std::isinf(dMinDamage))
+            dMinDamage = damageLimit;
+        if (dMaxDamage < 0.0 || dMaxDamage > damageLimit || std::isnan(dMaxDamage) || std::isinf(dMaxDamage))
+            dMaxDamage = damageLimit;
+    }
     if (dMinDamage > dMaxDamage)
         dMinDamage = dMaxDamage;
 
