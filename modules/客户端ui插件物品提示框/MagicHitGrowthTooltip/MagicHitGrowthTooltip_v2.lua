@@ -414,7 +414,16 @@ local function ApplyHuanJingToOfficialTooltip(tooltip)
     local state = HuanJingOfficialTooltips[tooltip]
     if not state or state.applied then return end
 
+    -- 【关键修复】幻境缓存使用GUID格式的key，但state.key可能是位置格式
+    -- 需要同时尝试两种格式的key来查找幻境数据
     local hjData = HuanJingGetData(state.key)
+
+    -- 如果用state.key找不到，尝试用GUID格式的key
+    if not hjData and state.itemID and state.guid and state.guid > 0 then
+        local guidKey = "G:" .. state.itemID .. ":" .. state.guid
+        hjData = HuanJingGetData(guidKey)
+    end
+
     if not hjData or not hjData.multiplier or hjData.multiplier <= 1 then
         return
     end
