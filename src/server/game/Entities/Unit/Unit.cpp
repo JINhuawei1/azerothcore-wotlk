@@ -3409,13 +3409,15 @@ SpellMissInfo Unit::MagicSpellHitResult(Unit* victim, SpellInfo const* spellInfo
     int32 HitChance = modHitChance * 100;
     // Increase hit chance from attacker SPELL_AURA_MOD_SPELL_HIT_CHANCE and attacker ratings
     // Xinef: Totems should inherit casters ratings?
-    if (IsTotem())
-    {
-        if (Unit* owner = GetOwner())
-            HitChance += int32(owner->m_modSpellHitChance * 100.0f);
-    }
-    else
-        HitChance += int32(m_modSpellHitChance * 100.0f);
+    // 添加溢出保护：限制 m_modSpellHitChance 的最大值，防止 int32 溢出
+    float spellHitChance = IsTotem() && GetOwner() ? GetOwner()->m_modSpellHitChance : m_modSpellHitChance;
+
+    // 限制最大值为 20000000（20亿/100），防止乘以100后溢出 int32
+    if (spellHitChance > 20000000.0f)
+        spellHitChance = 20000000.0f;
+
+    int32 hitChanceAdd = int32(spellHitChance * 100.0f);
+    HitChance += hitChanceAdd;
 
     if (HitChance < 100)
         HitChance = 100;
