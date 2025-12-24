@@ -178,6 +178,7 @@ Player::Player(WorldSession* session): Unit(true), m_mover(this)
 
     m_regenTimer = 0;
     m_regenTimerCount = 0;
+    m_money = 0;  // 初始化金币
     m_foodEmoteTimerCount = 0;
     m_weaponChangeTimer = 0;
 
@@ -11553,7 +11554,7 @@ void Player::InitPrimaryProfessions()
     SetFreePrimaryProfessions(sWorld->getIntConfig(CONFIG_MAX_PRIMARY_TRADE_SKILL));
 }
 
-bool Player::ModifyMoney(int32 amount, bool sendError /*= true*/)
+bool Player::ModifyMoney(int64 amount, bool sendError /*= true*/)
 {
     if (!amount)
         return true;
@@ -11561,10 +11562,10 @@ bool Player::ModifyMoney(int32 amount, bool sendError /*= true*/)
     sScriptMgr->OnPlayerMoneyChanged(this, amount);
 
     if (amount < 0)
-        SetMoney (GetMoney() > uint32(-amount) ? GetMoney() + amount : 0);
+        SetMoney (GetMoney() > uint64(-amount) ? GetMoney() + amount : 0);
     else
     {
-        if (GetMoney() < uint32(MAX_MONEY_AMOUNT - amount))
+        if (GetMoney() < uint64(MAX_MONEY_AMOUNT - amount))
             SetMoney(GetMoney() + amount);
         else
         {

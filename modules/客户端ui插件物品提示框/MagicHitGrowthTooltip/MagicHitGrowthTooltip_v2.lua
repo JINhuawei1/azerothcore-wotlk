@@ -4559,6 +4559,19 @@ local function OnTooltipSetItem(tooltip)
         return
     end
 
+    -- 【飞升系统支持】检查是否是飞升系统的物品
+    -- 飞升系统会设置全局变量 ASCENSION_TOOLTIP_ITEM_ID 和 ASCENSION_TOOLTIP_ITEM_GUID
+    local isAscensionItem = false
+    if ASCENSION_TOOLTIP_ITEM_ID and ASCENSION_TOOLTIP_ITEM_GUID then
+        if ASCENSION_TOOLTIP_ITEM_ID == itemID and ASCENSION_TOOLTIP_ITEM_GUID > 0 then
+            guid = ASCENSION_TOOLTIP_ITEM_GUID
+            isAscensionItem = true
+            if DB.debug then
+                print(string.format("|cff00ff00[飞升系统]|r 使用飞升系统提供的GUID: itemID=%d, guid=%d", itemID, guid))
+            end
+        end
+    end
+
     -- 【调试日志】ExtractItemInfoEnhanced结果
     if DB.debug then
         print(string.format("|cff00ffff[ExtractItemInfoEnhanced]|r itemID=%d, guid=%s, bag=%s, slot=%s, isEquipped=%s",
@@ -4585,8 +4598,9 @@ local function OnTooltipSetItem(tooltip)
         end
     end
 
-    -- 只有非待鉴定物品才进行链接匹配验证
-    if not isPendingIdentifyEarly and bagNum ~= nil and slotNum ~= nil and bagNum ~= 255 then
+    -- 【飞升系统支持】如果是飞升系统的物品，跳过槽位搜索逻辑
+    -- 飞升系统的物品不在背包中，直接使用已设置的GUID
+    if not isAscensionItem and not isPendingIdentifyEarly and bagNum ~= nil and slotNum ~= nil and bagNum ~= 255 then
         local verifyLink = GetContainerItemLink(bagNum, slotNum)
 
         -- 比较完整链接，而不只是itemID
@@ -4651,7 +4665,8 @@ local function OnTooltipSetItem(tooltip)
     end
 
     -- 如果从tooltip无法获取（如聊天链接），则使用ExtractItemInfoEnhanced的结果
-    if bagNum == nil or slotNum == nil then
+    -- 【飞升系统支持】飞升系统的物品已经有GUID，跳过槽位搜索
+    if not isAscensionItem and (bagNum == nil or slotNum == nil) then
         bagNum = extractedBag
         slotNum = extractedSlot
 
@@ -4765,7 +4780,11 @@ local function OnTooltipSetItem(tooltip)
     -- 统一使用位置信息生成缓存键
     local key
     local isChatLink = false  -- 标记是否为聊天框链接
-    if bagNum ~= nil and slotNum ~= nil then
+    -- 【飞升系统支持】飞升系统的物品强制使用GUID格式
+    if isAscensionItem and guid and guid > 0 then
+        isChatLink = true
+        key = MakeKey(itemID, guid, nil, nil, false)
+    elseif bagNum ~= nil and slotNum ~= nil then
         key = MakeKey(itemID, nil, bagNum, slotNum, bagNum == 255)
     elseif guid and guid > 0 then
         -- 【修复】有GUID但没有位置信息，也是聊天框链接的情况

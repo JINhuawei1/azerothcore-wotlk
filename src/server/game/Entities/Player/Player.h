@@ -933,7 +933,8 @@ enum PlayerCharmedAISpells
 
 // Player summoning auto-decline time (in secs)
 #define MAX_PLAYER_SUMMON_DELAY                   (2*MINUTE)
-#define MAX_MONEY_AMOUNT                       (0x7FFFFFFF-1)
+// 40万金币上限 = 4,000,000,000 铜币
+#define MAX_MONEY_AMOUNT                       (4000000000ULL)
 
 struct ProgressionRequirement
 {
@@ -1614,19 +1615,17 @@ public:
     void setRegenTimerCount(uint32 time) {m_regenTimerCount = time;}
     void setWeaponChangeTimer(uint32 time) {m_weaponChangeTimer = time;}
 
-    [[nodiscard]] uint32 GetMoney() const { return GetUInt32Value(PLAYER_FIELD_COINAGE); }
-    bool ModifyMoney(int32 amount, bool sendError = true);
-    [[nodiscard]] bool HasEnoughMoney(uint32 amount) const { return (GetMoney() >= amount); }
-    [[nodiscard]] bool HasEnoughMoney(int32 amount) const
-    {
-        if (amount > 0)
-            return (GetMoney() >= (uint32) amount);
-        return true;
-    }
+    // 金币系统 - 使用 m_money 存储实际金额，客户端显示截断到 uint32 最大值
+    [[nodiscard]] uint64 GetMoney() const { return m_money; }
+    bool ModifyMoney(int64 amount, bool sendError = true);
+    [[nodiscard]] bool HasEnoughMoney(uint64 amount) const { return (GetMoney() >= amount); }
 
-    void SetMoney(uint32 value)
+    void SetMoney(uint64 value)
     {
-        SetUInt32Value(PLAYER_FIELD_COINAGE, value);
+        m_money = value;
+        // 客户端只支持 uint32，超出部分截断显示
+        uint32 displayMoney = (value > 0xFFFFFFFF) ? 0xFFFFFFFF : static_cast<uint32>(value);
+        SetUInt32Value(PLAYER_FIELD_COINAGE, displayMoney);
         MoneyChanged(value);
         UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_GOLD_VALUE_OWNED);
     }
@@ -2671,6 +2670,7 @@ protected:
     uint32 m_charmAISpells[NUM_CAI_SPELLS];
 
     uint32 m_AreaID;
+    uint64 m_money;  // 扩展金币存储，支持40万金上限
     uint32 m_regenTimerCount;
     uint32 m_foodEmoteTimerCount;
     float m_powerFraction[MAX_POWERS];

@@ -114,7 +114,7 @@ void ScriptMgr::OnPlayerAfterSpecSlotChanged(Player* player, uint8 newSlot)
     CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_AFTER_SPEC_SLOT_CHANGED, script->OnPlayerAfterSpecSlotChanged(player, newSlot));
 }
 
-void ScriptMgr::OnPlayerMoneyChanged(Player* player, int32& amount)
+void ScriptMgr::OnPlayerMoneyChanged(Player* player, int64& amount)
 {
     CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_MONEY_CHANGED, script->OnPlayerMoneyChanged(player, amount));
 }

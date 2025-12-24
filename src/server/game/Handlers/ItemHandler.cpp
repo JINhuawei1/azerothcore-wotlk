@@ -806,7 +806,7 @@ void WorldSession::HandleSellItemOpcode(WorldPacket& recvData)
         {
             if (pProto->SellPrice > 0)
             {
-                uint32 money = pProto->SellPrice * count;
+                uint64 money = uint64(pProto->SellPrice) * count;
                 if (_player->GetMoney() >= MAX_MONEY_AMOUNT - money)               // prevent exceeding gold limit
                 {
                     _player->SendEquipError(EQUIP_ERR_TOO_MUCH_GOLD, nullptr, nullptr);

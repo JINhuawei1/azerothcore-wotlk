@@ -1,0 +1,10 @@
+## Interface: 30300
+## Title: |cFFFFD700飞升系统|r
+## Notes: 飞升装备系统UI - 额外18个装备槽位
+## Author: AzerothCore
+## Version: 1.0.0
+## SavedVariables: AscensionSystemUISettings
+## SavedVariablesPerCharacter: AscensionSystemUICharSettings
+
+AscensionSystemUI.xml
+AscensionSystemUI.lua

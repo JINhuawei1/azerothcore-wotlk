@@ -1694,7 +1694,7 @@ void Guild::HandleMemberDepositMoney(WorldSession* session, uint32 amount)
 bool Guild::HandleMemberWithdrawMoney(WorldSession* session, uint32 amount, bool repair)
 {
     //clamp amount to MAX_MONEY_AMOUNT, Players can't hold more than that anyway
-    amount = std::min(amount, uint32(MAX_MONEY_AMOUNT));
+    amount = std::min(amount, uint32(MAX_MONEY_AMOUNT > 0xFFFFFFFF ? 0xFFFFFFFF : MAX_MONEY_AMOUNT));
 
     if (m_bankMoney < amount)                               // Not enough money in bank
         return false;
