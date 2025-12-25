@@ -5958,6 +5958,20 @@ void Player::_LoadInventory(PreparedQueryResult result, uint32 timeDiff)
                 }
                 else
                 {
+                    // 【飞升系统兼容】检查是否是飞升系统的虚拟背包（bag=200）
+                    // 如果是，跳过这个物品，让飞升系统自己加载和管理
+                    if (bagGuid == 200)
+                    {
+                        // 飞升系统物品，设置为 ITEM_UNCHANGED 状态，不添加到更新队列
+                        item->SetSlot(slot);
+                        item->FSetState(ITEM_UNCHANGED);
+                        // 不删除物品，飞升系统会在 OnPlayerLogin 时加载它
+                        LOG_DEBUG("entities.player", "Player::_LoadInventory: 跳过飞升系统物品 ({}, entry: {}) bag=200 slot={}",
+                                  item->GetGUID().ToString(), item->GetEntry(), slot);
+                        delete item;  // 释放临时创建的物品对象，飞升系统会重新加载
+                        continue;
+                    }
+
                     item->SetSlot(NULL_SLOT);
                     // Item is in the bag, find the bag
                     std::map<ObjectGuid::LowType, Bag*>::iterator itr = bagMap.find(bagGuid);
@@ -7425,6 +7439,16 @@ void Player::_SaveInventory(CharacterDatabaseTransaction trans)
             Item* test = GetItemByPos(item->GetBagSlot(), item->GetSlot());
             if (!test)
             {
+                // 【飞升系统兼容】在删除物品之前，检查脚本是否允许删除
+                // 如果 CanItemRemove 返回 false，表示物品在虚拟槽位中，不应该被删除
+                if (!sScriptMgr->OnItemRemove(this, item))
+                {
+                    // 脚本阻止了物品删除，跳过此物品
+                    LOG_DEBUG("entities.player", "Player(GUID: {} Name: {})::_SaveInventory - item {} removal blocked by script (virtual slot)",
+                              lowGuid, GetName(), item->GetGUID().ToString());
+                    continue;
+                }
+
                 ObjectGuid::LowType bagTestGUID = 0;
                 if (Item* test2 = GetItemByPos(INVENTORY_SLOT_BAG_0, item->GetBagSlot()))
                     bagTestGUID = test2->GetGUID().GetCounter();

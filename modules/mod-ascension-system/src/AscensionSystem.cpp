@@ -134,9 +134,10 @@ void AscensionManager::LoadPlayerData(Player* player)
     PlayerAscensionStatus status;
     status.playerGuid = playerGuid;
 
-    // 从合并表加载数据（已解锁槽位和装备数据）
+    // 从 _飞升系统_数据 表加载已解锁槽位
+    // 【新方案】装备数据现在从 character_inventory 表加载，不再从这里解析
     QueryResult result = CharacterDatabase.Query(
-        "SELECT `已解锁槽位`, `装备数据` FROM `_飞升系统_数据` WHERE `玩家GUID` = {}", playerGuid);
+        "SELECT `已解锁槽位` FROM `_飞升系统_数据` WHERE `玩家GUID` = {}", playerGuid);
 
     if (result)
     {
@@ -165,39 +166,6 @@ void AscensionManager::LoadPlayerData(Player* player)
                 }
             }
         }
-
-        // 解析装备数据（槽位:物品ID:物品GUID,槽位:物品ID:物品GUID,...）
-        std::string equipStr = fields[1].Get<std::string>();
-        if (!equipStr.empty())
-        {
-            std::stringstream ss(equipStr);
-            std::string slotInfo;
-            while (std::getline(ss, slotInfo, ','))
-            {
-                if (!slotInfo.empty())
-                {
-                    std::stringstream slotSS(slotInfo);
-                    std::string part;
-                    std::vector<std::string> parts;
-                    while (std::getline(slotSS, part, ':'))
-                    {
-                        parts.push_back(part);
-                    }
-                    if (parts.size() >= 3)
-                    {
-                        uint8 slot = static_cast<uint8>(std::stoi(parts[0]));
-                        if (slot < ASCENSION_SLOT_COUNT)
-                        {
-                            AscensionSlotData slotData;
-                            slotData.itemId = static_cast<uint32>(std::stoul(parts[1]));
-                            slotData.itemGuid = static_cast<uint32>(std::stoul(parts[2]));
-                            slotData.itemPtr = nullptr;  // 稍后在加载物品实例时设置
-                            status.slots[slot] = slotData;
-                        }
-                    }
-                }
-            }
-        }
     }
 
     // 如果启用自动解锁，解锁所有槽位
@@ -211,13 +179,13 @@ void AscensionManager::LoadPlayerData(Player* player)
 
     _playerStatus[playerGuid] = status;
 
-    // 加载物品实例
+    // 【新方案】从 character_inventory 表加载物品实例（bag=200）
     LoadAscensionItems(player);
 
     if (sAscensionConfig->IsDebugMode())
     {
         LOG_INFO("module", "飞升系统: 玩家 {} 数据加载完成，已解锁 {} 个槽位，已装备 {} 件",
-            player->GetName(), status.unlockedSlots.size(), status.slots.size());
+            player->GetName(), status.unlockedSlots.size(), _playerStatus[playerGuid].slots.size());
     }
 }
 
@@ -300,7 +268,16 @@ void AscensionManager::DeletePlayerData(uint32 playerGuid)
         }
         _playerStatus.erase(it);
     }
+
+    // 【新方案】删除 character_inventory 表中 bag=200 的记录
+    CharacterDatabase.Execute(
+        "DELETE FROM character_inventory WHERE guid = {} AND bag = {}",
+        playerGuid, ASCENSION_VIRTUAL_BAG);
+
+    // 删除飞升系统数据
     CharacterDatabase.Execute("DELETE FROM `_飞升系统_数据` WHERE `玩家GUID` = {}", playerGuid);
+
+    LOG_INFO("module", "飞升系统: 删除玩家 {} 的所有飞升数据", playerGuid);
 }
 
 void AscensionManager::SaveAscensionItems(Player* player)
@@ -313,6 +290,9 @@ void AscensionManager::SaveAscensionItems(Player* player)
     if (!status)
         return;
 
+    LOG_INFO("module", "飞升系统: 开始保存玩家 {} 的飞升物品，共 {} 个槽位",
+        player->GetName(), status->slots.size());
+
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
 
     for (auto& pair : status->slots)
@@ -320,20 +300,55 @@ void AscensionManager::SaveAscensionItems(Player* player)
         Item* item = pair.second.itemPtr;
         if (item)
         {
-            // 确保物品状态为 ITEM_CHANGED，这样 SaveToDB 会保存物品
-            item->SetState(ITEM_CHANGED, player);
-            // 保存物品到数据库
-            item->SaveToDB(trans);
+            // 【关键】不要设置 SetOwnerGUID，保持为空以防止物品被添加到更新队列
+            // 我们直接在 SQL 中使用 player->GetGUID().GetCounter() 作为 owner_guid
+            // item->SetOwnerGUID(player->GetGUID());  // 已移除，防止被添加到更新队列
 
-            if (sAscensionConfig->IsDebugMode())
+            // 【关键】直接使用 REPLACE 语句保存物品，不调用 SaveToDB
+            // 因为 SaveToDB 在 ITEM_REMOVED 状态下会删除物品
+            uint8 index = 0;
+            CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_REP_ITEM_INSTANCE);
+            stmt->SetData(  index, item->GetEntry());
+            stmt->SetData(++index, player->GetGUID().GetCounter());
+            stmt->SetData(++index, item->GetGuidValue(ITEM_FIELD_CREATOR).GetCounter());
+            stmt->SetData(++index, item->GetGuidValue(ITEM_FIELD_GIFTCREATOR).GetCounter());
+            stmt->SetData(++index, item->GetCount());
+            stmt->SetData(++index, item->GetUInt32Value(ITEM_FIELD_DURATION));
+
+            std::ostringstream ssSpells;
+            for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+                ssSpells << item->GetSpellCharges(i) << ' ';
+            stmt->SetData(++index, ssSpells.str());
+
+            stmt->SetData(++index, item->GetUInt32Value(ITEM_FIELD_FLAGS));
+
+            std::ostringstream ssEnchants;
+            for (uint8 i = 0; i < MAX_ENCHANTMENT_SLOT; ++i)
             {
-                LOG_INFO("module", "飞升系统: 保存飞升物品 槽位={} 物品ID={} GUID={}",
-                    pair.first, pair.second.itemId, pair.second.itemGuid);
+                ssEnchants << item->GetEnchantmentId(EnchantmentSlot(i)) << ' ';
+                ssEnchants << item->GetEnchantmentDuration(EnchantmentSlot(i)) << ' ';
+                ssEnchants << item->GetEnchantmentCharges(EnchantmentSlot(i)) << ' ';
             }
+            stmt->SetData(++index, ssEnchants.str());
+
+            stmt->SetData(++index, item->GetItemRandomPropertyId());
+            stmt->SetData(++index, item->GetUInt32Value(ITEM_FIELD_DURABILITY));
+            stmt->SetData(++index, item->GetUInt32Value(ITEM_FIELD_CREATE_PLAYED_TIME));
+            stmt->SetData(++index, item->GetText());
+            stmt->SetData(++index, pair.second.itemGuid);
+            trans->Append(stmt);
+
+            LOG_INFO("module", "飞升系统: 保存飞升物品 槽位={} 物品ID={} GUID={} OwnerGUID={}",
+                pair.first, pair.second.itemId, pair.second.itemGuid, player->GetGUID().GetCounter());
+        }
+        else
+        {
+            LOG_ERROR("module", "飞升系统: 槽位 {} 物品指针为空，无法保存", pair.first);
         }
     }
 
     CharacterDatabase.CommitTransaction(trans);
+    LOG_INFO("module", "飞升系统: 玩家 {} 的飞升物品保存完成", player->GetName());
 }
 
 void AscensionManager::LoadAscensionItems(Player* player)
@@ -346,77 +361,78 @@ void AscensionManager::LoadAscensionItems(Player* player)
     if (!status)
         return;
 
-    std::vector<uint8> slotsToRemove;
+    // 【新方案】从 character_inventory 表加载 bag=200 的飞升系统物品
+    // 这样物品由官方系统管理，不会被当作孤立物品删除
+    QueryResult invResult = CharacterDatabase.Query(
+        "SELECT ci.slot, ci.item, ii.itemEntry, ii.creatorGuid, ii.giftCreatorGuid, ii.count, "
+        "ii.duration, ii.charges, ii.flags, ii.enchantments, ii.randomPropertyId, ii.durability, "
+        "ii.playedTime, ii.text "
+        "FROM character_inventory ci "
+        "JOIN item_instance ii ON ci.item = ii.guid "
+        "WHERE ci.guid = {} AND ci.bag = {}", playerGuid, ASCENSION_VIRTUAL_BAG);
 
-    for (auto& pair : status->slots)
+    if (!invResult)
     {
-        uint8 slot = pair.first;
-        AscensionSlotData& slotData = pair.second;
+        LOG_INFO("module", "飞升系统: 玩家 {} 没有飞升装备（character_inventory bag=200 无记录）", player->GetName());
+        return;
+    }
 
-        // 从 item_instance 表加载物品（使用与核心相同的查询字段）
-        QueryResult result = CharacterDatabase.Query(
-            "SELECT creatorGuid, giftCreatorGuid, count, duration, charges, flags, enchantments, "
-            "randomPropertyId, durability, playedTime, text, itemEntry "
-            "FROM item_instance WHERE guid = {}", slotData.itemGuid);
+    // 清空旧的槽位数据，从数据库重新加载
+    status->slots.clear();
 
-        if (!result)
+    do
+    {
+        Field* fields = invResult->Fetch();
+        uint8 slot = fields[0].Get<uint8>();
+        uint32 itemGuid = fields[1].Get<uint32>();
+        uint32 itemEntry = fields[2].Get<uint32>();
+
+        if (slot >= ASCENSION_SLOT_COUNT)
         {
-            // 物品实例不存在
-            LOG_ERROR("module", "飞升系统: 物品实例不存在 GUID={}", slotData.itemGuid);
-            slotsToRemove.push_back(slot);
+            LOG_ERROR("module", "飞升系统: 无效槽位 {} 物品GUID={}", slot, itemGuid);
             continue;
         }
 
-        Field* fields = result->Fetch();
-        uint32 itemEntry = fields[11].Get<uint32>();  // itemEntry 在最后一列
+        LOG_INFO("module", "飞升系统: 从 character_inventory 加载物品 槽位={} GUID={} Entry={}",
+            slot, itemGuid, itemEntry);
 
-        // 验证物品ID是否匹配
-        if (itemEntry != slotData.itemId)
-        {
-            LOG_ERROR("module", "飞升系统: 物品ID不匹配 期望={} 实际={}", slotData.itemId, itemEntry);
-            slotsToRemove.push_back(slot);
-            continue;
-        }
-
-        // 创建新的物品对象
-        Item* item = NewItemOrBag(sObjectMgr->GetItemTemplate(slotData.itemId));
+        // 创建物品对象
+        Item* item = NewItemOrBag(sObjectMgr->GetItemTemplate(itemEntry));
         if (!item)
         {
-            LOG_ERROR("module", "飞升系统: 无法创建物品实例 itemId={}", slotData.itemId);
-            slotsToRemove.push_back(slot);
+            LOG_ERROR("module", "飞升系统: 无法创建物品实例 itemEntry={}", itemEntry);
             continue;
         }
 
-        // 从数据库加载完整物品数据
-        if (!item->LoadFromDB(slotData.itemGuid, player->GetGUID(), fields, slotData.itemId))
+        // 构建 LoadFromDB 需要的字段数组（跳过前3个字段：slot, item, itemEntry）
+        // LoadFromDB 期望的字段顺序：creatorGuid, giftCreatorGuid, count, duration, charges,
+        //                           flags, enchantments, randomPropertyId, durability, playedTime, text
+        if (!item->LoadFromDB(itemGuid, player->GetGUID(), fields + 3, itemEntry))
         {
-            LOG_ERROR("module", "飞升系统: 从数据库加载物品失败 GUID={}", slotData.itemGuid);
+            LOG_ERROR("module", "飞升系统: 从数据库加载物品失败 GUID={}", itemGuid);
             delete item;
-            slotsToRemove.push_back(slot);
             continue;
         }
 
-        // 保存物品指针
+        // 【关键】清空 OwnerGUID 并设置状态为 ITEM_UNCHANGED
+        // 防止物品被添加到核心的更新队列，飞升系统自己管理物品的保存
+        item->SetOwnerGUID(ObjectGuid::Empty);
+        item->FSetState(ITEM_UNCHANGED);
+
+        // 保存到槽位数据
+        AscensionSlotData slotData;
+        slotData.itemId = itemEntry;
+        slotData.itemGuid = itemGuid;
         slotData.itemPtr = item;
+        status->slots[slot] = slotData;
 
-        if (sAscensionConfig->IsDebugMode())
-        {
-            LOG_INFO("module", "飞升系统: 加载飞升物品 槽位={} 物品ID={} GUID={}",
-                slot, slotData.itemId, slotData.itemGuid);
-        }
-    }
+        LOG_INFO("module", "飞升系统: 成功加载飞升物品 槽位={} 物品ID={} GUID={}",
+            slot, itemEntry, itemGuid);
 
-    // 移除无效的槽位
-    for (uint8 slot : slotsToRemove)
-    {
-        status->slots.erase(slot);
-    }
+    } while (invResult->NextRow());
 
-    // 如果有移除，保存数据
-    if (!slotsToRemove.empty())
-    {
-        SavePlayerData(player);
-    }
+    LOG_INFO("module", "飞升系统: 玩家 {} 加载了 {} 件飞升装备",
+        player->GetName(), status->slots.size());
 }
 
 void AscensionManager::ValidateEquippedItems(Player* player)
@@ -474,16 +490,21 @@ void AscensionManager::ValidateEquippedItems(Player* player)
         }
     }
 
-    // 移除无效的装备记录
-    for (uint8 slot : slotsToRemove)
-    {
-        status->slots.erase(slot);
-    }
+    // 移除无效的装备记录 - 【重要】暂时禁用自动清理，只记录日志
+    // for (uint8 slot : slotsToRemove)
+    // {
+    //     status->slots.erase(slot);
+    // }
 
-    // 如果有变动，保存数据
+    // 如果有变动，保存数据 - 【重要】暂时禁用自动保存
+    // if (needSave)
+    // {
+    //     SavePlayerData(player);
+    // }
+
     if (needSave)
     {
-        SavePlayerData(player);
+        LOG_ERROR("module", "飞升系统: ValidateEquippedItems 发现无效数据，但暂时不清理以便调试");
     }
 }
 
@@ -662,17 +683,68 @@ bool AscensionManager::EquipItem(Player* player, uint8 slot, uint32 itemId, uint
     slotData.itemPtr = item;
     status->slots[slot] = slotData;
 
+    // 【关键】先从更新队列中移除物品，防止 _SaveInventory 将其标记为 ITEM_REMOVED 并删除
+    // MoveItemFromInventory 内部会调用 RemoveFromUpdateQueueOf，但我们需要确保状态正确
+    item->RemoveFromUpdateQueueOf(player);
+
     // 从背包移除物品（但不删除物品实例）
     player->MoveItemFromInventory(bagSlot, itemSlot, true);
 
-    // 从数据库的 character_inventory 中删除（物品不再属于背包）
-    // 同时立即保存物品实例，确保物品数据不会丢失
+    // 【新方案】将物品存储到 character_inventory 表，使用 bag=200 作为飞升系统的虚拟背包
+    // 这样核心会正确管理物品，不会被当作孤立物品删除
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+
+    // 先删除旧的 character_inventory 记录（MoveItemFromInventory 已经删除了，但为了安全再删一次）
     item->DeleteFromInventoryDB(trans);
-    // 确保物品状态为 ITEM_CHANGED，这样 SaveToDB 会保存物品到 item_instance
-    item->SetState(ITEM_CHANGED, player);
-    item->SaveToDB(trans);
+
+    // 插入新的 character_inventory 记录，使用 bag=200 标识飞升系统物品
+    // 核心的 _LoadInventory 会识别 bag=200 并跳过，让飞升系统自己处理
+    CharacterDatabasePreparedStatement* invStmt = CharacterDatabase.GetPreparedStatement(CHAR_REP_INVENTORY_ITEM);
+    invStmt->SetData(0, playerGuid);                    // characterGuid
+    invStmt->SetData(1, ASCENSION_VIRTUAL_BAG);         // bag = 200 (飞升系统虚拟背包)
+    invStmt->SetData(2, slot);                          // slot (飞升槽位)
+    invStmt->SetData(3, itemGuid);                      // item guid
+    trans->Append(invStmt);
+
+    // 保存物品实例到数据库（使用 REPLACE）
+    {
+        uint8 index = 0;
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_REP_ITEM_INSTANCE);
+        stmt->SetData(  index, item->GetEntry());
+        stmt->SetData(++index, player->GetGUID().GetCounter());
+        stmt->SetData(++index, item->GetGuidValue(ITEM_FIELD_CREATOR).GetCounter());
+        stmt->SetData(++index, item->GetGuidValue(ITEM_FIELD_GIFTCREATOR).GetCounter());
+        stmt->SetData(++index, item->GetCount());
+        stmt->SetData(++index, item->GetUInt32Value(ITEM_FIELD_DURATION));
+
+        std::ostringstream ssSpells;
+        for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+            ssSpells << item->GetSpellCharges(i) << ' ';
+        stmt->SetData(++index, ssSpells.str());
+
+        stmt->SetData(++index, item->GetUInt32Value(ITEM_FIELD_FLAGS));
+
+        std::ostringstream ssEnchants;
+        for (uint8 i = 0; i < MAX_ENCHANTMENT_SLOT; ++i)
+        {
+            ssEnchants << item->GetEnchantmentId(EnchantmentSlot(i)) << ' ';
+            ssEnchants << item->GetEnchantmentDuration(EnchantmentSlot(i)) << ' ';
+            ssEnchants << item->GetEnchantmentCharges(EnchantmentSlot(i)) << ' ';
+        }
+        stmt->SetData(++index, ssEnchants.str());
+
+        stmt->SetData(++index, item->GetItemRandomPropertyId());
+        stmt->SetData(++index, item->GetUInt32Value(ITEM_FIELD_DURABILITY));
+        stmt->SetData(++index, item->GetUInt32Value(ITEM_FIELD_CREATE_PLAYED_TIME));
+        stmt->SetData(++index, item->GetText());
+        stmt->SetData(++index, itemGuid);
+        trans->Append(stmt);
+    }
+
     CharacterDatabase.CommitTransaction(trans);
+
+    LOG_INFO("module", "飞升系统: 装备物品 槽位={} 物品ID={} GUID={} OwnerGUID={}",
+        slot, itemId, itemGuid, player->GetGUID().GetCounter());
 
     // 应用属性
     ApplyItemEffect(player, itemId, slot, true);
@@ -718,26 +790,34 @@ bool AscensionManager::UnequipItem(Player* player, uint8 slot)
     // 移除属性
     ApplyItemEffect(player, itemId, slot, false);
 
+    // 【新方案】先从 character_inventory 表删除 bag=200 的记录
+    CharacterDatabase.Execute(
+        "DELETE FROM character_inventory WHERE guid = {} AND bag = {} AND slot = {}",
+        playerGuid, ASCENSION_VIRTUAL_BAG, slot);
+
+    LOG_INFO("module", "飞升系统: 从 character_inventory 删除记录 玩家={} bag={} slot={}",
+        playerGuid, ASCENSION_VIRTUAL_BAG, slot);
+
     // 将物品放回背包
     if (item)
     {
+        // 【关键】恢复物品的 OwnerGUID，因为物品要放回背包由核心管理
+        item->SetOwnerGUID(player->GetGUID());
+
         // 查找空闲背包位置
         ItemPosCountVec dest;
         InventoryResult result = player->CanStoreItem(NULL_BAG, NULL_SLOT, dest, item, false);
         if (result == EQUIP_ERR_OK)
         {
-            // 存入背包
+            // 存入背包 - StoreItem 会自动处理 character_inventory 记录
             player->StoreItem(dest, item, true);
 
-            // 保存到数据库
+            // 保存物品实例到数据库
             CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
             item->SaveToDB(trans);
             CharacterDatabase.CommitTransaction(trans);
 
-            if (sAscensionConfig->IsDebugMode())
-            {
-                LOG_INFO("module", "飞升系统: 物品 {} (GUID:{}) 已放回背包", itemId, itemGuid);
-            }
+            LOG_INFO("module", "飞升系统: 物品 {} (GUID:{}) 已放回背包", itemId, itemGuid);
         }
         else
         {
@@ -750,21 +830,16 @@ bool AscensionManager::UnequipItem(Player* player, uint8 slot)
 
             ChatHandler(player->GetSession()).SendSysMessage("背包已满，物品已通过邮件返还。");
 
-            if (sAscensionConfig->IsDebugMode())
-            {
-                LOG_INFO("module", "飞升系统: 背包已满，物品 {} (GUID:{}) 通过邮件返还", itemId, itemGuid);
-            }
+            LOG_INFO("module", "飞升系统: 背包已满，物品 {} (GUID:{}) 通过邮件返还", itemId, itemGuid);
         }
     }
     else
     {
-        // 物品指针无效，尝试从数据库恢复
+        // 物品指针无效，也需要清理数据库中的物品实例
+        CharacterDatabase.Execute("DELETE FROM item_instance WHERE guid = {}", itemGuid);
         ChatHandler(player->GetSession()).SendSysMessage("物品数据异常，已清除飞升装备记录。");
 
-        if (sAscensionConfig->IsDebugMode())
-        {
-            LOG_ERROR("module", "飞升系统: 卸下装备时物品指针无效 itemId={} itemGuid={}", itemId, itemGuid);
-        }
+        LOG_ERROR("module", "飞升系统: 卸下装备时物品指针无效 itemId={} itemGuid={}", itemId, itemGuid);
     }
 
     // 移除装备记录
@@ -800,6 +875,14 @@ void AscensionManager::UnequipAllItems(Player* player)
     // 移除所有属性
     RemoveAllEffects(player);
 
+    // 【新方案】先从 character_inventory 表删除所有 bag=200 的记录
+    CharacterDatabase.Execute(
+        "DELETE FROM character_inventory WHERE guid = {} AND bag = {}",
+        playerGuid, ASCENSION_VIRTUAL_BAG);
+
+    LOG_INFO("module", "飞升系统: 从 character_inventory 删除所有飞升记录 玩家={} bag={}",
+        playerGuid, ASCENSION_VIRTUAL_BAG);
+
     // 将所有物品放回背包
     std::vector<Item*> itemsToMail;
     for (auto& pair : status->slots)
@@ -807,6 +890,9 @@ void AscensionManager::UnequipAllItems(Player* player)
         Item* item = pair.second.itemPtr;
         if (!item)
             continue;
+
+        // 【关键】恢复物品的 OwnerGUID，因为物品要放回背包由核心管理
+        item->SetOwnerGUID(player->GetGUID());
 
         // 查找空闲背包位置
         ItemPosCountVec dest;
@@ -1492,9 +1578,10 @@ void AscensionPlayerScript::OnPlayerLogout(Player* player)
     // 保存数据
     sAscensionManager->SavePlayerData(player);
 
-    // 清理内存（包括释放物品实例）
-    uint32 playerGuid = player->GetGUID().GetCounter();
-    sAscensionManager->ClearPlayerData(playerGuid);
+    // 【注意】不在这里清理玩家状态
+    // 因为核心的 _SaveInventory 会在 OnPlayerLogout 之后被调用
+    // CanItemRemove 钩子会通过数据库检查来阻止物品被删除
+    // 玩家状态会在下次登录时被重新加载覆盖
 
     if (sAscensionConfig->IsDebugMode())
     {
@@ -1557,41 +1644,7 @@ bool AscensionCommandScript::HandleAscensionView(ChatHandler* handler, const cha
     if (!player)
         return false;
 
-    uint32 playerGuid = player->GetGUID().GetCounter();
-    PlayerAscensionStatus* status = sAscensionManager->GetPlayerStatus(playerGuid);
-
-    handler->SendSysMessage("|cFFFFD700=== 飞升装备 ===|r");
-
-    if (!status || status->slots.empty())
-    {
-        handler->SendSysMessage("当前没有装备任何飞升物品。");
-    }
-    else
-    {
-        for (uint8 i = 0; i < ASCENSION_SLOT_COUNT; ++i)
-        {
-            std::string slotName = sAscensionManager->GetSlotName(i);
-            bool unlocked = sAscensionManager->IsSlotUnlocked(player, i);
-
-            auto it = status->slots.find(i);
-            if (it != status->slots.end())
-            {
-                ItemTemplate const* proto = sObjectMgr->GetItemTemplate(it->second.itemId);
-                std::string itemName = proto ? proto->Name1 : "未知物品";
-                handler->PSendSysMessage("|cFF00FF00[{}]|r {}: {}", i, slotName.c_str(), itemName.c_str());
-            }
-            else if (unlocked)
-            {
-                handler->PSendSysMessage("|cFF808080[{}]|r {}: 空", i, slotName.c_str());
-            }
-            else
-            {
-                handler->PSendSysMessage("|cFFFF0000[{}]|r {}: 未解锁", i, slotName.c_str());
-            }
-        }
-    }
-
-    // 发送数据到客户端UI
+    // 只发送数据到客户端UI，不在聊天框显示
     sAscensionManager->SendAscensionDataToClient(player);
 
     return true;
@@ -1758,6 +1811,80 @@ bool AscensionCommandScript::HandleAscensionReload(ChatHandler* handler, const c
 }
 
 //=============================================================================
+// AscensionItemScript 实现 - 阻止飞升槽位中的物品被删除
+//=============================================================================
+
+AscensionItemScript::AscensionItemScript() : AllItemScript("AscensionItemScript")
+{
+}
+
+bool AscensionItemScript::CanItemRemove(Player* player, Item* item)
+{
+    if (!sAscensionConfig->IsEnabled() || !player || !item)
+        return true;  // 允许删除
+
+    uint32 itemGuid = item->GetGUID().GetCounter();
+    uint32 playerGuid = player->GetGUID().GetCounter();
+
+    // 首先检查内存中的状态
+    if (sAscensionManager->IsItemEquippedInAscension(player, itemGuid))
+    {
+        if (sAscensionConfig->IsDebugMode())
+        {
+            LOG_INFO("module", "飞升系统: 阻止删除飞升槽位中的物品 GUID={} 玩家={} (内存检查)",
+                itemGuid, player->GetName());
+        }
+        return false;  // 阻止删除
+    }
+
+    // 如果内存中没有找到，查询数据库确认
+    // 这是为了处理玩家状态已被清理但核心还在保存的情况
+    QueryResult result = CharacterDatabase.Query(
+        "SELECT `装备数据` FROM `_飞升系统_数据` WHERE `玩家GUID` = {}", playerGuid);
+
+    if (result)
+    {
+        Field* fields = result->Fetch();
+        std::string equipStr = fields[0].Get<std::string>();
+
+        if (!equipStr.empty())
+        {
+            // 解析装备数据，检查物品GUID是否在其中
+            std::stringstream ss(equipStr);
+            std::string slotInfo;
+            while (std::getline(ss, slotInfo, ','))
+            {
+                if (!slotInfo.empty())
+                {
+                    std::stringstream slotSS(slotInfo);
+                    std::string part;
+                    std::vector<std::string> parts;
+                    while (std::getline(slotSS, part, ':'))
+                    {
+                        parts.push_back(part);
+                    }
+                    if (parts.size() >= 3)
+                    {
+                        uint32 storedItemGuid = static_cast<uint32>(std::stoul(parts[2]));
+                        if (storedItemGuid == itemGuid)
+                        {
+                            if (sAscensionConfig->IsDebugMode())
+                            {
+                                LOG_INFO("module", "飞升系统: 阻止删除飞升槽位中的物品 GUID={} 玩家={} (数据库检查)",
+                                    itemGuid, player->GetName());
+                            }
+                            return false;  // 阻止删除
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return true;  // 允许删除
+}
+
+//=============================================================================
 // 脚本加载函数
 //=============================================================================
 
@@ -1766,5 +1893,7 @@ void AddAscensionSystemScripts()
     new AscensionWorldScript();
     new AscensionPlayerScript();
     new AscensionCommandScript();
+    new AscensionItemScript();
 }
+
 

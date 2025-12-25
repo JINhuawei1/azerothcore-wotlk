@@ -24,6 +24,11 @@
 // 飞升槽位数量（与官方装备槽位一致）
 #define ASCENSION_SLOT_COUNT 18
 
+// 飞升系统使用的特殊背包ID
+// 用于在 character_inventory 表中标识飞升系统的物品
+// 这个值必须大于正常背包范围（0-4），且不与其他系统冲突
+#define ASCENSION_VIRTUAL_BAG 200
+
 // 槽位定义
 enum AscensionSlots
 {
@@ -216,6 +221,14 @@ public:
     static bool HandleAscensionRefresh(ChatHandler* handler, const char* args);
     static bool HandleAscensionUnlock(ChatHandler* handler, const char* args);
     static bool HandleAscensionReload(ChatHandler* handler, const char* args);
+};
+
+// 物品脚本 - 用于阻止飞升槽位中的物品被删除
+class AscensionItemScript : public AllItemScript
+{
+public:
+    AscensionItemScript();
+    bool CanItemRemove(Player* player, Item* item) override;
 };
 
 // 脚本加载函数
