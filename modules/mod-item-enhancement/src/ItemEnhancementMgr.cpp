@@ -24,6 +24,14 @@
     #include "mod-item-identification-system/src/ItemIdentificationSystem.h"
 #endif
 
+// 幻境系统集成（用于强化后重新应用倍率属性）
+#if __has_include("HuanJingSystem.h")
+    #ifndef MODULE_HUANJING_SYSTEM
+        #define MODULE_HUANJING_SYSTEM
+    #endif
+    #include "HuanJingSystem.h"
+#endif
+
 // 可选集成：物品属性模板系统（mod-item-attributes）
 #if __has_include("ItemAttributesLoader.h")
     #ifndef MODULE_ITEM_ATTRIBUTES
@@ -368,7 +376,12 @@ void ItemEnhancementMgr::SaveEnhancementRecord(EnhancementRecord const& record)
     sql += std::to_string(record.lastEnhanceTime);           // 最后强化时间
     sql += ")";
 
-    CharacterDatabase.Execute(sql);
+    // 【关键修复】使用 DirectExecute 同步执行，确保数据立即写入数据库
+    // 原来使用 Execute 是异步的，导致后续查询时数据还没写入，客户端获取到旧数据
+    CharacterDatabase.DirectExecute(sql);
+
+    LOG_DEBUG("module.itemenhancement", "[强化保存] 同步写入数据库完成: itemGuid={}, level={}, stats='{}'",
+        record.itemGuid, record.level, record.statValues);
 
     uint32 now = static_cast<uint32>(GameTime::GetGameTime().count());
     auto& entry = _recordCache[record.itemGuid];
@@ -383,7 +396,8 @@ void ItemEnhancementMgr::DeleteEnhancementRecord(uint32 itemGuid)
 {
     // 使用正确的表名和字段名
     std::string sql = "DELETE FROM 物品强化_记录 WHERE guid = " + std::to_string(itemGuid);
-    CharacterDatabase.Execute(sql);
+    // 【修复】同步执行删除操作
+    CharacterDatabase.DirectExecute(sql);
 
     _recordCache.erase(itemGuid);
 }
@@ -393,7 +407,8 @@ void ItemEnhancementMgr::DeleteAllEnhancementRecordsByPlayer(uint32 playerGuid)
     // 删除指定玩家的所有强化记录
     std::string sql = "DELETE FROM 物品强化_记录 WHERE owner_guid = " + std::to_string(playerGuid);
     LOG_INFO("server.loading", "强化系统: 执行SQL删除玩家 {} 的强化记录: {}", playerGuid, sql);
-    CharacterDatabase.Execute(sql);
+    // 【修复】同步执行删除操作
+    CharacterDatabase.DirectExecute(sql);
     LOG_INFO("server.loading", "强化系统: 已删除玩家 {} 的所有强化记录", playerGuid);
 
     for (auto itr = _recordCache.begin(); itr != _recordCache.end(); )
@@ -642,9 +657,10 @@ bool ItemEnhancementMgr::EnhanceItem(Player* player, Item* item, uint32 group)
 
         // 强化成功后，从数据库重新获取最新的强化数据发送给客户端
         EnhancementRecord const* updatedRecord = GetEnhancementRecord(itemGuid);
-            if (updatedRecord)
-            {
-                SendEnhancementDataToClient(player, item, *updatedRecord);
+
+        if (updatedRecord)
+        {
+            SendEnhancementDataToClient(player, item, *updatedRecord);
 
 #ifndef MODULE_ITEM_ATTRIBUTES
                 // 检查装备是否已穿戴，如果穿戴则应用新的强化效果
@@ -668,9 +684,10 @@ bool ItemEnhancementMgr::EnhanceItem(Player* player, Item* item, uint32 group)
                     // ChatHandler(player->GetSession()).PSendSysMessage("强化系统：装备未穿戴，强化效果将在穿戴时应用");
                 }
 #endif
-            }
+        }
+        else
         {
-            // ChatHandler(player->GetSession()).PSendSysMessage("警告：无法获取最新的强化数据");
+            LOG_WARN("module.itemenhancement", "[强化] 无法获取更新后的强化记录: itemGuid={}", itemGuid);
         }
 
         // 全服公告
@@ -680,6 +697,20 @@ bool ItemEnhancementMgr::EnhanceItem(Player* player, Item* item, uint32 group)
             std::string announcement = player->GetName() + " 成功将 " + itemLink + " 强化到 +" + std::to_string(record.level) + " 级！";
             sWorldSessionMgr->SendServerMessage(SERVER_MSG_STRING, announcement);
         }
+
+#ifdef MODULE_ITEM_IDENTIFICATION_SYSTEM
+        // 【关键修复】强化成功后，先清除缓存再发送新数据
+        sItemIdentificationSystem->ClearItemCache(item->GetEntry(), itemGuid);
+        sItemIdentificationSystem->SendAllModuleDataAddon(player, item->GetEntry(), itemGuid);
+#endif
+
+#ifdef MODULE_HUANJING_SYSTEM
+        // 【关键修复】强化成功后，重新应用幻境系统的倍率属性
+        if (sHuanJingSystem && item->IsEquipped())
+        {
+            sHuanJingSystem->ApplyHuanJingEnhancement(player, item, true);
+        }
+#endif
 
         return true;
     }
@@ -765,6 +796,20 @@ bool ItemEnhancementMgr::EnhanceItem(Player* player, Item* item, uint32 group)
 
         // 发送失败消息
         ChatHandler(player->GetSession()).PSendSysMessage("物品强化失败");
+
+#ifdef MODULE_ITEM_IDENTIFICATION_SYSTEM
+        // 强化失败后（特别是等级清零的情况），也需要清除缓存并更新客户端
+        sItemIdentificationSystem->ClearItemCache(item->GetEntry(), itemGuid);
+        sItemIdentificationSystem->SendAllModuleDataAddon(player, item->GetEntry(), itemGuid);
+#endif
+
+#ifdef MODULE_HUANJING_SYSTEM
+        // 强化失败后（等级清零），也需要重新应用幻境系统的倍率属性
+        if (sHuanJingSystem && item->IsEquipped())
+        {
+            sHuanJingSystem->ApplyHuanJingEnhancement(player, item, true);
+        }
+#endif
 
         return false;
     }
@@ -1602,24 +1647,41 @@ void ItemEnhancementMgr::SyncEnhancementAttributesToItemAttributes(Player* playe
 
     ItemAttributesDBHelper::SaveItemAttributes(data);
 
-    // 【关键修复】参考 ItemAttributesEvents 的实现模式：
-    // 1. 只负责数据库同步，不直接调用 Apply/Remove
-    // 2. 如果装备已穿戴，需要重新应用属性，但必须安全地进行
-    // 3. 添加完整的安全检查，避免在加载阶段或无效状态下操作
-    // 4. 【新增】添加对 item 的额外检查，避免在检查后item失效
+    // 【关键修复】强化成功后立即应用属性增量
+    // 问题原因：之前的逻辑是先Remove再Apply，但Remove读取的是更新后的缓存数据（新值），
+    // 导致移除新值后再应用新值，净效果为0。
+    // 正确做法：直接应用属性增量（newStatValues - oldStatValues）
     if (player && item)
     {
         // 安全检查：确保玩家已完全加载且在世界中
-        // 必须在所有操作之前进行完整检查
         if (!player->isBeingLoaded() && player->IsInWorld() && player->GetSession())
         {
-            // 【关键】在调用 IsEquipped() 之前再次验证 item 的有效性
-            // 因为在并发环境下，item 可能在检查和使用之间被删除
-            if (item->IsEquipped() && sItemAttributesEffects)
+            if (item->IsEquipped())
             {
-                // 重新应用该物品的所有属性（包括强化属性）
-                sItemAttributesEffects->RemoveItemAttributeEffects(player, item);
-                sItemAttributesEffects->ApplyItemAttributeEffects(player, item);
+                // 对每个属性类型，计算增量并直接应用
+                for (uint32 statType : keys)
+                {
+                    int32 oldValue = 0;
+                    int32 newValue = 0;
+
+                    auto itOld = oldStats.find(statType);
+                    if (itOld != oldStats.end()) oldValue = itOld->second;
+
+                    auto itNew = newStats.find(statType);
+                    if (itNew != newStats.end()) newValue = itNew->second;
+
+                    int32 delta = newValue - oldValue;
+
+                    if (delta != 0)
+                    {
+                        // 直接应用增量：delta > 0 表示增加属性，delta < 0 表示减少属性
+                        ApplyStatModifier(player, statType, std::abs(delta), delta > 0);
+
+                        LOG_DEBUG("module.itemenhancement",
+                            "[强化属性同步] 玩家:{} 物品:{} 属性类型:{} 旧值:{} 新值:{} 增量:{}",
+                            player->GetName(), item->GetEntry(), statType, oldValue, newValue, delta);
+                    }
+                }
 
                 // 刷新玩家属性
                 player->UpdateAllStats();
@@ -2303,19 +2365,28 @@ void ItemEnhancementMgr::SendEnhancementDataToClient(Player* player, Item* item,
     enhancementData += std::to_string(record.level) + "|";  // 强化等级
     enhancementData += record.statValues;                     // 强化属性值
 
+    LOG_DEBUG("module.itemenhancement", "[发送强化数据] 玩家:{} 物品ID:{} GUID:{} 等级:{}",
+        player->GetName(), itemId, itemGuid, record.level);
+
     // 发送给物品强化专用UI插件
     SendAddonMessage(player, enhancementData);
 }
 
 // 发送插件消息给客户端
+// 【修复】使用与鉴定系统相同的格式发送Addon消息
+// 格式：CHAT_MSG_WHISPER + LANG_ADDON + "UITQ\t" 前缀
+// 这样客户端的 CHAT_MSG_ADDON 事件才能正确接收
 void ItemEnhancementMgr::SendAddonMessage(Player* player, const std::string& message)
 {
     if (!player)
         return;
 
+    // 使用UITQ前缀，与统一物品提示框插件兼容
+    std::string fullMessage = "UITQ\t" + message;
+
     WorldPacket data;
-    ChatHandler::BuildChatPacket(data, CHAT_MSG_GUILD, LANG_ADDON, player, player, message);
-    player->GetSession()->SendPacket(&data);
+    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
+    player->SendDirectMessage(&data);
 }
 
 // 跟踪已应用的强化效果

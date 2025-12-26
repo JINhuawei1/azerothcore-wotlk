@@ -2712,7 +2712,7 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
     -- 我们需要分离出实际的前缀和消息内容
     local actualPrefix = prefix
     local actualMessage = message
-    
+
     -- 如果prefix包含竖线，分离出真正的前缀和消息
     if prefix:find("|") then
         local parts = { strsplit("|", prefix) }
@@ -2966,6 +2966,90 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
         end)
 
         -- 不return，让后续处理继续
+    end
+
+    -- 【新增】处理强化成功响应 - 强化成功后清除缓存以便显示最新强化等级
+    -- 服务器发送格式: ITEMENHANCE|ENHANCED|itemId|itemGuid|level|statValues
+    -- 注意：消息可能在prefix中（已在上方处理分离）
+
+    -- 匹配多种可能的格式
+    if message:match("^ENHANCED|") or message:match("^ENHANCED:") or message:match("^ITEMENHANCE|ENHANCED|") then
+        local parts = { strsplit("|", message) }
+        -- 格式可能是: ENHANCED|itemId|itemGuid|level|statValues
+        -- 或者: ITEMENHANCE|ENHANCED|itemId|itemGuid|level|statValues
+
+        -- 找到ENHANCED的位置
+        local startIndex = 1
+        for i, part in ipairs(parts) do
+            if part == "ENHANCED" then
+                startIndex = i
+                break
+            end
+        end
+
+        -- 从ENHANCED后面开始解析
+        local itemId = tonumber(parts[startIndex + 1])
+        local itemGuid = tonumber(parts[startIndex + 2])
+        -- parts[startIndex + 3] 是强化等级，暂不使用
+
+        if itemId and itemGuid then
+            -- 清除该物品的所有相关缓存
+            -- 1. 清除GUID格式的缓存
+            local guidKey = string.format("G:%d:%d", itemId, itemGuid)
+            if State.cache[guidKey] then
+                State.cache[guidKey] = nil
+                State.cacheTime[guidKey] = nil
+                State.pending[guidKey] = nil
+            end
+
+            -- 2. 清除所有位置格式的缓存（遍历查找同itemId的缓存）
+            local keysToRemove = {}
+            for key, cached in pairs(State.cache) do
+                if cached.itemID == itemId then
+                    -- 检查GUID是否匹配（如果缓存有GUID）
+                    if cached.guid == nil or cached.guid == itemGuid then
+                        table.insert(keysToRemove, key)
+                    end
+                end
+            end
+
+            for _, key in ipairs(keysToRemove) do
+                State.cache[key] = nil
+                State.cacheTime[key] = nil
+                State.pending[key] = nil
+            end
+
+            -- 3. 清除幻境系统缓存（因为强化后属性变化会影响幻境倍率计算）
+            if HuanJingState.cache[guidKey] then
+                HuanJingState.cache[guidKey] = nil
+            end
+
+            -- 4. 刷新当前显示的tooltip（如果正在显示该物品）
+            for tooltip, meta in pairs(State.tooltips) do
+                if tooltip:IsShown() then
+                    local _, itemLink = tooltip:GetItem()
+                    if itemLink then
+                        local tooltipItemId = tonumber(string.match(itemLink, "item:(%d+)"))
+                        if tooltipItemId == itemId then
+                            -- 标记需要重新渲染
+                            meta.rendered = {}
+                        end
+                    end
+                end
+            end
+
+            -- 5. 刷新统一大框（如果正在显示该物品）
+            for key, frames in pairs(UnifiedFramesByKey) do
+                for _, frame in ipairs(frames) do
+                    if frame:IsShown() and frame.UIT_ItemID == itemId then
+                        -- 清除该大框的缓存键关联，强制重新查询
+                        frame.UIT_Key = nil
+                    end
+                end
+            end
+        end
+
+        -- 不return，让后续处理继续（以防还有其他处理逻辑）
     end
 
     -- 检查是否是ALL_MODULE_DATA响应
