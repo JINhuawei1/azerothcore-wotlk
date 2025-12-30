@@ -359,6 +359,9 @@ public:
     // 服务器更新时触发
     void OnUpdate(uint32 diff) override;
 
+    // 【关键修复】服务器关闭时保存数据
+    void OnShutdownInitiate(ShutdownExitCode code, ShutdownMask mask) override;
+
 private:
     bool _loaded;        // 是否已加载
     uint32 _startTime;   // 开始时间
