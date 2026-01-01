@@ -290,8 +290,7 @@ void AscensionManager::SaveAscensionItems(Player* player)
     if (!status)
         return;
 
-    LOG_INFO("module", "飞升系统: 开始保存玩家 {} 的飞升物品，共 {} 个槽位",
-        player->GetName(), status->slots.size());
+
 
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
 
@@ -338,8 +337,7 @@ void AscensionManager::SaveAscensionItems(Player* player)
             stmt->SetData(++index, pair.second.itemGuid);
             trans->Append(stmt);
 
-            LOG_INFO("module", "飞升系统: 保存飞升物品 槽位={} 物品ID={} GUID={} OwnerGUID={}",
-                pair.first, pair.second.itemId, pair.second.itemGuid, player->GetGUID().GetCounter());
+
         }
         else
         {
@@ -348,7 +346,6 @@ void AscensionManager::SaveAscensionItems(Player* player)
     }
 
     CharacterDatabase.CommitTransaction(trans);
-    LOG_INFO("module", "飞升系统: 玩家 {} 的飞升物品保存完成", player->GetName());
 }
 
 void AscensionManager::LoadAscensionItems(Player* player)
@@ -393,8 +390,7 @@ void AscensionManager::LoadAscensionItems(Player* player)
             continue;
         }
 
-        LOG_INFO("module", "飞升系统: 从 character_inventory 加载物品 槽位={} GUID={} Entry={}",
-            slot, itemGuid, itemEntry);
+
 
         // 创建物品对象
         Item* item = NewItemOrBag(sObjectMgr->GetItemTemplate(itemEntry));
@@ -426,13 +422,11 @@ void AscensionManager::LoadAscensionItems(Player* player)
         slotData.itemPtr = item;
         status->slots[slot] = slotData;
 
-        LOG_INFO("module", "飞升系统: 成功加载飞升物品 槽位={} 物品ID={} GUID={}",
-            slot, itemEntry, itemGuid);
+
 
     } while (invResult->NextRow());
 
-    LOG_INFO("module", "飞升系统: 玩家 {} 加载了 {} 件飞升装备",
-        player->GetName(), status->slots.size());
+
 }
 
 void AscensionManager::ValidateEquippedItems(Player* player)
