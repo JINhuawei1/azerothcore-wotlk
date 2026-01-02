@@ -63,6 +63,8 @@ public:
             { "升级",     talentSoulUpgradeTable },
             { "设置",     HandleTalentSoulSetCommand,     SEC_ADMINISTRATOR, Console::No  },
             { "重置",     HandleTalentSoulResetCommand,   SEC_ADMINISTRATOR, Console::No  },
+            { "界面",     HandleTalentSoulOpenUICommand,  SEC_PLAYER,        Console::No  },
+            { "ui",       HandleTalentSoulOpenUICommand,  SEC_PLAYER,        Console::No  },
         };
 
         static ChatCommandTable commandTable =
@@ -472,6 +474,22 @@ public:
             handler->PSendSysMessage("已重置玩家 {} 的所有天赋之魂数据",
                 target->GetName().c_str());
         }
+
+        return true;
+    }
+
+    // .天赋之魂 界面 / .天赋之魂 ui - 打开UI界面
+    static bool HandleTalentSoulOpenUICommand(ChatHandler* handler)
+    {
+        Player* player = handler->GetSession()->GetPlayer();
+        if (!player)
+            return false;
+
+        // 发送打开UI界面的Addon消息
+        std::string fullMessage = std::string(TALENT_SOUL_ADDON_PREFIX) + "\tOPEN_UI";
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
+        player->SendDirectMessage(&data);
 
         return true;
     }

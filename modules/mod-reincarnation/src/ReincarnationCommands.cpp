@@ -6,6 +6,7 @@
  * .转身 设置 <等级> - 设置转身等级
  * .转身 重载 - 重载配置
  * .转身 信息 - 查看转身信息
+ * .转身 界面 / .转身 ui - 打开UI界面
  */
 
 #include "Reincarnation.h"
@@ -15,8 +16,13 @@
 #include "Configuration/Config.h"
 #include "Log.h"
 #include "Language.h"
+#include "WorldPacket.h"
+#include "Opcodes.h"
 
 using namespace Acore::ChatCommands;
+
+// Addon消息前缀
+static constexpr char const* REINCARNATION_ADDON_PREFIX = "ReincarnationUI";
 
 class ReincarnationCommandScript : public CommandScript
 {
@@ -31,6 +37,8 @@ public:
             { "设置", HandleReincarnationSetCommand,     SEC_GAMEMASTER, Console::No },
             { "重载", HandleReincarnationReloadCommand,  SEC_GAMEMASTER, Console::Yes },
             { "信息", HandleReincarnationInfoCommand,    SEC_PLAYER,     Console::No },
+            { "界面", HandleReincarnationOpenUICommand,  SEC_PLAYER,     Console::No },
+            { "ui",   HandleReincarnationOpenUICommand,  SEC_PLAYER,     Console::No },
         };
 
         static ChatCommandTable commandTable =
@@ -185,6 +193,22 @@ public:
         }
 
         handler->PSendSysMessage("|cff00ff00================================|r");
+
+        return true;
+    }
+
+    // .转身 界面 / .转身 ui - 打开UI界面
+    static bool HandleReincarnationOpenUICommand(ChatHandler* handler)
+    {
+        Player* player = handler->GetPlayer();
+        if (!player)
+            return false;
+
+        // 发送打开UI界面的Addon消息
+        std::string fullMessage = std::string(REINCARNATION_ADDON_PREFIX) + "\tOPEN_UI";
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
+        player->SendDirectMessage(&data);
 
         return true;
     }

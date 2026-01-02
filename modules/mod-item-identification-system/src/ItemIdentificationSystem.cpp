@@ -1689,7 +1689,9 @@ std::vector<Acore::ChatCommands::ChatCommandBuilder> ItemIdentificationCommandSc
         // ========== 【新增】手动鉴定相关命令 ==========
         { "手动", HandleManualIdentifyCommand, SEC_PLAYER, Console::No },  // 手动鉴定单个物品
         { "待鉴定", HandleListPendingCommand, SEC_PLAYER, Console::No },   // 查询待鉴定列表
-        { "批量鉴定", HandleBatchIdentifyCommand, SEC_PLAYER, Console::No } // 批量鉴定所有
+        { "批量鉴定", HandleBatchIdentifyCommand, SEC_PLAYER, Console::No }, // 批量鉴定所有
+        { "界面", HandleOpenUICommand, SEC_PLAYER, Console::No },          // 打开UI界面
+        { "ui", HandleOpenUICommand, SEC_PLAYER, Console::No }             // 打开UI界面
     };
 
     // 主命令 - 支持直接鉴定和子命令
@@ -2293,16 +2295,20 @@ public:
         // 这样客户端无需等待小退即可显示自定义属性
         uint32 itemEntry = item->GetEntry();
         uint32 itemGuid = item->GetGUID().GetCounter();
+        // 【崩溃修复】捕获玩家GUID而非原始指针，避免玩家登出后悬空指针访问
+        ObjectGuid playerGuid = player->GetGUID();
 
         // 延迟发送，确保物品数据已经完全准备好
         // 使用500ms延迟，因为物品可能需要一点时间才能完全初始化
-        player->m_Events.AddEventAtOffset([player, itemEntry, itemGuid]()
+        player->m_Events.AddEventAtOffset([playerGuid, itemEntry, itemGuid]()
         {
-            if (player && player->IsInWorld())
+            // 通过GUID安全查找玩家，避免悬空指针
+            Player* p = ObjectAccessor::FindPlayer(playerGuid);
+            if (p && p->IsInWorld())
             {
-                sItemIdentificationSystem->SendAllModuleDataAddon(player, itemEntry, itemGuid);
+                sItemIdentificationSystem->SendAllModuleDataAddon(p, itemEntry, itemGuid);
                 LOG_DEBUG("module", "[物品掉落同步] 已向玩家 {} 发送物品属性: itemEntry={}, guid={}",
-                    player->GetName(), itemEntry, itemGuid);
+                    p->GetName(), itemEntry, itemGuid);
             }
         }, 500ms);
     }
@@ -2321,15 +2327,19 @@ public:
         // 【关键修复】物品进入背包后，主动向客户端发送属性数据
         uint32 itemEntry = item->GetEntry();
         uint32 itemGuid = item->GetGUID().GetCounter();
+        // 【崩溃修复】捕获玩家GUID而非原始指针，避免玩家登出后悬空指针访问
+        ObjectGuid playerGuid = player->GetGUID();
 
         // 延迟发送，确保物品数据已经完全准备好
-        player->m_Events.AddEventAtOffset([player, itemEntry, itemGuid]()
+        player->m_Events.AddEventAtOffset([playerGuid, itemEntry, itemGuid]()
         {
-            if (player && player->IsInWorld())
+            // 通过GUID安全查找玩家，避免悬空指针
+            Player* p = ObjectAccessor::FindPlayer(playerGuid);
+            if (p && p->IsInWorld())
             {
-                sItemIdentificationSystem->SendAllModuleDataAddon(player, itemEntry, itemGuid);
+                sItemIdentificationSystem->SendAllModuleDataAddon(p, itemEntry, itemGuid);
                 LOG_DEBUG("module", "[物品存储同步] 已向玩家 {} 发送物品属性: itemEntry={}, guid={}",
-                    player->GetName(), itemEntry, itemGuid);
+                    p->GetName(), itemEntry, itemGuid);
             }
         }, 500ms);
     }
@@ -4894,6 +4904,22 @@ bool ItemIdentificationCommandScript::HandleBatchIdentifyCommand(ChatHandler* ha
     handler->SendSysMessage("|cff00ff00===== 批量鉴定完成 =====|r");
     handler->PSendSysMessage("|cff00ff00成功: {}|r, |cffff0000失败: {}|r, |cff888888跳过: {}|r",
         successCount, failCount, skipCount);
+
+    return true;
+}
+
+// 处理打开UI界面命令: .鉴定 界面 或 .鉴定 ui
+bool ItemIdentificationCommandScript::HandleOpenUICommand(ChatHandler* handler, const char* /*args*/)
+{
+    Player* player = handler->GetSession()->GetPlayer();
+    if (!player)
+        return false;
+
+    // 发送打开UI界面的Addon消息
+    std::string fullMessage = "UITQ\tOPEN_UI";
+    WorldPacket data;
+    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
+    player->SendDirectMessage(&data);
 
     return true;
 }

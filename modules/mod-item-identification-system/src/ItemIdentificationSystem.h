@@ -345,6 +345,8 @@ private:
     static bool HandleListPendingCommand(ChatHandler* handler, const char* args);
     // 批量鉴定所有待鉴定物品
     static bool HandleBatchIdentifyCommand(ChatHandler* handler, const char* args);
+    // 打开UI界面
+    static bool HandleOpenUICommand(ChatHandler* handler, const char* args);
 };
 
 // 物品鉴定系统模块加载器
