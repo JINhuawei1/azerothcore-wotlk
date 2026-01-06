@@ -408,9 +408,8 @@ uint32 ItemIdentificationSystem::GetSuccessRate(Player* player, Item* item)
     // 直接使用配置文件中的基础成功率，不做任何调整
     uint32 successRate = _baseSuccessRate;
 
-    // 确保成功率在合理范围内
-    if (successRate < 1)
-        successRate = 1;
+    // 【审计修复】移除强制下限1%的限制，允许配置为0%
+    // 确保成功率在合理范围内（0-100%）
     if (successRate > 100)
         successRate = 100;
 
@@ -423,9 +422,9 @@ bool ItemIdentificationSystem::IdentifyItem(Player* player, Item* item, uint32 g
     if (!CanIdentify(player, item))
         return false;
 
-    // 扣除金币
-    player->ModifyMoney(-static_cast<int32>(_cost));
-    ChatHandler(player->GetSession()).SendNotification("已扣除 {} 铜币用于鉴定", _cost);
+    // 【修复】先不扣费，等所有校验和操作成功后再扣费
+    // 保存当前金币数（用于验证）
+    uint32 costToDeduct = _cost;
 
     // 计算成功率
     uint32 successRate = GetSuccessRate(player, item);
@@ -442,26 +441,46 @@ bool ItemIdentificationSystem::IdentifyItem(Player* player, Item* item, uint32 g
 
         if (applyResult)
         {
+            // 【修复】应用成功后才扣除金币
+            player->ModifyMoney(-static_cast<int32>(costToDeduct));
+            ChatHandler(player->GetSession()).SendNotification("已扣除 {} 铜币用于鉴定", costToDeduct);
             ChatHandler(player->GetSession()).SendNotification("物品鉴定成功！");
 
-            // 发送公告（暂时禁用，避免API兼容性问题）
+            // 【审计修复】实现全服公告功能
             if (_enableAnnounce)
             {
-                // TODO: 实现全服公告功能
+                // 获取物品模板和名称
+                ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(item->GetEntry());
+                if (itemTemplate)
+                {
+                    std::string itemName = itemTemplate->Name1;
+                    std::string playerName = player->GetName();
+
+                    // 构建公告消息
+                    std::string announcement = Acore::StringFormat(
+                        "|cff00ff00【鉴定公告】|r玩家 |cffffffff{}|r 成功鉴定了 |cff1eff00[{}]|r！",
+                        playerName, itemName
+                    );
+
+                    // 发送全服公告
+                    sWorldSessionMgr->SendServerMessage(SERVER_MSG_STRING, announcement.c_str());
+                }
             }
 
             return true;
         }
         else
         {
-            // 应用鉴定失败
-            ChatHandler(player->GetSession()).SendSysMessage("鉴定失败：无法应用鉴定效果");
+            // 应用鉴定失败，【修复】不扣费
+            ChatHandler(player->GetSession()).SendSysMessage("鉴定失败：无法应用鉴定效果（未扣费）");
             return false;
         }
     }
     else
     {
-        // 鉴定失败
+        // 鉴定失败（掷骰失败，这是正常游戏机制，需要扣费）
+        player->ModifyMoney(-static_cast<int32>(costToDeduct));
+        ChatHandler(player->GetSession()).SendNotification("已扣除 {} 铜币用于鉴定", costToDeduct);
         ChatHandler(player->GetSession()).SendNotification("鉴定失败！");
 
         // 是否销毁物品
@@ -1010,7 +1029,8 @@ void ItemIdentificationSystem::ApplyBaseAttributes(Player* player, Item* item, c
         return;
     }
 
-    uint64 itemGuid = item->GetGUID().GetRawValue();
+    // 【修复】统一使用GetCounter()获取32位GUID，与数据库字段类型一致
+    uint32 itemGuid = item->GetGUID().GetCounter();
 
     // 使用属性数据库助手清除物品现有的属性
     // 检查物品是否已有属性
@@ -1732,6 +1752,7 @@ bool ItemIdentificationCommandScript::HandleIdentifyCommand(ChatHandler* handler
     // 旧代码：if (firstArg == "查询") HandleQueryAttributesCommand(...) - 已删除
 
     // 解析鉴定命令参数: <组ID> <物品ID>
+    // 【安全修复】使用std::strtok并增加输入验证
     char* groupIdStr = strtok((char*)args, " ");
     char* itemIdStr = strtok(nullptr, " ");
 
@@ -1741,13 +1762,25 @@ bool ItemIdentificationCommandScript::HandleIdentifyCommand(ChatHandler* handler
         return true;
     }
 
-    uint32 groupId = atoi(groupIdStr);
-    uint32 itemId = atoi(itemIdStr);
-    if (itemId == 0)
+    // 【安全修复】验证输入是否为有效数字
+    char* endPtr = nullptr;
+    long groupIdLong = strtol(groupIdStr, &endPtr, 10);
+    if (endPtr == groupIdStr || *endPtr != '\0' || groupIdLong < 0 || groupIdLong > UINT32_MAX)
     {
-        handler->SendSysMessage("无效的物品ID");
+        handler->SendSysMessage("无效的组ID，必须是非负整数");
         return true;
     }
+
+    endPtr = nullptr;
+    long itemIdLong = strtol(itemIdStr, &endPtr, 10);
+    if (endPtr == itemIdStr || *endPtr != '\0' || itemIdLong <= 0 || itemIdLong > UINT32_MAX)
+    {
+        handler->SendSysMessage("无效的物品ID，必须是正整数");
+        return true;
+    }
+
+    uint32 groupId = static_cast<uint32>(groupIdLong);
+    uint32 itemId = static_cast<uint32>(itemIdLong);
 
     // 检查物品模板是否存在
     ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(itemId);
@@ -1857,8 +1890,8 @@ void ItemIdentificationSystemModuleLoader::OnUpdate(uint32 diff)
         {
             _loaded = true;
 
-            // 注册命令脚本
-            new ItemIdentificationCommandScript();
+            // 【修复】命令脚本已在 AddItemIdentificationSystemScripts() 中注册，移除重复注册
+            // new ItemIdentificationCommandScript();  // 已移除，避免重复注册导致命令执行两次
 
             // 注册玩家脚本
             new ItemIdentificationPlayerScript();
@@ -1899,6 +1932,18 @@ void ItemIdentificationSystemModuleLoader::OnUpdate(uint32 diff)
         cacheCleanTimer = 0;
         sItemIdentificationSystem->CleanExpiredCache();
     }
+
+    // ★★★ 定期清理待鉴定物品标记表的孤立数据（每30分钟执行一次）★★★
+    // 原因：玩家拾取物品后没有手动鉴定就删除/出售/交易物品，导致待鉴定标记永久保留
+    // 这个清理在服务器运行期间持续进行，确保数据库不会无限膨胀
+    static uint32 pendingCleanTimer = 0;
+    pendingCleanTimer += diff;
+
+    if (pendingCleanTimer >= 1800000)  // 30分钟 = 1800000ms
+    {
+        pendingCleanTimer = 0;
+        CleanupPendingIdentificationData();
+    }
 }
 
 // 清理孤立的物品数据（服务器启动时执行）
@@ -1913,6 +1958,11 @@ void ItemIdentificationSystemModuleLoader::CleanupOrphanedItemData()
     // 1) 用 JOIN 代替 NOT IN 子查询，降低锁竞争
     // 2) 用事务提交，让框架对 1213 自动重试（TransactionTask::Execute）
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+
+    // ★★★ 关键修复：清理待鉴定物品标记表的孤立数据 ★★★
+    // 原因：玩家拾取物品后没有手动鉴定就删除/出售/交易物品，导致待鉴定标记永久保留
+    trans->Append(
+        "DELETE p FROM `待鉴定物品标记` p LEFT JOIN `item_instance` i ON p.`物品GUID` = i.`guid` WHERE i.`guid` IS NULL");
 
     trans->Append(
         "DELETE r FROM `物品_鉴定记录` r LEFT JOIN `item_instance` i ON r.`物品GUID` = i.`guid` WHERE i.`guid` IS NULL");
@@ -1947,6 +1997,28 @@ void ItemIdentificationSystemModuleLoader::CleanupOrphanedItemData()
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
 
     LOG_INFO("module.itemidentification", "[启动清理] 孤立数据清理完成，耗时 {} ms", duration);
+}
+
+// ★★★ 定期清理待鉴定物品标记表的孤立数据 ★★★
+// 原因：玩家拾取物品后没有手动鉴定就删除/出售/交易物品，导致待鉴定标记永久保留
+// 这个函数每30分钟执行一次，确保数据库不会无限膨胀
+void ItemIdentificationSystemModuleLoader::CleanupPendingIdentificationData()
+{
+    LOG_INFO("module.itemidentification", "[定期清理] 开始清理待鉴定物品标记表的孤立数据...");
+
+    auto startTime = std::chrono::high_resolution_clock::now();
+
+    // 使用异步执行，不阻塞主线程
+    // 删除物品已不存在的待鉴定标记（物品被删除/出售/交易后）
+    CharacterDatabase.Execute(
+        "DELETE p FROM `待鉴定物品标记` p "
+        "LEFT JOIN `item_instance` i ON p.`物品GUID` = i.`guid` "
+        "WHERE i.`guid` IS NULL");
+
+    auto endTime = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
+
+    LOG_INFO("module.itemidentification", "[定期清理] 待鉴定孤立数据清理完成，耗时 {} ms", duration);
 }
 
 // 【关键修复】服务器关闭时保存数据
@@ -1998,22 +2070,41 @@ void ItemIdentificationPlayerScript::OnLogin(Player* player, bool firstLogin)
 // 鉴定记录管理实现
 bool ItemIdentificationSystem::IsItemIdentified(uint32 itemGuid)
 {
-    // 【性能优化】如果缓存未初始化，返回false而不是同步初始化
-    // 缓存会在服务器启动时由 Initialize() 异步初始化
-    // 这样可以避免玩家登录时阻塞主线程
+    // 【审计修复】如果缓存未初始化，回退到数据库查询
     if (!_cacheInitialized)
     {
-        // 如果缓存还没初始化，可能是服务器刚启动
-        // 此时回退到数据库查询，但使用异步方式不阻塞
-        // 为了简化，这里直接返回false，后续会通过InitializeCache加载
+        // 缓存还没初始化，回退到数据库查询以确保重复鉴定保护生效
+        QueryResult result = CharacterDatabase.Query(
+            "SELECT 1 FROM `物品_鉴定记录` WHERE `物品GUID` = {} LIMIT 1",
+            itemGuid
+        );
+        if (result)
+        {
+            // 顺便更新缓存
+            std::lock_guard<std::mutex> lock(_identifiedCacheMutex);
+            _identifiedItemsCache.insert(itemGuid);
+            return true;
+        }
         return false;
     }
 
+    // 【线程安全修复】加锁读取缓存
+    std::lock_guard<std::mutex> lock(_identifiedCacheMutex);
     return _identifiedItemsCache.find(itemGuid) != _identifiedItemsCache.end();
 }
 
 void ItemIdentificationSystem::SaveIdentificationRecord(const ItemIdentificationRecord& record)
 {
+    // 【审计修复】对字符串字段进行SQL转义，防止SQL注入和语法错误
+    std::string escapedBaseAttrDetails = record.baseAttrDetails;
+    std::string escapedAdditionalAttrGroups = record.additionalAttrGroups;
+    std::string escapedSkillGroups = record.skillGroups;
+    std::string escapedMagicHitGroups = record.magicHitGroups;
+
+    CharacterDatabase.EscapeString(escapedBaseAttrDetails);
+    CharacterDatabase.EscapeString(escapedAdditionalAttrGroups);
+    CharacterDatabase.EscapeString(escapedSkillGroups);
+    CharacterDatabase.EscapeString(escapedMagicHitGroups);
 
     // 使用 INSERT ... ON DUPLICATE KEY UPDATE 避免重复键错误
     // 【修复】使用 DirectExecute 同步写入数据库
@@ -2062,17 +2153,20 @@ void ItemIdentificationSystem::SaveIdentificationRecord(const ItemIdentification
         record.playerGuid, record.itemGuid, record.itemEntry, record.templateId,
         record.hasGrowth ? 1 : 0, record.growthGroup,
         record.hasEnhancement ? 1 : 0, record.enhancementGroup,
-        record.hasBaseAttributes ? 1 : 0, record.baseAttrCount, record.baseAttrGroup, record.baseAttrDetails,
-        record.hasAdditionalAttributes ? 1 : 0, record.additionalAttrCount, record.additionalAttrGroups,
+        record.hasBaseAttributes ? 1 : 0, record.baseAttrCount, record.baseAttrGroup, escapedBaseAttrDetails,
+        record.hasAdditionalAttributes ? 1 : 0, record.additionalAttrCount, escapedAdditionalAttrGroups,
         record.hasRuneSlots ? 1 : 0, record.runeSlotCount,
-        record.hasSkills ? 1 : 0, record.skillGroups,
-        record.hasMagicHits ? 1 : 0, record.magicHitCount, record.magicHitGroups,
+        record.hasSkills ? 1 : 0, escapedSkillGroups,
+        record.hasMagicHits ? 1 : 0, record.magicHitCount, escapedMagicHitGroups,
         record.hasSet ? 1 : 0, record.setGroup, record.setId,
         record.costGold, record.successRate
     );
 
-    // ✅ 优化：立即更新缓存
-    _identifiedItemsCache.insert(record.itemGuid);
+    // 【审计修复】使用锁保护缓存写入，防止数据竞争
+    {
+        std::lock_guard<std::mutex> lock(_identifiedCacheMutex);
+        _identifiedItemsCache.insert(record.itemGuid);
+    }
 
     DebugLog("保存鉴定记录: 玩家GUID={}, 物品GUID={}, 模板ID={}",
              record.playerGuid, record.itemGuid, record.templateId);
@@ -2212,14 +2306,17 @@ public:
 };
 
 // ✅ 新增：初始化已鉴定物品缓存
+// 【线程安全修复】添加锁保护
 void ItemIdentificationSystem::InitializeCache()
 {
     PerformanceTimer timer("初始化已鉴定物品缓存");
 
-    _identifiedItemsCache.clear();
-
     // 一次性从数据库加载所有已鉴定物品的GUID
     QueryResult result = CharacterDatabase.Query("SELECT `物品GUID` FROM `物品_鉴定记录`");
+
+    // 【线程安全修复】使用锁保护缓存写入
+    std::lock_guard<std::mutex> lock(_identifiedCacheMutex);
+    _identifiedItemsCache.clear();
 
     if (!result)
     {
@@ -2242,13 +2339,16 @@ void ItemIdentificationSystem::InitializeCache()
 }
 
 // ✅ 新增：清除指定物品的鉴定缓存
+// 【线程安全修复】添加锁保护
 void ItemIdentificationSystem::ClearIdentifiedCache(uint32 itemGuid)
 {
+    std::lock_guard<std::mutex> lock(_identifiedCacheMutex);
     _identifiedItemsCache.erase(itemGuid);
     DebugLog("清除物品GUID {} 的鉴定缓存", itemGuid);
 }
 
 // ✅ 新增：批量检查物品是否已鉴定（优化版）
+// 【线程安全修复】添加锁保护
 std::set<uint32> ItemIdentificationSystem::BatchCheckIdentified(const std::vector<uint32>& itemGuids)
 {
     PerformanceTimer timer("批量检查已鉴定物品");
@@ -2262,6 +2362,8 @@ std::set<uint32> ItemIdentificationSystem::BatchCheckIdentified(const std::vecto
 
     std::set<uint32> identifiedSet;
 
+    // 【线程安全修复】加锁读取缓存
+    std::lock_guard<std::mutex> lock(_identifiedCacheMutex);
     for (uint32 guid : itemGuids)
     {
         if (_identifiedItemsCache.find(guid) != _identifiedItemsCache.end())
@@ -2565,6 +2667,7 @@ public:
 
 private:
     // 处理查询其他玩家装备GUID的请求
+    // 【安全修复】添加权限校验，防止未授权查看他人装备
     void HandleInspectItemGuidRequest(Player* requester, const std::string& params)
     {
         if (!requester)
@@ -2604,6 +2707,42 @@ private:
         if (!targetPlayer)
         {
             // 玩家不在线，返回空响应
+            std::string response = "INSPECT_ITEM_GUID_RESPONSE:" + targetPlayerName + ":" +
+                                   std::to_string(slot) + ":" + std::to_string(itemID) + ":0";
+            std::string fullMessage = "UITQ\t" + response;
+
+            WorldPacket data;
+            ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON,
+                                         requester, requester, fullMessage, 0);
+            requester->SendDirectMessage(&data);
+            return;
+        }
+
+        // 【安全修复】权限校验：只允许以下情况查看装备信息
+        // 1. 查看自己的装备
+        // 2. GM权限玩家
+        // 3. 目标玩家在附近（30码内）且请求者正在观察状态（模拟inspect行为）
+        bool canInspect = false;
+
+        if (requester->GetGUID() == targetPlayer->GetGUID())
+        {
+            // 查看自己的装备，始终允许
+            canInspect = true;
+        }
+        else if (requester->GetSession()->GetSecurity() >= SEC_GAMEMASTER)
+        {
+            // GM权限可以查看任何人的装备
+            canInspect = true;
+        }
+        else if (requester->IsWithinDistInMap(targetPlayer, 30.0f))
+        {
+            // 在30码范围内，允许查看（模拟正常的inspect行为）
+            canInspect = true;
+        }
+
+        if (!canInspect)
+        {
+            // 无权限查看，返回空响应
             std::string response = "INSPECT_ITEM_GUID_RESPONSE:" + targetPlayerName + ":" +
                                    std::to_string(slot) + ":" + std::to_string(itemID) + ":0";
             std::string fullMessage = "UITQ\t" + response;
@@ -2716,8 +2855,7 @@ private:
 
             auto it = sItemIdentificationSystem->_batchQueryCache.find(cacheKey);
 
-            // 更新统计：总查询次数
-            sItemIdentificationSystem->_perfStats.totalQueries++;
+            // 【线程安全修复】移除此处的直接统计更新，改为在函数末尾统一更新
 
             if (it != sItemIdentificationSystem->_batchQueryCache.end())
             {
@@ -2728,25 +2866,18 @@ private:
                     // 缓存有效，直接使用
                     moduleData = it->second.data;
                     cacheHit = true;
-                    sItemIdentificationSystem->_perfStats.cacheHits++;
                 }
                 else
                 {
                     // 缓存过期，删除
                     sItemIdentificationSystem->_batchQueryCache.erase(it);
-                    sItemIdentificationSystem->_perfStats.cacheMisses++;
                 }
-            }
-            else
-            {
-                sItemIdentificationSystem->_perfStats.cacheMisses++;
             }
         }
 
         if (!cacheHit)
         {
             // 缓存未命中，在锁外查询数据库（避免长时间持有锁）
-            sItemIdentificationSystem->_perfStats.dbQueries++;
             moduleData = sItemIdentificationSystem->QueryAllModuleData(itemID, guid);
 
             // 【关键修复】移除GUID回退逻辑！
@@ -2801,9 +2932,9 @@ private:
         // 计算查询耗时
         auto queryEnd = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::microseconds>(queryEnd - queryStart).count();
-        sItemIdentificationSystem->_perfStats.totalQueryTime += duration;
-        sItemIdentificationSystem->_perfStats.avgQueryTime = 
-            sItemIdentificationSystem->_perfStats.totalQueryTime / sItemIdentificationSystem->_perfStats.totalQueries;
+
+        // 【线程安全修复】使用封装方法更新性能统计
+        sItemIdentificationSystem->UpdatePerfStats(duration, cacheHit, !cacheHit);
 
         // 无论是否开启调试，当批量查询耗时较长时输出性能日志（阈值：>= 20ms）
         if (duration >= 20000)
@@ -3463,8 +3594,11 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
         if (checkResult)
         {
             isIdentified = true;
-            // 【修复】同步更新缓存
-            _identifiedItemsCache.insert(guid);
+            // 【线程安全修复】使用锁保护缓存写入
+            {
+                std::lock_guard<std::mutex> lock(_identifiedCacheMutex);
+                _identifiedItemsCache.insert(guid);
+            }
         }
         else
         {
@@ -3473,35 +3607,44 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
     }
 
     // ========== 表存在性缓存（静态变量，只初始化一次）==========
+    // 【线程安全修复】添加静态锁保护表存在性缓存
+    static std::mutex tableCacheMutex;
     static std::unordered_map<std::string, bool> tableCache;
     static bool cacheInitialized = false;
 
-    if (!cacheInitialized)
+    // 【线程安全修复】使用锁保护表缓存的初始化和访问
     {
-        // 一次性检查所有需要的表
-        std::vector<std::string> tablesToCheck = {
-            "物品属性_数据", "物品_鉴定记录", "物品成长_玩家记录",
-            "物品强化_记录", "物品技能_数据", "魔次系统_数据",
-            "符文系统_数据", "_物品套装_数据"
-        };
-
-        for (const auto& tableName : tablesToCheck)
+        std::lock_guard<std::mutex> lock(tableCacheMutex);
+        if (!cacheInitialized)
         {
-            QueryResult tableCheckResult = CharacterDatabase.Query(
-                "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{}'",
-                tableName);
+            // 一次性检查所有需要的表
+            std::vector<std::string> tablesToCheck = {
+                "物品属性_数据", "物品_鉴定记录", "物品成长_玩家记录",
+                "物品强化_记录", "物品技能_数据", "魔次系统_数据",
+                "符文系统_数据", "_物品套装_数据"
+            };
 
-            bool exists = (tableCheckResult && tableCheckResult->Fetch()[0].Get<uint32>() > 0);
-            tableCache[tableName] = exists;
+            for (const auto& tableName : tablesToCheck)
+            {
+                QueryResult tableCheckResult = CharacterDatabase.Query(
+                    "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{}'",
+                    tableName);
+
+                bool exists = (tableCheckResult && tableCheckResult->Fetch()[0].Get<uint32>() > 0);
+                tableCache[tableName] = exists;
+            }
+
+            cacheInitialized = true;
         }
-
-        cacheInitialized = true;
     }
 
     // ========== 辅助函数：从缓存检查表是否存在 ==========
+    // 注意：tableCache在初始化后只读，所以这里不需要加锁
+    // 【修复】静态变量不能通过引用捕获，改为使用指针
     auto TableExists = [](const std::string& tableName) -> bool {
-        auto it = tableCache.find(tableName);
-        return (it != tableCache.end() && it->second);
+        static std::unordered_map<std::string, bool>* cache = &tableCache;
+        auto it = cache->find(tableName);
+        return (it != cache->end() && it->second);
     };
 
     // ========== 【性能优化】使用UNION合并多个查询为一个 ==========
@@ -4360,11 +4503,8 @@ void ItemIdentificationSystem::PreloadPlayerEquipment(Player* player)
             preloadCount++;
         }
 
-        // 更新性能统计（加锁保护）
-        {
-            std::lock_guard<std::mutex> lock(_batchCacheMutex);
-            _perfStats.preloadCount += preloadCount;
-        }
+        // 【线程安全修复】使用专用方法更新性能统计
+        IncrementPreloadCount(preloadCount);
 
         auto endTime = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
@@ -4607,17 +4747,12 @@ static bool DoIdentifyItem(Player* player, Item* item, ChatHandler* handler = nu
 #endif
 
     // 执行鉴定（如果有鉴定组）
+    // 【审计修复】使用 IdentifyItem 进行鉴定，确保成功率和费用扣除逻辑生效
     bool identifySuccess = true;
     if (identificationGroupId > 0)
     {
-        identifySuccess = sItemIdentificationSystem->ApplyIdentification(player, item, identificationGroupId);
-        if (handler)
-        {
-            if (identifySuccess)
-                handler->PSendSysMessage("|cff00ff00鉴定成功！|r");
-            else
-                handler->SendSysMessage("|cffff0000鉴定失败|r");
-        }
+        identifySuccess = sItemIdentificationSystem->IdentifyItem(player, item, identificationGroupId);
+        // IdentifyItem 内部已经发送了成功/失败消息，这里不需要重复发送
     }
     else
     {
@@ -4625,7 +4760,7 @@ static bool DoIdentifyItem(Player* player, Item* item, ChatHandler* handler = nu
             handler->SendSysMessage("|cffffa500此物品没有配置鉴定组，只应用了幻境倍率|r");
     }
 
-    // 删除待鉴定标记
+    // 删除待鉴定标记（无论成功失败都删除，避免重复鉴定尝试）
     CharacterDatabase.Execute("DELETE FROM `待鉴定物品标记` WHERE `物品GUID` = {}", itemGuid);
 
     // 发送物品属性数据到客户端
@@ -4666,6 +4801,7 @@ bool ItemIdentificationCommandScript::HandleManualIdentifyCommand(ChatHandler* h
     }
 
     // 解析参数: 背包号 槽位号
+    // 【安全修复】使用std::strtol并增加输入验证
     char* bagStr = strtok((char*)args, " ");
     char* slotStr = strtok(nullptr, " ");
 
@@ -4675,8 +4811,25 @@ bool ItemIdentificationCommandScript::HandleManualIdentifyCommand(ChatHandler* h
         return true;
     }
 
-    uint8 bagSlot = static_cast<uint8>(atoi(bagStr));
-    uint8 slot = static_cast<uint8>(atoi(slotStr));
+    // 【安全修复】验证输入是否为有效数字
+    char* endPtr = nullptr;
+    long bagLong = strtol(bagStr, &endPtr, 10);
+    if (endPtr == bagStr || *endPtr != '\0' || bagLong < 0 || bagLong > 255)
+    {
+        handler->SendSysMessage("|cffff0000无效的背包号，必须是0-255之间的整数|r");
+        return true;
+    }
+
+    endPtr = nullptr;
+    long slotLong = strtol(slotStr, &endPtr, 10);
+    if (endPtr == slotStr || *endPtr != '\0' || slotLong < 0 || slotLong > 255)
+    {
+        handler->SendSysMessage("|cffff0000无效的槽位号，必须是0-255之间的整数|r");
+        return true;
+    }
+
+    uint8 bagSlot = static_cast<uint8>(bagLong);
+    uint8 slot = static_cast<uint8>(slotLong);
 
     if (bagSlot > 4)
     {
@@ -4868,10 +5021,11 @@ bool ItemIdentificationCommandScript::HandleBatchIdentifyCommand(ChatHandler* ha
 #endif
 
         // 执行鉴定
+        // 【审计修复】使用 IdentifyItem 进行鉴定，确保成功率和费用扣除逻辑生效
         bool success = true;
         if (identificationGroupId > 0)
         {
-            success = sItemIdentificationSystem->ApplyIdentification(player, item, identificationGroupId);
+            success = sItemIdentificationSystem->IdentifyItem(player, item, identificationGroupId);
         }
 
         if (success)

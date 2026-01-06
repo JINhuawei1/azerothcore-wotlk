@@ -6,6 +6,8 @@
 #include "Log.h"
 #include "DatabaseEnv.h"
 #include "SpellMgr.h"
+#include <limits>
+#include <cctype>
 
 TalentSoulMgr::TalentSoulMgr()
 {
@@ -27,6 +29,8 @@ void TalentSoulMgr::LoadTalentSoulData()
 {
     uint32 oldMSTime = getMSTime();
 
+    // 加写锁保护配置数据
+    std::unique_lock<std::shared_mutex> lock(_configMutex);
     _talentSoulData.clear();
 
     QueryResult result = WorldDatabase.Query(
@@ -72,6 +76,8 @@ void TalentSoulMgr::SetupIndependentGCDCategories()
     // 为配置了GCD减少的技能设置独立的StartRecoveryCategory
     // 这样每个技能都有自己独立的GCD计时器，不会互相影响
 
+    // 加读锁保护配置数据
+    std::shared_lock<std::shared_mutex> lock(_configMutex);
     uint32 setupCount = 0;
 
     for (auto const& pair : _talentSoulData)
@@ -106,6 +112,8 @@ void TalentSoulMgr::SetupIndependentGCDCategories()
 
 TalentSoulData const* TalentSoulMgr::GetTalentSoulData(uint32 spellId) const
 {
+    // 加读锁保护配置数据
+    std::shared_lock<std::shared_mutex> lock(_configMutex);
     auto itr = _talentSoulData.find(spellId);
     if (itr != _talentSoulData.end())
         return &(itr->second);
@@ -114,6 +122,8 @@ TalentSoulData const* TalentSoulMgr::GetTalentSoulData(uint32 spellId) const
 
 std::vector<TalentSoulData const*> TalentSoulMgr::GetClassTalentSoulData(uint8 playerClass) const
 {
+    // 加读锁保护配置数据
+    std::shared_lock<std::shared_mutex> lock(_configMutex);
     std::vector<TalentSoulData const*> result;
 
     for (auto const& pair : _talentSoulData)
@@ -150,12 +160,54 @@ void TalentSoulMgr::ParseCompactData(const std::string& data, PlayerTalentSoulDa
 
         while (std::getline(skillSS, value, ','))
         {
-            try
+            // 跳过空值
+            if (value.empty())
             {
-                values.push_back(static_cast<uint32>(std::stoul(value)));
+                values.push_back(0);
+                continue;
             }
-            catch (...)
+
+            // 验证是否为有效数字
+            bool isValid = true;
+            for (char c : value)
             {
+                if (!std::isdigit(c))
+                {
+                    isValid = false;
+                    break;
+                }
+            }
+
+            if (isValid)
+            {
+                try
+                {
+                    unsigned long parsed = std::stoul(value);
+                    // 检查是否超出 uint32 范围
+                    if (parsed > std::numeric_limits<uint32>::max())
+                    {
+                        LOG_ERROR("module", "天赋之魂: 解析数据时值 {} 超出范围", value);
+                        values.push_back(0);
+                    }
+                    else
+                    {
+                        values.push_back(static_cast<uint32>(parsed));
+                    }
+                }
+                catch (const std::out_of_range&)
+                {
+                    LOG_ERROR("module", "天赋之魂: 解析数据时值 {} 超出范围", value);
+                    values.push_back(0);
+                }
+                catch (const std::invalid_argument&)
+                {
+                    LOG_ERROR("module", "天赋之魂: 解析数据时无效值 {}", value);
+                    values.push_back(0);
+                }
+            }
+            else
+            {
+                LOG_ERROR("module", "天赋之魂: 解析数据时发现非数字字符: {}", value);
                 values.push_back(0);
             }
         }
@@ -163,6 +215,13 @@ void TalentSoulMgr::ParseCompactData(const std::string& data, PlayerTalentSoulDa
         // 需要5个值: 技能ID,公共cd等级,冷却等级,消耗等级,伤害等级
         if (values.size() >= 5)
         {
+            // 验证技能ID有效性（技能ID不能为0）
+            if (values[0] == 0)
+            {
+                LOG_ERROR("module", "天赋之魂: 解析数据时发现无效技能ID: 0");
+                continue;
+            }
+
             PlayerSkillData skill;
             skill.spellId = values[0];
             skill.gcdLevel = values[1];
@@ -171,6 +230,10 @@ void TalentSoulMgr::ParseCompactData(const std::string& data, PlayerTalentSoulDa
             skill.damageLevel = values[4];
 
             playerData.skills[skill.spellId] = skill;
+        }
+        else if (!values.empty())
+        {
+            LOG_ERROR("module", "天赋之魂: 解析数据时值数量不足: {} (需要5个)", values.size());
         }
     }
 }
@@ -212,21 +275,24 @@ void TalentSoulMgr::LoadPlayerData(Player* player)
 
     uint32 playerGuid = player->GetGUID().GetCounter();
 
-    // 初始化玩家数据
-    _playerData[playerGuid] = PlayerTalentSoulData();
-
+    // 先查询数据库（不需要锁）
     QueryResult result = CharacterDatabase.Query(
         "SELECT `天赋点`, `技能数据` FROM `_天赋之魂_玩家数据` WHERE `角色id` = {}", playerGuid);
 
-    if (!result)
-        return;
+    PlayerTalentSoulData newData;
+    if (result)
+    {
+        Field* fields = result->Fetch();
+        newData.usedTalentPoints = fields[0].Get<uint32>();
+        std::string compactData = fields[1].Get<std::string>();
+        ParseCompactData(compactData, newData);
+    }
 
-    Field* fields = result->Fetch();
-
-    _playerData[playerGuid].usedTalentPoints = fields[0].Get<uint32>();
-    std::string compactData = fields[1].Get<std::string>();
-
-    ParseCompactData(compactData, _playerData[playerGuid]);
+    // 加写锁保护玩家数据
+    {
+        std::unique_lock<std::shared_mutex> lock(_playerDataMutex);
+        _playerData[playerGuid] = std::move(newData);
+    }
 
     LOG_DEBUG("module", "天赋之魂: 为玩家 {} 加载了 {} 条技能数据，已使用天赋点: {}",
         player->GetName(), _playerData[playerGuid].skills.size(), _playerData[playerGuid].usedTalentPoints);
@@ -239,16 +305,25 @@ void TalentSoulMgr::SavePlayerData(Player* player)
 
     uint32 playerGuid = player->GetGUID().GetCounter();
 
-    auto itr = _playerData.find(playerGuid);
-    if (itr == _playerData.end())
-        return;
+    std::string compactData;
+    uint32 usedPoints = 0;
 
-    std::string compactData = GenerateCompactData(itr->second);
+    // 加读锁获取数据
+    {
+        std::shared_lock<std::shared_mutex> lock(_playerDataMutex);
+        auto itr = _playerData.find(playerGuid);
+        if (itr == _playerData.end())
+            return;
 
-    // 转义字符串以防止SQL注入
+        compactData = GenerateCompactData(itr->second);
+        usedPoints = itr->second.usedTalentPoints;
+    }
+
+    // 使用转义字符串防止SQL注入
+    CharacterDatabase.EscapeString(compactData);
     CharacterDatabase.Execute(
         "REPLACE INTO `_天赋之魂_玩家数据` (`角色id`, `天赋点`, `技能数据`) VALUES ({}, {}, '{}')",
-        playerGuid, itr->second.usedTalentPoints, compactData);
+        playerGuid, usedPoints, compactData);
 
     LOG_DEBUG("module", "天赋之魂: 为玩家 {} 保存数据，紧凑格式: {}",
         player->GetName(), compactData);
@@ -256,11 +331,15 @@ void TalentSoulMgr::SavePlayerData(Player* player)
 
 void TalentSoulMgr::OnPlayerLogout(uint32 playerGuid)
 {
+    // 加写锁保护玩家数据
+    std::unique_lock<std::shared_mutex> lock(_playerDataMutex);
     _playerData.erase(playerGuid);
 }
 
 PlayerTalentSoulData* TalentSoulMgr::GetPlayerData(uint32 playerGuid)
 {
+    // 加读锁保护玩家数据
+    std::shared_lock<std::shared_mutex> lock(_playerDataMutex);
     auto itr = _playerData.find(playerGuid);
     if (itr == _playerData.end())
         return nullptr;
@@ -269,6 +348,8 @@ PlayerTalentSoulData* TalentSoulMgr::GetPlayerData(uint32 playerGuid)
 
 PlayerSkillData* TalentSoulMgr::GetPlayerSkillData(uint32 playerGuid, uint32 spellId)
 {
+    // 加读锁保护玩家数据
+    std::shared_lock<std::shared_mutex> lock(_playerDataMutex);
     auto playerItr = _playerData.find(playerGuid);
     if (playerItr == _playerData.end())
         return nullptr;
@@ -288,7 +369,7 @@ bool TalentSoulMgr::CanUpgradeSpell(Player* player, uint32 spellId, std::string&
         return false;
     }
 
-    // 检查技能配置是否存在
+    // 检查技能配置是否存在（GetTalentSoulData内部已加锁）
     TalentSoulData const* config = GetTalentSoulData(spellId);
     if (!config)
     {
@@ -305,21 +386,24 @@ bool TalentSoulMgr::CanUpgradeSpell(Player* player, uint32 spellId, std::string&
 
     // 检查天赋点需求
     uint32 playerGuid = player->GetGUID().GetCounter();
-    auto playerItr = _playerData.find(playerGuid);
 
-    // 检查玩家是否已经升级过这个技能
+    // 加读锁检查玩家数据
     bool hasSkill = false;
-    if (playerItr != _playerData.end())
     {
-        hasSkill = playerItr->second.skills.find(spellId) != playerItr->second.skills.end();
+        std::shared_lock<std::shared_mutex> lock(_playerDataMutex);
+        auto playerItr = _playerData.find(playerGuid);
+        if (playerItr != _playerData.end())
+        {
+            hasSkill = playerItr->second.skills.find(spellId) != playerItr->second.skills.end();
+        }
     }
 
     // 计算本次升级需要的天赋点
     uint32 requiredPoints = 1;  // 每次升级消耗1点
     if (!hasSkill && config->talentPointCost > 0)
     {
-        // 新技能首次解锁需要额外的前置天赋点
-        requiredPoints = config->talentPointCost;
+        // 新技能首次解锁需要：解锁费用 + 本次升级费用
+        requiredPoints = config->talentPointCost + 1;
     }
 
     // 检查是否有足够天赋点
@@ -347,81 +431,92 @@ bool TalentSoulMgr::UpgradePlayerSpell(Player* player, uint32 spellId, TalentSou
         return false;
 
     uint32 playerGuid = player->GetGUID().GetCounter();
+    bool success = false;
+    std::string compactData;
+    uint32 usedPoints = 0;
 
-    // 确保玩家数据存在
-    if (_playerData.find(playerGuid) == _playerData.end())
+    // 加写锁修改玩家数据
     {
-        _playerData[playerGuid] = PlayerTalentSoulData();
-    }
+        std::unique_lock<std::shared_mutex> lock(_playerDataMutex);
 
-    PlayerTalentSoulData& playerData = _playerData[playerGuid];
-
-    // 获取或创建技能数据
-    bool isNewSkill = playerData.skills.find(spellId) == playerData.skills.end();
-    if (isNewSkill)
-    {
-        PlayerSkillData newSkill;
-        newSkill.spellId = spellId;
-        playerData.skills[spellId] = newSkill;
-
-        // 扣除天赋点
-        if (config->talentPointCost > 0)
+        // 确保玩家数据存在
+        if (_playerData.find(playerGuid) == _playerData.end())
         {
-            playerData.usedTalentPoints += config->talentPointCost;
+            _playerData[playerGuid] = PlayerTalentSoulData();
+        }
+
+        PlayerTalentSoulData& playerData = _playerData[playerGuid];
+
+        // 获取或创建技能数据
+        bool isNewSkill = playerData.skills.find(spellId) == playerData.skills.end();
+        if (isNewSkill)
+        {
+            PlayerSkillData newSkill;
+            newSkill.spellId = spellId;
+            playerData.skills[spellId] = newSkill;
+
+            // 扣除天赋点
+            if (config->talentPointCost > 0)
+            {
+                playerData.usedTalentPoints += config->talentPointCost;
+            }
+        }
+
+        PlayerSkillData& skill = playerData.skills[spellId];
+
+        // 根据类型升级
+        switch (upgradeType)
+        {
+            case TALENT_SOUL_UPGRADE_GCD:
+                if (skill.gcdLevel < config->gcdMaxLevel)
+                {
+                    skill.gcdLevel++;
+                    success = true;
+                }
+                break;
+            case TALENT_SOUL_UPGRADE_COOLDOWN:
+                if (skill.cooldownLevel < config->cooldownMaxLevel)
+                {
+                    skill.cooldownLevel++;
+                    success = true;
+                }
+                break;
+            case TALENT_SOUL_UPGRADE_COST:
+                if (skill.costLevel < config->costMaxLevel)
+                {
+                    skill.costLevel++;
+                    success = true;
+                }
+                break;
+            case TALENT_SOUL_UPGRADE_DAMAGE:
+                if (skill.damageLevel < config->damageMaxLevel)
+                {
+                    skill.damageLevel++;
+                    success = true;
+                }
+                break;
+            default:
+                break;
+        }
+
+        if (success)
+        {
+            // 每次升级都消耗1点天赋点
+            playerData.usedTalentPoints += 1;
+
+            // 准备保存数据（在锁内生成）
+            compactData = GenerateCompactData(playerData);
+            usedPoints = playerData.usedTalentPoints;
         }
     }
 
-    PlayerSkillData& skill = playerData.skills[spellId];
-
-    // 根据类型升级
-    bool success = false;
-    switch (upgradeType)
-    {
-        case TALENT_SOUL_UPGRADE_GCD:
-            if (skill.gcdLevel < config->gcdMaxLevel)
-            {
-                skill.gcdLevel++;
-                success = true;
-            }
-            break;
-        case TALENT_SOUL_UPGRADE_COOLDOWN:
-            if (skill.cooldownLevel < config->cooldownMaxLevel)
-            {
-                skill.cooldownLevel++;
-                success = true;
-            }
-            break;
-        case TALENT_SOUL_UPGRADE_COST:
-            if (skill.costLevel < config->costMaxLevel)
-            {
-                skill.costLevel++;
-                success = true;
-            }
-            break;
-        case TALENT_SOUL_UPGRADE_DAMAGE:
-            if (skill.damageLevel < config->damageMaxLevel)
-            {
-                skill.damageLevel++;
-                success = true;
-            }
-            break;
-        default:
-            break;
-    }
-
+    // 在锁外执行数据库操作
     if (success)
     {
-        // 每次升级消耗1点天赋点（新技能首次解锁时已在上面扣除）
-        if (!isNewSkill)
-        {
-            playerData.usedTalentPoints += 1;
-        }
-
-        // 立即保存到数据库
-        std::string compactData = GenerateCompactData(playerData);
+        CharacterDatabase.EscapeString(compactData);
         CharacterDatabase.Execute(
             "REPLACE INTO `_天赋之魂_玩家数据` (`角色id`, `天赋点`, `技能数据`) VALUES ({}, {}, '{}')",
-            playerGuid, playerData.usedTalentPoints, compactData);
+            playerGuid, usedPoints, compactData);
     }
 
     return success;
@@ -429,6 +524,8 @@ bool TalentSoulMgr::UpgradePlayerSpell(Player* player, uint32 spellId, TalentSou
 
 uint32 TalentSoulMgr::GetPlayerUsedTalentPoints(uint32 playerGuid) const
 {
+    // 加读锁保护玩家数据
+    std::shared_lock<std::shared_mutex> lock(_playerDataMutex);
     auto itr = _playerData.find(playerGuid);
     if (itr == _playerData.end())
         return 0;
@@ -453,6 +550,8 @@ float TalentSoulMgr::GetPlayerGCDReduction(uint32 playerGuid, uint32 spellId) co
     if (!config)
         return 0.0f;
 
+    // 加读锁保护玩家数据
+    std::shared_lock<std::shared_mutex> lock(_playerDataMutex);
     auto playerItr = _playerData.find(playerGuid);
     if (playerItr == _playerData.end())
         return 0.0f;
@@ -470,6 +569,8 @@ float TalentSoulMgr::GetPlayerCooldownReduction(uint32 playerGuid, uint32 spellI
     if (!config)
         return 0.0f;
 
+    // 加读锁保护玩家数据
+    std::shared_lock<std::shared_mutex> lock(_playerDataMutex);
     auto playerItr = _playerData.find(playerGuid);
     if (playerItr == _playerData.end())
         return 0.0f;
@@ -487,6 +588,8 @@ float TalentSoulMgr::GetPlayerCostReduction(uint32 playerGuid, uint32 spellId) c
     if (!config)
         return 0.0f;
 
+    // 加读锁保护玩家数据
+    std::shared_lock<std::shared_mutex> lock(_playerDataMutex);
     auto playerItr = _playerData.find(playerGuid);
     if (playerItr == _playerData.end())
         return 0.0f;
@@ -504,6 +607,8 @@ float TalentSoulMgr::GetPlayerDamageBonus(uint32 playerGuid, uint32 spellId) con
     if (!config)
         return 0.0f;
 
+    // 加读锁保护玩家数据
+    std::shared_lock<std::shared_mutex> lock(_playerDataMutex);
     auto playerItr = _playerData.find(playerGuid);
     if (playerItr == _playerData.end())
         return 0.0f;

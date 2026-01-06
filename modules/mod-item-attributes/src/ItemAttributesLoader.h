@@ -80,9 +80,9 @@ public:
     int32 CalculateAttributeValue(Item* item, ItemAttributeTemplate const* attributeTemplate) const;
     int32 CalculateAttributeValueWithRange(Item* item, ItemAttributeTemplate const* attributeTemplate, int32 minValue, int32 maxValue) const;
 
-    // 保存物品属性值到数据库
-    void SaveItemAttributeValues(Item* item, const std::vector<int32>& values);
-    
+    // 【审计修复】移除未实现的 SaveItemAttributeValues 声明
+    // 属性值保存已通过 ItemAttributesDBHelper 实现
+
     // 删除物品的属性数据（当物品被删除时）
     void DeleteItemAttributeData(uint64 itemGuid);
     

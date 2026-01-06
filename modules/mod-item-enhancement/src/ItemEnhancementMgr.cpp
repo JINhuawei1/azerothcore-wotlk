@@ -287,21 +287,34 @@ EnhancementRecord const* ItemEnhancementMgr::GetEnhancementRecord(uint32 itemGui
 
     uint32 now = static_cast<uint32>(GameTime::GetGameTime().count());
 
-    auto cacheItr = _recordCache.find(itemGuid);
-    if (cacheItr != _recordCache.end())
-    {
-        if (_recordCacheLifetime == 0 || now - cacheItr->second.lastUpdateTime <= _recordCacheLifetime)
-            return cacheItr->second.record.get();
+    // 【修复】_recordCacheLifetime == 0 表示禁用缓存，每次都从数据库读取
+    // _recordCacheLifetime > 0 表示启用缓存，值为缓存有效时间（秒）
+    bool cacheEnabled = (_recordCacheLifetime > 0);
 
-        _recordCache.erase(cacheItr);
+    if (cacheEnabled)
+    {
+        auto cacheItr = _recordCache.find(itemGuid);
+        if (cacheItr != _recordCache.end())
+        {
+            // 检查缓存是否过期
+            if (now - cacheItr->second.lastUpdateTime <= _recordCacheLifetime)
+                return cacheItr->second.record.get();
+
+            // 缓存过期，删除
+            _recordCache.erase(cacheItr);
+        }
     }
 
     QueryResult result = CharacterDatabase.Query("SELECT * FROM 物品强化_记录 WHERE guid = {}", itemGuid);
     if (!result)
     {
-        EnhancementRecordCacheEntry entry;
-        entry.lastUpdateTime = now;
-        _recordCache[itemGuid] = std::move(entry);
+        // 【修复】只在启用缓存时才缓存空结果
+        if (cacheEnabled)
+        {
+            EnhancementRecordCacheEntry entry;
+            entry.lastUpdateTime = now;
+            _recordCache[itemGuid] = std::move(entry);
+        }
         return nullptr;
     }
 
@@ -309,19 +322,35 @@ EnhancementRecord const* ItemEnhancementMgr::GetEnhancementRecord(uint32 itemGui
     std::unique_ptr<EnhancementRecord> record = DeserializeRecord(fields);
     if (!record)
     {
-        EnhancementRecordCacheEntry entry;
-        entry.lastUpdateTime = now;
-        _recordCache[itemGuid] = std::move(entry);
+        // 【修复】只在启用缓存时才缓存空结果
+        if (cacheEnabled)
+        {
+            EnhancementRecordCacheEntry entry;
+            entry.lastUpdateTime = now;
+            _recordCache[itemGuid] = std::move(entry);
+        }
         return nullptr;
     }
 
-    EnhancementRecordCacheEntry entry;
-    entry.record = std::move(record);
-    entry.lastUpdateTime = now;
+    // 【修复】只在启用缓存时才写入缓存
+    if (cacheEnabled)
+    {
+        EnhancementRecordCacheEntry entry;
+        entry.record = std::move(record);
+        entry.lastUpdateTime = now;
 
-    auto& cacheEntry = _recordCache[itemGuid];
-    cacheEntry = std::move(entry);
-    return cacheEntry.record.get();
+        auto& cacheEntry = _recordCache[itemGuid];
+        cacheEntry = std::move(entry);
+        return cacheEntry.record.get();
+    }
+    else
+    {
+        // 不使用缓存，但需要返回有效指针
+        // 使用静态临时存储，注意：这在多线程环境下不安全，但与原代码行为一致
+        static thread_local std::unique_ptr<EnhancementRecord> tempRecord;
+        tempRecord = std::move(record);
+        return tempRecord.get();
+    }
 }
 
 void ItemEnhancementMgr::PreloadPlayerEnhancementRecords(Player* player)
@@ -357,28 +386,64 @@ void ItemEnhancementMgr::PreloadPlayerEnhancementRecords(Player* player)
 
 void ItemEnhancementMgr::SaveEnhancementRecord(EnhancementRecord const& record)
 {
-    // 使用正确的表名和字段名
-    std::string sql = "REPLACE INTO 物品强化_记录 (";
-    sql += "guid, owner_guid, 物品模板ID, 强化组, 强化等级, 强化经验, 属性值, ";
-    sql += "品质等级, 品质进阶次数, 强化次数, 失败次数, 最后强化时间";
-    sql += ") VALUES (";
-    sql += std::to_string(record.itemGuid) + ", ";           // guid
-    sql += std::to_string(record.ownerGuid) + ", ";          // owner_guid
-    sql += "0, ";                                            // 物品模板ID (暂时设为0)
-    sql += std::to_string(record.group) + ", ";              // 强化组
-    sql += std::to_string(record.level) + ", ";              // 强化等级
-    sql += "0, ";                                            // 强化经验
-    sql += "'" + record.statValues + "', ";                  // 属性值
-    sql += std::to_string(record.qualityLevel) + ", ";       // 品质等级
-    sql += std::to_string(record.qualityUpgradeCount) + ", "; // 品质进阶次数
-    sql += std::to_string(record.enhancementCount) + ", ";   // 强化次数
-    sql += std::to_string(record.failureCount) + ", ";       // 失败次数
-    sql += std::to_string(record.lastEnhanceTime);           // 最后强化时间
-    sql += ")";
+    // 【安全修复】使用预处理语句防止SQL注入
+    // statValues 可能包含特殊字符，直接拼接存在注入风险
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_REP_ITEM_ENHANCEMENT_RECORD);
+    if (!stmt)
+    {
+        // 如果预处理语句不可用，使用转义后的SQL（兼容旧版本）
+        std::string escapedStatValues = record.statValues;
+        // 转义单引号，防止SQL注入
+        size_t pos = 0;
+        while ((pos = escapedStatValues.find('\'', pos)) != std::string::npos)
+        {
+            escapedStatValues.replace(pos, 1, "''");
+            pos += 2;
+        }
+        // 转义反斜杠
+        pos = 0;
+        while ((pos = escapedStatValues.find('\\', pos)) != std::string::npos)
+        {
+            escapedStatValues.replace(pos, 1, "\\\\");
+            pos += 2;
+        }
 
-    // 【关键修复】使用 DirectExecute 同步执行，确保数据立即写入数据库
-    // 原来使用 Execute 是异步的，导致后续查询时数据还没写入，客户端获取到旧数据
-    CharacterDatabase.DirectExecute(sql);
+        std::string sql = "REPLACE INTO 物品强化_记录 (";
+        sql += "guid, owner_guid, 物品模板ID, 强化组, 强化等级, 强化经验, 属性值, ";
+        sql += "品质等级, 品质进阶次数, 强化次数, 失败次数, 最后强化时间";
+        sql += ") VALUES (";
+        sql += std::to_string(record.itemGuid) + ", ";
+        sql += std::to_string(record.ownerGuid) + ", ";
+        sql += std::to_string(record.itemTemplateId) + ", ";
+        sql += std::to_string(record.group) + ", ";
+        sql += std::to_string(record.level) + ", ";
+        sql += std::to_string(record.enhancementExp) + ", ";
+        sql += "'" + escapedStatValues + "', ";
+        sql += std::to_string(record.qualityLevel) + ", ";
+        sql += std::to_string(record.qualityUpgradeCount) + ", ";
+        sql += std::to_string(record.enhancementCount) + ", ";
+        sql += std::to_string(record.failureCount) + ", ";
+        sql += std::to_string(record.lastEnhanceTime);
+        sql += ")";
+
+        CharacterDatabase.DirectExecute(sql);
+    }
+    else
+    {
+        stmt->SetData(0, record.itemGuid);
+        stmt->SetData(1, record.ownerGuid);
+        stmt->SetData(2, record.itemTemplateId);
+        stmt->SetData(3, record.group);
+        stmt->SetData(4, record.level);
+        stmt->SetData(5, record.enhancementExp);
+        stmt->SetData(6, record.statValues);
+        stmt->SetData(7, record.qualityLevel);
+        stmt->SetData(8, record.qualityUpgradeCount);
+        stmt->SetData(9, record.enhancementCount);
+        stmt->SetData(10, record.failureCount);
+        stmt->SetData(11, record.lastEnhanceTime);
+        CharacterDatabase.DirectExecute(stmt);
+    }
 
     LOG_DEBUG("module.itemenhancement", "[强化保存] 同步写入数据库完成: itemGuid={}, level={}, stats='{}'",
         record.itemGuid, record.level, record.statValues);
@@ -411,6 +476,13 @@ void ItemEnhancementMgr::DeleteAllEnhancementRecordsByPlayer(uint32 playerGuid)
     CharacterDatabase.DirectExecute(sql);
     LOG_INFO("server.loading", "强化系统: 已删除玩家 {} 的所有强化记录", playerGuid);
 
+    // 清理内存缓存
+    ClearPlayerRecordCache(playerGuid);
+}
+
+void ItemEnhancementMgr::ClearPlayerRecordCache(uint32 playerGuid)
+{
+    // 清理指定玩家的记录缓存
     for (auto itr = _recordCache.begin(); itr != _recordCache.end(); )
     {
         if (itr->second.record && itr->second.record->ownerGuid == playerGuid)
@@ -568,22 +640,28 @@ bool ItemEnhancementMgr::EnhanceItem(Player* player, Item* item, uint32 group)
             enhTemplate->group, enhTemplate->level, successRate, failureType, enhTemplate->requirementId);
     }
 
-    successRate = std::min(100.0f, std::max(1.0f, successRate)); // 限制在1%-100%之间
+    // 【修复】成功率限制：允许0%（必定失败）到100%（必定成功）
+    // 移除最小1%的限制，保留浮点精度
+    successRate = std::min(100.0f, std::max(0.0f, successRate));
 
     // 显示成功率
     if (_showSuccessRateEnabled)
     {
-        // ChatHandler(player->GetSession()).PSendSysMessage("强化成功率: {:.1f}%", successRate);
+        ChatHandler(player->GetSession()).PSendSysMessage("强化成功率: {:.2f}%", successRate);
     }
 
-    // 随机判断是否成功（使用AzerothCore的随机数系统）
-    bool success = urand(1, 100) <= static_cast<uint32>(successRate);
+    // 【修复】随机判断是否成功，使用浮点数比较保留精度
+    // 生成0.00-99.99的随机数，与成功率比较
+    float randomValue = static_cast<float>(urand(0, 9999)) / 100.0f;
+    bool success = randomValue < successRate;
 
     if (success)
     {
         // 强化成功
         record.level = nextLevel;
         record.lastEnhanceTime = static_cast<uint32>(GameTime::GetGameTime().count());
+        // 【修复】递增强化次数
+        record.enhancementCount++;
 
         // 生成本次强化的增量属性加成（只计算本次强化增加的属性）
         std::string incrementalStats = GenerateIncrementalEnhancementStats(item, nextLevel, record.group);
@@ -644,7 +722,8 @@ bool ItemEnhancementMgr::EnhanceItem(Player* player, Item* item, uint32 group)
         }
 #endif
 
-        // 不再向随机附魔字段写入GUID，避免与随机附魔系统和聊天链接冲突
+        // 【修复】不再向randomPropertyId字段写入任何数据，保留原有随机属性
+        // 强化信息完全通过 物品强化_记录 表关联
         if (item->IsEquipped())
             player->SetVisibleItemSlot(item->GetSlot(), item);
 
@@ -718,6 +797,8 @@ bool ItemEnhancementMgr::EnhanceItem(Player* player, Item* item, uint32 group)
     {
         // 强化失败
         record.lastEnhanceTime = static_cast<uint32>(GameTime::GetGameTime().count());
+        // 【修复】递增失败次数
+        record.failureCount++;
 
         // 根据失败处理类型处理
 #ifdef MODULE_ITEM_ATTRIBUTES
@@ -770,6 +851,8 @@ bool ItemEnhancementMgr::EnhanceItem(Player* player, Item* item, uint32 group)
                     // 移除之前的强化效果
                     RemoveOfficialItemEnhancement(player, item);
                     record.level = 0;
+                    // 【修复】同时清空属性值，避免数据库/客户端显示旧属性
+                    record.statValues.clear();
                     ChatHandler(player->GetSession()).PSendSysMessage("物品强化失败，强化等级清零");
                 }
                 break;
@@ -1552,7 +1635,8 @@ std::map<uint32, int32> ItemEnhancementMgr::ParseStatValues(const std::string& s
             {
                 uint32 statType = std::stoul(statTypeStr);
                 int32 statValue = std::stol(statValueStr);
-                stats[statType] = statValue;
+                // 【修复】对重复属性类型进行累加而非覆盖
+                stats[statType] += statValue;
             }
             catch (const std::exception& e)
             {
@@ -2341,22 +2425,9 @@ void ItemEnhancementMgr::SendEnhancementDataToClient(Player* player, Item* item,
 
     // handler.PSendSysMessage(message);
 
-    // 额外发送一条包含装备链接GUID的消息，供客户端对比
-    if (storedGuid != static_cast<int32>(itemGuid))
-    {
-        // handler.PSendSysMessage("强化系统：警告 - GUID不匹配！服务器: {}, 装备链接: {}", itemGuid, storedGuid);
-
-        // 尝试重新存储GUID
-        item->SetInt32Value(ITEM_FIELD_RANDOM_PROPERTIES_ID, static_cast<int32>(itemGuid));
-        item->SetState(ITEM_CHANGED, player);
-        item->SendUpdateToPlayer(player);
-
-        // handler.PSendSysMessage("强化系统：已重新同步GUID到装备链接");
-    }
-    else
-    {
-        // handler.PSendSysMessage("强化系统：GUID匹配正确");
-    }
+    // 【已废弃】不再将GUID写入randomPropertyId字段，避免覆盖随机属性
+    // 强化信息完全通过 物品强化_记录 表关联，无需同步GUID到装备链接
+    (void)storedGuid; // 避免未使用变量警告
 
     // 使用自定义字段格式：ITEMENHANCE|ENHANCED|字段1|字段2|字段3...
     std::string enhancementData = "ITEMENHANCE|ENHANCED|";

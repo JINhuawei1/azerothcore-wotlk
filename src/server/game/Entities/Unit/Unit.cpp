@@ -14182,6 +14182,25 @@ int32 Unit::ModifyHealth(int32 dVal)
         return 0;
 
     int32 curHealth = (int32)GetHealth();
+    int32 maxHealth = (int32)GetMaxHealth();
+
+    // 【溢出保护】防止治疗时整数溢出导致死亡
+    // 当 curHealth + dVal 可能超过 INT32_MAX 时，限制治疗量
+    if (dVal > 0)
+    {
+        // 计算距离最大血量还能加多少
+        int32 headroom = maxHealth - curHealth;
+        if (headroom < 0)
+            headroom = 0;
+
+        // 如果治疗量超过可用空间，限制到可用空间
+        if (dVal > headroom)
+            dVal = headroom;
+
+        // 如果已经满血，直接返回
+        if (dVal == 0)
+            return 0;
+    }
 
     int32 val = dVal + curHealth;
     if (val <= 0)
@@ -14189,8 +14208,6 @@ int32 Unit::ModifyHealth(int32 dVal)
         SetHealth(0);
         return -curHealth;
     }
-
-    int32 maxHealth = (int32)GetMaxHealth();
 
     if (val < maxHealth)
     {
@@ -14214,14 +14231,25 @@ int32 Unit::GetHealthGain(int32 dVal)
         return 0;
 
     int32 curHealth = (int32)GetHealth();
+    int32 maxHealth = (int32)GetMaxHealth();
+
+    // 【溢出保护】防止治疗预估时整数溢出
+    if (dVal > 0)
+    {
+        int32 headroom = maxHealth - curHealth;
+        if (headroom < 0)
+            headroom = 0;
+        if (dVal > headroom)
+            dVal = headroom;
+        if (dVal == 0)
+            return 0;
+    }
 
     int32 val = dVal + curHealth;
     if (val <= 0)
     {
         return -curHealth;
     }
-
-    int32 maxHealth = (int32)GetMaxHealth();
 
     if (val < maxHealth)
         gain = dVal;
@@ -14240,6 +14268,19 @@ int32 Unit::ModifyPower(Powers power, int32 dVal, bool withPowerUpdate /*= true*
     int32 gain = 0;
 
     int32 curPower = (int32)GetPower(power);
+    int32 maxPower = (int32)GetMaxPower(power);
+
+    // 【溢出保护】防止能量恢复时整数溢出
+    if (dVal > 0)
+    {
+        int32 headroom = maxPower - curPower;
+        if (headroom < 0)
+            headroom = 0;
+        if (dVal > headroom)
+            dVal = headroom;
+        if (dVal == 0)
+            return 0;
+    }
 
     int32 val = dVal + curPower;
     if (val <= 0)
@@ -14247,8 +14288,6 @@ int32 Unit::ModifyPower(Powers power, int32 dVal, bool withPowerUpdate /*= true*
         SetPower(power, 0, withPowerUpdate);
         return -curPower;
     }
-
-    int32 maxPower = (int32)GetMaxPower(power);
 
     if (val < maxPower)
     {

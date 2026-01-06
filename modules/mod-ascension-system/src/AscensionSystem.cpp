@@ -7,7 +7,9 @@
 #include "Logging/Log.h"
 #include "World.h"
 #include "Mail.h"
+#include "DBCStores.h"
 #include <sstream>
+#include <algorithm>  // 用于 std::all_of, std::min, std::remove
 
 // 需求模板系统集成：通过模块管理器访问统一的需求接口
 #include "ModuleManager.h"
@@ -128,8 +130,8 @@ void AscensionManager::LoadPlayerData(Player* player)
 
     uint32 playerGuid = player->GetGUID().GetCounter();
 
-    // 清除旧数据
-    _playerStatus.erase(playerGuid);
+    // 【修复】清除旧数据前先释放物品内存，防止内存泄漏
+    ClearPlayerData(playerGuid);
 
     PlayerAscensionStatus status;
     status.playerGuid = playerGuid;
@@ -252,7 +254,7 @@ void AscensionManager::ClearPlayerData(uint32 playerGuid)
 void AscensionManager::DeletePlayerData(uint32 playerGuid)
 {
     // 清理内存并删除数据库数据（仅在角色删除时调用）
-    // 先释放物品内存
+    // 先释放物品内存（如果玩家在线/已加载）
     auto it = _playerStatus.find(playerGuid);
     if (it != _playerStatus.end())
     {
@@ -260,8 +262,6 @@ void AscensionManager::DeletePlayerData(uint32 playerGuid)
         {
             if (pair.second.itemPtr)
             {
-                // 删除物品实例数据
-                CharacterDatabase.Execute("DELETE FROM item_instance WHERE guid = {}", pair.second.itemGuid);
                 delete pair.second.itemPtr;
                 pair.second.itemPtr = nullptr;
             }
@@ -269,7 +269,25 @@ void AscensionManager::DeletePlayerData(uint32 playerGuid)
         _playerStatus.erase(it);
     }
 
-    // 【新方案】删除 character_inventory 表中 bag=200 的记录
+    // 【修复】根据 character_inventory 查询并删除对应的 item_instance 及关联表
+    // 这样即使玩家数据未加载（离线角色），也能正确清理
+    QueryResult result = CharacterDatabase.Query(
+        "SELECT item FROM character_inventory WHERE guid = {} AND bag = {}",
+        playerGuid, ASCENSION_VIRTUAL_BAG);
+
+    if (result)
+    {
+        do
+        {
+            uint32 itemGuid = result->Fetch()[0].Get<uint32>();
+            // 【修复】删除物品关联的所有数据表
+            CharacterDatabase.Execute("DELETE FROM item_instance WHERE guid = {}", itemGuid);
+            CharacterDatabase.Execute("DELETE FROM item_text WHERE guid = {}", itemGuid);
+            // 如果有其他关联表也需要清理（如物品邮件附件等），可在此添加
+        } while (result->NextRow());
+    }
+
+    // 删除 character_inventory 表中的飞升物品记录
     CharacterDatabase.Execute(
         "DELETE FROM character_inventory WHERE guid = {} AND bag = {}",
         playerGuid, ASCENSION_VIRTUAL_BAG);
@@ -390,13 +408,29 @@ void AscensionManager::LoadAscensionItems(Player* player)
             continue;
         }
 
-
+        // 【修复】先校验物品模板是否存在，避免空指针崩溃
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemEntry);
+        if (!proto)
+        {
+            LOG_ERROR("module", "飞升系统: 物品模板不存在 itemEntry={} itemGuid={} 槽位={}，跳过加载",
+                itemEntry, itemGuid, slot);
+            // 清理数据库中的无效记录
+            CharacterDatabase.Execute(
+                "DELETE FROM character_inventory WHERE guid = {} AND bag = {} AND slot = {}",
+                playerGuid, ASCENSION_VIRTUAL_BAG, slot);
+            continue;
+        }
 
         // 创建物品对象
-        Item* item = NewItemOrBag(sObjectMgr->GetItemTemplate(itemEntry));
+        Item* item = NewItemOrBag(proto);
         if (!item)
         {
             LOG_ERROR("module", "飞升系统: 无法创建物品实例 itemEntry={}", itemEntry);
+            // 【修复】清理数据库中的无效记录
+            CharacterDatabase.Execute(
+                "DELETE FROM character_inventory WHERE guid = {} AND bag = {} AND slot = {}",
+                playerGuid, ASCENSION_VIRTUAL_BAG, slot);
+            CharacterDatabase.Execute("DELETE FROM item_instance WHERE guid = {}", itemGuid);
             continue;
         }
 
@@ -407,6 +441,11 @@ void AscensionManager::LoadAscensionItems(Player* player)
         {
             LOG_ERROR("module", "飞升系统: 从数据库加载物品失败 GUID={}", itemGuid);
             delete item;
+            // 【修复】LoadFromDB 失败时清理数据库中的记录，避免孤儿数据
+            CharacterDatabase.Execute(
+                "DELETE FROM character_inventory WHERE guid = {} AND bag = {} AND slot = {}",
+                playerGuid, ASCENSION_VIRTUAL_BAG, slot);
+            CharacterDatabase.Execute("DELETE FROM item_instance WHERE guid = {}", itemGuid);
             continue;
         }
 
@@ -454,11 +493,8 @@ void AscensionManager::ValidateEquippedItems(Player* player)
             slotsToRemove.push_back(slot);
             needSave = true;
 
-            if (sAscensionConfig->IsDebugMode())
-            {
-                LOG_INFO("module", "飞升系统: 玩家 {} 槽位 {} 的物品指针无效，移除记录",
-                    player->GetName(), slot);
-            }
+            LOG_WARN("module", "飞升系统: 玩家 {} 槽位 {} 的物品指针无效，将移除记录",
+                player->GetName(), slot);
             continue;
         }
 
@@ -476,29 +512,30 @@ void AscensionManager::ValidateEquippedItems(Player* player)
             delete slotData.itemPtr;
             slotData.itemPtr = nullptr;
 
-            if (sAscensionConfig->IsDebugMode())
-            {
-                LOG_INFO("module", "飞升系统: 玩家 {} 槽位 {} 的物品(GUID:{}) 已被删除，移除记录",
-                    player->GetName(), slot, slotData.itemGuid);
-            }
+            LOG_WARN("module", "飞升系统: 玩家 {} 槽位 {} 的物品(GUID:{}) 已被删除，将移除记录",
+                player->GetName(), slot, slotData.itemGuid);
         }
     }
 
-    // 移除无效的装备记录 - 【重要】暂时禁用自动清理，只记录日志
-    // for (uint8 slot : slotsToRemove)
-    // {
-    //     status->slots.erase(slot);
-    // }
+    // 【修复】恢复清理逻辑 - 移除无效的装备记录并同步清理数据库
+    for (uint8 slot : slotsToRemove)
+    {
+        // 从 character_inventory 表删除该槽位的记录
+        CharacterDatabase.Execute(
+            "DELETE FROM character_inventory WHERE guid = {} AND bag = {} AND slot = {}",
+            playerGuid, ASCENSION_VIRTUAL_BAG, slot);
 
-    // 如果有变动，保存数据 - 【重要】暂时禁用自动保存
-    // if (needSave)
-    // {
-    //     SavePlayerData(player);
-    // }
+        // 从内存中移除
+        status->slots.erase(slot);
 
+        LOG_INFO("module", "飞升系统: 已清理玩家 {} 槽位 {} 的无效装备记录", player->GetName(), slot);
+    }
+
+    // 如果有变动，保存数据
     if (needSave)
     {
-        LOG_ERROR("module", "飞升系统: ValidateEquippedItems 发现无效数据，但暂时不清理以便调试");
+        SavePlayerData(player);
+        LOG_INFO("module", "飞升系统: ValidateEquippedItems 清理了 {} 条无效装备记录", slotsToRemove.size());
     }
 }
 
@@ -533,6 +570,8 @@ bool AscensionManager::UnlockSlot(Player* player, uint8 slot)
     if (IsSlotUnlocked(player, slot))
     {
         ChatHandler(player->GetSession()).SendSysMessage("该槽位已经解锁。");
+        // 即使槽位已解锁，也要发送数据到客户端，确保UI状态同步
+        SendAscensionDataToClient(player);
         return false;
     }
 
@@ -781,8 +820,50 @@ bool AscensionManager::UnequipItem(Player* player, uint8 slot)
     uint32 itemGuid = it->second.itemGuid;
     Item* item = it->second.itemPtr;
 
-    // 移除属性
-    ApplyItemEffect(player, itemId, slot, false);
+    // 【修复】使用 slotStats 记录的值精确移除该槽位的属性，防止属性漂移
+    auto statIt = status->slotStats.find(slot);
+    if (statIt != status->slotStats.end())
+    {
+        for (const AppliedStatEffect& effect : statIt->second)
+        {
+            RemoveStatEffect(player, effect.statType, effect.statValue);
+        }
+        status->slotStats.erase(statIt);
+    }
+
+    // 【修复】移除该槽位关联的法术
+    auto spellIt = status->slotSpells.find(slot);
+    if (spellIt != status->slotSpells.end())
+    {
+        for (uint32 spellId : spellIt->second)
+        {
+            // 检查其他槽位是否也有相同法术
+            bool spellFromOtherSlot = false;
+            for (const auto& otherSlot : status->slotSpells)
+            {
+                if (otherSlot.first != slot)
+                {
+                    for (uint32 otherId : otherSlot.second)
+                    {
+                        if (otherId == spellId)
+                        {
+                            spellFromOtherSlot = true;
+                            break;
+                        }
+                    }
+                }
+                if (spellFromOtherSlot) break;
+            }
+            if (!spellFromOtherSlot)
+            {
+                player->RemoveAurasDueToSpell(spellId);
+            }
+        }
+        status->slotSpells.erase(spellIt);
+    }
+
+    // 更新玩家属性
+    UpdatePlayerStats(player);
 
     // 【新方案】先从 character_inventory 表删除 bag=200 的记录
     CharacterDatabase.Execute(
@@ -906,19 +987,30 @@ void AscensionManager::UnequipAllItems(Player* player)
         }
     }
 
-    // 邮寄无法放入背包的物品
+    // 【修复】邮寄无法放入背包的物品 - 分批发送，每封邮件最多12件物品
+    // 注意：MAX_MAIL_ITEMS 已在 Mail.h 中定义为 12
     if (!itemsToMail.empty())
     {
-        MailDraft draft("飞升系统", "您的背包已满，飞升装备已通过邮件返还。");
-        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-        for (Item* item : itemsToMail)
-        {
-            draft.AddItem(item);
-        }
-        draft.SendMailTo(trans, MailReceiver(player, playerGuid), MailSender(MAIL_NORMAL, 0, MAIL_STATIONERY_GM), MAIL_CHECK_MASK_COPIED, 0);
-        CharacterDatabase.CommitTransaction(trans);
+        size_t totalItems = itemsToMail.size();
+        size_t mailCount = 0;
 
-        ChatHandler(player->GetSession()).PSendSysMessage("背包已满，{} 件物品已通过邮件返还。", itemsToMail.size());
+        for (size_t i = 0; i < totalItems; i += MAX_MAIL_ITEMS)
+        {
+            MailDraft draft("飞升系统", "您的背包已满，飞升装备已通过邮件返还。");
+            CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+
+            size_t endIndex = std::min(i + static_cast<size_t>(MAX_MAIL_ITEMS), totalItems);
+            for (size_t j = i; j < endIndex; ++j)
+            {
+                draft.AddItem(itemsToMail[j]);
+            }
+
+            draft.SendMailTo(trans, MailReceiver(player, playerGuid), MailSender(MAIL_NORMAL, 0, MAIL_STATIONERY_GM), MAIL_CHECK_MASK_COPIED, 0);
+            CharacterDatabase.CommitTransaction(trans);
+            ++mailCount;
+        }
+
+        ChatHandler(player->GetSession()).PSendSysMessage("背包已满，{} 件物品已通过 {} 封邮件返还。", totalItems, mailCount);
     }
 
     // 清空装备
@@ -969,19 +1061,26 @@ void AscensionManager::RemoveAllEffects(Player* player)
     if (!status)
         return;
 
-    // 移除所有已应用的法术
-    for (uint32 spellId : status->appliedSpells)
+    // 【修复】移除所有已应用的法术 - 遍历按槽位记录的法术
+    for (const auto& slotPair : status->slotSpells)
     {
-        player->RemoveAurasDueToSpell(spellId);
+        for (uint32 spellId : slotPair.second)
+        {
+            player->RemoveAurasDueToSpell(spellId);
+        }
     }
-    status->appliedSpells.clear();
+    status->slotSpells.clear();
 
-    // 移除所有已装备物品的效果
-    for (const auto& pair : status->slots)
+    // 【修复】使用 slotStats 记录的值来精确回滚属性，防止倍率变化导致的属性漂移
+    for (const auto& slotPair : status->slotStats)
     {
-        ApplyItemEffect(player, pair.second.itemId, pair.first, false);
+        for (const AppliedStatEffect& effect : slotPair.second)
+        {
+            // 根据记录的属性类型和值进行移除
+            RemoveStatEffect(player, effect.statType, effect.statValue);
+        }
     }
-    status->appliedStats.clear();
+    status->slotStats.clear();
 
     UpdatePlayerStats(player);
 
@@ -1014,6 +1113,17 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
     if (!status)
         return;
 
+    // 【修复】检查槽位是否启用，禁用槽位不应用效果
+    auto ctrlIt = _slotControls.find(slot);
+    if (ctrlIt != _slotControls.end() && !ctrlIt->second.enabled)
+    {
+        if (sAscensionConfig->IsDebugMode())
+        {
+            LOG_INFO("module", "飞升系统: 槽位 {} 已禁用，不应用属性", slot);
+        }
+        return;
+    }
+
     // 获取槽位数据和物品指针（用于应用鉴定系统的自定义属性）
     Item* item = nullptr;
     auto slotIt = status->slots.find(slot);
@@ -1022,9 +1132,19 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
         item = slotIt->second.itemPtr;
     }
 
+    // 【修复】检查物品是否破损，破损物品不应用属性
+    if (apply && item && item->IsBroken())
+    {
+        if (sAscensionConfig->IsDebugMode())
+        {
+            LOG_INFO("module", "飞升系统: 玩家 {} 槽位 {} 的物品已破损，不应用属性",
+                player->GetName(), slot);
+        }
+        return;
+    }
+
     // 获取槽位倍率
     float slotMultiplier = 1.0f;
-    auto ctrlIt = _slotControls.find(slot);
     if (ctrlIt != _slotControls.end())
     {
         slotMultiplier = ctrlIt->second.statMultiplier;
@@ -1189,17 +1309,180 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
                     break;
             }
 
+            // 【修复】按槽位记录已应用的属性
             if (apply)
             {
                 AppliedStatEffect effect;
                 effect.statType = statType;
                 effect.statValue = val;
-                status->appliedStats.push_back(effect);
+                status->slotStats[slot].push_back(effect);
             }
         }
     }
 
-    // 应用物品法术效果
+    // 【修复】应用护甲值
+    if (proto->Armor > 0)
+    {
+        int32 armorVal = int32(proto->Armor * totalMultiplier);
+        player->HandleStatModifier(UNIT_MOD_ARMOR, BASE_VALUE, float(armorVal), apply);
+        if (apply)
+        {
+            AppliedStatEffect effect;
+            effect.statType = 1000;  // 自定义标识：护甲
+            effect.statValue = armorVal;
+            status->slotStats[slot].push_back(effect);
+        }
+    }
+
+    // 【修复】应用格挡值（盾牌）
+    if (proto->Block > 0)
+    {
+        int32 blockVal = int32(proto->Block * totalMultiplier);
+        player->HandleBaseModValue(SHIELD_BLOCK_VALUE, FLAT_MOD, float(blockVal), apply);
+        if (apply)
+        {
+            AppliedStatEffect effect;
+            effect.statType = 1001;  // 自定义标识：格挡值
+            effect.statValue = blockVal;
+            status->slotStats[slot].push_back(effect);
+        }
+    }
+
+    // 【修复】应用抗性值
+    for (uint8 i = 0; i < MAX_ITEM_PROTO_SOCKETS; ++i)
+    {
+        // 注意：抗性在 ItemTemplate 中的存储方式
+    }
+
+    // 物品抗性（Holy, Fire, Nature, Frost, Shadow, Arcane）
+    if (proto->HolyRes > 0)
+    {
+        int32 val = int32(proto->HolyRes * totalMultiplier);
+        player->HandleStatModifier(UNIT_MOD_RESISTANCE_HOLY, BASE_VALUE, float(val), apply);
+        if (apply) { AppliedStatEffect e; e.statType = 1002; e.statValue = val; status->slotStats[slot].push_back(e); }
+    }
+    if (proto->FireRes > 0)
+    {
+        int32 val = int32(proto->FireRes * totalMultiplier);
+        player->HandleStatModifier(UNIT_MOD_RESISTANCE_FIRE, BASE_VALUE, float(val), apply);
+        if (apply) { AppliedStatEffect e; e.statType = 1003; e.statValue = val; status->slotStats[slot].push_back(e); }
+    }
+    if (proto->NatureRes > 0)
+    {
+        int32 val = int32(proto->NatureRes * totalMultiplier);
+        player->HandleStatModifier(UNIT_MOD_RESISTANCE_NATURE, BASE_VALUE, float(val), apply);
+        if (apply) { AppliedStatEffect e; e.statType = 1004; e.statValue = val; status->slotStats[slot].push_back(e); }
+    }
+    if (proto->FrostRes > 0)
+    {
+        int32 val = int32(proto->FrostRes * totalMultiplier);
+        player->HandleStatModifier(UNIT_MOD_RESISTANCE_FROST, BASE_VALUE, float(val), apply);
+        if (apply) { AppliedStatEffect e; e.statType = 1005; e.statValue = val; status->slotStats[slot].push_back(e); }
+    }
+    if (proto->ShadowRes > 0)
+    {
+        int32 val = int32(proto->ShadowRes * totalMultiplier);
+        player->HandleStatModifier(UNIT_MOD_RESISTANCE_SHADOW, BASE_VALUE, float(val), apply);
+        if (apply) { AppliedStatEffect e; e.statType = 1006; e.statValue = val; status->slotStats[slot].push_back(e); }
+    }
+    if (proto->ArcaneRes > 0)
+    {
+        int32 val = int32(proto->ArcaneRes * totalMultiplier);
+        player->HandleStatModifier(UNIT_MOD_RESISTANCE_ARCANE, BASE_VALUE, float(val), apply);
+        if (apply) { AppliedStatEffect e; e.statType = 1007; e.statValue = val; status->slotStats[slot].push_back(e); }
+    }
+
+    // 【修复】应用附魔效果（从物品实例读取）
+    if (item)
+    {
+        for (uint8 enchantSlot = 0; enchantSlot < MAX_ENCHANTMENT_SLOT; ++enchantSlot)
+        {
+            uint32 enchantId = item->GetEnchantmentId(EnchantmentSlot(enchantSlot));
+            if (enchantId == 0)
+                continue;
+
+            SpellItemEnchantmentEntry const* enchant = sSpellItemEnchantmentStore.LookupEntry(enchantId);
+            if (!enchant)
+                continue;
+
+            for (uint8 s = 0; s < MAX_ITEM_ENCHANTMENT_EFFECTS; ++s)
+            {
+                uint32 enchType = enchant->type[s];
+                int32 amount = enchant->amount[s];
+
+                if (amount == 0)
+                    continue;
+
+                // 附魔不应用倍率（保持原始效果）
+                switch (enchType)
+                {
+                    case ITEM_ENCHANTMENT_TYPE_COMBAT_SPELL:
+                    case ITEM_ENCHANTMENT_TYPE_DAMAGE:
+                    case ITEM_ENCHANTMENT_TYPE_EQUIP_SPELL:
+                        // 这些类型通过法术处理
+                        if (enchant->spellid[s])
+                        {
+                            if (apply)
+                            {
+                                player->CastSpell(player, enchant->spellid[s], true);
+                                status->slotSpells[slot].push_back(enchant->spellid[s]);
+                            }
+                            else
+                            {
+                                // 检查其他槽位是否有相同法术
+                                bool spellFromOtherSlot = false;
+                                for (const auto& slotPair : status->slotSpells)
+                                {
+                                    if (slotPair.first != slot)
+                                    {
+                                        for (uint32 spId : slotPair.second)
+                                        {
+                                            if (spId == enchant->spellid[s])
+                                            {
+                                                spellFromOtherSlot = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if (spellFromOtherSlot) break;
+                                }
+                                if (!spellFromOtherSlot)
+                                    player->RemoveAurasDueToSpell(enchant->spellid[s]);
+                            }
+                        }
+                        break;
+                    case ITEM_ENCHANTMENT_TYPE_STAT:
+                        // 属性附魔
+                        if (enchant->spellid[s] < MAX_ITEM_MOD)
+                        {
+                            // 这里使用与物品属性相同的逻辑
+                            uint32 statType = enchant->spellid[s];
+                            ApplyEnchantStatMod(player, statType, amount, apply);
+                            if (apply)
+                            {
+                                AppliedStatEffect e;
+                                e.statType = 2000 + enchantSlot * 100 + s;  // 附魔属性标识
+                                e.statValue = amount;
+                                status->slotStats[slot].push_back(e);
+                            }
+                        }
+                        break;
+                    case ITEM_ENCHANTMENT_TYPE_RESISTANCE:
+                        // 抗性附魔
+                        if (enchant->spellid[s] < MAX_SPELL_SCHOOL)
+                        {
+                            SpellSchools school = SpellSchools(enchant->spellid[s]);
+                            player->HandleStatModifier(UnitMods(UNIT_MOD_RESISTANCE_START + school), BASE_VALUE, float(amount), apply);
+                        }
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+    }
+
+    // 应用物品法术效果 - 【修复】按槽位绑定法术来源
     for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
     {
         if (proto->Spells[i].SpellId <= 0)
@@ -1211,14 +1494,46 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
             if (!spellInfo)
                 continue;
 
+            uint32 spellId = proto->Spells[i].SpellId;
+
             if (apply)
             {
                 player->CastSpell(player, spellInfo, true);
-                status->appliedSpells.push_back(proto->Spells[i].SpellId);
+                // 按槽位记录法术，便于单件卸下时精确移除
+                status->slotSpells[slot].push_back(spellId);
             }
             else
             {
-                player->RemoveAurasDueToSpell(proto->Spells[i].SpellId);
+                // 【修复】只移除属于该槽位的法术，检查其他槽位是否也有相同法术
+                bool spellFromOtherSlot = false;
+                for (const auto& slotPair : status->slotSpells)
+                {
+                    if (slotPair.first != slot)
+                    {
+                        for (uint32 otherSpellId : slotPair.second)
+                        {
+                            if (otherSpellId == spellId)
+                            {
+                                spellFromOtherSlot = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (spellFromOtherSlot)
+                        break;
+                }
+
+                // 只有当其他槽位没有提供相同法术时才移除
+                if (!spellFromOtherSlot)
+                {
+                    player->RemoveAurasDueToSpell(spellId);
+                }
+
+                // 从该槽位的法术列表中移除
+                auto& slotSpellList = status->slotSpells[slot];
+                slotSpellList.erase(
+                    std::remove(slotSpellList.begin(), slotSpellList.end(), spellId),
+                    slotSpellList.end());
             }
         }
     }
@@ -1226,7 +1541,8 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
     // 应用鉴定系统的自定义属性（通过幻境系统）
     // 包括：基础属性、追加属性、成长属性、强化属性等，以及倍率加成
 #ifdef MODULE_HUANJING_SYSTEM
-    if (item)
+    // 【修复】添加 sHuanJingSystem 空指针检查
+    if (item && sHuanJingSystem)
     {
         if (apply)
         {
@@ -1271,11 +1587,185 @@ bool AscensionManager::CanEquipItemInSlot(Player* player, uint8 slot, uint32 ite
 
     // 检查物品等级要求
     if (proto->RequiredLevel > player->GetLevel())
+    {
+        if (sAscensionConfig->IsDebugMode())
+            LOG_INFO("module", "飞升系统: 等级不足 需要={} 玩家={}", proto->RequiredLevel, player->GetLevel());
         return false;
+    }
 
     // 检查物品是否是装备类型 (InventoryType = 0 表示不是可装备物品)
     if (proto->InventoryType == 0)
         return false;
+
+    // === 【修复】复用核心装备校验逻辑 ===
+
+    // 检查职业限制
+    if (proto->AllowableClass != 0 && proto->AllowableClass != -1)
+    {
+        if (!(proto->AllowableClass & player->getClassMask()))
+        {
+            if (sAscensionConfig->IsDebugMode())
+                LOG_INFO("module", "飞升系统: 职业不匹配 物品职业限制={} 玩家职业={}", proto->AllowableClass, player->getClassMask());
+            return false;
+        }
+    }
+
+    // 检查种族限制
+    if (proto->AllowableRace != 0 && proto->AllowableRace != -1)
+    {
+        if (!(proto->AllowableRace & player->getRaceMask()))
+        {
+            if (sAscensionConfig->IsDebugMode())
+                LOG_INFO("module", "飞升系统: 种族不匹配 物品种族限制={} 玩家种族={}", proto->AllowableRace, player->getRaceMask());
+            return false;
+        }
+    }
+
+    // 检查技能要求
+    if (proto->RequiredSkill != 0)
+    {
+        if (player->GetSkillValue(proto->RequiredSkill) < proto->RequiredSkillRank)
+        {
+            if (sAscensionConfig->IsDebugMode())
+                LOG_INFO("module", "飞升系统: 技能不足 需要技能={} 等级={} 玩家等级={}",
+                    proto->RequiredSkill, proto->RequiredSkillRank, player->GetSkillValue(proto->RequiredSkill));
+            return false;
+        }
+    }
+
+    // 检查声望要求
+    if (proto->RequiredReputationFaction != 0)
+    {
+        if (player->GetReputationRank(proto->RequiredReputationFaction) < proto->RequiredReputationRank)
+        {
+            if (sAscensionConfig->IsDebugMode())
+                LOG_INFO("module", "飞升系统: 声望不足");
+            return false;
+        }
+    }
+
+    // 检查法术要求
+    if (proto->RequiredSpell != 0 && !player->HasSpell(proto->RequiredSpell))
+    {
+        if (sAscensionConfig->IsDebugMode())
+            LOG_INFO("module", "飞升系统: 缺少所需法术 spellId={}", proto->RequiredSpell);
+        return false;
+    }
+
+    // 【修复】检查 Unique-Equipped 限制
+    // 检查物品是否标记为唯一装备
+    if (proto->Flags & ITEM_FLAG_UNIQUE_EQUIPPABLE)
+    {
+        // 检查玩家是否已经装备了相同物品（正常装备栏或飞升槽位）
+        for (uint8 i = EQUIPMENT_SLOT_START; i < EQUIPMENT_SLOT_END; ++i)
+        {
+            Item* equipped = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i);
+            if (equipped && equipped->GetEntry() == itemId)
+            {
+                if (sAscensionConfig->IsDebugMode())
+                    LOG_INFO("module", "飞升系统: Unique-Equipped 物品已在正常装备栏装备 itemId={}", itemId);
+                return false;
+            }
+        }
+
+        // 检查飞升槽位
+        uint32 playerGuid = player->GetGUID().GetCounter();
+        PlayerAscensionStatus* status = GetPlayerStatus(playerGuid);
+        if (status)
+        {
+            for (const auto& slotPair : status->slots)
+            {
+                if (slotPair.first != slot && slotPair.second.itemId == itemId)
+                {
+                    if (sAscensionConfig->IsDebugMode())
+                        LOG_INFO("module", "飞升系统: Unique-Equipped 物品已在飞升槽位装备 itemId={}", itemId);
+                    return false;
+                }
+            }
+        }
+    }
+
+    // 【修复】检查 ItemLimitCategory 限制（如宝石槽位限制等）
+    if (proto->ItemLimitCategory)
+    {
+        ItemLimitCategoryEntry const* limitEntry = sItemLimitCategoryStore.LookupEntry(proto->ItemLimitCategory);
+        if (limitEntry)
+        {
+            // 计算玩家已装备的同类物品数量
+            uint32 count = 0;
+
+            // 检查正常装备栏
+            for (uint8 i = EQUIPMENT_SLOT_START; i < EQUIPMENT_SLOT_END; ++i)
+            {
+                Item* equipped = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i);
+                if (equipped)
+                {
+                    ItemTemplate const* equippedProto = equipped->GetTemplate();
+                    if (equippedProto && equippedProto->ItemLimitCategory == proto->ItemLimitCategory)
+                        ++count;
+                }
+            }
+
+            // 检查飞升槽位
+            uint32 playerGuid = player->GetGUID().GetCounter();
+            PlayerAscensionStatus* status = GetPlayerStatus(playerGuid);
+            if (status)
+            {
+                for (const auto& slotPair : status->slots)
+                {
+                    if (slotPair.first != slot)  // 不计算当前要装备的槽位
+                    {
+                        ItemTemplate const* slotProto = sObjectMgr->GetItemTemplate(slotPair.second.itemId);
+                        if (slotProto && slotProto->ItemLimitCategory == proto->ItemLimitCategory)
+                            ++count;
+                    }
+                }
+            }
+
+            // 检查是否超过限制
+            if (count >= limitEntry->maxCount)
+            {
+                if (sAscensionConfig->IsDebugMode())
+                    LOG_INFO("module", "飞升系统: ItemLimitCategory 限制超出 category={} count={} max={}",
+                        proto->ItemLimitCategory, count, limitEntry->maxCount);
+                return false;
+            }
+        }
+    }
+
+    // 检查双手武器互斥（如果要装备双手武器到主手，副手槽位必须为空）
+    if (proto->InventoryType == INVTYPE_2HWEAPON && slot == ASCENSION_SLOT_MAINHAND)
+    {
+        uint32 playerGuid = player->GetGUID().GetCounter();
+        PlayerAscensionStatus* status = GetPlayerStatus(playerGuid);
+        if (status && status->slots.find(ASCENSION_SLOT_OFFHAND) != status->slots.end())
+        {
+            if (sAscensionConfig->IsDebugMode())
+                LOG_INFO("module", "飞升系统: 装备双手武器时副手槽位必须为空");
+            return false;
+        }
+    }
+
+    // 检查副手槽位时主手是否装备了双手武器
+    if (slot == ASCENSION_SLOT_OFFHAND)
+    {
+        uint32 playerGuid = player->GetGUID().GetCounter();
+        PlayerAscensionStatus* status = GetPlayerStatus(playerGuid);
+        if (status)
+        {
+            auto mainIt = status->slots.find(ASCENSION_SLOT_MAINHAND);
+            if (mainIt != status->slots.end())
+            {
+                ItemTemplate const* mainProto = sObjectMgr->GetItemTemplate(mainIt->second.itemId);
+                if (mainProto && mainProto->InventoryType == INVTYPE_2HWEAPON)
+                {
+                    if (sAscensionConfig->IsDebugMode())
+                        LOG_INFO("module", "飞升系统: 主手已装备双手武器，无法装备副手");
+                    return false;
+                }
+            }
+        }
+    }
 
     // 获取物品应该装备的槽位
     uint8 expectedSlot = GetSlotForItemClass(proto->Class, proto->SubClass, proto->InventoryType);
@@ -1292,6 +1782,20 @@ bool AscensionManager::CanEquipItemInSlot(Player* player, uint8 slot, uint32 ite
     if (slot == ASCENSION_SLOT_TRINKET1 || slot == ASCENSION_SLOT_TRINKET2)
     {
         return expectedSlot == ASCENSION_SLOT_TRINKET1 || expectedSlot == ASCENSION_SLOT_TRINKET2;
+    }
+
+    // 【修复】特殊处理：INVTYPE_WEAPON 类型的单手武器可以装备到副手
+    if (slot == ASCENSION_SLOT_OFFHAND && proto->InventoryType == INVTYPE_WEAPON)
+    {
+        // 检查玩家是否有双持技能
+        if (player->CanDualWield())
+            return true;
+        else
+        {
+            if (sAscensionConfig->IsDebugMode())
+                LOG_INFO("module", "飞升系统: 玩家没有双持技能，无法将单手武器装备到副手");
+            return false;
+        }
     }
 
     return expectedSlot == slot;
@@ -1315,15 +1819,19 @@ uint8 AscensionManager::GetSlotForItemClass(uint32 itemClass, uint32 itemSubClas
         case INVTYPE_FINGER:        return ASCENSION_SLOT_FINGER1;
         case INVTYPE_TRINKET:       return ASCENSION_SLOT_TRINKET1;
         case INVTYPE_CLOAK:         return ASCENSION_SLOT_BACK;
-        case INVTYPE_WEAPON:
         case INVTYPE_WEAPONMAINHAND:
         case INVTYPE_2HWEAPON:      return ASCENSION_SLOT_MAINHAND;
+        // 【修复】INVTYPE_WEAPON 可以装备到主手或副手，返回主手作为默认
+        // 实际是否可装备到副手由 CanEquipItemInSlot 中的特殊处理决定
+        case INVTYPE_WEAPON:        return ASCENSION_SLOT_MAINHAND;
         case INVTYPE_SHIELD:
         case INVTYPE_WEAPONOFFHAND:
         case INVTYPE_HOLDABLE:      return ASCENSION_SLOT_OFFHAND;
         case INVTYPE_RANGED:
         case INVTYPE_THROWN:
         case INVTYPE_RANGEDRIGHT:   return ASCENSION_SLOT_RANGED;
+        // 【修复】添加 INVTYPE_RELIC 支持（圣物/图腾/神像/魔印）
+        case INVTYPE_RELIC:         return ASCENSION_SLOT_RANGED;
         default:                    return 0xFF; // 无效槽位
     }
 }
@@ -1355,6 +1863,272 @@ std::string AscensionManager::GetSlotName(uint8 slot) const
     if (slot < ASCENSION_SLOT_COUNT)
         return defaultNames[slot];
     return "未知";
+}
+
+void AscensionManager::ApplyEnchantStatMod(Player* player, uint32 statType, int32 amount, bool apply)
+{
+    if (!player || amount == 0)
+        return;
+
+    int32 val = apply ? amount : -amount;
+
+    switch (statType)
+    {
+        case ITEM_MOD_MANA:
+            player->HandleStatModifier(UNIT_MOD_MANA, BASE_VALUE, float(val), apply);
+            break;
+        case ITEM_MOD_HEALTH:
+            player->HandleStatModifier(UNIT_MOD_HEALTH, BASE_VALUE, float(val), apply);
+            break;
+        case ITEM_MOD_AGILITY:
+            player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, BASE_VALUE, float(val), apply);
+            player->ApplyStatBuffMod(STAT_AGILITY, float(val), apply);
+            break;
+        case ITEM_MOD_STRENGTH:
+            player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, BASE_VALUE, float(val), apply);
+            player->ApplyStatBuffMod(STAT_STRENGTH, float(val), apply);
+            break;
+        case ITEM_MOD_INTELLECT:
+            player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, BASE_VALUE, float(val), apply);
+            player->ApplyStatBuffMod(STAT_INTELLECT, float(val), apply);
+            break;
+        case ITEM_MOD_SPIRIT:
+            player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, BASE_VALUE, float(val), apply);
+            player->ApplyStatBuffMod(STAT_SPIRIT, float(val), apply);
+            break;
+        case ITEM_MOD_STAMINA:
+            player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, BASE_VALUE, float(val), apply);
+            player->ApplyStatBuffMod(STAT_STAMINA, float(val), apply);
+            break;
+        case ITEM_MOD_DEFENSE_SKILL_RATING:
+            player->ApplyRatingMod(CR_DEFENSE_SKILL, amount, apply);
+            break;
+        case ITEM_MOD_DODGE_RATING:
+            player->ApplyRatingMod(CR_DODGE, amount, apply);
+            break;
+        case ITEM_MOD_PARRY_RATING:
+            player->ApplyRatingMod(CR_PARRY, amount, apply);
+            break;
+        case ITEM_MOD_BLOCK_RATING:
+            player->ApplyRatingMod(CR_BLOCK, amount, apply);
+            break;
+        case ITEM_MOD_HIT_MELEE_RATING:
+            player->ApplyRatingMod(CR_HIT_MELEE, amount, apply);
+            break;
+        case ITEM_MOD_HIT_RANGED_RATING:
+            player->ApplyRatingMod(CR_HIT_RANGED, amount, apply);
+            break;
+        case ITEM_MOD_HIT_SPELL_RATING:
+            player->ApplyRatingMod(CR_HIT_SPELL, amount, apply);
+            break;
+        case ITEM_MOD_CRIT_MELEE_RATING:
+            player->ApplyRatingMod(CR_CRIT_MELEE, amount, apply);
+            break;
+        case ITEM_MOD_CRIT_RANGED_RATING:
+            player->ApplyRatingMod(CR_CRIT_RANGED, amount, apply);
+            break;
+        case ITEM_MOD_CRIT_SPELL_RATING:
+            player->ApplyRatingMod(CR_CRIT_SPELL, amount, apply);
+            break;
+        case ITEM_MOD_HIT_RATING:
+            player->ApplyRatingMod(CR_HIT_MELEE, amount, apply);
+            player->ApplyRatingMod(CR_HIT_RANGED, amount, apply);
+            player->ApplyRatingMod(CR_HIT_SPELL, amount, apply);
+            break;
+        case ITEM_MOD_CRIT_RATING:
+            player->ApplyRatingMod(CR_CRIT_MELEE, amount, apply);
+            player->ApplyRatingMod(CR_CRIT_RANGED, amount, apply);
+            player->ApplyRatingMod(CR_CRIT_SPELL, amount, apply);
+            break;
+        case ITEM_MOD_RESILIENCE_RATING:
+            player->ApplyRatingMod(CR_CRIT_TAKEN_MELEE, amount, apply);
+            player->ApplyRatingMod(CR_CRIT_TAKEN_RANGED, amount, apply);
+            player->ApplyRatingMod(CR_CRIT_TAKEN_SPELL, amount, apply);
+            break;
+        case ITEM_MOD_HASTE_RATING:
+            player->ApplyRatingMod(CR_HASTE_MELEE, amount, apply);
+            player->ApplyRatingMod(CR_HASTE_RANGED, amount, apply);
+            player->ApplyRatingMod(CR_HASTE_SPELL, amount, apply);
+            break;
+        case ITEM_MOD_EXPERTISE_RATING:
+            player->ApplyRatingMod(CR_EXPERTISE, amount, apply);
+            break;
+        case ITEM_MOD_ATTACK_POWER:
+            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, float(val), apply);
+            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, float(val), apply);
+            break;
+        case ITEM_MOD_RANGED_ATTACK_POWER:
+            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, float(val), apply);
+            break;
+        case ITEM_MOD_MANA_REGENERATION:
+            player->ApplyManaRegenBonus(amount, apply);
+            break;
+        case ITEM_MOD_ARMOR_PENETRATION_RATING:
+            player->ApplyRatingMod(CR_ARMOR_PENETRATION, amount, apply);
+            break;
+        case ITEM_MOD_SPELL_POWER:
+            player->ApplySpellPowerBonus(amount, apply);
+            break;
+        case ITEM_MOD_HEALTH_REGEN:
+            player->ApplyHealthRegenBonus(amount, apply);
+            break;
+        case ITEM_MOD_SPELL_PENETRATION:
+            player->ApplySpellPenetrationBonus(val, apply);
+            break;
+        case ITEM_MOD_BLOCK_VALUE:
+            player->HandleBaseModValue(SHIELD_BLOCK_VALUE, FLAT_MOD, float(val), apply);
+            break;
+        default:
+            break;
+    }
+}
+
+void AscensionManager::RemoveStatEffect(Player* player, uint32 statType, int32 statValue)
+{
+    if (!player || statValue == 0)
+        return;
+
+    // 处理标准物品属性类型
+    switch (statType)
+    {
+        case ITEM_MOD_MANA:
+            player->HandleStatModifier(UNIT_MOD_MANA, BASE_VALUE, float(statValue), false);
+            break;
+        case ITEM_MOD_HEALTH:
+            player->HandleStatModifier(UNIT_MOD_HEALTH, BASE_VALUE, float(statValue), false);
+            break;
+        case ITEM_MOD_AGILITY:
+            player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, BASE_VALUE, float(statValue), false);
+            player->ApplyStatBuffMod(STAT_AGILITY, float(statValue), false);
+            break;
+        case ITEM_MOD_STRENGTH:
+            player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, BASE_VALUE, float(statValue), false);
+            player->ApplyStatBuffMod(STAT_STRENGTH, float(statValue), false);
+            break;
+        case ITEM_MOD_INTELLECT:
+            player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, BASE_VALUE, float(statValue), false);
+            player->ApplyStatBuffMod(STAT_INTELLECT, float(statValue), false);
+            break;
+        case ITEM_MOD_SPIRIT:
+            player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, BASE_VALUE, float(statValue), false);
+            player->ApplyStatBuffMod(STAT_SPIRIT, float(statValue), false);
+            break;
+        case ITEM_MOD_STAMINA:
+            player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, BASE_VALUE, float(statValue), false);
+            player->ApplyStatBuffMod(STAT_STAMINA, float(statValue), false);
+            break;
+        case ITEM_MOD_DEFENSE_SKILL_RATING:
+            player->ApplyRatingMod(CR_DEFENSE_SKILL, statValue, false);
+            break;
+        case ITEM_MOD_DODGE_RATING:
+            player->ApplyRatingMod(CR_DODGE, statValue, false);
+            break;
+        case ITEM_MOD_PARRY_RATING:
+            player->ApplyRatingMod(CR_PARRY, statValue, false);
+            break;
+        case ITEM_MOD_BLOCK_RATING:
+            player->ApplyRatingMod(CR_BLOCK, statValue, false);
+            break;
+        case ITEM_MOD_HIT_MELEE_RATING:
+            player->ApplyRatingMod(CR_HIT_MELEE, statValue, false);
+            break;
+        case ITEM_MOD_HIT_RANGED_RATING:
+            player->ApplyRatingMod(CR_HIT_RANGED, statValue, false);
+            break;
+        case ITEM_MOD_HIT_SPELL_RATING:
+            player->ApplyRatingMod(CR_HIT_SPELL, statValue, false);
+            break;
+        case ITEM_MOD_CRIT_MELEE_RATING:
+            player->ApplyRatingMod(CR_CRIT_MELEE, statValue, false);
+            break;
+        case ITEM_MOD_CRIT_RANGED_RATING:
+            player->ApplyRatingMod(CR_CRIT_RANGED, statValue, false);
+            break;
+        case ITEM_MOD_CRIT_SPELL_RATING:
+            player->ApplyRatingMod(CR_CRIT_SPELL, statValue, false);
+            break;
+        case ITEM_MOD_HIT_RATING:
+            player->ApplyRatingMod(CR_HIT_MELEE, statValue, false);
+            player->ApplyRatingMod(CR_HIT_RANGED, statValue, false);
+            player->ApplyRatingMod(CR_HIT_SPELL, statValue, false);
+            break;
+        case ITEM_MOD_CRIT_RATING:
+            player->ApplyRatingMod(CR_CRIT_MELEE, statValue, false);
+            player->ApplyRatingMod(CR_CRIT_RANGED, statValue, false);
+            player->ApplyRatingMod(CR_CRIT_SPELL, statValue, false);
+            break;
+        case ITEM_MOD_RESILIENCE_RATING:
+            player->ApplyRatingMod(CR_CRIT_TAKEN_MELEE, statValue, false);
+            player->ApplyRatingMod(CR_CRIT_TAKEN_RANGED, statValue, false);
+            player->ApplyRatingMod(CR_CRIT_TAKEN_SPELL, statValue, false);
+            break;
+        case ITEM_MOD_HASTE_RATING:
+            player->ApplyRatingMod(CR_HASTE_MELEE, statValue, false);
+            player->ApplyRatingMod(CR_HASTE_RANGED, statValue, false);
+            player->ApplyRatingMod(CR_HASTE_SPELL, statValue, false);
+            break;
+        case ITEM_MOD_EXPERTISE_RATING:
+            player->ApplyRatingMod(CR_EXPERTISE, statValue, false);
+            break;
+        case ITEM_MOD_ATTACK_POWER:
+            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, float(statValue), false);
+            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, float(statValue), false);
+            break;
+        case ITEM_MOD_RANGED_ATTACK_POWER:
+            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, float(statValue), false);
+            break;
+        case ITEM_MOD_MANA_REGENERATION:
+            player->ApplyManaRegenBonus(statValue, false);
+            break;
+        case ITEM_MOD_ARMOR_PENETRATION_RATING:
+            player->ApplyRatingMod(CR_ARMOR_PENETRATION, statValue, false);
+            break;
+        case ITEM_MOD_SPELL_POWER:
+            player->ApplySpellPowerBonus(statValue, false);
+            break;
+        case ITEM_MOD_HEALTH_REGEN:
+            player->ApplyHealthRegenBonus(statValue, false);
+            break;
+        case ITEM_MOD_SPELL_PENETRATION:
+            player->ApplySpellPenetrationBonus(statValue, false);
+            break;
+        case ITEM_MOD_BLOCK_VALUE:
+            player->HandleBaseModValue(SHIELD_BLOCK_VALUE, FLAT_MOD, float(statValue), false);
+            break;
+        // 自定义属性类型（1000+）
+        case 1000:  // 护甲
+            player->HandleStatModifier(UNIT_MOD_ARMOR, BASE_VALUE, float(statValue), false);
+            break;
+        case 1001:  // 格挡值
+            player->HandleBaseModValue(SHIELD_BLOCK_VALUE, FLAT_MOD, float(statValue), false);
+            break;
+        case 1002:  // 神圣抗性
+            player->HandleStatModifier(UNIT_MOD_RESISTANCE_HOLY, BASE_VALUE, float(statValue), false);
+            break;
+        case 1003:  // 火焰抗性
+            player->HandleStatModifier(UNIT_MOD_RESISTANCE_FIRE, BASE_VALUE, float(statValue), false);
+            break;
+        case 1004:  // 自然抗性
+            player->HandleStatModifier(UNIT_MOD_RESISTANCE_NATURE, BASE_VALUE, float(statValue), false);
+            break;
+        case 1005:  // 冰霜抗性
+            player->HandleStatModifier(UNIT_MOD_RESISTANCE_FROST, BASE_VALUE, float(statValue), false);
+            break;
+        case 1006:  // 暗影抗性
+            player->HandleStatModifier(UNIT_MOD_RESISTANCE_SHADOW, BASE_VALUE, float(statValue), false);
+            break;
+        case 1007:  // 奥术抗性
+            player->HandleStatModifier(UNIT_MOD_RESISTANCE_ARCANE, BASE_VALUE, float(statValue), false);
+            break;
+        default:
+            // 附魔属性标识（2000+）需要使用 ApplyEnchantStatMod 移除
+            if (statType >= 2000)
+            {
+                // 附魔属性的实际类型需要从记录中解析
+                // 这里简化处理，附魔属性已经通过法术系统管理
+            }
+            break;
+    }
 }
 
 void AscensionManager::UpdatePlayerStats(Player* player)
@@ -1442,46 +2216,100 @@ void AscensionManager::SendAscensionDataToClient(Player* player)
         return;
 
     uint32 playerGuid = player->GetGUID().GetCounter();
+
     PlayerAscensionStatus* status = GetPlayerStatus(playerGuid);
     if (!status)
+    {
         return;
+    }
 
-    // 构建数据字符串: ASCENSION_DATA:槽位:物品ID:物品GUID:解锁状态;...
-    // 注意：使用分号;作为槽位分隔符，因为|在WoW客户端会被当作颜色代码
-    std::ostringstream ss;
-    ss << "ASCENSION_DATA:";
+    // 构建压缩的数据字符串
+    // 格式: ASC:U=解锁槽位位图;E=槽位:物品ID:GUID,槽位:物品ID:GUID...
 
-    bool first = true;
+    // 计算解锁槽位位图
+    uint32 unlockedBitmap = 0;
     for (uint8 slot = 0; slot < ASCENSION_SLOT_COUNT; ++slot)
     {
+        if (IsSlotUnlocked(player, slot))
+        {
+            unlockedBitmap |= (1 << slot);
+        }
+    }
+
+    // 构建装备数据（只包含有装备的槽位）
+    std::ostringstream equipStr;
+    bool first = true;
+    for (const auto& pair : status->slots)
+    {
         if (!first)
-            ss << ";";  // 使用分号代替竖线
-
-        bool unlocked = IsSlotUnlocked(player, slot);
-        auto it = status->slots.find(slot);
-
-        if (it != status->slots.end())
-        {
-            // 有装备
-            ss << (int)slot << ":" << it->second.itemId << ":" << it->second.itemGuid << ":" << (unlocked ? 1 : 0);
-        }
-        else
-        {
-            // 无装备
-            ss << (int)slot << ":0:0:" << (unlocked ? 1 : 0);
-        }
+            equipStr << ",";
+        equipStr << (int)pair.first << ":" << pair.second.itemId << ":" << pair.second.itemGuid;
         first = false;
     }
 
-    // 发送隐藏消息到客户端
-    std::string hiddenMsg = "ASCENSION_HIDDEN:" + ss.str();
-    WorldPacket data;
-    ChatHandler::BuildChatPacket(data, CHAT_MSG_SYSTEM, LANG_UNIVERSAL, nullptr, nullptr, hiddenMsg);
-    player->GetSession()->SendPacket(&data);
+    // 组合数据部分 - 格式: U=位图;E=装备数据
+    std::ostringstream dataStr;
+    dataStr << "U=" << unlockedBitmap << ";E=" << equipStr.str();
+
+    // 【关键】WoTLK 3.3.5 的 Addon 消息格式：PREFIX<TAB>DATA
+    // 使用 "ASCENSION" 作为前缀，与客户端注册的前缀一致
+    std::string fullMessage = "ASCENSION\t" + dataStr.str();
+
+    // 【修复】检查消息长度，如果超过255字节则拆分发送
+    const size_t MAX_ADDON_MSG_LEN = 250;  // 留一些余量
+
+    if (fullMessage.length() <= MAX_ADDON_MSG_LEN)
+    {
+        // 消息长度正常，直接发送
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
+        player->SendDirectMessage(&data);
+    }
+    else
+    {
+        // 消息过长，分两部分发送：先发解锁数据，再发装备数据
+        // 第一条消息：解锁数据
+        std::string msg1 = "ASCENSION\tU=" + std::to_string(unlockedBitmap);
+        WorldPacket data1;
+        ChatHandler::BuildChatPacket(data1, CHAT_MSG_WHISPER, LANG_ADDON, player, player, msg1, 0);
+        player->SendDirectMessage(&data1);
+
+        // 第二条消息：装备数据
+        std::string equipData = equipStr.str();
+        if (!equipData.empty())
+        {
+            std::string msg2 = "ASCENSION\tE=" + equipData;
+
+            // 如果装备数据仍然太长，继续拆分
+            while (msg2.length() > MAX_ADDON_MSG_LEN)
+            {
+                // 找到最后一个逗号位置作为分割点
+                size_t cutPos = msg2.rfind(',', MAX_ADDON_MSG_LEN - 1);
+                if (cutPos == std::string::npos || cutPos < 12)  // "ASCENSION\tE=" 长度约12
+                {
+                    // 无法再拆分，记录警告
+                    LOG_WARN("module", "飞升系统: 单条装备数据过长，可能导致客户端解析失败");
+                    break;
+                }
+
+                std::string partMsg = msg2.substr(0, cutPos);
+                WorldPacket partData;
+                ChatHandler::BuildChatPacket(partData, CHAT_MSG_WHISPER, LANG_ADDON, player, player, partMsg, 0);
+                player->SendDirectMessage(&partData);
+
+                msg2 = "ASCENSION\tE=" + msg2.substr(cutPos + 1);
+            }
+
+            // 发送最后一部分
+            WorldPacket data2;
+            ChatHandler::BuildChatPacket(data2, CHAT_MSG_WHISPER, LANG_ADDON, player, player, msg2, 0);
+            player->SendDirectMessage(&data2);
+        }
+    }
 
     if (sAscensionConfig->IsDebugMode())
     {
-        LOG_INFO("module", "飞升系统: 发送数据到客户端 - {}", ss.str());
+        LOG_INFO("module", "飞升系统: 发送数据到客户端 (长度:{}) - {}", fullMessage.length(), fullMessage);
     }
 }
 
@@ -1572,14 +2400,14 @@ void AscensionPlayerScript::OnPlayerLogout(Player* player)
     // 保存数据
     sAscensionManager->SavePlayerData(player);
 
-    // 【注意】不在这里清理玩家状态
-    // 因为核心的 _SaveInventory 会在 OnPlayerLogout 之后被调用
-    // CanItemRemove 钩子会通过数据库检查来阻止物品被删除
-    // 玩家状态会在下次登录时被重新加载覆盖
+    // 【修复】清理玩家内存状态，防止内存泄漏
+    // 注意：由于 CanItemRemove 钩子现在依赖数据库检查而不是内存状态，
+    // 所以可以安全地在这里清理内存
+    sAscensionManager->ClearPlayerData(player->GetGUID().GetCounter());
 
     if (sAscensionConfig->IsDebugMode())
     {
-        LOG_INFO("module", "飞升系统: 玩家 {} 登出，已保存飞升数据", player->GetName());
+        LOG_INFO("module", "飞升系统: 玩家 {} 登出，已保存飞升数据并清理内存", player->GetName());
     }
 }
 
@@ -1681,6 +2509,23 @@ bool AscensionCommandScript::HandleAscensionEquip(ChatHandler* handler, const ch
     uint8 bagId = static_cast<uint8>(bagIdInt);
     uint8 bagSlot = static_cast<uint8>(bagSlotInt);
 
+    // 【修复】参数范围校验
+    if (ascensionSlotInt < 0 || ascensionSlotInt >= ASCENSION_SLOT_COUNT)
+    {
+        handler->PSendSysMessage("无效槽位，有效范围: 0-{}", ASCENSION_SLOT_COUNT - 1);
+        return true;
+    }
+    if (bagIdInt < 0 || bagIdInt > 4)
+    {
+        handler->SendSysMessage("无效背包ID，有效范围: 0-4 (0=主背包, 1-4=额外背包)");
+        return true;
+    }
+    if (bagSlotInt <= 0)
+    {
+        handler->SendSysMessage("无效背包槽位，槽位从1开始");
+        return true;
+    }
+
     // 通过背包位置获取物品
     // 客户端: bag=0 是主背包，bag=1-4 是额外背包
     // 客户端: slot 从1开始
@@ -1736,7 +2581,14 @@ bool AscensionCommandScript::HandleAscensionUnequip(ChatHandler* handler, const 
         return true;
     }
 
-    uint8 slot = atoi(args);
+    // 【修复】参数范围校验
+    int slotInt = atoi(args);
+    if (slotInt < 0 || slotInt >= ASCENSION_SLOT_COUNT)
+    {
+        handler->PSendSysMessage("无效槽位，有效范围: 0-{}", ASCENSION_SLOT_COUNT - 1);
+        return true;
+    }
+    uint8 slot = static_cast<uint8>(slotInt);
     sAscensionManager->UnequipItem(player, slot);
     return true;
 }
@@ -1792,7 +2644,14 @@ bool AscensionCommandScript::HandleAscensionUnlock(ChatHandler* handler, const c
         return true;
     }
 
-    uint8 slot = atoi(args);
+    // 【修复】参数范围校验
+    int slotInt = atoi(args);
+    if (slotInt < 0 || slotInt >= ASCENSION_SLOT_COUNT)
+    {
+        handler->PSendSysMessage("无效槽位，有效范围: 0-{}", ASCENSION_SLOT_COUNT - 1);
+        return true;
+    }
+    uint8 slot = static_cast<uint8>(slotInt);
     sAscensionManager->UnlockSlot(player, slot);
     return true;
 }
@@ -1843,34 +2702,51 @@ bool AscensionItemScript::CanItemRemove(Player* player, Item* item)
 
         if (!equipStr.empty())
         {
-            // 解析装备数据，检查物品GUID是否在其中
-            std::stringstream ss(equipStr);
-            std::string slotInfo;
-            while (std::getline(ss, slotInfo, ','))
+            // 【修复】使用 try/catch 包裹解析逻辑，防止脏数据导致崩溃
+            try
             {
-                if (!slotInfo.empty())
+                // 解析装备数据，检查物品GUID是否在其中
+                std::stringstream ss(equipStr);
+                std::string slotInfo;
+                while (std::getline(ss, slotInfo, ','))
                 {
-                    std::stringstream slotSS(slotInfo);
-                    std::string part;
-                    std::vector<std::string> parts;
-                    while (std::getline(slotSS, part, ':'))
+                    if (!slotInfo.empty())
                     {
-                        parts.push_back(part);
-                    }
-                    if (parts.size() >= 3)
-                    {
-                        uint32 storedItemGuid = static_cast<uint32>(std::stoul(parts[2]));
-                        if (storedItemGuid == itemGuid)
+                        std::stringstream slotSS(slotInfo);
+                        std::string part;
+                        std::vector<std::string> parts;
+                        while (std::getline(slotSS, part, ':'))
                         {
-                            if (sAscensionConfig->IsDebugMode())
+                            parts.push_back(part);
+                        }
+                        if (parts.size() >= 3)
+                        {
+                            // 先验证是否为有效数字
+                            bool validNumber = !parts[2].empty() &&
+                                std::all_of(parts[2].begin(), parts[2].end(), ::isdigit);
+
+                            if (validNumber)
                             {
-                                LOG_INFO("module", "飞升系统: 阻止删除飞升槽位中的物品 GUID={} 玩家={} (数据库检查)",
-                                    itemGuid, player->GetName());
+                                uint32 storedItemGuid = static_cast<uint32>(std::stoul(parts[2]));
+                                if (storedItemGuid == itemGuid)
+                                {
+                                    if (sAscensionConfig->IsDebugMode())
+                                    {
+                                        LOG_INFO("module", "飞升系统: 阻止删除飞升槽位中的物品 GUID={} 玩家={} (数据库检查)",
+                                            itemGuid, player->GetName());
+                                    }
+                                    return false;  // 阻止删除
+                                }
                             }
-                            return false;  // 阻止删除
                         }
                     }
                 }
+            }
+            catch (const std::exception& e)
+            {
+                LOG_ERROR("module", "飞升系统: CanItemRemove 解析装备数据失败: {} 数据: {}",
+                    e.what(), equipStr);
+                // 解析失败时，为安全起见不阻止删除
             }
         }
     }

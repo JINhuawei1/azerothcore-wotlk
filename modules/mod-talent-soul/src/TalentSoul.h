@@ -21,6 +21,7 @@
 #include <string>
 #include <sstream>
 #include <vector>
+#include <shared_mutex>
 
 /**
  * @enum TalentSoulUpgradeType
@@ -151,6 +152,10 @@ private:
 
     // 玩家数据，键为玩家GUID
     std::unordered_map<uint32, PlayerTalentSoulData> _playerData;
+
+    // 线程安全保护
+    mutable std::shared_mutex _configMutex;     // 配置数据读写锁
+    mutable std::shared_mutex _playerDataMutex; // 玩家数据读写锁
 };
 
 #define sTalentSoulMgr TalentSoulMgr::instance()

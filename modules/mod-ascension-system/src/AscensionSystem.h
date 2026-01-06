@@ -26,7 +26,8 @@
 
 // 飞升系统使用的特殊背包ID
 // 用于在 character_inventory 表中标识飞升系统的物品
-// 这个值必须大于正常背包范围（0-4），且不与其他系统冲突
+// 使用 200 作为虚拟背包标识，核心 PlayerStorage.cpp 会跳过此值
+// 注意：需要确保 PlayerStorage.cpp 中的检查值与此一致
 #define ASCENSION_VIRTUAL_BAG 200
 
 // 槽位定义
@@ -86,8 +87,8 @@ struct PlayerAscensionStatus
     uint32 playerGuid;
     std::map<uint8, AscensionSlotData> slots;           // 槽位 -> 装备数据
     std::set<uint8> unlockedSlots;                       // 已解锁的槽位
-    std::vector<AppliedStatEffect> appliedStats;         // 已应用的属性
-    std::vector<uint32> appliedSpells;                   // 已应用的法术
+    std::map<uint8, std::vector<AppliedStatEffect>> slotStats;   // 【修复】按槽位记录已应用的属性
+    std::map<uint8, std::vector<uint32>> slotSpells;     // 【修复】按槽位记录已应用的法术
 };
 
 //=============================================================================
@@ -171,6 +172,8 @@ public:
 
 private:
     void ApplyItemEffect(Player* player, uint32 itemId, uint8 slot, bool apply);
+    void ApplyEnchantStatMod(Player* player, uint32 statType, int32 amount, bool apply);
+    void RemoveStatEffect(Player* player, uint32 statType, int32 statValue);
     void UpdatePlayerStats(Player* player);
     Item* FindItemInBags(Player* player, uint32 itemGuid);
 

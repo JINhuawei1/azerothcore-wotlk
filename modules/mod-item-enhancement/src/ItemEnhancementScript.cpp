@@ -248,17 +248,9 @@ public:
             if (slot >= EQUIPMENT_SLOT_END)
                 return true; // 不是装备槽，允许移除
 
-            uint64 itemGuid = item->GetGUID().GetCounter();
-            EnhancementRecord const* record = sItemEnhancementMgr->GetEnhancementRecord(itemGuid);
-
-            // 移除强化效果
-            sItemEnhancementMgr->RemoveOfficialItemEnhancement(player, item);
-
-            if (record && record->level > 0)
-            {
-                LOG_DEBUG("module.itemenhancement", "CanItemRemove: Removed enhancement for item {} from slot {}",
-                    itemGuid, slot);
-            }
+            // 【修复】CanItemRemove 不再移除强化效果
+            // 强化效果的移除统一由 OnPlayerAfterMoveItemFromInventory 处理
+            // 避免同一事件触发两次导致重复移除属性
 
             return true; // 允许移除物品
         }
@@ -283,15 +275,27 @@ public:
         if (!sItemEnhancementMgr->IsEnabled() || !player || !item)
             return false;
 
-        // 当物品被移除时，删除对应的强化记录
+        // 【修复】只有在物品真正被销毁时才删除强化记录
+        // OnRemove 在交易、邮寄、移动背包等场景也会触发，不应该删除记录
+        // 检查物品是否真的要被销毁（通过检查物品状态）
+
+        // 如果物品正在被交易或邮寄，不删除记录
+        // 物品被销毁时，通常是通过 Player::DestroyItem 调用的
+        // 此时物品的 owner 仍然是当前玩家
+
         uint32 itemGuid = item->GetGUID().GetCounter();
         EnhancementRecord const* record = sItemEnhancementMgr->GetEnhancementRecord(itemGuid);
+
+        // 只有当物品有强化记录，且物品确实要被永久删除时才删除记录
+        // 注意：这里我们保守处理，只记录日志，不主动删除
+        // 强化记录的清理应该通过定期维护任务或GM命令来处理孤儿记录
         if (record)
         {
-            DeleteEnhancementRecord(itemGuid);
-            LOG_DEBUG("module.itemenhancement", "ItemEnhancement: Deleted enhancement record for item GUID: {}", itemGuid);
+            LOG_DEBUG("module.itemenhancement", "ItemEnhancement: OnRemove triggered for item GUID: {}, level: {} - record preserved for safety",
+                itemGuid, record->level);
         }
 
+        // 返回false表示不阻止物品移除
         return false;
     }
 };

@@ -83,7 +83,11 @@ void ItemAttributesEvents::OnPlayerLogout(Player* player)
     if (lastCleanup.time_since_epoch().count() == 0 || (now - lastCleanup) > std::chrono::minutes(30))
     {
         lastCleanup = now;
-        sItemAttributesLoader->CleanupOrphanedAttributeData();
+        // 【审计修复】添加空指针保护和模块启用检查
+        if (sConfigMgr->GetOption<bool>("ItemAttributes.Enable", true) && sItemAttributesLoader)
+        {
+            sItemAttributesLoader->CleanupOrphanedAttributeData();
+        }
     }
 }
 
@@ -93,10 +97,20 @@ void ItemAttributesEvents::OnPlayerDeleteFromDB(CharacterDatabaseTransaction tra
         return;
 
     // 当角色被删除时，清理该角色所有物品的属性数据
-    // 使用事务来确保数据一致性
-    CharacterDatabase.Execute(
-        "DELETE FROM `物品属性_数据` WHERE `物品GUID` IN "
-        "(SELECT `guid` FROM `item_instance` WHERE `owner_guid` = {})", guid);
+    // 【审计修复】使用传入的事务来确保数据一致性
+    if (trans)
+    {
+        trans->Append(Acore::StringFormat(
+            "DELETE FROM `物品属性_数据` WHERE `物品GUID` IN "
+            "(SELECT `guid` FROM `item_instance` WHERE `owner_guid` = {})", guid));
+    }
+    else
+    {
+        // 如果没有事务，使用异步执行
+        CharacterDatabase.Execute(
+            "DELETE FROM `物品属性_数据` WHERE `物品GUID` IN "
+            "(SELECT `guid` FROM `item_instance` WHERE `owner_guid` = {})", guid);
+    }
     ItemAttributesDBHelper::FlushCache();
 }
 

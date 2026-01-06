@@ -41,14 +41,19 @@ public:
     std::string GetAttributeDescription(Item* item, uint32 attributeId);
 
 private:
-    ItemAttributesEffects() : _isInitialized(false), _batchUpdateInProgress(false), _lastPlayerGuid(0), _pendingUpdateCount(0) {}
+    ItemAttributesEffects() : _isInitialized(false), _lastPlayerGuid(0), _pendingUpdateCount(0) {}
     ~ItemAttributesEffects() = default;
 
     // 【根本性修复】初始化状态标志
     bool _isInitialized;
 
-    // 【性能优化】批量更新进行中标志
-    bool _batchUpdateInProgress;
+    // 【审计修复】将全局批量更新标志改为按玩家跟踪，避免跨玩家并发问题
+    std::mutex _batchUpdateMutex;
+    std::unordered_set<uint64> _batchUpdatePlayers;  // 正在进行批量更新的玩家GUID集合
+
+    // 检查玩家是否正在进行批量更新
+    bool IsBatchUpdateInProgress(uint64 playerGuid);
+    void SetBatchUpdateInProgress(uint64 playerGuid, bool inProgress);
 
     // 【性能优化-防抖】防抖机制：短时间内连续调用时延迟UpdateStats
     uint64 _lastPlayerGuid;          // 上次操作的玩家GUID

@@ -565,6 +565,22 @@ void ItemAttributesEffects::RegisterAttributeEffectHandler(uint32 attributeType,
     _attributeDescriptionGenerators[attributeType] = descGenerator;
 }
 
+// 【审计修复】按玩家跟踪批量更新状态
+bool ItemAttributesEffects::IsBatchUpdateInProgress(uint64 playerGuid)
+{
+    std::lock_guard<std::mutex> lock(_batchUpdateMutex);
+    return _batchUpdatePlayers.find(playerGuid) != _batchUpdatePlayers.end();
+}
+
+void ItemAttributesEffects::SetBatchUpdateInProgress(uint64 playerGuid, bool inProgress)
+{
+    std::lock_guard<std::mutex> lock(_batchUpdateMutex);
+    if (inProgress)
+        _batchUpdatePlayers.insert(playerGuid);
+    else
+        _batchUpdatePlayers.erase(playerGuid);
+}
+
 void ItemAttributesEffects::RequestDeferredStatsUpdate(Player* player)
 {
     if (!player)
@@ -647,9 +663,13 @@ void ItemAttributesEffects::ApplyItemAttributeEffects(Player* player, Item* item
     if (attributes.empty())
         return;
 
+    // 【审计修复】使用按玩家跟踪的批量更新标志，避免跨玩家并发问题
+    uint64 playerGuid = player->GetGUID().GetCounter();
+    bool batchInProgress = IsBatchUpdateInProgress(playerGuid);
+
     // 【性能优化】批量应用期间由上层统一刷新；普通情况下合并到一次延迟刷新
     bool canModifyBefore = player->CanModifyStats();
-    bool needsDeferUpdate = !_batchUpdateInProgress;
+    bool needsDeferUpdate = !batchInProgress;
     if (needsDeferUpdate && canModifyBefore)
         player->SetCanModifyStats(false);
 
@@ -726,8 +746,12 @@ void ItemAttributesEffects::RemoveItemAttributeEffects(Player* player, Item* ite
     if (attributes.empty())
         return;
 
+    // 【审计修复】使用按玩家跟踪的批量更新标志，避免跨玩家并发问题
+    uint64 playerGuid = player->GetGUID().GetCounter();
+    bool batchInProgress = IsBatchUpdateInProgress(playerGuid);
+
     bool canModifyBefore = player->CanModifyStats();
-    bool needsDeferUpdate = !_batchUpdateInProgress;
+    bool needsDeferUpdate = !batchInProgress;
     if (needsDeferUpdate && canModifyBefore)
         player->SetCanModifyStats(false);
 
@@ -767,8 +791,11 @@ void ItemAttributesEffects::UpdateItemAttributeEffects(Player* player)
     if (!player)
         return;
 
+    // 【审计修复】使用按玩家跟踪的批量更新标志，避免跨玩家并发问题
+    uint64 playerGuid = player->GetGUID().GetCounter();
+
     // 【性能优化-批量更新】设置批量更新标志，防止每个装备都触发UpdateAllStats
-    _batchUpdateInProgress = true;
+    SetBatchUpdateInProgress(playerGuid, true);
 
     // 【性能优化-批量更新】禁用自动属性更新，处理完所有装备后统一更新一次
     player->SetCanModifyStats(false);
@@ -792,7 +819,7 @@ void ItemAttributesEffects::UpdateItemAttributeEffects(Player* player)
     }
 
     // 【性能优化-批量更新】恢复批量更新标志
-    _batchUpdateInProgress = false;
+    SetBatchUpdateInProgress(playerGuid, false);
 
     // 【性能优化-批量更新】重新启用属性更新并统一计算一次
     // 这样所有装备的属性变化只触发一次UpdateStats
@@ -898,15 +925,42 @@ std::string ItemAttributesEffects::GetAttributeDescription(Item* item, uint32 at
     if (!attributeTemplate)
         return "";
 
+    // 【审计修复】从数据库读取实际保存的值，而不是重新计算随机值
+    int32 value = 0;
+    uint64 itemGuid = item->GetGUID().GetCounter();
+    auto data = ItemAttributesDBHelper::LoadItemAttributes(itemGuid);
+    if (data)
+    {
+        // 在基础属性中查找
+        for (size_t i = 0; i < data->baseAttributeIds.size(); ++i)
+        {
+            if (data->baseAttributeIds[i] == attributeId)
+            {
+                value = data->baseAttributeValues[i];
+                break;
+            }
+        }
+        // 如果没找到，在追加属性中查找
+        if (value == 0)
+        {
+            for (size_t i = 0; i < data->additionalAttributeIds.size(); ++i)
+            {
+                if (data->additionalAttributeIds[i] == attributeId)
+                {
+                    value = data->additionalAttributeValues[i];
+                    break;
+                }
+            }
+        }
+    }
+
     auto generatorItr = _attributeDescriptionGenerators.find(attributeTemplate->attributeType);
     if (generatorItr != _attributeDescriptionGenerators.end())
     {
-        int32 value = sItemAttributesLoader->CalculateAttributeValue(item, attributeTemplate);
         return generatorItr->second(item, attributeTemplate, value);
     }
 
     // 默认描述
-    int32 value = sItemAttributesLoader->CalculateAttributeValue(item, attributeTemplate);
     std::ostringstream ss;
     ss << attributeTemplate->clientDisplay << ": " << value;
     return ss.str();

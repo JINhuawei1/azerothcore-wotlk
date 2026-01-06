@@ -5,6 +5,22 @@
 --       避免多个插件重复注册事件导致冲突
 -- 用法: 在每个插件中require此文件,然后注册自己的处理函数
 
+-- WoTLK 3.3.5 兼容：如果 C_Timer 不存在，创建一个兼容层
+if not C_Timer then
+    C_Timer = {}
+    function C_Timer.After(delay, func)
+        local frame = CreateFrame("Frame")
+        local elapsed = 0
+        frame:SetScript("OnUpdate", function(self, delta)
+            elapsed = elapsed + delta
+            if elapsed >= delay then
+                self:SetScript("OnUpdate", nil)
+                func()
+            end
+        end)
+    end
+end
+
 -- 创建全局命名空间
 if not _G.PluginManagerClient then
     _G.PluginManagerClient = {}
@@ -139,9 +155,15 @@ function PMClient:Initialize()
         if event == "CHAT_MSG_SYSTEM" then
             PMClient:DispatchMessage(message)
         elseif event == "PLAYER_ENTERING_WORLD" then
-            -- 延迟3秒后请求插件配置,确保客户端完全加载
-            C_Timer.After(3, function()
-                PMClient:RequestPluginConfig()
+            -- 使用 OnUpdate 定时器延迟3秒后请求插件配置,确保客户端完全加载
+            local requestTimer = CreateFrame("Frame")
+            local elapsed = 0
+            requestTimer:SetScript("OnUpdate", function(frame, elap)
+                elapsed = elapsed + elap
+                if elapsed >= 3 then
+                    frame:SetScript("OnUpdate", nil)
+                    PMClient:RequestPluginConfig()
+                end
             end)
         end
     end)

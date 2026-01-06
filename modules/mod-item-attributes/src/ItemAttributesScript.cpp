@@ -282,22 +282,32 @@ public:
         if (!args || !*args)
             return true;
 
+        // 【审计修复】使用 istringstream 替代 strtok，线程安全
         // 解析参数: itemID clientGuid [bag] [slot] [equipFlag] [rpId]
-        char* itemIdStr = strtok((char*)args, " ");
-        char* clientGuidStr = strtok(nullptr, " ");
-        char* bagStr = strtok(nullptr, " ");
-        char* slotStr = strtok(nullptr, " ");
-        char* equipStr = strtok(nullptr, " ");
-        char* rpIdStr = strtok(nullptr, " ");
+        std::istringstream iss(args);
+        std::string itemIdStr, clientGuidStr, bagStr, slotStr, equipStr, rpIdStr;
 
-        if (!itemIdStr || !clientGuidStr)
+        iss >> itemIdStr >> clientGuidStr >> bagStr >> slotStr >> equipStr >> rpIdStr;
+
+        if (itemIdStr.empty() || clientGuidStr.empty())
             return true; // 静默失败
 
-        uint32 itemId = atoi(itemIdStr);
-        uint64 clientGuid = atoi(clientGuidStr);
-        int32 bag = bagStr ? atoi(bagStr) : -1;
-        int32 slot = slotStr ? atoi(slotStr) : -1;
-        bool isEquip = equipStr ? (atoi(equipStr) != 0) : false;
+        // 【审计修复】使用 stoul/stoll 替代 atoi，避免截断和更好的错误处理
+        uint32 itemId = 0;
+        uint64 clientGuid = 0;
+        int32 bag = -1;
+        int32 slot = -1;
+        bool isEquip = false;
+
+        try {
+            itemId = static_cast<uint32>(std::stoul(itemIdStr));
+            clientGuid = std::stoull(clientGuidStr);
+            if (!bagStr.empty()) bag = std::stoi(bagStr);
+            if (!slotStr.empty()) slot = std::stoi(slotStr);
+            if (!equipStr.empty()) isEquip = (std::stoi(equipStr) != 0);
+        } catch (const std::exception&) {
+            return true; // 静默失败
+        }
 
         if (itemId == 0)
         {
@@ -384,7 +394,21 @@ public:
         uint32 group = 0;
 
         if (*args)
-            group = atoi(args);
+        {
+            // 【审计修复】使用 strtoul 替代 atoi，带错误检查
+            char* endPtr = nullptr;
+            unsigned long val = strtoul(args, &endPtr, 10);
+            if (endPtr != args && val <= UINT32_MAX)
+                group = static_cast<uint32>(val);
+        }
+
+        // 【审计修复】添加空指针保护
+        if (!sItemAttributesLoader)
+        {
+            handler->SendSysMessage("物品属性系统尚未初始化");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
 
         std::vector<ItemAttributeTemplate const*> attributes;
 
@@ -435,19 +459,33 @@ public:
             return false;
         }
 
-        char* attributeIdStr = strtok((char*)args, " ");
-        char* itemIdStr = strtok(nullptr, " ");
-        char* attributeValueStr = strtok(nullptr, " ");
+        // 【安全修复】使用 std::istringstream 替代 strtok/atoi
+        std::istringstream iss(args);
+        std::string attributeIdStr, itemIdStr, attributeValueStr;
+        iss >> attributeIdStr >> itemIdStr >> attributeValueStr;
 
-        if (!attributeIdStr || !itemIdStr)
+        if (attributeIdStr.empty() || itemIdStr.empty())
         {
             handler->SendSysMessage("用法: .物品属性 添加 <属性ID> <物品ID> [属性值]");
             handler->SetSentErrorMessage(true);
             return false;
         }
 
-        uint32 attributeId = atoi(attributeIdStr);
-        uint32 itemId = atoi(itemIdStr);
+        // 安全解析参数
+        char* endPtr = nullptr;
+        unsigned long attrLong = strtoul(attributeIdStr.c_str(), &endPtr, 10);
+        uint32 attributeId = (endPtr != attributeIdStr.c_str() && attrLong <= UINT32_MAX) ? static_cast<uint32>(attrLong) : 0;
+
+        endPtr = nullptr;
+        unsigned long itemLong = strtoul(itemIdStr.c_str(), &endPtr, 10);
+        uint32 itemId = (endPtr != itemIdStr.c_str() && itemLong <= UINT32_MAX) ? static_cast<uint32>(itemLong) : 0;
+
+        if (attributeId == 0 || itemId == 0)
+        {
+            handler->SendSysMessage("无效的属性ID或物品ID");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
         
         // 验证属性是否存在
         ItemAttributeTemplate const* attrTemplate = sItemAttributesLoader->GetItemAttributeTemplate(attributeId);
@@ -518,9 +556,13 @@ public:
 
         // 计算属性值（如果未指定）
         int32 attributeValue = 0;
-        if (attributeValueStr)
+        if (!attributeValueStr.empty())
         {
-            attributeValue = atoi(attributeValueStr);
+            // 【安全修复】使用 strtol 替代 atoi
+            endPtr = nullptr;
+            long valLong = strtol(attributeValueStr.c_str(), &endPtr, 10);
+            if (endPtr != attributeValueStr.c_str())
+                attributeValue = static_cast<int32>(valLong);
         }
         else
         {
@@ -547,13 +589,16 @@ public:
         // 添加属性到数据库
         uint64 itemGuid = item->GetGUID().GetCounter();
         uint32 itemEntry = item->GetEntry();
-        if (ItemAttributesDBHelper::AddAttributeToItem(itemGuid, itemEntry, attributeId, attributeValue))
+        // 【审计修复】保存属性类型而不是模板ID，确保与效果系统一致
+        uint32 attrTypeToSave = attrTemplate->attributeType;
+        if (ItemAttributesDBHelper::AddAttributeToItem(itemGuid, itemEntry, attrTypeToSave, attributeValue))
         {
-            // 将真实GUID写入randomPropertyId字段（客户端识别用）
-            int32 randomPropertyId = static_cast<int32>(itemGuid);
-            
+            // 【审计修复】使用特殊标记值而不是GUID，避免64位GUID转32位溢出
+            // 使用负值 -1 作为"有自定义属性"的标记，不会与正常的随机属性ID冲突
+            constexpr int32 CUSTOM_ATTR_MARKER = -1;
+
             // 直接设置字段值并标记为已修改
-            item->SetInt32Value(ITEM_FIELD_RANDOM_PROPERTIES_ID, randomPropertyId);
+            item->SetInt32Value(ITEM_FIELD_RANDOM_PROPERTIES_ID, CUSTOM_ATTR_MARKER);
             item->SetState(ITEM_CHANGED, player);
             item->SaveToDB(nullptr); // 保存到数据库
             
@@ -613,18 +658,33 @@ public:
             return false;
         }
 
-        char* attributeIdStr = strtok((char*)args, " ");
-        char* itemIdStr = strtok(nullptr, " ");
+        // 【审计修复】使用 std::istringstream 替代 strtok/atoi
+        std::istringstream iss(args);
+        std::string attributeIdStr, itemIdStr;
+        iss >> attributeIdStr >> itemIdStr;
 
-        if (!attributeIdStr || !itemIdStr)
+        if (attributeIdStr.empty() || itemIdStr.empty())
         {
             handler->SendSysMessage("用法: .物品属性 删除 <属性ID> <物品ID>");
             handler->SetSentErrorMessage(true);
             return false;
         }
 
-        uint32 attributeId = atoi(attributeIdStr);
-        uint32 itemId = atoi(itemIdStr);
+        // 【审计修复】使用 strtoul 替代 atoi，带错误检查
+        char* endPtr = nullptr;
+        unsigned long attrLong = strtoul(attributeIdStr.c_str(), &endPtr, 10);
+        uint32 attributeId = (endPtr != attributeIdStr.c_str() && attrLong <= UINT32_MAX) ? static_cast<uint32>(attrLong) : 0;
+
+        endPtr = nullptr;
+        unsigned long itemLong = strtoul(itemIdStr.c_str(), &endPtr, 10);
+        uint32 itemId = (endPtr != itemIdStr.c_str() && itemLong <= UINT32_MAX) ? static_cast<uint32>(itemLong) : 0;
+
+        if (attributeId == 0 || itemId == 0)
+        {
+            handler->SendSysMessage("无效的属性ID或物品ID");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
         
         // 验证属性是否存在
         ItemAttributeTemplate const* attrTemplate = sItemAttributesLoader->GetItemAttributeTemplate(attributeId);
@@ -758,7 +818,17 @@ public:
             return false;
         }
 
-        uint32 itemId = atoi(args);
+        // 【审计修复】使用 strtoul 替代 atoi，带错误检查
+        char* endPtr = nullptr;
+        unsigned long val = strtoul(args, &endPtr, 10);
+        uint32 itemId = (endPtr != args && val <= UINT32_MAX) ? static_cast<uint32>(val) : 0;
+
+        if (itemId == 0)
+        {
+            handler->SendSysMessage("无效的物品ID");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
         
         // 在玩家背包中查找指定ID的物品
         Item* item = nullptr;
@@ -966,11 +1036,12 @@ public:
         }
 
         // 解析参数：random [数量] 或 group [组ID] [数量]
-        char* typeStr = strtok((char*)args, " ");
-        char* param1Str = strtok(nullptr, " ");
-        char* param2Str = strtok(nullptr, " ");
+        // 【审计修复】使用 std::istringstream 替代 strtok/atoi
+        std::istringstream iss(args);
+        std::string typeStr, param1Str, param2Str;
+        iss >> typeStr >> param1Str >> param2Str;
 
-        if (!typeStr)
+        if (typeStr.empty())
         {
             handler->SendSysMessage("用法: .物品属性 生成 random <数量>");
             handler->SendSysMessage("     .物品属性 生成 group <组ID> <数量>");
@@ -978,26 +1049,39 @@ public:
             return false;
         }
 
-        std::string type(typeStr);
         uint32 count = 1;
         uint32 groupId = 0;
 
-        if (type == "random")
+        if (typeStr == "random")
         {
-            if (param1Str)
-                count = atoi(param1Str);
+            if (!param1Str.empty())
+            {
+                char* endPtr = nullptr;
+                unsigned long val = strtoul(param1Str.c_str(), &endPtr, 10);
+                if (endPtr != param1Str.c_str() && val <= UINT32_MAX)
+                    count = static_cast<uint32>(val);
+            }
         }
-        else if (type == "group")
+        else if (typeStr == "group")
         {
-            if (!param1Str)
+            if (param1Str.empty())
             {
                 handler->SendSysMessage("用法: .物品属性 生成 group <组ID> <数量>");
                 handler->SetSentErrorMessage(true);
                 return false;
             }
-            groupId = atoi(param1Str);
-            if (param2Str)
-                count = atoi(param2Str);
+            char* endPtr = nullptr;
+            unsigned long val = strtoul(param1Str.c_str(), &endPtr, 10);
+            if (endPtr != param1Str.c_str() && val <= UINT32_MAX)
+                groupId = static_cast<uint32>(val);
+
+            if (!param2Str.empty())
+            {
+                endPtr = nullptr;
+                val = strtoul(param2Str.c_str(), &endPtr, 10);
+                if (endPtr != param2Str.c_str() && val <= UINT32_MAX)
+                    count = static_cast<uint32>(val);
+            }
         }
         else
         {
@@ -1060,7 +1144,8 @@ public:
             }
 
             // 添加属性
-            if (ItemAttributesDBHelper::AddAttributeToItem(itemGuid, itemId, attrTemplate->id, attributeValue))
+            // 【审计修复】保存属性类型而不是模板ID，确保与效果系统一致
+            if (ItemAttributesDBHelper::AddAttributeToItem(itemGuid, itemId, attrTemplate->attributeType, attributeValue))
             {
                 handler->PSendSysMessage("生成属性: {} +{}", attrTemplate->clientDisplay, attributeValue);
                 successCount++;
@@ -1072,11 +1157,11 @@ public:
 
         if (successCount > 0)
         {
-            // 将真实GUID写入randomPropertyId字段
-            int32 randomPropertyId = static_cast<int32>(itemGuid);
-            
+            // 【审计修复】使用特殊标记值而不是GUID，避免64位GUID转32位溢出
+            constexpr int32 CUSTOM_ATTR_MARKER = -1;
+
             // 直接设置字段值并标记为已修改
-            item->SetInt32Value(ITEM_FIELD_RANDOM_PROPERTIES_ID, randomPropertyId);
+            item->SetInt32Value(ITEM_FIELD_RANDOM_PROPERTIES_ID, CUSTOM_ATTR_MARKER);
             item->SetState(ITEM_CHANGED, player);
             item->SaveToDB(nullptr);
             
@@ -1152,6 +1237,13 @@ public:
 
     static bool HandleAttributesCleanupCommand(ChatHandler* handler, const char* /*args*/)
     {
+        // 【审计修复】添加空指针保护
+        if (!sItemAttributesLoader)
+        {
+            handler->SendSysMessage("物品属性系统尚未初始化");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
         // 清理孤立的属性数据（物品已删除但数据仍存在）
         sItemAttributesLoader->CleanupOrphanedAttributeData();
         handler->SendSysMessage("已清理孤立的物品属性数据");
@@ -1191,22 +1283,56 @@ public:
             return false;
         }
 
-        char* itemIdStr = strtok((char*)args, " ");
-        char* minAttrStr = strtok(nullptr, " ");
-        char* maxAttrStr = strtok(nullptr, " ");
-        char* groupIdStr = strtok(nullptr, " ");
+        // 【审计修复】使用 std::istringstream 替代 strtok/atoi
+        std::istringstream iss(args);
+        std::string itemIdStr, minAttrStr, maxAttrStr, groupIdStr;
+        iss >> itemIdStr >> minAttrStr >> maxAttrStr >> groupIdStr;
 
-        if (!itemIdStr)
+        if (itemIdStr.empty())
         {
             handler->SendSysMessage("用法: .物品属性生成 random [物品ID] [最小属性数] [最大属性数] [属性组ID]");
             handler->SetSentErrorMessage(true);
             return false;
         }
 
-        uint32 itemId = atoi(itemIdStr);
-        uint32 minAttr = minAttrStr ? atoi(minAttrStr) : 1;
-        uint32 maxAttr = maxAttrStr ? atoi(maxAttrStr) : minAttr;
-        uint32 groupId = groupIdStr ? atoi(groupIdStr) : 0;
+        // 【审计修复】使用 strtoul 替代 atoi，带错误检查
+        char* endPtr = nullptr;
+        unsigned long val = strtoul(itemIdStr.c_str(), &endPtr, 10);
+        uint32 itemId = (endPtr != itemIdStr.c_str() && val <= UINT32_MAX) ? static_cast<uint32>(val) : 0;
+
+        uint32 minAttr = 1;
+        if (!minAttrStr.empty())
+        {
+            endPtr = nullptr;
+            val = strtoul(minAttrStr.c_str(), &endPtr, 10);
+            if (endPtr != minAttrStr.c_str() && val <= UINT32_MAX)
+                minAttr = static_cast<uint32>(val);
+        }
+
+        uint32 maxAttr = minAttr;
+        if (!maxAttrStr.empty())
+        {
+            endPtr = nullptr;
+            val = strtoul(maxAttrStr.c_str(), &endPtr, 10);
+            if (endPtr != maxAttrStr.c_str() && val <= UINT32_MAX)
+                maxAttr = static_cast<uint32>(val);
+        }
+
+        uint32 groupId = 0;
+        if (!groupIdStr.empty())
+        {
+            endPtr = nullptr;
+            val = strtoul(groupIdStr.c_str(), &endPtr, 10);
+            if (endPtr != groupIdStr.c_str() && val <= UINT32_MAX)
+                groupId = static_cast<uint32>(val);
+        }
+
+        if (itemId == 0)
+        {
+            handler->SendSysMessage("无效的物品ID");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
 
         Player* player = handler->GetSession()->GetPlayer();
         Item* item = nullptr;
@@ -1289,7 +1415,18 @@ public:
             return false;
         }
 
-        uint32 itemId = atoi(args);
+        // 【审计修复】使用 strtoul 替代 atoi，带错误检查
+        char* endPtr = nullptr;
+        unsigned long val = strtoul(args, &endPtr, 10);
+        uint32 itemId = (endPtr != args && val <= UINT32_MAX) ? static_cast<uint32>(val) : 0;
+
+        if (itemId == 0)
+        {
+            handler->SendSysMessage("无效的物品ID");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
         Player* player = handler->GetSession()->GetPlayer();
         Item* item = nullptr;
 
@@ -1361,7 +1498,18 @@ public:
             return false;
         }
 
-        uint32 itemId = atoi(args);
+        // 【审计修复】使用 strtoul 替代 atoi，带错误检查
+        char* endPtr = nullptr;
+        unsigned long val = strtoul(args, &endPtr, 10);
+        uint32 itemId = (endPtr != args && val <= UINT32_MAX) ? static_cast<uint32>(val) : 0;
+
+        if (itemId == 0)
+        {
+            handler->SendSysMessage("无效的物品ID");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
         Player* player = handler->GetSession()->GetPlayer();
         Item* item = nullptr;
 

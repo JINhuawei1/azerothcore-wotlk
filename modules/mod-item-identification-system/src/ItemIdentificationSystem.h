@@ -125,8 +125,10 @@ public:
     void ClearIdentifiedCache(uint32 itemGuid);
 
     // 添加物品到已鉴定缓存（鉴定成功后调用，确保缓存同步）
+    // 【线程安全修复】添加锁保护
     void AddToIdentifiedCache(uint32 itemGuid)
     {
+        std::lock_guard<std::mutex> lock(_identifiedCacheMutex);
         _identifiedItemsCache.insert(itemGuid);
     }
 
@@ -207,8 +209,10 @@ public:
     void CleanExpiredCache();
 
     // 【性能优化】主动清除特定物品的缓存（当物品被修改时调用）
+    // 【线程安全修复】添加锁保护，防止与异步线程竞争
     void ClearItemCache(uint32 itemID, uint32 guid)
     {
+        std::lock_guard<std::mutex> lock(_batchCacheMutex);
         uint64 key = (static_cast<uint64>(itemID) << 32) | guid;
         _batchQueryCache.erase(key);
     }
@@ -237,12 +241,35 @@ public:
     };
 
     PerformanceStats _perfStats;
+    mutable std::mutex _perfStatsMutex;  // 【线程安全修复】保护_perfStats
 
     // 获取性能统计
     const PerformanceStats& GetPerformanceStats() const { return _perfStats; }
 
     // 重置性能统计
     void ResetPerformanceStats();
+
+    // 【线程安全】更新性能统计的原子操作
+    void UpdatePerfStats(uint64 duration, bool cacheHit, bool dbQuery = false)
+    {
+        std::lock_guard<std::mutex> lock(_perfStatsMutex);
+        _perfStats.totalQueries++;
+        if (cacheHit)
+            _perfStats.cacheHits++;
+        else
+            _perfStats.cacheMisses++;
+        if (dbQuery)
+            _perfStats.dbQueries++;
+        _perfStats.totalQueryTime += duration;
+        if (_perfStats.totalQueries > 0)
+            _perfStats.avgQueryTime = _perfStats.totalQueryTime / _perfStats.totalQueries;
+    }
+
+    void IncrementPreloadCount(uint32 count)
+    {
+        std::lock_guard<std::mutex> lock(_perfStatsMutex);
+        _perfStats.preloadCount += count;
+    }
 
     // 获取缓存大小（用于性能统计）
     size_t GetIdentifiedCacheSize() const { return _identifiedItemsCache.size(); }
@@ -252,6 +279,7 @@ public:
 private:
     // 已鉴定物品GUID缓存（内存缓存，提升性能）
     std::set<uint32> _identifiedItemsCache;
+    mutable std::mutex _identifiedCacheMutex;  // 【线程安全修复】保护_identifiedItemsCache
     bool _cacheInitialized;
 
     // 初始化缓存
@@ -370,6 +398,9 @@ private:
 
     // 清理孤立的物品数据（服务器启动时执行）
     void CleanupOrphanedItemData();
+
+    // 定期清理待鉴定物品标记表的孤立数据（每30分钟执行一次）
+    void CleanupPendingIdentificationData();
 };
 
 // 玩家登录时自动发送属性数据

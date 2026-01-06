@@ -51,11 +51,11 @@ ItemAttributesLoader* ItemAttributesLoader::SafeInstance()
 
 void ItemAttributesLoader::LoadItemAttributeTemplates()
 {
-    // 【根本性修复】防止重复初始化
+    // 【审计修复】移除重复初始化检查，允许重载命令生效
+    // 如果已初始化，清空现有数据以便重新加载
     if (_isInitialized)
     {
-        LOG_WARN("module.item-attributes", "LoadItemAttributeTemplates() 被重复调用，跳过加载");
-        return;
+        LOG_INFO("module.item-attributes", "重新加载物品属性模板...");
     }
 
     _itemAttributeTemplateStore.clear();
