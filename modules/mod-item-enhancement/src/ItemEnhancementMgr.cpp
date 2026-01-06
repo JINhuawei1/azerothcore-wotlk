@@ -386,64 +386,42 @@ void ItemEnhancementMgr::PreloadPlayerEnhancementRecords(Player* player)
 
 void ItemEnhancementMgr::SaveEnhancementRecord(EnhancementRecord const& record)
 {
-    // 【安全修复】使用预处理语句防止SQL注入
-    // statValues 可能包含特殊字符，直接拼接存在注入风险
-    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_REP_ITEM_ENHANCEMENT_RECORD);
-    if (!stmt)
+    // 使用转义后的SQL保存数据
+    std::string escapedStatValues = record.statValues;
+    // 转义单引号，防止SQL注入
+    size_t pos = 0;
+    while ((pos = escapedStatValues.find('\'', pos)) != std::string::npos)
     {
-        // 如果预处理语句不可用，使用转义后的SQL（兼容旧版本）
-        std::string escapedStatValues = record.statValues;
-        // 转义单引号，防止SQL注入
-        size_t pos = 0;
-        while ((pos = escapedStatValues.find('\'', pos)) != std::string::npos)
-        {
-            escapedStatValues.replace(pos, 1, "''");
-            pos += 2;
-        }
-        // 转义反斜杠
-        pos = 0;
-        while ((pos = escapedStatValues.find('\\', pos)) != std::string::npos)
-        {
-            escapedStatValues.replace(pos, 1, "\\\\");
-            pos += 2;
-        }
-
-        std::string sql = "REPLACE INTO 物品强化_记录 (";
-        sql += "guid, owner_guid, 物品模板ID, 强化组, 强化等级, 强化经验, 属性值, ";
-        sql += "品质等级, 品质进阶次数, 强化次数, 失败次数, 最后强化时间";
-        sql += ") VALUES (";
-        sql += std::to_string(record.itemGuid) + ", ";
-        sql += std::to_string(record.ownerGuid) + ", ";
-        sql += std::to_string(record.itemTemplateId) + ", ";
-        sql += std::to_string(record.group) + ", ";
-        sql += std::to_string(record.level) + ", ";
-        sql += std::to_string(record.enhancementExp) + ", ";
-        sql += "'" + escapedStatValues + "', ";
-        sql += std::to_string(record.qualityLevel) + ", ";
-        sql += std::to_string(record.qualityUpgradeCount) + ", ";
-        sql += std::to_string(record.enhancementCount) + ", ";
-        sql += std::to_string(record.failureCount) + ", ";
-        sql += std::to_string(record.lastEnhanceTime);
-        sql += ")";
-
-        CharacterDatabase.DirectExecute(sql);
+        escapedStatValues.replace(pos, 1, "''");
+        pos += 2;
     }
-    else
+    // 转义反斜杠
+    pos = 0;
+    while ((pos = escapedStatValues.find('\\', pos)) != std::string::npos)
     {
-        stmt->SetData(0, record.itemGuid);
-        stmt->SetData(1, record.ownerGuid);
-        stmt->SetData(2, record.itemTemplateId);
-        stmt->SetData(3, record.group);
-        stmt->SetData(4, record.level);
-        stmt->SetData(5, record.enhancementExp);
-        stmt->SetData(6, record.statValues);
-        stmt->SetData(7, record.qualityLevel);
-        stmt->SetData(8, record.qualityUpgradeCount);
-        stmt->SetData(9, record.enhancementCount);
-        stmt->SetData(10, record.failureCount);
-        stmt->SetData(11, record.lastEnhanceTime);
-        CharacterDatabase.DirectExecute(stmt);
+        escapedStatValues.replace(pos, 1, "\\\\");
+        pos += 2;
     }
+
+    std::string sql = "REPLACE INTO 物品强化_记录 (";
+    sql += "guid, owner_guid, 物品模板ID, 强化组, 强化等级, 强化经验, 属性值, ";
+    sql += "品质等级, 品质进阶次数, 强化次数, 失败次数, 最后强化时间";
+    sql += ") VALUES (";
+    sql += std::to_string(record.itemGuid) + ", ";
+    sql += std::to_string(record.ownerGuid) + ", ";
+    sql += std::to_string(record.itemTemplateId) + ", ";
+    sql += std::to_string(record.group) + ", ";
+    sql += std::to_string(record.level) + ", ";
+    sql += std::to_string(record.enhancementExp) + ", ";
+    sql += "'" + escapedStatValues + "', ";
+    sql += std::to_string(record.qualityLevel) + ", ";
+    sql += std::to_string(record.qualityUpgradeCount) + ", ";
+    sql += std::to_string(record.enhancementCount) + ", ";
+    sql += std::to_string(record.failureCount) + ", ";
+    sql += std::to_string(record.lastEnhanceTime);
+    sql += ")";
+
+    CharacterDatabase.DirectExecute(sql);
 
     LOG_DEBUG("module.itemenhancement", "[强化保存] 同步写入数据库完成: itemGuid={}, level={}, stats='{}'",
         record.itemGuid, record.level, record.statValues);
