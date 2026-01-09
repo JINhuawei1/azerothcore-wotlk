@@ -520,6 +520,50 @@ void AscensionManager::ValidateEquippedItems(Player* player)
     // 【修复】恢复清理逻辑 - 移除无效的装备记录并同步清理数据库
     for (uint8 slot : slotsToRemove)
     {
+        // 【关键修复】移除该槽位已应用的属性，防止属性叠加bug
+        auto statIt = status->slotStats.find(slot);
+        if (statIt != status->slotStats.end())
+        {
+            for (const AppliedStatEffect& effect : statIt->second)
+            {
+                RemoveStatEffect(player, effect.statType, effect.statValue);
+            }
+            status->slotStats.erase(statIt);
+            LOG_INFO("module", "飞升系统: 已移除玩家 {} 槽位 {} 的属性效果", player->GetName(), slot);
+        }
+
+        // 【关键修复】移除该槽位关联的法术
+        auto spellIt = status->slotSpells.find(slot);
+        if (spellIt != status->slotSpells.end())
+        {
+            for (uint32 spellId : spellIt->second)
+            {
+                // 检查其他槽位是否也有相同法术
+                bool spellFromOtherSlot = false;
+                for (const auto& otherSlot : status->slotSpells)
+                {
+                    if (otherSlot.first != slot)
+                    {
+                        for (uint32 otherId : otherSlot.second)
+                        {
+                            if (otherId == spellId)
+                            {
+                                spellFromOtherSlot = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (spellFromOtherSlot) break;
+                }
+                if (!spellFromOtherSlot)
+                {
+                    player->RemoveAurasDueToSpell(spellId);
+                }
+            }
+            status->slotSpells.erase(spellIt);
+            LOG_INFO("module", "飞升系统: 已移除玩家 {} 槽位 {} 的法术效果", player->GetName(), slot);
+        }
+
         // 从 character_inventory 表删除该槽位的记录
         CharacterDatabase.Execute(
             "DELETE FROM character_inventory WHERE guid = {} AND bag = {} AND slot = {}",
@@ -529,6 +573,12 @@ void AscensionManager::ValidateEquippedItems(Player* player)
         status->slots.erase(slot);
 
         LOG_INFO("module", "飞升系统: 已清理玩家 {} 槽位 {} 的无效装备记录", player->GetName(), slot);
+    }
+
+    // 【关键修复】清理完成后更新玩家属性
+    if (!slotsToRemove.empty())
+    {
+        UpdatePlayerStats(player);
     }
 
     // 如果有变动，保存数据
