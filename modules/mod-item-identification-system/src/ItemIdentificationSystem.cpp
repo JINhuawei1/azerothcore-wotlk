@@ -3286,22 +3286,35 @@ private:
                 uint8 slot = item->GetSlot();
 
                 // 【关键】服务器端背包编号转换为客户端编号
-                int clientBag;
+                int clientBag = 255;
+                int clientSlot = 0;
+
                 if (serverBag == INVENTORY_SLOT_BAG_0)
                 {
-                    clientBag = 0;
+                    if (slot >= EQUIPMENT_SLOT_START && slot < EQUIPMENT_SLOT_END)
+                    {
+                        clientBag = 255;
+                        clientSlot = static_cast<int>(slot) + 1;
+                    }
+                    else if (slot >= INVENTORY_SLOT_ITEM_START && slot < INVENTORY_SLOT_ITEM_END)
+                    {
+                        clientBag = 0;
+                        clientSlot = static_cast<int>(slot - INVENTORY_SLOT_ITEM_START) + 1;
+                    }
+                    else
+                    {
+                        continue;
+                    }
                 }
-                else if (serverBag >= INVENTORY_SLOT_BAG_START && serverBag <= INVENTORY_SLOT_BAG_END)
+                else if (serverBag >= INVENTORY_SLOT_BAG_START && serverBag < INVENTORY_SLOT_BAG_END)
                 {
                     clientBag = serverBag - INVENTORY_SLOT_BAG_START + 1;
+                    clientSlot = static_cast<int>(slot) + 1;
                 }
                 else
                 {
-                    clientBag = 255;
+                    continue;
                 }
-
-                // 【关键修复】服务器端槽位是0-based，客户端UI是1-based，需要+1
-                int clientSlot = (int)slot + 1;
 
                 // 生成物品条目字符串
                 std::ostringstream entryStream;

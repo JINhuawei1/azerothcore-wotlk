@@ -147,11 +147,13 @@ local HuanJingState = {
 -- 【修改】使用 "bag:slot:itemId" 作为缓存键，而不是GUID
 local PendingIdentifyState = {
     cache = {},       -- "bag:slot:itemId" -> { multiplier, groupId, timestamp }
-    lastQuery = 0,    -- 上次查询时间
-    COOLDOWN = 5,     -- 查询冷却（秒）
-    EXPIRE = 60,      -- 缓存有效期（秒）
-    querying = false, -- 是否正在查询中
-    refreshing = false  -- 【新增】是否正在刷新中（背包变化触发的强制刷新）
+    suppressed = {},  -- "bag:slot:itemId" -> expireTime???????????????????
+    lastQuery = 0,    -- ??????
+    COOLDOWN = 5,     -- ???????
+    EXPIRE = 60,      -- ????????
+    SUPPRESS_EXPIRE = 8, -- ?????????????????????
+    querying = false, -- ???????
+    refreshing = false  -- ????????????????????????
 }
 
 -- 【新增】查询待鉴定物品列表
@@ -180,18 +182,70 @@ end
 
 -- 【新增】检查物品是否待鉴定，返回 { isPending, multiplier } 或 nil
 -- 【修改】使用背包号+槽位+物品ID来查询，而不是GUID
-local function GetPendingIdentifyInfo(bag, slot, itemId)
+local function GetPendingIdentifyCacheKey(bag, slot, itemId)
     if bag == nil or slot == nil or not itemId then
         return nil
     end
+    return string.format("%d:%d:%d", bag, slot, itemId)
+end
 
-    local cacheKey = string.format("%d:%d:%d", bag, slot, itemId)
+local function CleanupPendingIdentifySuppressed(now)
+    now = now or GetTime()
+    for cacheKey, expireTime in pairs(PendingIdentifyState.suppressed) do
+        if not expireTime or now >= expireTime then
+            PendingIdentifyState.suppressed[cacheKey] = nil
+        end
+    end
+end
+
+local function SuppressPendingIdentify(bag, slot, itemId, duration)
+    local cacheKey = GetPendingIdentifyCacheKey(bag, slot, itemId)
+    if not cacheKey then
+        return
+    end
+
+    PendingIdentifyState.cache[cacheKey] = nil
+    PendingIdentifyState.suppressed[cacheKey] = GetTime() + (duration or PendingIdentifyState.SUPPRESS_EXPIRE)
+end
+
+local function IsPendingIdentifySuppressed(bag, slot, itemId)
+    local cacheKey = GetPendingIdentifyCacheKey(bag, slot, itemId)
+    if not cacheKey then
+        return false
+    end
+
+    local now = GetTime()
+    local expireTime = PendingIdentifyState.suppressed[cacheKey]
+    if not expireTime then
+        return false
+    end
+
+    if now >= expireTime then
+        PendingIdentifyState.suppressed[cacheKey] = nil
+        return false
+    end
+
+    return true
+end
+
+local function GetPendingIdentifyInfo(bag, slot, itemId)
+    local cacheKey = GetPendingIdentifyCacheKey(bag, slot, itemId)
+    if not cacheKey then
+        return nil
+    end
+
+    CleanupPendingIdentifySuppressed()
+    if IsPendingIdentifySuppressed(bag, slot, itemId) then
+        PendingIdentifyState.cache[cacheKey] = nil
+        return nil
+    end
+
     local data = PendingIdentifyState.cache[cacheKey]
     if not data then
         return nil
     end
 
-    -- 检查是否过期
+    -- ??????
     local now = GetTime()
     if (now - data.timestamp) > PendingIdentifyState.EXPIRE then
         PendingIdentifyState.cache[cacheKey] = nil
@@ -491,13 +545,9 @@ local function ApplyHuanJingToOfficialTooltip(tooltip)
                         local enhanced = info.enhanced or (original * mult)
 
                         -- 与右侧“基础/追加属性”保持一致的配色：倍率为粉色，最终值为红色
-                        local newCoreText = string.format("%d + %s倍率x%d%s %s= %d%s %s",
-                            original,
-                            COLOR_PINK, mult, COLOR_RESET,
-                            COLOR_RED, enhanced, COLOR_RESET,
-                            name)
+                        local newCoreText = FormatTooltipStatLine(name, original, mult)
 
-                        leftText:SetText(colorPrefix .. newCoreText .. colorSuffix)
+                        leftText:SetText(newCoreText)
                         changed = true
                         break
                     end
@@ -912,7 +962,7 @@ local function WrapText(text, maxCharsPerLine)
     if not text or text == "" then return {text} end
 
     -- 默认每行200个“显示字节”：ASCII算1，中文算2，大约可以放下100个汉字
-    maxCharsPerLine = maxCharsPerLine or 200
+    maxCharsPerLine = maxCharsPerLine or 220
 
     -- 提取颜色代码
     local colorCode = text:match("^(|c%x%x%x%x%x%x%x%x)")
@@ -999,7 +1049,6 @@ local function WrapText(text, maxCharsPerLine)
 
     return lines
 end
-
 
 -- ============================================================================
 -- 数据解析器 - 只使用批量查询解析器（addon格式）
@@ -1485,6 +1534,24 @@ end
 -- 渲染器 - 统一的渲染逻辑
 -- ============================================================================
 
+local function FormatSignedValue(value)
+    local numericValue = tonumber(value) or 0
+    local absValue = math.abs(numericValue)
+    if numericValue < 0 then
+        return string.format("- %d", absValue)
+    end
+    return string.format("+ %d", absValue)
+end
+
+local function FormatTooltipStatLine(name, value, multiplier)
+    local label = name or "属性"
+    local baseText = string.format("%s %s", FormatSignedValue(value), label)
+    if multiplier and multiplier > 1 then
+        return string.format("|cff00ff00%s  |r%s倍率x%d|r", baseText, COLOR_PINK, multiplier)
+    end
+    return string.format("|cff00ff00%s|r", baseText)
+end
+
 local Renderers = {}
 
 -- 渲染魔次属性
@@ -1527,8 +1594,7 @@ function Renderers.Growth(tooltip, data)
     if data.attributes and #data.attributes > 0 then
         for _, attr in ipairs(data.attributes) do
             local name = ATTR_NAMES[attr.type] or ("属性" .. attr.type)
-            tooltip:AddLine(string.format("%s+%d %s%s",
-                DB.colors.value, attr.value, name, DB.colors.reset))
+            tooltip:AddLine(FormatTooltipStatLine(name, attr.value))
         end
     end
 end
@@ -1609,7 +1675,7 @@ function Renderers.Identification(tooltip, data)
             if leftText and attrIndex <= #data.baseAttributes then
                 local attr = data.baseAttributes[attrIndex]
                 local name = ATTR_NAMES[attr.type] or ("属性" .. attr.type)
-                local displayText = string.format("|cff00ff00+%d %s|r", attr.value, name)
+                local displayText = FormatTooltipStatLine(name, attr.value)
                 leftText:SetText(displayText)
                 attrIndex = attrIndex + 1
             elseif leftText then
@@ -1623,7 +1689,7 @@ function Renderers.Identification(tooltip, data)
             for i = attrIndex, #data.baseAttributes do
                 local attr = data.baseAttributes[i]
                 local name = ATTR_NAMES[attr.type] or ("属性" .. attr.type)
-                local displayText = string.format("|cff00ff00+%d %s|r", attr.value, name)
+                local displayText = FormatTooltipStatLine(name, attr.value)
                 tooltip:AddLine(displayText)
             end
         end
@@ -1634,7 +1700,7 @@ function Renderers.Identification(tooltip, data)
 
         for _, attr in ipairs(data.baseAttributes) do
             local name = ATTR_NAMES[attr.type] or ("属性" .. attr.type)
-            local displayText = string.format("|cff00ff00+%d %s|r", attr.value, name)
+            local displayText = FormatTooltipStatLine(name, attr.value)
             tooltip:AddLine(displayText)
         end
     end
@@ -1646,7 +1712,7 @@ function Renderers.Identification(tooltip, data)
 
         for _, attr in ipairs(data.additionalAttributes) do
             local name = ATTR_NAMES[attr.type] or ("属性" .. attr.type)
-            local displayText = string.format("|cff00ff00+%d %s|r", attr.value, name)
+            local displayText = FormatTooltipStatLine(name, attr.value)
             tooltip:AddLine(displayText)
         end
     end
@@ -1666,8 +1732,7 @@ function Renderers.Enhancement(tooltip, data)
     if data.attributes and #data.attributes > 0 then
         for _, attr in ipairs(data.attributes) do
             local name = ATTR_NAMES[attr.type] or ("属性" .. attr.type)
-            tooltip:AddLine(string.format("%s+%d %s%s",
-                DB.colors.value, attr.value, name, DB.colors.reset))
+            tooltip:AddLine(FormatTooltipStatLine(name, attr.value))
         end
     end
 end
@@ -1687,7 +1752,7 @@ function Renderers.Skills(tooltip, data)
         text = text .. DB.colors.reset
 
         -- 使用WrapText函数将长文本分行显示，每行约支持100个汉字（200显示字节）
-        local lines = WrapText(text, 200)
+        local lines = WrapText(text, 220)
         for _, line in ipairs(lines) do
             tooltip:AddLine(line)
         end
@@ -1760,11 +1825,7 @@ function Renderers.Sets(tooltip, data)
         tooltip:AddLine(DB.colors.value .. "套装属性:" .. DB.colors.reset)
         for _, attr in ipairs(data.attributes) do
             local attrName = ATTR_NAMES[attr.type] or ("属性" .. attr.type)
-            local sign = attr.value >= 0 and "+ " or "- "
-            tooltip:AddLine(string.format("  %s%s%s %s%s%d%s",
-                DB.colors.name, attrName, DB.colors.reset,
-                DB.colors.value, sign, attr.value,
-                DB.colors.reset))
+            tooltip:AddLine("  " .. FormatTooltipStatLine(attrName, attr.value))
         end
     end
 
@@ -1884,11 +1945,10 @@ local function ShouldSkipQuery(key)
         local pending = State.pending[key]
         if pending.queryStartTime then
             local waitTime = now - pending.queryStartTime
-            if waitTime < 1.0 then
-                -- 查询刚发送不久（1秒内），跳过避免重复查询
+            local staleThreshold = math.max((DB.timeout or 15), 5)
+            if waitTime < staleThreshold then
                 return true, "pending_active"
             else
-                -- 已经等待超过1秒，清除pending状态，允许重新查询
                 State.pending[key] = nil
                 return false
             end
@@ -2367,108 +2427,50 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
         tooltip:AddLine(" ")
         tooltip:AddLine(DB.colors.header .. "基础属性" .. DB.colors.reset)
 
-        -- 先显示官方基础属性（力/敏/智/耐/精），带幻境倍率
         for _, attr in ipairs(officialBaseAttributes) do
             local baseValue = attr.value
             local mult = attr.multiplier
-            local enhanced = baseValue * mult
-
-            local leftText = string.format("%d + %s倍率x%d%s %s= %d%s",
-                baseValue,
-                COLOR_PINK, mult, COLOR_RESET,
-                COLOR_RED, enhanced, COLOR_RESET)
-
-            tooltip:AddDoubleLine(
-                leftText,
-                attr.name,
-                0, 1, 0,
-                0, 1, 0
-            )
+            tooltip:AddLine(FormatTooltipStatLine(attr.name, baseValue, mult), 0, 1, 0)
         end
 
-        -- 再显示鉴定系统的基础属性
         for index, attr in ipairs(baseAttributes) do
             local name = ATTR_NAMES[attr.type] or ("属性" .. attr.type)
             local hjInfo = hjBaseInfo[index]
             local leftText
 
-            -- 【修复】当有幻境倍率时，即使没有hjInfo也要显示倍率加成
             if hjData and hjData.multiplier and hjData.multiplier > 1 then
                 local mult = hjData.multiplier
-                local original, enhanced
-
-                if hjInfo then
-                    -- 优先使用幻境系统返回的原值和增强值
-                    original = hjInfo.original or attr.value
-                    enhanced = hjInfo.enhanced or math.floor(original * mult + 0.5)
-                else
-                    -- 如果没有hjInfo，直接用属性值乘以倍率计算
-                    original = attr.value
-                    enhanced = math.floor(original * mult + 0.5)
-                end
-
-                leftText = string.format("%d + %s倍率x%d%s %s= %d%s",
-                    original,
-                    COLOR_PINK, mult, COLOR_RESET,
-                    COLOR_RED, enhanced, COLOR_RESET)
+                local original = hjInfo and (hjInfo.original or attr.value) or attr.value
+                leftText = FormatTooltipStatLine(name, original, mult)
             else
-                leftText = string.format("+%d", attr.value)
+                leftText = FormatTooltipStatLine(name, attr.value)
             end
 
-            tooltip:AddDoubleLine(
-                leftText,
-                name,
-                0, 1, 0,  -- 左列：绿色
-                0, 1, 0   -- 右列：绿色
-            )
+            tooltip:AddLine(leftText, 0, 1, 0)
         end
     end
 
-    -- 在tooltip末尾添加鉴定系统的追加属性（如果有）
     if #additionalAttributes > 0 then
         tooltip:AddLine(" ")
         tooltip:AddLine(DB.colors.header .. "追加属性" .. DB.colors.reset)
 
-        -- 只显示鉴定系统随机生成的追加属性（不再混入官方基础属性）
         for index, attr in ipairs(additionalAttributes) do
             local name = ATTR_NAMES[attr.type] or ("属性" .. attr.type)
             local hjInfo = hjAdditionalInfo[index]
             local leftText
 
-            -- 【修复】当有幻境倍率时，即使没有hjInfo也要显示倍率加成
             if hjData and hjData.multiplier and hjData.multiplier > 1 then
                 local mult = hjData.multiplier
-                local original, enhanced
-
-                if hjInfo then
-                    -- 优先使用幻境系统返回的原值和增强值
-                    original = hjInfo.original or attr.value
-                    enhanced = hjInfo.enhanced or math.floor(original * mult + 0.5)
-                else
-                    -- 如果没有hjInfo，直接用属性值乘以倍率计算
-                    original = attr.value
-                    enhanced = math.floor(original * mult + 0.5)
-                end
-
-                leftText = string.format("%d + %s倍率x%d%s %s= %d%s",
-                    original,
-                    COLOR_PINK, mult, COLOR_RESET,
-                    COLOR_RED, enhanced, COLOR_RESET)
+                local original = hjInfo and (hjInfo.original or attr.value) or attr.value
+                leftText = FormatTooltipStatLine(name, original, mult)
             else
-                leftText = string.format("+%d", attr.value)
+                leftText = FormatTooltipStatLine(name, attr.value)
             end
 
-            tooltip:AddDoubleLine(
-                leftText,
-                name,
-                0, 1, 0,  -- 左列：绿色
-                0, 1, 0   -- 右列：绿色
-            )
+            tooltip:AddLine(leftText, 0, 1, 0)
         end
     end
 
-    -- 渲染强化系统的属性（独立区块）
-    -- 只要有强化数据（等级或属性），就显示强化区块
     if enhanceData and (
         (enhanceData.level and enhanceData.level > 0) or
         (enhanceData.attributes and #enhanceData.attributes > 0)
@@ -2485,32 +2487,19 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
                 local name = ATTR_NAMES[attr.type] or ("属性" .. attr.type)
                 local leftText
 
-                -- 如果存在幻境倍率，则按“原值 + 倍率xN = 最终值”格式显示
                 if hjData and hjData.multiplier and hjData.multiplier > 1 then
                     local mult = hjData.multiplier
                     local baseValue = attr.value or 0
-                    local finalValue = math.floor(baseValue * mult + 0.5)
-
-                    leftText = string.format("%d + %s倍率x%d%s %s= %d%s",
-                        baseValue,
-                        COLOR_PINK, mult, COLOR_RESET,
-                        COLOR_RED, finalValue, COLOR_RESET)
+                    leftText = FormatTooltipStatLine(name, baseValue, mult)
                 else
-                    leftText = string.format("+%d", attr.value)
+                    leftText = FormatTooltipStatLine(name, attr.value)
                 end
 
-                tooltip:AddDoubleLine(
-                    leftText,
-                    name,
-                    0, 1, 0,  -- 左列：绿色
-                    0, 1, 0   -- 右列：绿色
-                )
+                tooltip:AddLine(leftText, 0, 1, 0)
             end
         end
     end
 
-    -- 渲染成长系统的属性（独立区块）
-    -- 只要有成长数据（等级、经验或属性），就显示成长区块
     if growthData and (
         (growthData.level and growthData.level > 0) or
         (growthData.attributes and #growthData.attributes > 0)
@@ -2532,31 +2521,19 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
                 local name = ATTR_NAMES[attr.type] or ("属性" .. attr.type)
                 local leftText
 
-                -- 成长属性同样应用幻境倍率显示
                 if hjData and hjData.multiplier and hjData.multiplier > 1 then
                     local mult = hjData.multiplier
                     local baseValue = attr.value or 0
-                    local finalValue = math.floor(baseValue * mult + 0.5)
-
-                    leftText = string.format("%d + %s倍率x%d%s %s= %d%s",
-                        baseValue,
-                        COLOR_PINK, mult, COLOR_RESET,
-                        COLOR_RED, finalValue, COLOR_RESET)
+                    leftText = FormatTooltipStatLine(name, baseValue, mult)
                 else
-                    leftText = string.format("+%d", attr.value)
+                    leftText = FormatTooltipStatLine(name, attr.value)
                 end
 
-                tooltip:AddDoubleLine(
-                    leftText,
-                    name,
-                    0, 1, 0,  -- 左列：绿色
-                    0, 1, 0   -- 右列：绿色
-                )
+                tooltip:AddLine(leftText, 0, 1, 0)
             end
         end
     end
 
-    -- 标记这些系统已渲染
     meta.rendered.identification = true
     meta.rendered.enhancement = true
     meta.rendered.growth = true
@@ -2875,14 +2852,16 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
                         local bag, slot, itemId, multiplier, groupId = itemStr:match("(%d+),(%d+),(%d+),(%d+),(%d+)")
                         if bag and slot and itemId then
                             local cacheKey = string.format("%s:%s:%s", bag, slot, itemId)
-                            PendingIdentifyState.cache[cacheKey] = {
-                                bag = tonumber(bag),
-                                slot = tonumber(slot),
-                                itemId = tonumber(itemId),
-                                multiplier = tonumber(multiplier) or 1,
-                                groupId = tonumber(groupId) or 0,
-                                timestamp = GetTime()
-                            }
+                            if not IsPendingIdentifySuppressed(tonumber(bag), tonumber(slot), tonumber(itemId)) then
+                                PendingIdentifyState.cache[cacheKey] = {
+                                    bag = tonumber(bag),
+                                    slot = tonumber(slot),
+                                    itemId = tonumber(itemId),
+                                    multiplier = tonumber(multiplier) or 1,
+                                    groupId = tonumber(groupId) or 0,
+                                    timestamp = GetTime()
+                                }
+                            end
                         end
                     end
                 end
@@ -2911,14 +2890,16 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
                     local bag, slot, itemId, multiplier, groupId = itemStr:match("(%d+),(%d+),(%d+),(%d+),(%d+)")
                     if bag and slot and itemId then
                         local cacheKey = string.format("%s:%s:%s", bag, slot, itemId)
-                        PendingIdentifyState.cache[cacheKey] = {
-                            bag = tonumber(bag),
-                            slot = tonumber(slot),
-                            itemId = tonumber(itemId),
-                            multiplier = tonumber(multiplier) or 1,
-                            groupId = tonumber(groupId) or 0,
-                            timestamp = GetTime()
-                        }
+                        if not IsPendingIdentifySuppressed(tonumber(bag), tonumber(slot), tonumber(itemId)) then
+                            PendingIdentifyState.cache[cacheKey] = {
+                                bag = tonumber(bag),
+                                slot = tonumber(slot),
+                                itemId = tonumber(itemId),
+                                multiplier = tonumber(multiplier) or 1,
+                                groupId = tonumber(groupId) or 0,
+                                timestamp = GetTime()
+                            }
+                        end
                     end
                 end
             end
@@ -2936,6 +2917,7 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
         local bag, slot, itemId = dataMessage:match("^IDENTIFY_RESULT:SUCCESS:(%d+):(%d+):(%d+)")
         if bag and slot and itemId then
             local cacheKey = string.format("%s:%s:%s", bag, slot, itemId)
+            SuppressPendingIdentify(tonumber(bag), tonumber(slot), tonumber(itemId))
             -- 清除待鉴定状态缓存
             if PendingIdentifyState.cache[cacheKey] then
                 PendingIdentifyState.cache[cacheKey] = nil
@@ -2947,6 +2929,19 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
                 State.cache[stateCacheKey] = nil
                 State.cacheTime[stateCacheKey] = nil
                 State.pending[stateCacheKey] = nil
+            end
+            State.lastQuery[stateCacheKey] = nil
+            State.noDataUntil[stateCacheKey] = nil
+            if State.itemIdToKeys and State.itemIdToKeys[tonumber(itemId)] then
+                local mappedKeys = State.itemIdToKeys[tonumber(itemId)]
+                for idx = #mappedKeys, 1, -1 do
+                    if mappedKeys[idx] == stateCacheKey then
+                        table.remove(mappedKeys, idx)
+                    end
+                end
+                if #mappedKeys == 0 then
+                    State.itemIdToKeys[tonumber(itemId)] = nil
+                end
             end
         end
 
@@ -3106,12 +3101,11 @@ ProcessServerResponse = function(message, receiveTime)
         -- end
         -- print(string.format("|cff00ff00[响应处理]|r itemID=%d的映射状态: %s", batchData.itemID, mappingInfo))
 
-        -- 工具：校验pending对应槽位当前的物品指纹，以避免响应落在已换装的槽位上
-        -- 【关键修复】同时通过服务器返回的GUID匹配正确的物品实例
-        local function PendingSlotMatches(candidatePending, serverGuid)
+        -- ?????pending?????????????????????????????
+        local function PendingSlotMatches(candidatePending)
             if not candidatePending then return false end
 
-            -- 没有位置的（例如检查他人装备）保持兼容
+            -- ???????????????????
             if candidatePending.bag == nil or candidatePending.slot == nil then
                 return true
             end
@@ -3137,109 +3131,77 @@ ProcessServerResponse = function(message, receiveTime)
                 return false
             end
 
-            -- 【关键修复】额外检查：从物品链接中提取的uniqueId字段（位置8或9）
-            -- 如果服务器返回了GUID，验证链接中是否包含该GUID
-            -- WoW 3.3.5链接格式: item:itemId:enchant:gem1:gem2:gem3:gem4:suffixId:uniqueId:level
-            if serverGuid and serverGuid > 0 and liveFingerprint then
-                local parts = { strsplit(":", liveFingerprint) }
-                -- 检查位置8(suffixId后的uniqueId)或位置9(level前的字段)
-                local linkUniqueId = nil
-                if #parts >= 8 then
-                    -- 位置8通常是suffixId，位置9才是uniqueId(但3.3.5通常为0)
-                    -- 有些服务器会把GUID放在suffixId位置
-                    local pos8 = tonumber(parts[8])
-                    local pos9 = tonumber(parts[9])
-                    if pos8 and pos8 > 0 then
-                        linkUniqueId = math.abs(pos8)
-                    elseif pos9 and pos9 ~= 0 then
-                        linkUniqueId = math.abs(pos9)
-                    end
-                end
-
-                if linkUniqueId and linkUniqueId > 0 and linkUniqueId ~= serverGuid then
-                    return false
-                end
-            end
-
             return true
         end
 
-        -- 【关键修复】优先使用服务器返回的bag:slot精确匹配pending记录
-        -- 这是最可靠的方式，因为服务器返回的bag:slot与客户端发送的完全一致
-        if batchData.bag ~= nil and batchData.slot ~= nil then
-            -- 新格式响应：使用bag:slot:itemID直接生成缓存键
+        -- ?????????itemID -> pending?????????
+        -- ????????bag:slot??????????????????????????
+        if State.itemIdToKeys and State.itemIdToKeys[batchData.itemID] then
+            local keys = State.itemIdToKeys[batchData.itemID]
+
+            -- ???????????????guid??
+            for _, candidateKey in ipairs(keys) do
+                local candidatePending = State.pending[candidateKey]
+                if candidatePending and PendingSlotMatches(candidatePending) then
+                    if candidatePending.guid and batchData.guid and candidatePending.guid == batchData.guid then
+                        key = candidateKey
+                        pending = candidatePending
+                        break
+                    end
+                end
+            end
+
+            -- ?????????????????pending
+            if not key then
+                local bestKey = nil
+                local bestPending = nil
+                for _, candidateKey in ipairs(keys) do
+                    local candidatePending = State.pending[candidateKey]
+                    if candidatePending and PendingSlotMatches(candidatePending) then
+                        if not bestPending or (candidatePending.queryId or 0) > (bestPending.queryId or 0) then
+                            bestKey = candidateKey
+                            bestPending = candidatePending
+                        end
+                    end
+                end
+                if bestKey and bestPending then
+                    key = bestKey
+                    pending = bestPending
+                end
+            end
+        end
+
+        -- ?????????????????bag:slot???????
+        if not key and batchData.bag ~= nil and batchData.slot ~= nil then
             local directKey = MakeKey(batchData.itemID, nil, batchData.bag, batchData.slot, batchData.bag == 255)
             local directPending = State.pending[directKey]
-
-            if directPending then
+            if directPending and PendingSlotMatches(directPending) then
                 key = directKey
                 pending = directPending
             end
         end
 
-        -- 如果bag:slot匹配失败，回退到itemID映射查找
-        if not key and State.itemIdToKeys and State.itemIdToKeys[batchData.itemID] then
-            local keys = State.itemIdToKeys[batchData.itemID]
-
-            -- 【优先】尝试通过pending.guid精确匹配，同时校验槽位指纹
-            for _, candidateKey in ipairs(keys) do
-                local candidatePending = State.pending[candidateKey]
-                if candidatePending and candidatePending.guid and PendingSlotMatches(candidatePending, batchData.guid) then
-                    if candidatePending.guid == batchData.guid then
-                        key = candidateKey
-                        pending = candidatePending
-                        break
-                    end
-                end
-            end
-
-            -- 【备用】通过缓存中的GUID匹配（兼容旧数据），也需要槽位指纹匹配
-            if not key then
-                for _, candidateKey in ipairs(keys) do
-                    local candidatePending = State.pending[candidateKey]
-                    local candidateCache = State.cache[candidateKey]
-                    if candidatePending and candidateCache and PendingSlotMatches(candidatePending, batchData.guid) then
-                        if candidateCache.guid and candidateCache.guid == batchData.guid then
-                            key = candidateKey
-                            pending = candidatePending
-                            break
-                        end
-                    end
-                end
-            end
-
-            -- 【最后手段】在槽位指纹匹配的pending中按FIFO选择
-            if not key then
-                for _, candidateKey in ipairs(keys) do
-                    local candidatePending = State.pending[candidateKey]
-                    if candidatePending and PendingSlotMatches(candidatePending, batchData.guid) then
-                        key = candidateKey
-                        pending = candidatePending
-                        break
-                    end
-                end
-            end
-
-            -- 如果依然没有匹配但有映射，选择第一个（兼容极端情况）
-            if not key and #keys > 0 then
-                key = keys[1]
-            end
-        end
-
-        -- 如果映射中没找到，回退到旧的GUID格式（兼容性）
+        -- ????GUID????????
         if not key then
             key = MakeKey(batchData.itemID, batchData.guid, nil, nil, false)
             pending = State.pending[key]
         end
 
-        -- 【关键修复】如果还是没找到key，尝试通过itemID遍历所有pending找到匹配的
+        -- ?????????pending????????????????
         if not key or not pending then
+            local bestKey = nil
+            local bestPending = nil
             for pendingKey, pendingData in pairs(State.pending) do
-                if pendingData.itemID == batchData.itemID then
-                    key = pendingKey
-                    pending = pendingData
-                    break
+                if pendingData.itemID == batchData.itemID and PendingSlotMatches(pendingData) then
+                    if not bestPending or (pendingData.queryId or 0) > (bestPending.queryId or 0) then
+                        bestKey = pendingKey
+                        bestPending = pendingData
+                    end
                 end
+            end
+            if bestKey and bestPending then
+                key = bestKey
+                pending = bestPending
             end
         end
 
@@ -3404,6 +3366,7 @@ local function OnPlayerEnteringWorld(self, event, isLogin, isReload)
 
     -- 【新增】清除待鉴定状态缓存并重新查询
     PendingIdentifyState.cache = {}
+    PendingIdentifyState.suppressed = {}
     PendingIdentifyState.lastQuery = 0
     PendingIdentifyState.querying = false
 
@@ -4603,7 +4566,6 @@ local function OnTooltipSetItem(tooltip)
 
 	-- 2) 如果是 ShoppingTooltip1/2：完全不显示官方装备对比框（无论是否来自聊天）
 	if (tName == "ShoppingTooltip1" or tName == "ShoppingTooltip2") then
-		tooltip:Hide()
 		if tooltip.UIT_Tooltip2 then
 			tooltip.UIT_Tooltip2:Hide()
 			ClearTooltipMeta(tooltip.UIT_Tooltip2)
@@ -4616,7 +4578,6 @@ local function OnTooltipSetItem(tooltip)
 			tooltip.UIT_Tooltip4:Hide()
 			ClearTooltipMeta(tooltip.UIT_Tooltip4)
 		end
-		return
 	end
 
 	local _, itemLink = tooltip:GetItem()
@@ -4665,6 +4626,7 @@ local function OnTooltipSetItem(tooltip)
     -- 优先从tooltip获取实际悬停的槽位
     local bagNum, slotNum = GetTooltipBagSlot(tooltip)
     local originalBag, originalSlot = bagNum, slotNum
+    local isEquipmentSlotTooltip = (bagNum == 255) or (extractedBag == 255) or (isEquipped == true)
 
     -- 【临时调试 - 已关闭】输出槽位识别结果和待鉴定缓存
     -- print(string.format("|cff00ffff[槽位调试]|r itemID=%d, GetTooltipBagSlot返回: bag=%s, slot=%s",
@@ -4687,13 +4649,13 @@ local function OnTooltipSetItem(tooltip)
     if not isAscensionItem and not isPendingIdentifyEarly and bagNum ~= nil and slotNum ~= nil and bagNum ~= 255 then
         local verifyLink = GetContainerItemLink(bagNum, slotNum)
 
-        -- 比较完整链接，而不只是itemID
-        -- 注意：物品链接包含所有附魔、宝石等信息，应该是唯一的
+        -- ??????????????/????tooltip???????????????????
         if verifyLink then
             local verifyItemString = string.match(verifyLink, "item[%-?%d:]+")
+            local verifyItemID = tonumber(string.match(verifyLink, "item:(%d+)"))
 
             if verifyItemString == tooltipItemString then
-                -- 完全匹配，检查待鉴定缓存
+                -- ????????????
                 local pendingInfo = GetPendingIdentifyInfo(bagNum, slotNum, itemID)
 
                 if pendingInfo then
@@ -4702,16 +4664,20 @@ local function OnTooltipSetItem(tooltip)
                         guid = verifyGUID
                     end
                 else
-                    -- 当前位置不是待鉴定物品，直接使用当前位置
-                    -- 【关键修复】不再根据缓存是否有数据来切换槽位
-                    -- 如果当前位置不在待鉴定列表中，说明这是已鉴定物品或普通物品
                     local _, verifyGUID = ExtractItemInfo(verifyLink)
                     if verifyGUID and verifyGUID > 0 then
                         guid = verifyGUID
                     end
                 end
+            elseif verifyItemID and verifyItemID == itemID then
+                -- ??ID????????????????????????????????
+                tooltipItemString = verifyItemString or tooltipItemString
+                local _, verifyGUID = ExtractItemInfo(verifyLink)
+                if verifyGUID and verifyGUID > 0 then
+                    guid = verifyGUID
+                end
             else
-                -- 链接不匹配，搜索正确的槽位
+                -- ?????itemID???????????????
                 local foundBag, foundSlot, foundGuid = nil, nil, nil
                 for searchBag = 0, 4 do
                     local numSlots = GetContainerNumSlots(searchBag)
@@ -5101,81 +5067,66 @@ local function OnTooltipSetItem(tooltip)
     -- 【新增】查询待鉴定物品列表（定期刷新）
     QueryPendingIdentifyList()
 
-    -- 在任何情况下都强制隐藏官方比较框，只保留我们的大框
-    if ShoppingTooltip1 then
-        ShoppingTooltip1:Hide()
-    end
-    if ShoppingTooltip2 then
-        ShoppingTooltip2:Hide()
-    end
-
-    -- 创建并显示统一的四列框架
-    local unifiedFrame = GetUnifiedTooltipFrame(tooltip)
-
-    if not unifiedFrame then
-        DebugPrint("[错误] 统一框架创建失败")
-        return
-    end
-
-    -- 不再复制官方tooltip内容到第1列，四列全部显示自定义属性
-
-    -- 定位统一大框到固定位置
-    AnchorUnifiedFrame(unifiedFrame, tooltip)
-
-    -- 记录物品键与统一大框的对应关系，便于服务器返回数据后刷新
-    unifiedFrame.UIT_ItemID = itemID
-    unifiedFrame.UIT_GUID = guid
-
-    -- 【关键修复】如果frame之前关联了其他key，先从旧映射中移除
-    local oldKey = unifiedFrame.UIT_Key
-    if oldKey and oldKey ~= key and UnifiedFramesByKey[oldKey] then
-        local oldList = UnifiedFramesByKey[oldKey]
-        for i = #oldList, 1, -1 do
-            if oldList[i] == unifiedFrame then
-                table.remove(oldList, i)
+    if tName == "GameTooltip" and not IsTooltipFromChat(tooltip) then
+        if not isEquipmentSlotTooltip and GameTooltip_ShowCompareItem then
+            GameTooltip_ShowCompareItem(tooltip)
+        else
+            if ShoppingTooltip1 then
+                ShoppingTooltip1:Hide()
+            end
+            if ShoppingTooltip2 then
+                ShoppingTooltip2:Hide()
             end
         end
-        if #oldList == 0 then
-            UnifiedFramesByKey[oldKey] = nil
+    end
+
+    if tooltip.UIT_UnifiedFrame then
+        local oldFrame = tooltip.UIT_UnifiedFrame
+        oldFrame:Hide()
+
+        if oldFrame.UIT_Key and UnifiedFramesByKey[oldFrame.UIT_Key] then
+            local oldList = UnifiedFramesByKey[oldFrame.UIT_Key]
+            for i = #oldList, 1, -1 do
+                if oldList[i] == oldFrame then
+                    table.remove(oldList, i)
+                end
+            end
+            if #oldList == 0 then
+                UnifiedFramesByKey[oldFrame.UIT_Key] = nil
+            end
         end
+
+        oldFrame.UIT_Key = nil
+        oldFrame.UIT_ItemID = nil
+        oldFrame.UIT_GUID = nil
+        State.tooltips[oldFrame] = nil
     end
 
-    unifiedFrame.UIT_Key = key
+    ClearTooltipMeta(tooltip)
+    RenderTooltip(tooltip, itemID, guid, bagNum, slotNum)
 
-    UnifiedFramesByKey[key] = UnifiedFramesByKey[key] or {}
-    -- 避免重复添加
-    local found = false
-    for _, f in ipairs(UnifiedFramesByKey[key]) do
-        if f == unifiedFrame then
-            found = true
-            break
-        end
-    end
-    if not found then
-        table.insert(UnifiedFramesByKey[key], unifiedFrame)
-    end
+    local tooltipMeta = State.tooltips[tooltip]
+    local hasCustomData = tooltipMeta and tooltipMeta.key == key and (
+        tooltipMeta.rendered.identification
+        or tooltipMeta.rendered.enhancement
+        or tooltipMeta.rendered.growth
+        or tooltipMeta.rendered.skills
+        or tooltipMeta.rendered.runes
+        or tooltipMeta.rendered.sets
+        or tooltipMeta.rendered.magic
+    )
 
-    -- 初次渲染所有自定义数据（内部会根据是否有数据决定是否显示大框）
-    RefreshUnifiedFrame(unifiedFrame, itemID, guid)
-
-    -- 【待鉴定显示逻辑】
-    -- 关键判断：如果统一大框显示了（说明有自定义属性），则该物品已鉴定，不显示"待鉴定"
-    -- 如果统一大框没有显示（说明没有任何自定义属性），则检查待鉴定缓存
-    -- 使用 bag:slot:itemId 作为匹配键（而非GUID，因为服务器端GUID与客户端不一致）
-    local isFrameShown = unifiedFrame and unifiedFrame:IsShown()
     local cacheKey = nil
     if bagNum ~= nil and slotNum ~= nil and itemID then
         cacheKey = string.format("%d:%d:%d", bagNum, slotNum, itemID)
     end
 
-    if isFrameShown and not isPendingIdentify then
-        -- 大框显示了，说明有自定义属性，物品已鉴定
-        -- 同时从待鉴定缓存中移除该物品（以防服务器端延迟删除）
+    if hasCustomData and not isPendingIdentify then
         if cacheKey then
             PendingIdentifyState.cache[cacheKey] = nil
+            SuppressPendingIdentify(bagNum, slotNum, itemID, 6)
         end
     else
-        -- 大框没有显示或该物品处于待鉴定状态
         local pendingInfo = pendingInfo or GetPendingIdentifyInfo(bagNum, slotNum, itemID)
         if pendingInfo and pendingInfo.isPending then
             tooltip:AddLine(" ")
@@ -5191,6 +5142,8 @@ local function OnTooltipSetItem(tooltip)
 end
 
 local function OnTooltipCleared(tooltip)
+    ClearTooltipMeta(tooltip)
+
     -- 清理统一框架
     if tooltip.UIT_UnifiedFrame then
         local frame = tooltip.UIT_UnifiedFrame
@@ -5245,12 +5198,12 @@ GameTooltip:HookScript("OnShow", UIT_ForceHideTooltip)
 if ShoppingTooltip1 then
     ShoppingTooltip1:HookScript("OnTooltipSetItem", OnTooltipSetItem)
     ShoppingTooltip1:HookScript("OnTooltipCleared", OnTooltipCleared)
-    ShoppingTooltip1:HookScript("OnShow", function(self) self:Hide() end)
+    ShoppingTooltip1:HookScript("OnShow", UIT_ForceHideTooltip)
 end
 if ShoppingTooltip2 then
     ShoppingTooltip2:HookScript("OnTooltipSetItem", OnTooltipSetItem)
     ShoppingTooltip2:HookScript("OnTooltipCleared", OnTooltipCleared)
-    ShoppingTooltip2:HookScript("OnShow", function(self) self:Hide() end)
+    ShoppingTooltip2:HookScript("OnShow", UIT_ForceHideTooltip)
 end
 
 -- Hook物品引用提示框（聊天框链接点击）
