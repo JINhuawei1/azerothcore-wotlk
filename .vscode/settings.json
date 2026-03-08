@@ -1,3 +1,35 @@
 {
-    "chatgpt.openOnStartup": true
+    "chatgpt.openOnStartup":  true,
+    "Lua.runtime.version":  "Lua 5.1",
+    "Lua.diagnostics.globals":  [
+                                    "ASCENSION_TOOLTIP_ITEM_GUID",
+                                    "ASCENSION_TOOLTIP_ITEM_ID",
+                                    "C_ChatInfo",
+                                    "C_Timer",
+                                    "CreateFrame",
+                                    "GameTooltip",
+                                    "GameTooltip_ShowCompareItem",
+                                    "GetContainerItemLink",
+                                    "GetContainerNumSlots",
+                                    "GetInventoryItemLink",
+                                    "GetInventorySlotInfo",
+                                    "GetTime",
+                                    "InspectFrame",
+                                    "ITEM_COMPARE_TOOLTIP_TEXT",
+                                    "ITEM_MOD_AGILITY_SHORT",
+                                    "ITEM_MOD_INTELLECT_SHORT",
+                                    "ITEM_MOD_SPIRIT_SHORT",
+                                    "ITEM_MOD_STAMINA_SHORT",
+                                    "ITEM_MOD_STRENGTH_SHORT",
+                                    "ItemRefTooltip",
+                                    "RegisterAddonMessagePrefix",
+                                    "SendAddonMessage",
+                                    "ShoppingTooltip1",
+                                    "ShoppingTooltip2",
+                                    "SlashCmdList",
+                                    "strsplit",
+                                    "UnitExists",
+                                    "UnitIsUnit",
+                                    "UnitName"
+                                ]
 }

@@ -11,6 +11,8 @@ local ADDON_PREFIX_ALT = "ITEMENHANCE"  -- 备用前缀（兼容服务器可能�
 
 local DEFAULTS = {
     debug = false,  -- 调试模式（默认关闭，可通过 /提示框 调试 开启）
+    traceEnabled = false,
+    traceItemID = 0,
     queryInterval = 1,      -- 查询间隔（秒）- 只在所有数据齐全时生效
     timeout = 15,           -- 查询超时（秒）- 增加到15秒以应对服务器延迟
     emptyCooldown = 30,     -- 无数据冷却时间（秒）
@@ -127,9 +129,94 @@ local State = {
     queryId = 0
 }
 
+local TRACE_PREFIX = "|cffff8800[UITQ-TRACE]|r"
+
+local function GetTraceItemID()
+    local itemID = tonumber(DB.traceItemID or 0)
+    if not itemID or itemID < 0 then
+        itemID = 0
+    end
+    return itemID
+end
+
+local function ShouldTrace(itemID)
+    if not DB.traceEnabled then
+        return false
+    end
+
+    local traceItemID = GetTraceItemID()
+    if traceItemID <= 0 then
+        return true
+    end
+
+    return tonumber(itemID) == traceItemID
+end
+
+local function TraceLog(itemID, fmt, ...)
+    if not ShouldTrace(itemID) then
+        return
+    end
+
+    local ok, msg = pcall(string.format, fmt, ...)
+    if not ok then
+        msg = tostring(fmt)
+    end
+
+    print(string.format("%s [itemID=%s] %s", TRACE_PREFIX, tostring(itemID), msg))
+end
+
+local function TraceLogDedup(traceKey, itemID, signature, fmt, ...)
+    if not ShouldTrace(itemID) then
+        return
+    end
+
+    State.traceLast = State.traceLast or {}
+
+    local now = GetTime()
+    local last = State.traceLast[traceKey]
+    if last and last.signature == signature and (now - last.time) < 0.2 then
+        return
+    end
+
+    State.traceLast[traceKey] = {
+        signature = signature,
+        time = now
+    }
+
+    TraceLog(itemID, fmt, ...)
+end
+
+local function CollectTraceKeys(list)
+    local names = {}
+    if list then
+        for name, value in pairs(list) do
+            if value ~= nil then
+                table.insert(names, tostring(name))
+            end
+        end
+    end
+
+    table.sort(names)
+    return #names > 0 and table.concat(names, ",") or "-"
+end
+
+local function FormatTracePositions(positions)
+    if not positions or #positions == 0 then
+        return "-"
+    end
+
+    local parts = {}
+    for _, pos in ipairs(positions) do
+        table.insert(parts, string.format("%s:%s", tostring(pos.bag), tostring(pos.slot)))
+    end
+    return table.concat(parts, ",")
+end
+
 local MakeKey       -- 提前声明，供幻境相关函数使用
 local RenderTooltip -- 提前声明，供幻境相关更新调用
 local RefreshUnifiedFrame -- 提前声明，供四联大框刷新使用
+local ExtractItemInfo -- 提前声明，供对比提示框定位使用
+local GetTooltipBagSlot -- 提前声明，供待鉴定提示刷新使用
 
 -- 记录当前按物品键关联的统一四联大框，用于异步刷新
 local UnifiedFramesByKey = {}
@@ -153,7 +240,8 @@ local PendingIdentifyState = {
     EXPIRE = 60,      -- ????????
     SUPPRESS_EXPIRE = 8, -- ?????????????????????
     querying = false, -- ???????
-    refreshing = false  -- ????????????????????????
+    refreshing = false,  -- ????????????????????????
+    refreshQueued = false
 }
 
 -- 【新增】查询待鉴定物品列表
@@ -178,6 +266,68 @@ local function QueryPendingIdentifyList(forceRefresh)
     elseif C_ChatInfo and C_ChatInfo.SendAddonMessage then
         C_ChatInfo.SendAddonMessage(ADDON_PREFIX, addonMessage, "WHISPER", UnitName("player"))
     end
+end
+
+local function RefreshPendingIdentifyTooltip(tooltip)
+    if not tooltip or not tooltip.IsShown or not tooltip:IsShown() then
+        return
+    end
+
+    local bag, slot = GetTooltipBagSlot(tooltip)
+    if bag == nil or slot == nil then
+        return
+    end
+
+    if bag == 255 then
+        if tooltip.SetInventoryItem then
+            tooltip:SetInventoryItem("player", slot)
+        end
+    elseif tooltip.SetBagItem then
+        tooltip:SetBagItem(bag, slot)
+    end
+end
+
+local function RefreshVisiblePendingIdentifyTooltips(itemId)
+    C_Timer.After(0.05, function()
+        for tooltip, _ in pairs(State.tooltips) do
+            if tooltip and tooltip:IsShown() then
+                local tooltipName = tooltip:GetName() or ""
+                if tooltipName == "GameTooltip" then
+                    local _, itemLink = tooltip:GetItem()
+                    local tooltipItemId = itemLink and tonumber(string.match(itemLink, "item:(%d+)")) or nil
+                    if not itemId or tooltipItemId == itemId then
+                        RefreshPendingIdentifyTooltip(tooltip)
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local function SchedulePendingIdentifyRefresh(reason, itemId)
+    PendingIdentifyState.lastQuery = 0
+
+    if PendingIdentifyState.querying or PendingIdentifyState.refreshing then
+        PendingIdentifyState.refreshQueued = true
+        TraceLog(itemId or 0, "PendingIdentify refresh queued reason=%s querying=%s refreshing=%s",
+            tostring(reason), tostring(PendingIdentifyState.querying), tostring(PendingIdentifyState.refreshing))
+        return
+    end
+
+    PendingIdentifyState.refreshing = true
+    C_Timer.After(0.1, function()
+        PendingIdentifyState.refreshing = false
+
+        if PendingIdentifyState.querying then
+            PendingIdentifyState.refreshQueued = true
+            TraceLog(itemId or 0, "PendingIdentify refresh deferred reason=%s querying=%s",
+                tostring(reason), tostring(PendingIdentifyState.querying))
+            return
+        end
+
+        TraceLog(itemId or 0, "PendingIdentify refresh now reason=%s", tostring(reason))
+        QueryPendingIdentifyList(true)
+    end)
 end
 
 -- 【新增】检查物品是否待鉴定，返回 { isPending, multiplier } 或 nil
@@ -846,7 +996,92 @@ local function ScanEquipmentForItem(itemID, unit)
         end
     end
 
+	return nil
+end
+
+local COMPARE_TOOLTIP_EQUIP_SLOTS = {
+    INVTYPE_HEAD = {"HeadSlot"},
+    INVTYPE_NECK = {"NeckSlot"},
+    INVTYPE_SHOULDER = {"ShoulderSlot"},
+    INVTYPE_BODY = {"ShirtSlot"},
+    INVTYPE_CHEST = {"ChestSlot"},
+    INVTYPE_ROBE = {"ChestSlot"},
+    INVTYPE_WAIST = {"WaistSlot"},
+    INVTYPE_LEGS = {"LegsSlot"},
+    INVTYPE_FEET = {"FeetSlot"},
+    INVTYPE_WRIST = {"WristSlot"},
+    INVTYPE_HAND = {"HandsSlot"},
+    INVTYPE_FINGER = {"Finger0Slot", "Finger1Slot"},
+    INVTYPE_TRINKET = {"Trinket0Slot", "Trinket1Slot"},
+    INVTYPE_CLOAK = {"BackSlot"},
+    INVTYPE_WEAPON = {"MainHandSlot", "SecondaryHandSlot"},
+    INVTYPE_2HWEAPON = {"MainHandSlot"},
+    INVTYPE_WEAPONMAINHAND = {"MainHandSlot"},
+    INVTYPE_WEAPONOFFHAND = {"SecondaryHandSlot"},
+    INVTYPE_SHIELD = {"SecondaryHandSlot"},
+    INVTYPE_HOLDABLE = {"SecondaryHandSlot"},
+    INVTYPE_RANGED = {"RangedSlot"},
+    INVTYPE_RANGEDRIGHT = {"RangedSlot"},
+    INVTYPE_THROWN = {"RangedSlot"},
+    INVTYPE_RELIC = {"RangedSlot"},
+    INVTYPE_TABARD = {"TabardSlot"}
+}
+
+local function GetCompareTooltipIndex(tooltipName)
+    if tooltipName == "ShoppingTooltip1" then
+        return 1
+    elseif tooltipName == "ShoppingTooltip2" then
+        return 2
+    end
+
     return nil
+end
+
+local function ResolveCompareTooltipEquipSlot(itemLink, itemID, tooltipName)
+    local compareIndex = GetCompareTooltipIndex(tooltipName)
+    if not compareIndex or not itemLink or not itemID then
+        return nil
+    end
+
+    local tooltipItemString = string.match(itemLink, "item[%-?%d:]+") or itemLink
+    local _, _, _, _, _, _, _, _, equipLoc = GetItemInfo(itemLink)
+    local slotNames = equipLoc and COMPARE_TOOLTIP_EQUIP_SLOTS[equipLoc]
+    if not slotNames then
+        return nil, nil, "equipLocMissing", equipLoc, 0
+    end
+
+    local exactMatches = {}
+    local itemIDMatches = {}
+
+    for _, slotName in ipairs(slotNames) do
+        local slotId = GetInventorySlotInfo(slotName)
+        if slotId then
+            local equipLink = GetInventoryItemLink("player", slotId)
+            if equipLink then
+                local equipItemString = string.match(equipLink, "item[%-?%d:]+") or equipLink
+                local equipItemID, equipGuid = ExtractItemInfo(equipLink)
+
+                if equipItemString == tooltipItemString then
+                    table.insert(exactMatches, { slot = slotId, guid = equipGuid, source = "itemString" })
+                elseif equipItemID == itemID then
+                    table.insert(itemIDMatches, { slot = slotId, guid = equipGuid, source = "itemID" })
+                end
+            end
+        end
+    end
+
+    local matches = (#exactMatches > 0) and exactMatches or itemIDMatches
+    if #matches == 0 then
+        return nil, nil, "noMatch", equipLoc, 0
+    end
+
+    local matchIndex = compareIndex
+    if matchIndex > #matches then
+        matchIndex = 1
+    end
+
+    local match = matches[matchIndex]
+    return match.slot, match.guid, match.source, equipLoc, #matches
 end
 
 -- 获取当前正在检查的玩家单位（如果正在检查其他玩家）
@@ -862,7 +1097,7 @@ local function GetInspectUnit()
 end
 
 -- 从物品链接提取ID和GUID
-local function ExtractItemInfo(itemLink)
+ExtractItemInfo = function(itemLink)
     if not itemLink then return nil end
 
     local itemID = tonumber(string.match(itemLink, "item:(%d+)"))
@@ -876,7 +1111,7 @@ end
 
 -- 增强版物品信息提取 - 如果链接中没有 GUID，尝试从背包/装备栏查找
 -- inspectUnit: 可选参数，如果正在检查其他玩家，传入该玩家的单位ID
-local function ExtractItemInfoEnhanced(itemLink, inspectUnit)
+local function ExtractItemInfoEnhanced(itemLink, inspectUnit, preferEquipped)
     if not itemLink then return nil end
 
     local itemID, guid = ExtractItemInfo(itemLink)
@@ -914,17 +1149,23 @@ local function ExtractItemInfoEnhanced(itemLink, inspectUnit)
         return itemID, nil, nil, nil, false
     end
 
-    -- 以下是自己的装备或背包物品，链接中的GUID是可信的
-
-    -- 【修改】即使链接中已经有有效的 GUID，也需要扫描找到位置信息（用于待鉴定匹配）
-    if guid and guid > 0 then
-        -- 先检查装备栏
-        local _, _, equipSlot, isEquipped = ScanEquipmentForItem(itemID, "player")
+    -- 以下是自己的装备或背包物品。
+    -- 注意：WoW 3.3.5 链接里的 suffixId/uniqueId 不是实例 GUID，不能再拿它反查背包位置，
+    -- 否则同 itemID 物品会互相命中缓存。对比 tooltip 必须只走装备栏定位。
+    if preferEquipped then
+        local equipGUID, _, equipSlot, isEquipped = ScanEquipmentForItem(itemID, "player")
         if isEquipped and equipSlot then
+            if equipGUID and equipGUID > 0 then
+                return itemID, equipGUID, nil, equipSlot, true
+            end
             return itemID, guid, nil, equipSlot, true
         end
 
-        -- 检查背包 - 通过GUID匹配找到准确位置
+        return itemID, guid, nil, nil, false
+    end
+
+    if guid and guid > 0 then
+        -- 背包 tooltip 优先命中背包
         for bag = 0, 4 do
             local numSlots = GetContainerNumSlots(bag)
             for slot = 1, numSlots do
@@ -938,20 +1179,25 @@ local function ExtractItemInfoEnhanced(itemLink, inspectUnit)
             end
         end
 
-        -- 没有找到位置，只返回GUID
+        local _, _, equipSlot, isEquipped = ScanEquipmentForItem(itemID, "player")
+        if isEquipped and equipSlot then
+            return itemID, guid, nil, equipSlot, true
+        end
+
         return itemID, guid, nil, nil, false
     end
 
-    -- 没有 GUID，尝试从装备栏查找
-    local equipGUID, _, equipSlot, isEquipped = ScanEquipmentForItem(itemID, "player")
-    if equipGUID and equipGUID > 0 then
-        return itemID, equipGUID, nil, equipSlot, true
-    end
-
-    -- 从自己的背包查找
+    -- 没有 GUID 时，背包 tooltip 优先扫描背包
     local bagGUID, bag, slot = ScanBagsForItem(itemID)
     if bagGUID and bagGUID > 0 then
         return itemID, bagGUID, bag, slot, false
+    end
+
+    if not preferEquipped then
+        local equipGUID, _, equipSlot, isEquipped = ScanEquipmentForItem(itemID, "player")
+        if equipGUID and equipGUID > 0 then
+            return itemID, equipGUID, nil, equipSlot, true
+        end
     end
 
     -- 如果都找不到，返回 itemID 和 nil GUID
@@ -2132,6 +2378,9 @@ local function DoSendQuery(itemID, bag, slot, key, guid, fingerprint, isInspectO
     end
 
     -- 标记所有系统为查询中
+    TraceLog(itemID, "DoSendQuery queryId=%s key=%s bag=%s slot=%s guid=%s inspect=%s msg=%s",
+        tostring(queryId), tostring(key), tostring(bag), tostring(slot), tostring(guid), tostring(isInspectOther), tostring(addonMessage))
+
     for systemName, enabled in pairs(DB.systems) do
         if enabled and not cachedSystems[systemName] then
             State.pending[key].systems[systemName] = now
@@ -2552,7 +2801,17 @@ RenderTooltip = function(tooltip, itemID, guid, bag, slot)
     if bag ~= nil and slot ~= nil then
         key = MakeKey(itemID, nil, bag, slot, bag == 255)
     elseif guid and guid > 0 then
-        key = MakeKey(itemID, guid, nil, nil, false)
+        if IsTooltipFromChat and IsTooltipFromChat(tooltip) then
+            key = MakeKey(itemID, guid, nil, nil, false)
+        else
+            local meta = State.tooltips[tooltip]
+            if meta and meta.key then
+                key = meta.key
+            else
+                TraceLog(itemID, "Render skip guid-fallback tooltip=%s guid=%s", tostring(tooltip and tooltip.GetName and tooltip:GetName() or tooltip), tostring(guid))
+                return
+            end
+        end
     else
         -- 没有位置也没有GUID时，尝试从tooltip元数据获取缓存键
         local meta = State.tooltips[tooltip]
@@ -2593,6 +2852,17 @@ RenderTooltip = function(tooltip, itemID, guid, bag, slot)
 
     -- 检查是否正在查询中
     local isPending = State.pending[key] ~= nil
+    local hasRealCustomData = false
+
+    if cached and cached.systems then
+        for _, systemData in pairs(cached.systems) do
+            if systemData and not systemData.isEmpty then
+                hasRealCustomData = true
+                break
+            end
+        end
+    end
+
 
     if not cached then
         -- 完全没有缓存
@@ -2620,7 +2890,7 @@ RenderTooltip = function(tooltip, itemID, guid, bag, slot)
     end
 
     -- 如果正在查询中且缓存不完整，在底部显示提示
-    if isPending and not hasCompleteCache then
+    if isPending and not hasCompleteCache and not hasRealCustomData then
         local waitTime = 0
         if State.pending[key] and State.pending[key].queryStartTime then
             waitTime = now - State.pending[key].queryStartTime
@@ -2634,6 +2904,20 @@ RenderTooltip = function(tooltip, itemID, guid, bag, slot)
     end
 
     -- 如果缓存标记为无数据，直接返回不显示任何额外内容
+
+    if hasRealCustomData and isPending then
+        TraceLog(itemID, "Render clearPending key=%s because real custom data already exists", tostring(key))
+        State.pending[key] = nil
+        State.noDataUntil[key] = nil
+        isPending = false
+    end
+
+    local renderSystems = CollectTraceKeys(cached and cached.systems)
+    local renderSignature = string.format("%s|%s|%s|%s|%s|%s", tostring(key), tostring(isPending), tostring(hasCompleteCache), tostring(hasRealCustomData), tostring(cached and cached.noData), renderSystems)
+    TraceLogDedup("RenderTooltip:" .. tostring(key), itemID, renderSignature,
+        "Render key=%s bag=%s slot=%s pending=%s complete=%s real=%s noData=%s systems=%s",
+        tostring(key), tostring(bag), tostring(slot), tostring(isPending), tostring(hasCompleteCache), tostring(hasRealCustomData), tostring(cached and cached.noData), renderSystems)
+
     if cached.noData then
         return
     end
@@ -2873,6 +3157,13 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
                 PendingIdentifyState.querying = false
                 PendingIdentifyState.refreshing = false
                 PendingIdentifyState.lastQuery = GetTime()
+
+                RefreshVisiblePendingIdentifyTooltips()
+
+                if PendingIdentifyState.refreshQueued then
+                    PendingIdentifyState.refreshQueued = false
+                    SchedulePendingIdentifyRefresh("afterPendingListMultipart", 0)
+                end
             end
         else
             -- 旧格式（单包）或空列表: PENDING_LIST:count:数据 或 PENDING_LIST:0:
@@ -2905,6 +3196,13 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
             end
 
             PendingIdentifyState.lastQuery = GetTime()
+
+            RefreshVisiblePendingIdentifyTooltips()
+
+            if PendingIdentifyState.refreshQueued then
+                PendingIdentifyState.refreshQueued = false
+                SchedulePendingIdentifyRefresh("afterPendingListSingle", 0)
+            end
         end
 
         return
@@ -3088,6 +3386,10 @@ ProcessServerResponse = function(message, receiveTime)
         -- 服务器返回的是itemID和guid，但客户端使用bag:slot:itemID作为缓存键
         local key = nil
         local pending = nil
+        local matchSource = "unresolved"
+
+        TraceLog(batchData.itemID, "Response recv guid=%s bag=%s slot=%s systems=%s",
+            tostring(batchData.guid), tostring(batchData.bag), tostring(batchData.slot), CollectTraceKeys(batchData.systems))
 
         -- 【临时调试 - 已关闭】输出映射状态
         -- local mappingInfo = "无映射"
@@ -3101,9 +3403,15 @@ ProcessServerResponse = function(message, receiveTime)
         -- end
         -- print(string.format("|cff00ff00[响应处理]|r itemID=%d的映射状态: %s", batchData.itemID, mappingInfo))
 
-        -- ?????pending?????????????????????????????
+        -- 优先按精确槽位匹配当前 pending，避免同 itemID 物品互串缓存
         local function PendingSlotMatches(candidatePending)
             if not candidatePending then return false end
+
+            if batchData.bag ~= nil and batchData.slot ~= nil then
+                if candidatePending.bag ~= batchData.bag or candidatePending.slot ~= batchData.slot then
+                    return false
+                end
+            end
 
             -- ???????????????????
             if candidatePending.bag == nil or candidatePending.slot == nil then
@@ -3146,12 +3454,13 @@ ProcessServerResponse = function(message, receiveTime)
                     if candidatePending.guid and batchData.guid and candidatePending.guid == batchData.guid then
                         key = candidateKey
                         pending = candidatePending
+                        matchSource = "itemIdToKeys:guid"
                         break
                     end
                 end
             end
 
-            -- ?????????????????pending
+            -- 如果精确 GUID 没命中，再从相同 itemID 的 pending 中选最新的一条
             if not key then
                 local bestKey = nil
                 local bestPending = nil
@@ -3167,6 +3476,7 @@ ProcessServerResponse = function(message, receiveTime)
                 if bestKey and bestPending then
                     key = bestKey
                     pending = bestPending
+                    matchSource = "itemIdToKeys:latestPending"
                 end
             end
         end
@@ -3178,6 +3488,10 @@ ProcessServerResponse = function(message, receiveTime)
             if directPending and PendingSlotMatches(directPending) then
                 key = directKey
                 pending = directPending
+                matchSource = "directBagSlot:pending"
+            else
+                key = directKey
+                matchSource = "directBagSlot:fallback"
             end
         end
 
@@ -3185,6 +3499,7 @@ ProcessServerResponse = function(message, receiveTime)
         if not key then
             key = MakeKey(batchData.itemID, batchData.guid, nil, nil, false)
             pending = State.pending[key]
+            matchSource = "guidKey"
         end
 
         -- ?????????pending????????????????
@@ -3202,6 +3517,7 @@ ProcessServerResponse = function(message, receiveTime)
             if bestKey and bestPending then
                 key = bestKey
                 pending = bestPending
+                matchSource = "pendingScan"
             end
         end
 
@@ -3232,6 +3548,8 @@ ProcessServerResponse = function(message, receiveTime)
         -- 如果没有找到对应的pending记录，且服务器没有返回bag:slot（旧格式响应），
         -- 【修复】即使没有pending，只要有key就应该写入缓存
         if not key then
+            TraceLog(batchData.itemID, "Response drop source=%s reason=no-key guid=%s bag=%s slot=%s",
+                tostring(matchSource), tostring(batchData.guid), tostring(batchData.bag), tostring(batchData.slot))
             return
         end
 
@@ -3278,6 +3596,9 @@ ProcessServerResponse = function(message, receiveTime)
         -- 批量查询完成后，强制清除pending状态（因为服务器已经返回了所有数据）
         State.pending[key] = nil
         State.noDataUntil[key] = nil
+
+        TraceLog(batchData.itemID, "Response apply source=%s key=%s pending=%s hasAnyData=%s noData=%s systems=%s",
+            tostring(matchSource), tostring(key), tostring(pending ~= nil), tostring(hasAnyData), tostring(not hasAnyData), CollectTraceKeys(State.cache[key] and State.cache[key].systems))
 
         -- 【新增】清理itemID到缓存键的映射中已处理的条目
         if State.itemIdToKeys and State.itemIdToKeys[batchData.itemID] then
@@ -3335,6 +3656,8 @@ ProcessServerResponse = function(message, receiveTime)
                 renderCount = renderCount + 1
             end
         end
+
+        TraceLog(batchData.itemID, "Response render key=%s renderCount=%s", tostring(key), tostring(renderCount))
 
         return
     end
@@ -3405,6 +3728,10 @@ local function ClearSlotCache(bag, slot)
 
     -- 删除收集到的键
     for _, key in ipairs(keysToRemove) do
+        local cached = State.cache[key]
+        if cached then
+            TraceLog(cached.itemID, "ClearSlotCache bag=%s slot=%s key=%s", tostring(bag), tostring(slot), tostring(key))
+        end
         State.cache[key] = nil
         State.cacheTime[key] = nil
         State.pending[key] = nil
@@ -3431,6 +3758,11 @@ local function OnBagUpdate(self, event, bagID)
         if currentFingerprint ~= previousFingerprint then
             -- 更新记录
             SlotFingerprints[slotKey] = currentFingerprint
+
+            local currentItemID = link and tonumber(link:match("item:(%d+)")) or nil
+            local previousItemID = previousFingerprint and tonumber(previousFingerprint:match("item:(%d+)")) or nil
+            TraceLog(currentItemID or previousItemID, "BAG_UPDATE bag=%s slot=%s prev=%s curr=%s",
+                tostring(bagID), tostring(slot), tostring(previousFingerprint), tostring(currentFingerprint))
             -- 清理该槽位的缓存
             ClearSlotCache(bagID, slot)
 
@@ -3459,6 +3791,7 @@ local function OnBagUpdate(self, event, bagID)
         -- 检查这个itemID是否有待鉴定物品
         local pendingPositions = FindPendingItemPositions(itemID)
         if #pendingPositions > 0 then
+            TraceLog(itemID, "BAG_UPDATE pendingPositions=%s", FormatTracePositions(pendingPositions))
             -- 清理所有同itemID的缓存
             local keysToRemove = {}
             for key, cached in pairs(State.cache) do
@@ -3466,13 +3799,17 @@ local function OnBagUpdate(self, event, bagID)
                     table.insert(keysToRemove, key)
                 end
             end
+            TraceLog(itemID, "BAG_UPDATE purgeSameItemCaches itemID=%s count=%s", tostring(itemID), tostring(#keysToRemove))
             for _, key in ipairs(keysToRemove) do
+                TraceLog(itemID, "BAG_UPDATE removeKey=%s", tostring(key))
                 State.cache[key] = nil
                 State.cacheTime[key] = nil
                 State.pending[key] = nil
                 State.lastQuery[key] = nil
             end
         end
+
+        SchedulePendingIdentifyRefresh("bagUpdate", itemID)
     end
 
 end
@@ -3487,9 +3824,16 @@ local function OnPlayerEquipmentChanged(self, event, equipSlot, hasCurrent)
     local previousFingerprint = SlotFingerprints[slotKey]
 
     if currentFingerprint ~= previousFingerprint then
+        local currentItemID = link and tonumber(link:match("item:(%d+)")) or nil
+        local previousItemID = previousFingerprint and tonumber(previousFingerprint:match("item:(%d+)")) or nil
+        TraceLog(currentItemID or previousItemID, "EQUIP_CHANGED slot=%s prev=%s curr=%s",
+            tostring(equipSlot), tostring(previousFingerprint), tostring(currentFingerprint))
+
         SlotFingerprints[slotKey] = currentFingerprint
         -- 装备栏使用 bag=255
         ClearSlotCache(255, equipSlot)
+
+        SchedulePendingIdentifyRefresh("equipmentChanged", currentItemID or previousItemID)
     end
 end
 
@@ -3866,8 +4210,8 @@ end
 RefreshUnifiedFrame = function(unifiedFrame, itemID, guid)
     if not unifiedFrame or not unifiedFrame.columns then return end
 
-    -- 【关键修复】优先使用unifiedFrame中存储的缓存键，而不是通过GUID查找
-    -- 因为缓存数据使用位置格式的键(P:bag:slot:itemID)，而GUID格式的键(G:itemID:guid)找不到数据
+    -- 【关键修复】优先使用位置 key，禁止本地物品回退到 GUID key
+    -- 3.3.5 物品链接里的 guid/uniqueId 并不可靠，回退会把同 itemID 的其他物品缓存串过来
     local cached = nil
     local usedKey = nil
 
@@ -3876,10 +4220,13 @@ RefreshUnifiedFrame = function(unifiedFrame, itemID, guid)
         cached = State.cache[usedKey]
     end
 
-    -- 如果通过UIT_Key没找到，回退到GUID查找（兼容性）
-    if not cached and guid and guid > 0 then
-        usedKey = MakeKey(itemID, guid, nil, nil, false)
-        cached = State.cache[usedKey]
+    if not usedKey and unifiedFrame.UIT_OwnerTooltip then
+        local ownerMeta = State.tooltips[unifiedFrame.UIT_OwnerTooltip]
+        if ownerMeta and ownerMeta.key then
+            usedKey = ownerMeta.key
+            cached = State.cache[usedKey]
+            unifiedFrame.UIT_Key = usedKey
+        end
     end
 
     -- 如果缓存存在，检查itemID是否匹配
@@ -3992,8 +4339,8 @@ RefreshUnifiedFrame = function(unifiedFrame, itemID, guid)
     unifiedFrame:ClearColumn(1)
     unifiedFrame:ClearColumn(2)
 
-    -- 为当前大框构造/重置渲染元数据（用于幻境倍率等逻辑）
-    local key = MakeKey(itemID, guid, nil, nil, false)
+    -- 为当前大框构造/重置渲染元数据（沿用当前绑定的缓存 key）
+    local key = usedKey
     local meta = State.tooltips[unifiedFrame] or { key = key, rendered = {} }
     meta.key = key
     meta.rendered = {}
@@ -4261,7 +4608,7 @@ local function FixExtraTooltipOffscreen(extra, ownerTooltip)
 end
 
 -- 获取当前鼠标悬停的背包位置
-local function GetTooltipBagSlot(tooltip)
+GetTooltipBagSlot = function(tooltip)
     local owner = tooltip:GetOwner()
     if not owner then
         -- 【日志精简】常规日志已注释
@@ -4598,8 +4945,11 @@ local function OnTooltipSetItem(tooltip)
             tooltipName, tostring(inspectUnit)))
     end
 
+    local tooltipName = tooltip:GetName() or "unknown"
+    local preferEquipped = (tooltipName == "ShoppingTooltip1" or tooltipName == "ShoppingTooltip2")
+
     -- 使用增强版提取逻辑
-    local itemID, guid, extractedBag, extractedSlot, isEquipped = ExtractItemInfoEnhanced(itemLink, inspectUnit)
+    local itemID, guid, extractedBag, extractedSlot, isEquipped = ExtractItemInfoEnhanced(itemLink, inspectUnit, preferEquipped)
     if not itemID then
         return
     end
@@ -4623,10 +4973,41 @@ local function OnTooltipSetItem(tooltip)
             itemID, tostring(guid), tostring(extractedBag), tostring(extractedSlot), tostring(isEquipped)))
     end
 
-    -- 优先从tooltip获取实际悬停的槽位
+	-- 优先从tooltip获取实际悬停的槽位
     local bagNum, slotNum = GetTooltipBagSlot(tooltip)
     local originalBag, originalSlot = bagNum, slotNum
     local isEquipmentSlotTooltip = (bagNum == 255) or (extractedBag == 255) or (isEquipped == true)
+
+    if preferEquipped and (not inspectUnit or UnitIsUnit(inspectUnit, "player")) then
+        local compareSlot, compareGuid, compareSource, compareEquipLoc, compareMatchCount = ResolveCompareTooltipEquipSlot(itemLink, itemID, tooltipName)
+
+        if not compareSlot and isEquipped and extractedSlot then
+            compareSlot = extractedSlot
+            compareGuid = guid
+            compareSource = "extractFallback"
+            compareMatchCount = 1
+        end
+
+        if compareSlot then
+            bagNum = 255
+            slotNum = compareSlot
+            extractedBag = nil
+            extractedSlot = compareSlot
+            isEquipped = true
+            isEquipmentSlotTooltip = true
+            if compareGuid and compareGuid > 0 then
+                guid = compareGuid
+            end
+
+            TraceLog(itemID, "CompareTooltip resolved tooltip=%s slot=%s source=%s equipLoc=%s matches=%s guid=%s",
+                tostring(tooltipName), tostring(compareSlot), tostring(compareSource), tostring(compareEquipLoc), tostring(compareMatchCount), tostring(guid))
+        else
+            local owner = tooltip.GetOwner and tooltip:GetOwner() or nil
+            local ownerName = owner and owner.GetName and owner:GetName() or nil
+            TraceLog(itemID, "CompareTooltip unresolved tooltip=%s equipLoc=%s owner=%s extracted=%s/%s guid=%s",
+                tostring(tooltipName), tostring(compareEquipLoc), tostring(ownerName), tostring(extractedBag), tostring(extractedSlot), tostring(guid))
+        end
+    end
 
     -- 【临时调试 - 已关闭】输出槽位识别结果和待鉴定缓存
     -- print(string.format("|cff00ffff[槽位调试]|r itemID=%d, GetTooltipBagSlot返回: bag=%s, slot=%s",
@@ -4854,6 +5235,23 @@ local function OnTooltipSetItem(tooltip)
             key, tostring(isChatLink), tostring(bagNum), tostring(slotNum), tostring(guid)))
     end
 
+    TraceLog(itemID, "OnTooltipSetItem key=%s original=%s/%s extracted=%s/%s final=%s/%s guid=%s chat=%s equipTip=%s pendingEarly=%s",
+        tostring(key), tostring(originalBag), tostring(originalSlot), tostring(extractedBag), tostring(extractedSlot), tostring(bagNum), tostring(slotNum), tostring(guid), tostring(isChatLink), tostring(isEquipmentSlotTooltip), tostring(isPendingIdentifyEarly))
+    TraceLog(itemID, "OnTooltipSetItem tooltip=%s preferEquipped=%s", tostring(tooltipName), tostring(preferEquipped))
+
+    -- 【关键修复】本地背包/装备 tooltip 已有位置 key 时，清理不可靠的 GUID 缓存
+    if bagNum ~= nil and slotNum ~= nil and guid and guid > 0 then
+        local guidKey = MakeKey(itemID, guid, nil, nil, false)
+        if guidKey ~= key and (State.cache[guidKey] or State.pending[guidKey]) then
+            TraceLog(itemID, "OnTooltipSetItem purgeGuidCache guidKey=%s positionKey=%s", tostring(guidKey), tostring(key))
+            State.cache[guidKey] = nil
+            State.cacheTime[guidKey] = nil
+            State.pending[guidKey] = nil
+            State.lastQuery[guidKey] = nil
+            State.noDataUntil[guidKey] = nil
+        end
+    end
+
     -- 【关键修复】在查询前主动检查槽位指纹变化
     -- 因为tooltip查询可能发生在BAG_UPDATE事件之前，需要主动检测物品变化
     -- 【注意】装备栏物品(bagNum=255)也需要检查指纹
@@ -5001,6 +5399,9 @@ local function OnTooltipSetItem(tooltip)
         print(string.format("|cff00ffff[缓存状态]|r key=%s, cached=%s, hasCompleteCache=%s",
             key, tostring(cached ~= nil), tostring(hasCompleteCache)))
     end
+
+    TraceLog(itemID, "OnTooltipSetItem state key=%s pending=%s cached=%s complete=%s pendingIdentify=%s cacheSystems=%s",
+        tostring(key), tostring(State.pending[key] ~= nil), tostring(cached ~= nil), tostring(hasCompleteCache), tostring(isPendingIdentify), CollectTraceKeys(cached and cached.systems))
 
     if not hasCompleteCache then
         -- 聊天框链接处理：如果有有效GUID可以使用GUID格式查询
@@ -5229,6 +5630,33 @@ SlashCmdList["UNIFIEDTOOLTIP"] = function(msg)
         DB.debug = not DB.debug
         print("|cff00ff00[统一提示框]|r 调试模式: " .. (DB.debug and "开启" or "关闭"))
 
+    elseif msg == "停止跟踪" or msg == "关闭跟踪" or msg == "trace off" or msg == "trace stop" then
+        DB.traceEnabled = false
+        DB.traceItemID = 0
+        State.traceLast = {}
+        print("|cff00ff00[统一提示框]|r 定向追踪: 已关闭")
+
+    elseif msg:match("^跟踪%s+") or msg:match("^trace%s+") then
+        local traceArg = msg:match("%s+(.+)$")
+        if traceArg == "all" then
+            DB.traceEnabled = true
+            DB.traceItemID = 0
+            State.traceLast = {}
+            print("|cff00ff00[统一提示框]|r 定向追踪: 已开启（全部 itemID）")
+        else
+            local traceItemID = tonumber(traceArg and traceArg:match("%d+"))
+            if traceItemID and traceItemID > 0 then
+                DB.traceEnabled = true
+                DB.traceItemID = traceItemID
+                State.traceLast = {}
+                print("|cff00ff00[统一提示框]|r 定向追踪: 已开启，itemID=" .. traceItemID)
+                print("|cff888888示例: /提示框 停止跟踪|r")
+            else
+                print("|cffff0000[统一提示框]|r 用法: /提示框 跟踪 2649")
+                print("|cff888888也支持: /提示框 trace 2649, /提示框 trace off|r")
+            end
+        end
+
     elseif msg:match("^设置超时%s+") or msg:match("^timeout%s+") then
         local time = tonumber(msg:match("%d+"))
         if time and time > 0 and time <= 60 then
@@ -5300,6 +5728,7 @@ SlashCmdList["UNIFIEDTOOLTIP"] = function(msg)
         print("  通信方式: Addon消息（不受聊天速率限制）")
         print("  已注册前缀: " .. ADDON_PREFIX .. ", " .. ADDON_PREFIX_ALT)
         print("  调试模式: " .. (DB.debug and "开启" or "关闭"))
+        print("  定向追踪: " .. (DB.traceEnabled and ((tonumber(DB.traceItemID or 0) > 0) and ("开启 itemID=" .. DB.traceItemID) or "开启（全部）") or "关闭"))
 
         -- 显示当前装备的详细信息
         local _, itemLink = GameTooltip:GetItem()

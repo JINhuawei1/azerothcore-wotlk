@@ -3101,9 +3101,6 @@ private:
         // 6. 发送结果
         if (identifySuccess)
         {
-            // 发送物品属性数据到客户端
-            sItemIdentificationSystem->SendAllModuleDataAddon(player, itemId, itemGuid);
-
             // 发送鉴定成功消息，包含背包位置信息以便客户端正确清理缓存
             uint8 serverBag = item->GetBagSlot();
             uint8 slot = item->GetSlot();
@@ -3130,6 +3127,8 @@ private:
             std::ostringstream response;
             response << "IDENTIFY_RESULT:SUCCESS:" << clientBag << ":" << clientSlot << ":" << itemId << ":" << huanJingMultiplier;
             SendAddonResponse(player, response.str());
+
+            HandleAddonBatchQuery(player, itemId, itemGuid, static_cast<uint8>(clientBag), static_cast<uint8>(clientSlot));
         }
         else
         {
