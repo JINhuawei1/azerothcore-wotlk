@@ -20,6 +20,7 @@
 #include <cstdarg>
 #include <thread>
 #include <chrono>
+#include <set>
 
 // 模块集成 - 自动检测可用的模块并定义宏
 // 使用 __has_include 检测头文件是否存在，避免依赖CMake宏定义
@@ -78,6 +79,35 @@
     #endif
     #include "RequirementSystem.h"
 #endif
+
+namespace
+{
+    char NormalizeHuanJingMode(char mode)
+    {
+        if (mode == '+' || mode == 1)
+            return '+';
+        if (mode == '-' || mode == 'n')
+            return '-';
+        return 'x';
+    }
+
+    char DbValueToHuanJingMode(int32 value)
+    {
+        if (value == 1)
+            return '+';
+        if (value == -1)
+            return '-';
+        return 'x';
+    }
+
+    bool HasHuanJingEffect(uint32 value, char mode)
+    {
+        mode = NormalizeHuanJingMode(mode);
+        if (mode == '-')
+            return false;
+        return mode == '+' ? value > 0 : value > 1;
+    }
+}
 
 #if __has_include("ItemSets.h")
     #ifndef MODULE_ITEM_SETS
@@ -146,6 +176,10 @@ void ItemIdentificationSystem::LoadConfig(bool reload)
 
     if (reload)
     {
+        LoadIdentificationTemplates();
+#ifdef MODULE_ITEM_ATTRIBUTES
+        sItemAttributesLoaderUnsafe->LoadItemAttributeTemplates();
+#endif
         LOG_INFO("server.loading", "物品鉴定系统配置已重新加载");
     }
 }
@@ -500,14 +534,28 @@ uint32 ItemIdentificationSystem::SelectIdentificationTemplate(uint32 groupId, It
     // ✅ 从内存中筛选指定组ID的模板（不查询数据库）
     std::vector<std::pair<uint32, uint32>> templates; // <模板ID, 几率>
     uint32 totalChance = 0;
+    uint32 matchLevel = GetIdentificationTemplateMatchLevel(item);
 
     for (const auto& pair : _identificationTemplates)
     {
         const IdentificationTemplate& tmpl = pair.second;
-        if (tmpl.group == groupId)
+        if (tmpl.group == groupId && (matchLevel == 0 || tmpl.level == 0 || tmpl.level == matchLevel))
         {
             templates.push_back(std::make_pair(tmpl.id, tmpl.randomChance));
             totalChance += tmpl.randomChance;
+        }
+    }
+
+    if (templates.empty())
+    {
+        for (const auto& pair : _identificationTemplates)
+        {
+            const IdentificationTemplate& tmpl = pair.second;
+            if (tmpl.group == groupId)
+            {
+                templates.push_back(std::make_pair(tmpl.id, tmpl.randomChance));
+                totalChance += tmpl.randomChance;
+            }
         }
     }
 
@@ -684,10 +732,13 @@ bool ItemIdentificationSystem::ApplyIdentification(Player* player, Item* item, u
 
     if (!tmpl.itemAttributesAdditionalGroups.empty() && tmpl.additionalAttrMaxCount > 0)
     {
-        ApplyAdditionalAttributes(player, item, tmpl);
-        record.hasAdditionalAttributes = true;
-        record.additionalAttrCount = GenerateRandomNumber(tmpl.additionalAttrMinCount, tmpl.additionalAttrMaxCount);
-        record.additionalAttrGroups = tmpl.itemAttributesAdditionalGroups;
+        uint32 appliedAdditionalCount = ApplyAdditionalAttributes(player, item, tmpl);
+        if (appliedAdditionalCount > 0)
+        {
+            record.hasAdditionalAttributes = true;
+            record.additionalAttrCount = appliedAdditionalCount;
+            record.additionalAttrGroups = tmpl.itemAttributesAdditionalGroups;
+        }
 
     }
     else
@@ -835,6 +886,87 @@ uint32 GenerateRandomNumber(uint32 min, uint32 max)
     std::uniform_int_distribution<uint32> dis(min, max);
     return dis(sItemIdentificationSystem->GetRandomGenerator());
 }
+
+uint32 GetIdentificationTemplateMatchLevel(Item* item)
+{
+    if (!item || !item->GetTemplate())
+        return 0;
+
+    return item->GetTemplate()->Quality;
+}
+
+#ifdef MODULE_ITEM_ATTRIBUTES
+std::set<uint32> GetAllowedAttributeTypesByGroups(const std::vector<uint32>& attributeGroups)
+{
+    std::set<uint32> allowedTypes;
+
+    if (!sItemAttributesLoader)
+        return allowedTypes;
+
+    for (uint32 groupId : attributeGroups)
+    {
+        std::vector<ItemAttributeTemplate const*> templates = sItemAttributesLoader->GetItemAttributeTemplatesByGroup(groupId);
+        for (ItemAttributeTemplate const* attributeTemplate : templates)
+        {
+            if (attributeTemplate)
+                allowedTypes.insert(attributeTemplate->attributeType);
+        }
+    }
+
+    return allowedTypes;
+}
+
+uint32 FilterItemAdditionalAttributesByGroups(Item* item, const std::vector<uint32>& attributeGroups)
+{
+    if (!item || attributeGroups.empty())
+        return 0;
+
+    auto data = ItemAttributesDBHelper::LoadItemAttributes(item->GetGUID().GetCounter());
+    if (!data)
+        return 0;
+
+    std::set<uint32> allowedTypes = GetAllowedAttributeTypesByGroups(attributeGroups);
+    if (allowedTypes.empty())
+        return static_cast<uint32>(data->additionalAttributeIds.size());
+
+    std::vector<uint32> filteredIds;
+    std::vector<int32> filteredValues;
+    filteredIds.reserve(data->additionalAttributeIds.size());
+    filteredValues.reserve(data->additionalAttributeValues.size());
+
+    bool hasFiltered = false;
+    for (size_t i = 0; i < data->additionalAttributeIds.size() && i < data->additionalAttributeValues.size(); ++i)
+    {
+        uint32 attributeType = data->additionalAttributeIds[i];
+        if (allowedTypes.find(attributeType) != allowedTypes.end())
+        {
+            filteredIds.push_back(attributeType);
+            filteredValues.push_back(data->additionalAttributeValues[i]);
+        }
+        else
+        {
+            hasFiltered = true;
+        }
+    }
+
+    if (hasFiltered)
+    {
+        ItemAttributesDBHelper::SaveAdditionalAttributes(item->GetGUID().GetCounter(), item->GetEntry(), filteredIds, filteredValues);
+        std::ostringstream groupStream;
+        for (size_t i = 0; i < attributeGroups.size(); ++i)
+        {
+            if (i > 0)
+                groupStream << ",";
+            groupStream << attributeGroups[i];
+        }
+
+        LOG_WARN("module.itemidentification", "[追加属性修复] 物品GUID={} 过滤了不属于允许组 [{}] 的追加属性，剩余 {} 条",
+                 item->GetGUID().GetCounter(), groupStream.str(), filteredIds.size());
+    }
+
+    return static_cast<uint32>(filteredIds.size());
+}
+#endif
 
 // 检查需求条件
 bool ItemIdentificationSystem::CheckRequirements(Player* player, Item* item, const IdentificationTemplate& tmpl)
@@ -1139,26 +1271,35 @@ void ItemIdentificationSystem::ApplyBaseAttributes(Player* player, Item* item, c
 }
 
 // 应用追加属性
-void ItemIdentificationSystem::ApplyAdditionalAttributes(Player* player, Item* item, const IdentificationTemplate& tmpl)
+uint32 ItemIdentificationSystem::ApplyAdditionalAttributes(Player* player, Item* item, const IdentificationTemplate& tmpl)
 {
     std::vector<uint32> attributeGroups = ParseCommaSeparatedNumbers(tmpl.itemAttributesAdditionalGroups);
     if (attributeGroups.empty())
     {
 
-        return;
+        return 0;
     }
 
     uint32 attrCount = GenerateRandomNumber(tmpl.additionalAttrMinCount, tmpl.additionalAttrMaxCount);
     if (attrCount == 0)
     {
 
-        return;
+        return 0;
     }
 
 #ifdef MODULE_ITEM_ATTRIBUTES
     if (sItemAttributesGenerator)
     {
         uint32 appliedCount = 0;
+        uint64 itemGuid = item->GetGUID().GetCounter();
+
+        if (auto existingData = ItemAttributesDBHelper::LoadItemAttributes(itemGuid))
+        {
+            if (!existingData->additionalAttributeIds.empty())
+            {
+                ItemAttributesDBHelper::SaveAdditionalAttributes(itemGuid, item->GetEntry(), {}, {});
+            }
+        }
 
         // 判断是单组还是多组模式
         if (attributeGroups.size() == 1)
@@ -1177,7 +1318,7 @@ void ItemIdentificationSystem::ApplyAdditionalAttributes(Player* player, Item* i
 
             if (sItemAttributesGenerator->GenerateRandomAttributes(item, options))
             {
-                appliedCount = attrCount;
+                appliedCount = FilterItemAdditionalAttributesByGroups(item, attributeGroups);
             }
         }
         else
@@ -1206,6 +1347,8 @@ void ItemIdentificationSystem::ApplyAdditionalAttributes(Player* player, Item* i
                     appliedCount++;
                 }
             }
+
+            appliedCount = FilterItemAdditionalAttributesByGroups(item, attributeGroups);
         }
 
         if (appliedCount > 0)
@@ -1215,6 +1358,8 @@ void ItemIdentificationSystem::ApplyAdditionalAttributes(Player* player, Item* i
         else
         {
         }
+
+        return appliedCount;
     }
     else
     {
@@ -1223,6 +1368,7 @@ void ItemIdentificationSystem::ApplyAdditionalAttributes(Player* player, Item* i
 #endif
 
 
+    return 0;
 }
 
 // 应用追加技能
@@ -3030,7 +3176,7 @@ private:
 
         // 1. 从数据库查询待鉴定标记
         QueryResult result = CharacterDatabase.Query(
-            "SELECT `物品ID`, `幻境倍率`, `鉴定组ID` FROM `待鉴定物品标记` "
+            "SELECT `物品ID`, `幻境倍率`, `幻境倍率模式`, `鉴定组ID` FROM `待鉴定物品标记` "
             "WHERE `物品GUID` = {} AND `玩家GUID` = {}",
             itemGuid, playerGuid
         );
@@ -3044,7 +3190,8 @@ private:
         Field* fields = result->Fetch();
         uint32 itemId = fields[0].Get<uint32>();
         uint32 huanJingMultiplier = fields[1].Get<uint32>();
-        uint32 identificationGroupId = fields[2].Get<uint32>();
+        char huanJingMode = DbValueToHuanJingMode(fields[2].Get<int32>());
+        uint32 identificationGroupId = fields[3].Get<uint32>();
 
         // 2. 在玩家背包中查找物品
         Item* item = FindItemByGuid(player, itemGuid);
@@ -3066,11 +3213,11 @@ private:
 
         // 3. 应用幻境倍率属性（如果有幻境系统）
 #ifdef MODULE_HUANJING_SYSTEM
-        if (huanJingMultiplier > 1)
+        if (HasHuanJingEffect(huanJingMultiplier, huanJingMode))
         {
             if (sHuanJingSystem)
             {
-                sHuanJingSystem->ApplyItemAttributeMultiplier(item, static_cast<float>(huanJingMultiplier));
+                sHuanJingSystem->ApplyItemAttributeMultiplier(item, static_cast<float>(huanJingMultiplier), huanJingMode);
             }
         }
 #endif
@@ -3145,7 +3292,7 @@ private:
         uint32 playerGuid = player->GetGUID().GetCounter();
 
         QueryResult result = CharacterDatabase.Query(
-            "SELECT `物品GUID`, `物品ID`, `幻境倍率`, `鉴定组ID` FROM `待鉴定物品标记` "
+            "SELECT `物品GUID`, `物品ID`, `幻境倍率`, `幻境倍率模式`, `鉴定组ID` FROM `待鉴定物品标记` "
             "WHERE `玩家GUID` = {} ORDER BY `物品GUID` ASC",
             playerGuid
         );
@@ -3167,7 +3314,8 @@ private:
             uint32 itemGuid = fields[0].Get<uint32>();
             uint32 itemId = fields[1].Get<uint32>();
             uint32 huanJingMultiplier = fields[2].Get<uint32>();
-            uint32 identificationGroupId = fields[3].Get<uint32>();
+            char huanJingMode = DbValueToHuanJingMode(fields[3].Get<int32>());
+            uint32 identificationGroupId = fields[4].Get<uint32>();
 
             processedGuids.push_back(itemGuid);
 
@@ -3181,11 +3329,11 @@ private:
 
             // 应用幻境倍率
 #ifdef MODULE_HUANJING_SYSTEM
-            if (huanJingMultiplier > 1)
+            if (HasHuanJingEffect(huanJingMultiplier, huanJingMode))
             {
                 if (sHuanJingSystem)
                 {
-                    sHuanJingSystem->ApplyItemAttributeMultiplier(item, static_cast<float>(huanJingMultiplier));
+                    sHuanJingSystem->ApplyItemAttributeMultiplier(item, static_cast<float>(huanJingMultiplier), huanJingMode);
                 }
             }
 #endif
@@ -3251,7 +3399,7 @@ private:
         uint32 playerGuid = player->GetGUID().GetCounter();
 
         QueryResult result = CharacterDatabase.Query(
-            "SELECT `物品GUID`, `物品ID`, `幻境倍率`, `鉴定组ID` FROM `待鉴定物品标记` "
+            "SELECT `物品GUID`, `物品ID`, `幻境倍率`, `幻境倍率模式`, `鉴定组ID` FROM `待鉴定物品标记` "
             "WHERE `玩家GUID` = {} ORDER BY `物品GUID` DESC LIMIT 100",
             playerGuid
         );
@@ -3263,7 +3411,7 @@ private:
         }
 
         // 【修改】收集所有物品数据，然后分片发送
-        // 格式：bag,slot,itemId,multi,group
+        // 格式：bag,slot,itemId,mode,multi,group
         std::vector<std::string> itemEntries;
         uint32 dbCount = 0;
 
@@ -3273,7 +3421,8 @@ private:
             uint32 guid = fields[0].Get<uint32>();
             uint32 itemId = fields[1].Get<uint32>();
             uint32 multiplier = fields[2].Get<uint32>();
-            uint32 groupId = fields[3].Get<uint32>();
+            char multiplierMode = DbValueToHuanJingMode(fields[3].Get<int32>());
+            uint32 groupId = fields[4].Get<uint32>();
             dbCount++;
 
             // 检查物品是否还在背包中，并获取位置信息
@@ -3317,7 +3466,7 @@ private:
 
                 // 生成物品条目字符串
                 std::ostringstream entryStream;
-                entryStream << clientBag << "," << clientSlot << "," << itemId << "," << multiplier << "," << groupId;
+                entryStream << clientBag << "," << clientSlot << "," << itemId << "," << multiplierMode << "," << multiplier << "," << groupId;
                 itemEntries.push_back(entryStream.str());
             }
         } while (result->NextRow());
@@ -4115,20 +4264,22 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
     {
         bool foundHuanjingData = false;
         int multiplier = 0;
+        char multiplierMode = 'x';
         std::string enhancedAttrs;
 
         // 第一步：查询已鉴定物品的增强数据
         QueryResult huanjingResult = CharacterDatabase.Query(
-            "SELECT `属性倍率`, `增强属性数据` FROM `玩家装备属性增强` WHERE `装备GUID` = {} AND `装备ID` = {}",
+            "SELECT `属性倍率`, `属性倍率模式`, `增强属性数据` FROM `玩家装备属性增强` WHERE `装备GUID` = {} AND `装备ID` = {}",
             guid, itemID);
 
         if (huanjingResult)
         {
             Field* fields = huanjingResult->Fetch();
             multiplier = fields[0].Get<int>();
-            enhancedAttrs = fields[1].Get<std::string>();
+            multiplierMode = DbValueToHuanJingMode(fields[1].Get<int32>());
+            enhancedAttrs = fields[2].Get<std::string>();
 
-            if (multiplier > 1)
+            if (HasHuanJingEffect(multiplier, multiplierMode))
             {
                 foundHuanjingData = true;
                 DebugLog("[批量查询-优化-幻境] 从玩家装备属性增强表找到: multiplier={}, enhancedAttrs=[{}]", multiplier, enhancedAttrs);
@@ -4139,15 +4290,16 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
         if (!foundHuanjingData)
         {
             QueryResult pendingResult = CharacterDatabase.Query(
-                "SELECT `幻境倍率` FROM `待鉴定物品标记` WHERE `物品GUID` = {} AND `物品ID` = {}",
+                "SELECT `幻境倍率`, `幻境倍率模式` FROM `待鉴定物品标记` WHERE `物品GUID` = {} AND `物品ID` = {}",
                 guid, itemID);
 
             if (pendingResult)
             {
                 Field* fields = pendingResult->Fetch();
                 multiplier = fields[0].Get<int>();
+                multiplierMode = DbValueToHuanJingMode(fields[1].Get<int32>());
 
-                if (multiplier > 1)
+                if (HasHuanJingEffect(multiplier, multiplierMode))
                 {
                     foundHuanjingData = true;
                     // 待鉴定物品没有增强属性数据，只有倍率
@@ -4158,10 +4310,10 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
         }
 
         // 构建幻境数据字符串
-        if (foundHuanjingData && multiplier > 1)
+        if (foundHuanjingData && HasHuanJingEffect(multiplier, multiplierMode))
         {
             std::ostringstream huanjingStream;
-            huanjingStream << multiplier;
+            huanjingStream << multiplierMode << "," << multiplier;
 
             // 如果有增强属性数据，添加到结果中
             if (!enhancedAttrs.empty())
@@ -4288,7 +4440,8 @@ void ItemIdentificationSystem::HandleBatchQueryCommand(Player* player, uint32 it
              << data.skillsData << ":"
              << data.magicHitData << ":"
              << data.runeData << ":"
-             << data.setData;
+             << data.setData << ":"
+             << data.huanjingData;
 
     // 发送前记录完整消息内容
     DebugLog("[批量查询命令] 准备发送完整消息: [{}]", response.str());
@@ -4709,7 +4862,7 @@ static bool DoIdentifyItem(Player* player, Item* item, ChatHandler* handler = nu
 
     // 从数据库查询待鉴定标记
     QueryResult result = CharacterDatabase.Query(
-        "SELECT `物品ID`, `幻境倍率`, `鉴定组ID` FROM `待鉴定物品标记` "
+        "SELECT `物品ID`, `幻境倍率`, `幻境倍率模式`, `鉴定组ID` FROM `待鉴定物品标记` "
         "WHERE `物品GUID` = {} AND `玩家GUID` = {}",
         itemGuid, playerGuid
     );
@@ -4724,7 +4877,8 @@ static bool DoIdentifyItem(Player* player, Item* item, ChatHandler* handler = nu
     Field* fields = result->Fetch();
     uint32 itemId = fields[0].Get<uint32>();
     uint32 huanJingMultiplier = fields[1].Get<uint32>();
-    uint32 identificationGroupId = fields[2].Get<uint32>();
+    char huanJingMode = DbValueToHuanJingMode(fields[2].Get<int32>());
+    uint32 identificationGroupId = fields[3].Get<uint32>();
 
     // 验证物品ID是否匹配
     if (item->GetEntry() != itemId)
@@ -4742,16 +4896,17 @@ static bool DoIdentifyItem(Player* player, Item* item, ChatHandler* handler = nu
     if (handler)
     {
         handler->PSendSysMessage("|cff00ff00开始鉴定物品: |r|cffffffff{}|r", itemName);
-        handler->PSendSysMessage("|cff00ff00幻境倍率: |r|cffff8000{}x|r", huanJingMultiplier);
+        handler->PSendSysMessage("|cff00ff00幻境模式: |r|cffff8000{}{}|r",
+            huanJingMode == '+' ? "+" : (huanJingMode == '-' ? "关闭" : "x"), huanJingMultiplier);
     }
 
     // 应用幻境倍率属性（如果有幻境系统）
 #ifdef MODULE_HUANJING_SYSTEM
-    if (huanJingMultiplier > 1)
+    if (HasHuanJingEffect(huanJingMultiplier, huanJingMode))
     {
         if (sHuanJingSystem)
         {
-            sHuanJingSystem->ApplyItemAttributeMultiplier(item, static_cast<float>(huanJingMultiplier));
+            sHuanJingSystem->ApplyItemAttributeMultiplier(item, static_cast<float>(huanJingMultiplier), huanJingMode);
             if (handler)
                 handler->PSendSysMessage("|cff00ff00已应用幻境倍率属性|r");
         }
@@ -4874,7 +5029,7 @@ bool ItemIdentificationCommandScript::HandleListPendingCommand(ChatHandler* hand
     uint32 playerGuid = player->GetGUID().GetCounter();
 
     QueryResult result = CharacterDatabase.Query(
-        "SELECT `物品GUID`, `物品ID`, `幻境倍率`, `鉴定组ID` FROM `待鉴定物品标记` "
+        "SELECT `物品GUID`, `物品ID`, `幻境倍率`, `幻境倍率模式`, `鉴定组ID` FROM `待鉴定物品标记` "
         "WHERE `玩家GUID` = {} ORDER BY `物品GUID` DESC LIMIT 50",
         playerGuid
     );
@@ -4897,6 +5052,7 @@ bool ItemIdentificationCommandScript::HandleListPendingCommand(ChatHandler* hand
         uint32 guid = fields[0].Get<uint32>();
         uint32 itemId = fields[1].Get<uint32>();
         uint32 multiplier = fields[2].Get<uint32>();
+        char multiplierMode = DbValueToHuanJingMode(fields[3].Get<int32>());
 
         ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
         std::string itemName = proto ? proto->Name1 : "未知物品";
@@ -4939,8 +5095,8 @@ bool ItemIdentificationCommandScript::HandleListPendingCommand(ChatHandler* hand
 
         if (found)
         {
-            handler->PSendSysMessage("|cffffffff[{}]|r |cffff8000{}x|r |cff00ff00背包{} 槽位{}|r",
-                itemName, multiplier, foundBag, foundSlot);
+            handler->PSendSysMessage("|cffffffff[{}]|r |cffff8000{}{}|r |cff00ff00背包{} 槽位{}|r",
+                itemName, multiplierMode == '+' ? "+" : (multiplierMode == '-' ? "关闭" : "x"), multiplier, foundBag, foundSlot);
             validCount++;
         }
         else
@@ -4978,7 +5134,7 @@ bool ItemIdentificationCommandScript::HandleBatchIdentifyCommand(ChatHandler* ha
     uint32 playerGuid = player->GetGUID().GetCounter();
 
     QueryResult result = CharacterDatabase.Query(
-        "SELECT `物品GUID`, `物品ID`, `幻境倍率`, `鉴定组ID` FROM `待鉴定物品标记` "
+        "SELECT `物品GUID`, `物品ID`, `幻境倍率`, `幻境倍率模式`, `鉴定组ID` FROM `待鉴定物品标记` "
         "WHERE `玩家GUID` = {} ORDER BY `物品GUID` ASC",
         playerGuid
     );
@@ -5002,7 +5158,9 @@ bool ItemIdentificationCommandScript::HandleBatchIdentifyCommand(ChatHandler* ha
         uint32 itemGuid = fields[0].Get<uint32>();
         uint32 itemId = fields[1].Get<uint32>();
         uint32 huanJingMultiplier = fields[2].Get<uint32>();
-        uint32 identificationGroupId = fields[3].Get<uint32>();
+        std::string huanJingModeText = fields[3].Get<std::string>();
+        char huanJingMode = huanJingModeText.empty() ? 'x' : NormalizeHuanJingMode(huanJingModeText[0]);
+        uint32 identificationGroupId = fields[4].Get<uint32>();
 
         processedGuids.push_back(itemGuid);
 
@@ -5023,11 +5181,11 @@ bool ItemIdentificationCommandScript::HandleBatchIdentifyCommand(ChatHandler* ha
 
         // 应用幻境倍率
 #ifdef MODULE_HUANJING_SYSTEM
-        if (huanJingMultiplier > 1)
+        if (HasHuanJingEffect(huanJingMultiplier, huanJingMode))
         {
             if (sHuanJingSystem)
             {
-                sHuanJingSystem->ApplyItemAttributeMultiplier(item, static_cast<float>(huanJingMultiplier));
+                sHuanJingSystem->ApplyItemAttributeMultiplier(item, static_cast<float>(huanJingMultiplier), huanJingMode);
             }
         }
 #endif

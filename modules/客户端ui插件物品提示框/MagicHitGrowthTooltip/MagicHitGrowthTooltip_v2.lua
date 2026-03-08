@@ -217,6 +217,11 @@ local RenderTooltip -- 提前声明，供幻境相关更新调用
 local RefreshUnifiedFrame -- 提前声明，供四联大框刷新使用
 local ExtractItemInfo -- 提前声明，供对比提示框定位使用
 local GetTooltipBagSlot -- 提前声明，供待鉴定提示刷新使用
+local NormalizeHuanJingMode -- 提前声明，供批量解析/待鉴定逻辑使用
+local HasHuanJingEffect -- 提前声明，供批量解析/渲染逻辑使用
+local CalculateHuanJingEnhancedValue -- 提前声明，供官方提示框幻境换算使用
+local FormatHuanJingModeText -- 提前声明，供属性文本格式化使用
+local FormatTooltipStatLine -- 提前声明，供幻境属性文本格式化使用
 
 -- 记录当前按物品键关联的统一四联大框，用于异步刷新
 local UnifiedFramesByKey = {}
@@ -405,6 +410,7 @@ local function GetPendingIdentifyInfo(bag, slot, itemId)
     return {
         isPending = true,
         multiplier = data.multiplier or 1,
+        mode = NormalizeHuanJingMode(data.mode),
         groupId = data.groupId or 0
     }
 end
@@ -428,6 +434,7 @@ local function FindPendingItemPositions(itemId)
                     bag = data.bag,
                     slot = data.slot,
                     multiplier = data.multiplier or 1,
+                    mode = NormalizeHuanJingMode(data.mode),
                     groupId = data.groupId or 0
                 })
             end
@@ -628,11 +635,12 @@ local function ApplyHuanJingToOfficialTooltip(tooltip)
         hjData = HuanJingGetData(guidKey)
     end
 
-    if not hjData or not hjData.multiplier or hjData.multiplier <= 1 then
+    if not hjData or not HasHuanJingEffect(hjData.multiplier, hjData.mode) then
         return
     end
 
     local mult = hjData.multiplier
+    local mode = hjData.mode
 
     -- 只处理主属性：敏捷(3)、力量(4)、智力(5)、精神(6)、耐力(7)
     local baseTypes = {
@@ -692,10 +700,10 @@ local function ApplyHuanJingToOfficialTooltip(tooltip)
                     local amountStr = clean:match("^%+?(%-?%d+)%s*" .. name .. "%s*$")
                     if amountStr then
                         local original = info.original or tonumber(amountStr) or 0
-                        local enhanced = info.enhanced or (original * mult)
+                        local enhanced = info.enhanced or CalculateHuanJingEnhancedValue(original, mult, mode)
 
                         -- 与右侧“基础/追加属性”保持一致的配色：倍率为粉色，最终值为红色
-                        local newCoreText = FormatTooltipStatLine(name, original, mult)
+                        local newCoreText = FormatTooltipStatLine(name, original, mult, mode)
 
                         leftText:SetText(newCoreText)
                         changed = true
@@ -728,13 +736,33 @@ local function HuanJingHandleSystemMessage(message)
     end
 
     -- 兼容多种响应格式
-    local itemId, itemGuid, multiplier, attributeData, identificationData =
-        message:match("%[幻境系统%] 装备ID:(%d+) GUID:(%d+) 属性倍率:([%d%.]+) 属性数据:(.+) 鉴定数据:(.+)")
+    local itemId, itemGuid, mode, multiplier, attributeData, identificationData =
+        message:match("%[幻境系统%] 装备ID:(%d+) GUID:(%d+) 属性模式:([x%+%-]) 属性倍率:([%d%.]+) 属性数据:(.+) 鉴定数据:(.+)")
+
+    if not itemId then
+        itemId, itemGuid, mode, multiplier, attributeData =
+            message:match("%[幻境系统%] 装备ID:(%d+) GUID:(%d+) 属性模式:([x%+%-]) 属性倍率:([%d%.]+) 属性数据:(.+)")
+        identificationData = nil
+    end
+
+    if not itemId then
+        itemId, itemGuid, mode, multiplier =
+            message:match("%[幻境系统%] 装备ID:(%d+) GUID:(%d+) 属性模式:([x%+%-]) 属性倍率:([%d%.]+)")
+        attributeData = nil
+        identificationData = nil
+    end
+
+    if not itemId then
+        itemId, itemGuid, multiplier, attributeData, identificationData =
+            message:match("%[幻境系统%] 装备ID:(%d+) GUID:(%d+) 属性倍率:([%d%.]+) 属性数据:(.+) 鉴定数据:(.+)")
+        mode = "x"
+    end
 
     if not itemId then
         itemId, itemGuid, multiplier, attributeData =
             message:match("%[幻境系统%] 装备ID:(%d+) GUID:(%d+) 属性倍率:([%d%.]+) 属性数据:(.+)")
         identificationData = nil
+        mode = "x"
     end
 
     if not itemId then
@@ -742,6 +770,7 @@ local function HuanJingHandleSystemMessage(message)
             message:match("%[幻境系统%] 装备ID:(%d+) GUID:(%d+) 属性倍率:([%d%.]+)")
         attributeData = nil
         identificationData = nil
+        mode = "x"
     end
 
     if not itemId or not itemGuid or not multiplier then
@@ -762,6 +791,7 @@ local function HuanJingHandleSystemMessage(message)
         itemID = itemId,
         guid = itemGuid,
         multiplier = multiplier,
+        mode = NormalizeHuanJingMode(mode),
         attributeData = attributeData or "",
         identificationData = identificationData or "",
         timestamp = GetTime()
@@ -803,8 +833,14 @@ local function HuanJingHandleAddonMessage(message)
         return
     end
 
-    local itemId, itemGuid, multiplier, rest =
-        message:match("^HUANJING_DATA:(%d+):(%d+):([%d%.]+):?(.*)$")
+    local itemId, itemGuid, mode, multiplier, rest =
+        message:match("^HUANJING_DATA:(%d+):(%d+):([x%+%-]):([%d%.]+):?(.*)$")
+
+    if not itemId then
+        itemId, itemGuid, multiplier, rest =
+            message:match("^HUANJING_DATA:(%d+):(%d+):([%d%.]+):?(.*)$")
+        mode = "x"
+    end
 
     if not itemId or not itemGuid or not multiplier then
         return
@@ -835,6 +871,7 @@ local function HuanJingHandleAddonMessage(message)
         itemID = itemId,
         guid = itemGuid,
         multiplier = multiplier,
+        mode = NormalizeHuanJingMode(mode),
         attributeData = attributeData or "",
         identificationData = identificationData or "",
         timestamp = GetTime()
@@ -1380,9 +1417,13 @@ function Parsers.BatchQuery(message)
     local huanjingData = ""
 
     if #parts >= setDataStartIndex then
-        -- 检查最后一个字段是否是幻境数据格式（数字|...或纯数字）
+        -- 检查最后一个字段是否是幻境数据格式
+        -- 兼容旧格式："倍率" / "倍率|属性"
+        -- 兼容新格式："模式,倍率" / "模式,倍率|属性"（如 x,10 / +,10 / -,0）
         local lastPart = parts[#parts]
-        local isHuanjingFormat = lastPart:match("^%d+") and not lastPart:match(":")
+        local isLegacyHuanjingFormat = lastPart:match("^%d+") and not lastPart:match(":")
+        local isModeHuanjingFormat = lastPart:match("^[x%+%-],[%d%.]+") and not lastPart:match(":")
+        local isHuanjingFormat = isLegacyHuanjingFormat or isModeHuanjingFormat
 
         if #parts >= setDataStartIndex + 1 and isHuanjingFormat then
             -- 有幻境数据：最后一个是幻境，之前的是套装
@@ -1707,15 +1748,18 @@ function Parsers.BatchQuery(message)
                 end
             end
 
-            result.systems.sets = {
-                type = "sets",
-                itemID = itemID,
-                guid = guid,
-                setId = tonumber(sParts[1]),
-                setName = sParts[2] or "套装",  -- 如果没有setName，使用默认值
-                attributes = attrs,
-                effects = effects
-            }
+            local setId = tonumber(sParts[1])
+            if setId and setId > 0 then
+                result.systems.sets = {
+                    type = "sets",
+                    itemID = itemID,
+                    guid = guid,
+                    setId = setId,
+                    setName = sParts[2] or "套装",  -- 如果没有setName，使用默认值
+                    attributes = attrs,
+                    effects = effects
+                }
+            end
         end
     end
 
@@ -1723,9 +1767,20 @@ function Parsers.BatchQuery(message)
     -- enhancedAttrs格式："attrType value enhanced,attrType value enhanced"
     if huanjingData ~= "" then
         local hjParts = { strsplit("|", huanjingData) }
-        local multiplier = tonumber(hjParts[1]) or 1
+        local mode = "x"
+        local multiplier = tonumber(hjParts[1])
 
-        if multiplier > 1 then
+        if not multiplier and hjParts[1] then
+            local modeText, multiplierText = string.match(hjParts[1], "^([x%+%-]),([%d%.]+)$")
+            if modeText and multiplierText then
+                mode = NormalizeHuanJingMode(modeText)
+                multiplier = tonumber(multiplierText) or 1
+            end
+        end
+
+        multiplier = multiplier or 1
+
+        if HasHuanJingEffect(multiplier, mode) then
             local enhancedAttrs = {}
 
             -- 如果有增强属性数据
@@ -1748,6 +1803,7 @@ function Parsers.BatchQuery(message)
                 itemID = itemID,
                 guid = guid,
                 multiplier = multiplier,
+                mode = mode,
                 enhancedAttributes = enhancedAttrs
             }
 
@@ -1757,6 +1813,7 @@ function Parsers.BatchQuery(message)
                 itemID = itemID,
                 guid = guid,
                 multiplier = multiplier,
+                mode = mode,
                 attributeData = hjParts[2] or "",  -- 原始属性数据字符串
                 identificationData = "",
                 timestamp = GetTime()
@@ -1789,11 +1846,55 @@ local function FormatSignedValue(value)
     return string.format("+ %d", absValue)
 end
 
-local function FormatTooltipStatLine(name, value, multiplier)
+NormalizeHuanJingMode = function(mode)
+    if mode == "+" then
+        return "+"
+    end
+    if mode == "-" or mode == "n" then
+        return "-"
+    end
+    return "x"
+end
+
+HasHuanJingEffect = function(multiplier, mode)
+    mode = NormalizeHuanJingMode(mode)
+    multiplier = tonumber(multiplier) or 0
+    if mode == "-" then
+        return false
+    end
+    if mode == "+" then
+        return multiplier > 0
+    end
+    return multiplier > 1
+end
+
+CalculateHuanJingEnhancedValue = function(baseValue, multiplier, mode)
+    baseValue = tonumber(baseValue) or 0
+    multiplier = tonumber(multiplier) or 0
+    mode = NormalizeHuanJingMode(mode)
+    if mode == "-" then
+        return baseValue
+    end
+    if mode == "+" then
+        return baseValue + multiplier
+    end
+    return baseValue * multiplier
+end
+
+FormatHuanJingModeText = function(multiplier, mode)
+    mode = NormalizeHuanJingMode(mode)
+    multiplier = tonumber(multiplier) or 0
+    if mode == "+" then
+        return string.format("%s+%d|r", COLOR_PINK, multiplier)
+    end
+    return string.format("%s倍率x%d|r", COLOR_PINK, multiplier)
+end
+
+FormatTooltipStatLine = function(name, value, multiplier, mode)
     local label = name or "属性"
     local baseText = string.format("%s %s", FormatSignedValue(value), label)
-    if multiplier and multiplier > 1 then
-        return string.format("|cff00ff00%s  |r%s倍率x%d|r", baseText, COLOR_PINK, multiplier)
+    if HasHuanJingEffect(multiplier, mode) then
+        return string.format("|cff00ff00%s  |r%s", baseText, FormatHuanJingModeText(multiplier, mode))
     end
     return string.format("|cff00ff00%s|r", baseText)
 end
@@ -2594,7 +2695,7 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
     end
 
     -- 从提示框元数据中获取官方基础属性（力量/敏捷/智力/耐力/精神），配合幻境倍率展示
-    if meta and meta.officialStats and hjData and hjData.multiplier and hjData.multiplier > 1 then
+    if meta and meta.officialStats and hjData and HasHuanJingEffect(hjData.multiplier, hjData.mode) then
         local stats = meta.officialStats
         local mult = hjData.multiplier
 
@@ -2679,7 +2780,7 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
         for _, attr in ipairs(officialBaseAttributes) do
             local baseValue = attr.value
             local mult = attr.multiplier
-            tooltip:AddLine(FormatTooltipStatLine(attr.name, baseValue, mult), 0, 1, 0)
+            tooltip:AddLine(FormatTooltipStatLine(attr.name, baseValue, mult, hjData.mode), 0, 1, 0)
         end
 
         for index, attr in ipairs(baseAttributes) do
@@ -2687,10 +2788,10 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
             local hjInfo = hjBaseInfo[index]
             local leftText
 
-            if hjData and hjData.multiplier and hjData.multiplier > 1 then
+            if hjData and HasHuanJingEffect(hjData.multiplier, hjData.mode) then
                 local mult = hjData.multiplier
                 local original = hjInfo and (hjInfo.original or attr.value) or attr.value
-                leftText = FormatTooltipStatLine(name, original, mult)
+                leftText = FormatTooltipStatLine(name, original, mult, hjData.mode)
             else
                 leftText = FormatTooltipStatLine(name, attr.value)
             end
@@ -2708,10 +2809,10 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
             local hjInfo = hjAdditionalInfo[index]
             local leftText
 
-            if hjData and hjData.multiplier and hjData.multiplier > 1 then
+            if hjData and HasHuanJingEffect(hjData.multiplier, hjData.mode) then
                 local mult = hjData.multiplier
                 local original = hjInfo and (hjInfo.original or attr.value) or attr.value
-                leftText = FormatTooltipStatLine(name, original, mult)
+                leftText = FormatTooltipStatLine(name, original, mult, hjData.mode)
             else
                 leftText = FormatTooltipStatLine(name, attr.value)
             end
@@ -2736,10 +2837,10 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
                 local name = ATTR_NAMES[attr.type] or ("属性" .. attr.type)
                 local leftText
 
-                if hjData and hjData.multiplier and hjData.multiplier > 1 then
+                if hjData and HasHuanJingEffect(hjData.multiplier, hjData.mode) then
                     local mult = hjData.multiplier
                     local baseValue = attr.value or 0
-                    leftText = FormatTooltipStatLine(name, baseValue, mult)
+                    leftText = FormatTooltipStatLine(name, baseValue, mult, hjData.mode)
                 else
                     leftText = FormatTooltipStatLine(name, attr.value)
                 end
@@ -2770,10 +2871,10 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
                 local name = ATTR_NAMES[attr.type] or ("属性" .. attr.type)
                 local leftText
 
-                if hjData and hjData.multiplier and hjData.multiplier > 1 then
+                if hjData and HasHuanJingEffect(hjData.multiplier, hjData.mode) then
                     local mult = hjData.multiplier
                     local baseValue = attr.value or 0
-                    leftText = FormatTooltipStatLine(name, baseValue, mult)
+                    leftText = FormatTooltipStatLine(name, baseValue, mult, hjData.mode)
                 else
                     leftText = FormatTooltipStatLine(name, attr.value)
                 end
@@ -3133,7 +3234,11 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
                 -- 解析合并后的物品列表
                 if allItemsData ~= "" then
                     for itemStr in string.gmatch(allItemsData, "([^;]+)") do
-                        local bag, slot, itemId, multiplier, groupId = itemStr:match("(%d+),(%d+),(%d+),(%d+),(%d+)")
+                        local bag, slot, itemId, mode, multiplier, groupId = itemStr:match("(%d+),(%d+),(%d+),([x%+%-]),(%d+),(%d+)")
+                        if not bag then
+                            bag, slot, itemId, multiplier, groupId = itemStr:match("(%d+),(%d+),(%d+),(%d+),(%d+)")
+                            mode = "x"
+                        end
                         if bag and slot and itemId then
                             local cacheKey = string.format("%s:%s:%s", bag, slot, itemId)
                             if not IsPendingIdentifySuppressed(tonumber(bag), tonumber(slot), tonumber(itemId)) then
@@ -3142,6 +3247,7 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
                                     slot = tonumber(slot),
                                     itemId = tonumber(itemId),
                                     multiplier = tonumber(multiplier) or 1,
+                                    mode = NormalizeHuanJingMode(mode),
                                     groupId = tonumber(groupId) or 0,
                                     timestamp = GetTime()
                                 }
@@ -3176,9 +3282,13 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
             PendingIdentifyState.refreshing = false  -- 【新增】刷新完成
 
             if count > 0 and itemsData2 and itemsData2 ~= "" then
-                -- 解析物品列表，新格式：bag,slot,itemId,multiplier,groupId
+                -- 解析物品列表，新格式：bag,slot,itemId,mode,multiplier,groupId
                 for itemStr in string.gmatch(itemsData2, "([^;]+)") do
-                    local bag, slot, itemId, multiplier, groupId = itemStr:match("(%d+),(%d+),(%d+),(%d+),(%d+)")
+                    local bag, slot, itemId, mode, multiplier, groupId = itemStr:match("(%d+),(%d+),(%d+),([x%+%-]),(%d+),(%d+)")
+                    if not bag then
+                        bag, slot, itemId, multiplier, groupId = itemStr:match("(%d+),(%d+),(%d+),(%d+),(%d+)")
+                        mode = "x"
+                    end
                     if bag and slot and itemId then
                         local cacheKey = string.format("%s:%s:%s", bag, slot, itemId)
                         if not IsPendingIdentifySuppressed(tonumber(bag), tonumber(slot), tonumber(itemId)) then
@@ -3187,6 +3297,7 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
                                 slot = tonumber(slot),
                                 itemId = tonumber(itemId),
                                 multiplier = tonumber(multiplier) or 1,
+                                mode = NormalizeHuanJingMode(mode),
                                 groupId = tonumber(groupId) or 0,
                                 timestamp = GetTime()
                             }
@@ -5532,8 +5643,12 @@ local function OnTooltipSetItem(tooltip)
         if pendingInfo and pendingInfo.isPending then
             tooltip:AddLine(" ")
             local multiplierText = ""
-            if pendingInfo.multiplier and pendingInfo.multiplier > 1 then
-                multiplierText = " |cFF00FF00x" .. pendingInfo.multiplier .. "倍率|r"
+            if HasHuanJingEffect(pendingInfo.multiplier, pendingInfo.mode) then
+                if NormalizeHuanJingMode(pendingInfo.mode) == "+" then
+                    multiplierText = " |cFF00FF00+" .. pendingInfo.multiplier .. "|r"
+                else
+                    multiplierText = " |cFF00FF00x" .. pendingInfo.multiplier .. "倍率|r"
+                end
             end
             tooltip:AddLine("|cFFFF0000【待鉴定】|r" .. multiplierText)
             tooltip:Show()

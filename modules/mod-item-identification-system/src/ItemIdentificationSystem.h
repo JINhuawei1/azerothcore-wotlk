@@ -311,7 +311,7 @@ private:
     void ApplyBaseAttributes(Player* player, Item* item, const struct IdentificationTemplate& tmpl, std::string& outAttrDetails, uint32& outAttrCount, uint32& outAttrGroup);
 
     // 应用追加属性
-    void ApplyAdditionalAttributes(Player* player, Item* item, const struct IdentificationTemplate& tmpl);
+    uint32 ApplyAdditionalAttributes(Player* player, Item* item, const struct IdentificationTemplate& tmpl);
 
     // 应用追加技能
     void ApplyAdditionalSkills(Player* player, Item* item, const struct IdentificationTemplate& tmpl);
