@@ -127,6 +127,7 @@ namespace
 std::vector<uint32> ParseCommaSeparatedNumbers(const std::string& str);
 uint32 SelectRandomFromList(const std::vector<uint32>& list);
 uint32 GenerateRandomNumber(uint32 min, uint32 max);
+uint32 GetIdentificationTemplateMatchLevel(Item* item);
 
 // 单例实例
 ItemIdentificationSystem* ItemIdentificationSystem::_instance = nullptr;
