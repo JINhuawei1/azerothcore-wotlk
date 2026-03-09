@@ -43,6 +43,11 @@ CREATE TABLE `_物品鉴定_模板`  (
   `符文凹槽最大数量` int UNSIGNED NOT NULL DEFAULT 0,
   `技能模板_套装_组` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '关联mod-item-sets模块套装系统表的组字段，多个组用逗号隔开，随机取一个组后再随机分配该组内的套装',
   `公告模板` int UNSIGNED NULL DEFAULT 0 COMMENT '成功后公告',
+  `品质颜色` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '前缀+物品名+后缀 整体默认颜色，支持|cAARRGGBB、AARRGGBB或RRGGBB',
+  `物品名字前缀` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '显示在物品名称前面的前缀',
+  `物品名字后缀` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '显示在物品名称后面的后缀',
+  `物品名字颜色_多个逗号隔开` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '按完整显示名称逐字着色，多个颜色用逗号分隔；只有1个颜色则整串同色，支持|cAARRGGBB、AARRGGBB或RRGGBB',
+  `物品底部描述` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '显示在提示底部的额外描述',
   PRIMARY KEY (`id`) USING BTREE
 ) ENGINE = MyISAM AUTO_INCREMENT = 1 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '物品鉴定模板' ROW_FORMAT = DYNAMIC;
 
@@ -54,18 +59,18 @@ CREATE TABLE `_物品鉴定_模板`  (
 -- ----------------------------
 
 -- 组1 模板1: 等级1，几率30 (普通品质)
-INSERT INTO `_物品鉴定_模板` VALUES ('组1-普通品质', 1, 1, 1, 30, '1', 1, 1, 1, 9, '1', 1, 1, 1, 9, '0', 1, 1, 1, 9, 0, '1', 1, 1, 1, 9, 0, '1', 1, 1, 0, '1', 1, 1, 1, 9, 0, 0, '', 0, 0, '1', 0);
+INSERT INTO `_物品鉴定_模板` VALUES ('组1-普通品质', 1, 1, 1, 30, '1', 1, 1, 1, 9, '1', 1, 1, 1, 9, '0', 1, 1, 1, 9, 0, '1', 1, 1, 1, 9, 0, '1', 1, 1, 0, '1', 1, 1, 1, 9, 0, 0, '', 0, 0, '1', 0, '', '', '', '', '');
 
 -- 组1 模板2: 等级2，几率30 (优秀品质)
-INSERT INTO `_物品鉴定_模板` VALUES ('组1-优秀品质', 2, 1, 2, 30, '1', 1, 2, 2, 10, '1', 1, 2, 2, 10, '0', 1, 2, 2, 10, 0, '1', 1, 2, 2, 10, 0, '1', 1, 1, 0, '1', 1, 2, 2, 10, 0, 0, '', 0, 0, '1', 0);
+INSERT INTO `_物品鉴定_模板` VALUES ('组1-优秀品质', 2, 1, 2, 30, '1', 1, 2, 2, 10, '1', 1, 2, 2, 10, '0', 1, 2, 2, 10, 0, '1', 1, 2, 2, 10, 0, '1', 1, 1, 0, '1', 1, 2, 2, 10, 0, 0, '', 0, 0, '1', 0, '', '', '', '', '');
 
 -- 组1 模板3: 等级3，几率20 (精良品质)
-INSERT INTO `_物品鉴定_模板` VALUES ('组1-精良品质', 3, 1, 3, 20, '1', 1, 3, 3, 11, '1', 1, 3, 3, 11, '0', 1, 3, 3, 11, 0, '1', 1, 3, 3, 11, 0, '1', 1, 1, 0, '1', 1, 3, 3, 11, 0, 0, '', 0, 0, '1', 0);
+INSERT INTO `_物品鉴定_模板` VALUES ('组1-精良品质', 3, 1, 3, 20, '1', 1, 3, 3, 11, '1', 1, 3, 3, 11, '0', 1, 3, 3, 11, 0, '1', 1, 3, 3, 11, 0, '1', 1, 1, 0, '1', 1, 3, 3, 11, 0, 0, '', 0, 0, '1', 0, '', '', '', '', '');
 
 -- 组1 模板4: 等级4，几率10 (史诗品质)
-INSERT INTO `_物品鉴定_模板` VALUES ('组1-史诗品质', 4, 1, 4, 10, '1', 1, 4, 4, 12, '1', 1, 4, 4, 12, '0', 1, 4, 4, 12, 0, '1', 1, 4, 4, 12, 0, '1', 1, 1, 0, '1', 1, 4, 4, 12, 0, 0, '', 0, 0, '1', 0);
+INSERT INTO `_物品鉴定_模板` VALUES ('组1-史诗品质', 4, 1, 4, 10, '1', 1, 4, 4, 12, '1', 1, 4, 4, 12, '0', 1, 4, 4, 12, 0, '1', 1, 4, 4, 12, 0, '1', 1, 1, 0, '1', 1, 4, 4, 12, 0, 0, '', 0, 0, '1', 0, '', '', '', '', '');
 
 -- 组1 模板5: 等级5，几率5 (传说品质)
-INSERT INTO `_物品鉴定_模板` VALUES ('组1-传说品质', 5, 1, 5, 5, '1', 1, 5, 5, 15, '1', 1, 5, 5, 15, '0', 1, 5, 5, 15, 0, '1', 1, 5, 5, 15, 0, '1', 1, 1, 0, '1', 1, 5, 5, 15, 0, 0, '', 0, 0, '1', 0);
+INSERT INTO `_物品鉴定_模板` VALUES ('组1-传说品质', 5, 1, 5, 5, '1', 1, 5, 5, 15, '1', 1, 5, 5, 15, '0', 1, 5, 5, 15, 0, '1', 1, 5, 5, 15, 0, '1', 1, 1, 0, '1', 1, 5, 5, 15, 0, 0, '', 0, 0, '1', 0, '', '', '', '', '');
 
 SET FOREIGN_KEY_CHECKS = 1;

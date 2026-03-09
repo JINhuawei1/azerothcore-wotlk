@@ -140,6 +140,7 @@ public:
         // 鉴定系统数据
         std::string baseAttributes;      // 格式：attrType value,attrType value
         std::string additionalAttributes; // 格式：attrType value,attrType value
+        std::string identificationDisplayData; // 格式：IDDISP|品质颜色|前缀|后缀|名字颜色列表|底部描述（各字段均为URL编码）
 
         // 成长系统数据
         std::string growthData;          // 格式：level:exp:maxExp:attrs

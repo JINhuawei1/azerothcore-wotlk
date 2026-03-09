@@ -212,6 +212,184 @@ local function FormatTracePositions(positions)
     return table.concat(parts, ",")
 end
 
+local function UrlDecode(text)
+    if not text or text == "" then
+        return ""
+    end
+
+    return (text:gsub("%%(%x%x)", function(hex)
+        return string.char(tonumber(hex, 16) or 0)
+    end))
+end
+
+local function StripColorCodes(text)
+    if not text or text == "" then
+        return ""
+    end
+
+    return (text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+end
+
+local function SanitizeDisplayNameText(text)
+    if not text or text == "" then
+        return ""
+    end
+
+    return StripColorCodes(text)
+end
+
+local function NormalizeColorCode(color)
+    if not color or color == "" then
+        return nil
+    end
+
+    color = tostring(color)
+    color = color:gsub("^%s+", ""):gsub("%s+$", "")
+
+    local directCode = color:match("^(|c%x%x%x%x%x%x%x%x)")
+    if directCode then
+        return directCode
+    end
+
+    local directCodeShort = color:match("^(|cff%x%x%x%x%x%x)")
+    if directCodeShort then
+        return directCodeShort
+    end
+
+    local hex8 = color:match("^(%x%x%x%x%x%x%x%x)")
+    if hex8 then
+        return "|c" .. hex8
+    end
+
+    local hex6 = color:match("^(%x%x%x%x%x%x)")
+    if hex6 then
+        return "|cff" .. hex6
+    end
+
+    if color:match("^|c%x%x%x%x%x%x%x%x$") then
+        return color
+    end
+
+    if color:match("^|cff%x%x%x%x%x%x$") then
+        return color
+    end
+
+    if color:match("^%x%x%x%x%x%x%x%x$") then
+        return "|c" .. color
+    end
+
+    if color:match("^%x%x%x%x%x%x$") then
+        return "|cff" .. color
+    end
+
+    return nil
+end
+
+local function ParseItemNameColors(colorsText)
+    local colors = {}
+
+    if colorsText and colorsText ~= "" then
+        for token in string.gmatch(colorsText, "([^,]+)") do
+            local trimmed = token:gsub("^%s+", ""):gsub("%s+$", "")
+            if trimmed ~= "" then
+                table.insert(colors, NormalizeColorCode(trimmed))
+            end
+        end
+    end
+
+    return colors
+end
+
+local function SplitUtf8Chars(text)
+    local chars = {}
+    if not text or text == "" then
+        return chars
+    end
+
+    local index = 1
+    local length = string.len(text)
+    while index <= length do
+        local currentByte = string.byte(text, index)
+        local charLength = 1
+
+        if currentByte >= 240 then
+            charLength = 4
+        elseif currentByte >= 224 then
+            charLength = 3
+        elseif currentByte >= 192 then
+            charLength = 2
+        end
+
+        table.insert(chars, string.sub(text, index, index + charLength - 1))
+        index = index + charLength
+    end
+
+    return chars
+end
+
+local function ApplyColorToFullName(text, color)
+    if not text or text == "" then
+        return ""
+    end
+
+    local normalizedColor = NormalizeColorCode(color)
+    if not normalizedColor then
+        return text
+    end
+
+    return normalizedColor .. text .. "|r"
+end
+
+local function ApplyPerCharacterColors(text, colors, fallbackColor)
+    if not text or text == "" then
+        return ""
+    end
+
+    local normalizedFallback = NormalizeColorCode(fallbackColor)
+    if not colors or #colors == 0 then
+        return ApplyColorToFullName(text, normalizedFallback)
+    end
+
+    if #colors == 1 then
+        return ApplyColorToFullName(text, colors[1] or normalizedFallback)
+    end
+
+    local chars = SplitUtf8Chars(text)
+    local coloredText = ""
+    local lastColor = colors[#colors] or normalizedFallback
+
+    for index, char in ipairs(chars) do
+        local color = colors[index] or lastColor
+        color = NormalizeColorCode(color) or normalizedFallback
+        if color then
+            coloredText = coloredText .. color .. char .. "|r"
+        else
+            coloredText = coloredText .. char
+        end
+    end
+
+    return coloredText
+end
+
+local function ParseIdentificationDisplayData(displayData)
+    if not displayData or displayData == "" then
+        return nil
+    end
+
+    local parts = { strsplit("|", displayData) }
+    if #parts < 1 or parts[1] ~= "IDDISP" then
+        return nil
+    end
+
+    return {
+        qualityColor = UrlDecode(parts[2] or ""),
+        itemNamePrefix = UrlDecode(parts[3] or ""),
+        itemNameSuffix = UrlDecode(parts[4] or ""),
+        itemNameColors = UrlDecode(parts[5] or ""),
+        itemBottomDescription = UrlDecode(parts[6] or "")
+    }
+end
+
 local MakeKey       -- 提前声明，供幻境相关函数使用
 local RenderTooltip -- 提前声明，供幻境相关更新调用
 local RefreshUnifiedFrame -- 提前声明，供四联大框刷新使用
@@ -573,6 +751,21 @@ local function HuanJingRequest(itemID, guid, key, now)
     HuanJingState.pending[key] = now
 end
 
+local SEARCH_CONTAINER_BAGS = { -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 }
+
+local function ForEachSearchBag(callback)
+    for _, bagIndex in ipairs(SEARCH_CONTAINER_BAGS) do
+        local numSlots = GetContainerNumSlots(bagIndex)
+        if numSlots and numSlots > 0 then
+            if callback(bagIndex, numSlots) then
+                return true
+            end
+        end
+    end
+
+    return false
+end
+
 -- 查询其他玩家装备的GUID（通过玩家名和装备槽位）
 -- 这个函数向服务器请求指定玩家指定槽位装备的真实GUID
 local InspectGuidCache = {}  -- 缓存查询到的GUID: "playerName:slot:itemID" -> guid
@@ -718,6 +911,90 @@ local function ApplyHuanJingToOfficialTooltip(tooltip)
         state.applied = true
         tooltip:Show()
     end
+end
+
+local function ApplyIdentificationDisplay(tooltip, cached, meta)
+    if not tooltip or not cached or not cached.systems then
+        return
+    end
+
+    local identData = cached.systems.identification
+    if not identData or identData.isEmpty then
+        return
+    end
+
+    local hasDisplayConfig = (identData.qualityColor and identData.qualityColor ~= "")
+        or (identData.itemNamePrefix and identData.itemNamePrefix ~= "")
+        or (identData.itemNameSuffix and identData.itemNameSuffix ~= "")
+        or (identData.itemNameColors and identData.itemNameColors ~= "")
+        or (identData.itemBottomDescription and identData.itemBottomDescription ~= "")
+
+    if not hasDisplayConfig then
+        return
+    end
+
+    meta.rendered = meta.rendered or {}
+
+    local titleLine = nil
+    if tooltip.GetName then
+        local tooltipName = tooltip:GetName()
+        if tooltipName == "ShoppingTooltip1" or tooltipName == "ShoppingTooltip2" then
+            titleLine = _G[tooltipName .. "TextLeft2"] or _G[tooltipName .. "TextLeft1"]
+        else
+            titleLine = _G[tooltipName .. "TextLeft1"]
+        end
+    end
+
+    if titleLine and not meta.rendered.identificationTitle then
+        if not meta.originalTitle or meta.originalTitle == "" then
+            meta.originalTitle = StripColorCodes(titleLine:GetText() or "")
+            if meta.originalTitle == "" then
+                local itemName = tooltip:GetItem()
+                meta.originalTitle = StripColorCodes(itemName or "")
+            end
+        end
+
+        local originalTitle = meta.originalTitle or ""
+        local fullTitle = string.format("%s%s%s",
+            SanitizeDisplayNameText(identData.itemNamePrefix or ""),
+            originalTitle,
+            SanitizeDisplayNameText(identData.itemNameSuffix or ""))
+
+        local fallbackColor = NormalizeColorCode(identData.qualityColor)
+        local colors = ParseItemNameColors(identData.itemNameColors)
+        local newTitle = ApplyPerCharacterColors(fullTitle, colors, fallbackColor)
+
+        if newTitle ~= "" then
+            titleLine:SetText(newTitle)
+            meta.rendered.identificationTitle = true
+        end
+    end
+
+    tooltip:Show()
+end
+
+local function ApplyIdentificationBottomDescription(tooltip, cached, meta)
+    if not tooltip or not cached or not cached.systems then
+        return
+    end
+
+    local identData = cached.systems.identification
+    if not identData or identData.isEmpty then
+        return
+    end
+
+    if not identData.itemBottomDescription or identData.itemBottomDescription == "" then
+        return
+    end
+
+    meta.rendered = meta.rendered or {}
+    if meta.rendered.identificationBottomDescription then
+        return
+    end
+
+    tooltip:AddLine(" ")
+    tooltip:AddLine(identData.itemBottomDescription)
+    meta.rendered.identificationBottomDescription = true
 end
 
 -- 在现有tooltip上尝试渲染幻境属性（如果缓存中已有数据）
@@ -1342,7 +1619,7 @@ local Parsers = {}
 -- 批量数据解析器（解析ALL_MODULE_DATA消息）
 -- 这是唯一的解析器，处理服务器通过addon消息返回的批量数据
 function Parsers.BatchQuery(message)
-    -- 【修改】新格式：ALL_MODULE_DATA:bag:slot:itemID:guid:base:additional:growth:enhancement:skills:magic:rune:set:huanjing
+    -- 【修改】新格式：ALL_MODULE_DATA:bag:slot:itemID:guid:base:additional:identDisplay:growth:enhancement:skills:magic:rune:set:huanjing
     -- 旧格式（兼容）：ALL_MODULE_DATA:itemID:guid:base:additional:growth:enhancement:skills:magic:rune:set:huanjing
     if not message:match("^ALL_MODULE_DATA:") then
         return nil
@@ -1357,7 +1634,7 @@ function Parsers.BatchQuery(message)
     end
 
     -- 【修改】检测新格式还是旧格式
-    -- 新格式：parts[2]是bag（0-4或255），parts[3]是slot（0-36），parts[4]是itemID，parts[5]是guid
+    -- 新格式：parts[2]是bag（-1/0-11/255），parts[3]是slot（0-36），parts[4]是itemID，parts[5]是guid
     -- 旧格式：parts[2]是itemID（大数字），parts[3]是guid
     local bag, slot, itemID, guid
     local dataStartIndex  -- 数据字段开始的索引
@@ -1368,15 +1645,15 @@ function Parsers.BatchQuery(message)
     local fourthNum = tonumber(parts[5])
 
     -- 【关键修复】改进格式判断逻辑：
-    -- 新格式特征：bag是0-4或255，slot是0-36左右，且有第5个字段（guid）
+    -- 新格式特征：bag是-1/0-11或255，slot是0-36左右，且有第5个字段（guid）
     -- 旧格式特征：第一个数字是itemID（通常>100），第二个是guid
     -- 判断条件：如果第一个数字<=255且第二个数字<=50且有第5个字段，则是新格式
     local isNewFormat = false
     if firstNum and secondNum and thirdNum and fourthNum then
         -- 新格式有5个数值字段：bag, slot, itemID, guid, 然后是数据
-        -- bag范围：0-4（背包）或255（装备栏）
+        -- bag范围：-1（银行主仓）、0-11（背包/银行背包）或255（装备栏）
         -- slot范围：0-36（背包槽位）或1-19（装备槽位）
-        if (firstNum >= 0 and firstNum <= 255) and (secondNum >= 0 and secondNum <= 50) then
+        if (firstNum >= -1 and firstNum <= 255) and (secondNum >= 0 and secondNum <= 50) then
             isNewFormat = true
         end
     end
@@ -1404,38 +1681,47 @@ function Parsers.BatchQuery(message)
     -- 解析所有系统数据
     local baseAttributes = parts[dataStartIndex] or ""
     local additionalAttributes = parts[dataStartIndex + 1] or ""
-    local growthData = parts[dataStartIndex + 2] or ""
-    local enhancementData = parts[dataStartIndex + 3] or ""
-    local skillsData = parts[dataStartIndex + 4] or ""
-    local magicData = parts[dataStartIndex + 5] or ""
-    local runeData = parts[dataStartIndex + 6] or ""
+    local maybeDisplayData = parts[dataStartIndex + 2] or ""
+    local hasDisplayData = maybeDisplayData:match("^IDDISP|") ~= nil
+    local identificationDisplayData = hasDisplayData and maybeDisplayData or ""
+    local growthData = parts[dataStartIndex + (hasDisplayData and 3 or 2)] or ""
+    local enhancementData = parts[dataStartIndex + (hasDisplayData and 4 or 3)] or ""
+    local skillsData = parts[dataStartIndex + (hasDisplayData and 5 or 4)] or ""
+    local magicData = parts[dataStartIndex + (hasDisplayData and 6 or 5)] or ""
+    local runeData = parts[dataStartIndex + (hasDisplayData and 7 or 6)] or ""
 
     -- 套装字段可能包含多个":"，幻境字段(最后一个)不包含":"
     -- 策略：先提取最后一个字段作为幻境数据（不包含":"），剩余的拼接为套装数据
-    local setDataStartIndex = dataStartIndex + 7
+    local setDataStartIndex = dataStartIndex + (hasDisplayData and 8 or 7)
     local setData = ""
     local huanjingData = ""
+    local tailEndIndex = #parts
 
-    if #parts >= setDataStartIndex then
+    if #parts >= setDataStartIndex and parts[#parts] and parts[#parts]:match("^IDDISP|") then
+        identificationDisplayData = parts[#parts]
+        tailEndIndex = #parts - 1
+    end
+
+    if tailEndIndex >= setDataStartIndex then
         -- 检查最后一个字段是否是幻境数据格式
         -- 兼容旧格式："倍率" / "倍率|属性"
         -- 兼容新格式："模式,倍率" / "模式,倍率|属性"（如 x,10 / +,10 / -,0）
-        local lastPart = parts[#parts]
+        local lastPart = parts[tailEndIndex]
         local isLegacyHuanjingFormat = lastPart:match("^%d+") and not lastPart:match(":")
         local isModeHuanjingFormat = lastPart:match("^[x%+%-],[%d%.]+") and not lastPart:match(":")
         local isHuanjingFormat = isLegacyHuanjingFormat or isModeHuanjingFormat
 
-        if #parts >= setDataStartIndex + 1 and isHuanjingFormat then
+        if tailEndIndex >= setDataStartIndex + 1 and isHuanjingFormat then
             -- 有幻境数据：最后一个是幻境，之前的是套装
             huanjingData = lastPart
-            if #parts > setDataStartIndex + 1 then
-                setData = table.concat(parts, ":", setDataStartIndex, #parts - 1)
+            if tailEndIndex > setDataStartIndex + 1 then
+                setData = table.concat(parts, ":", setDataStartIndex, tailEndIndex - 1)
             else
                 setData = parts[setDataStartIndex] or ""
             end
         else
             -- 没有幻境数据或旧格式：setDataStartIndex之后全是套装
-            setData = table.concat(parts, ":", setDataStartIndex)
+            setData = table.concat(parts, ":", setDataStartIndex, tailEndIndex)
         end
     end
 
@@ -1457,10 +1743,18 @@ function Parsers.BatchQuery(message)
     -- print(string.format("|cffff8800[解析调试]|r rune='%s' set='%s' huanjing='%s'",
     --     runeData, setData, huanjingData))
 
-    -- 解析鉴定系统数据（基础属性和追加属性）
-    if baseAttributes ~= "" or additionalAttributes ~= "" then
+    -- 解析鉴定系统数据（基础属性、追加属性和名称显示）
+    if baseAttributes ~= "" or additionalAttributes ~= "" or identificationDisplayData ~= "" then
         local baseAttrs = {}
         local additionalAttrs = {}
+        local displayData = ParseIdentificationDisplayData(identificationDisplayData)
+        local hasDisplayConfig = displayData and (
+            (displayData.qualityColor and displayData.qualityColor ~= "")
+            or (displayData.itemNamePrefix and displayData.itemNamePrefix ~= "")
+            or (displayData.itemNameSuffix and displayData.itemNameSuffix ~= "")
+            or (displayData.itemNameColors and displayData.itemNameColors ~= "")
+            or (displayData.itemBottomDescription and displayData.itemBottomDescription ~= "")
+        )
 
         -- 解析基础属性
         if baseAttributes ~= "" then
@@ -1488,14 +1782,19 @@ function Parsers.BatchQuery(message)
             end
         end
 
-        -- 只要有基础属性或追加属性，就创建鉴定系统数据
-        if #baseAttrs > 0 or #additionalAttrs > 0 then
+        -- 只要有基础属性、追加属性或显示配置，就创建鉴定系统数据
+        if #baseAttrs > 0 or #additionalAttrs > 0 or hasDisplayConfig then
             result.systems.identification = {
                 type = "identification",
                 itemID = itemID,
                 guid = guid,
                 baseAttributes = baseAttrs,
-                additionalAttributes = additionalAttrs
+                additionalAttributes = additionalAttrs,
+                qualityColor = displayData and displayData.qualityColor or "",
+                itemNamePrefix = displayData and displayData.itemNamePrefix or "",
+                itemNameSuffix = displayData and displayData.itemNameSuffix or "",
+                itemNameColors = displayData and displayData.itemNameColors or "",
+                itemBottomDescription = displayData and displayData.itemBottomDescription or ""
             }
         end
     end
@@ -1986,7 +2285,9 @@ end
 
 -- 渲染鉴定基础属性
 function Renderers.Identification(tooltip, data)
-    if not data.baseAttributes or #data.baseAttributes == 0 then return end
+    local hasBaseAttributes = data.baseAttributes and #data.baseAttributes > 0
+    local hasAdditionalAttributes = data.additionalAttributes and #data.additionalAttributes > 0
+    if not hasBaseAttributes and not hasAdditionalAttributes then return end
 
     -- 查找并替换官方属性行
     local numLines = tooltip:NumLines()
@@ -2053,7 +2354,7 @@ function Renderers.Identification(tooltip, data)
     end
 
     -- 显示追加属性（如果有）
-    if data.additionalAttributes and #data.additionalAttributes > 0 then
+    if hasAdditionalAttributes then
         tooltip:AddLine(" ")
         tooltip:AddLine("|cff00ff00追加属性|r")
 
@@ -3023,6 +3324,8 @@ RenderTooltip = function(tooltip, itemID, guid, bag, slot)
         return
     end
 
+    ApplyIdentificationDisplay(tooltip, cached, meta)
+
     -- 1. 先统一渲染所有基础属性（鉴定、强化、成长）
     if not meta.rendered.identification and not meta.rendered.enhancement and not meta.rendered.growth then
         RenderUnifiedBaseAttributes(tooltip, cached, meta)
@@ -3051,6 +3354,8 @@ RenderTooltip = function(tooltip, itemID, guid, bag, slot)
             end
         end
     end
+
+    ApplyIdentificationBottomDescription(tooltip, cached, meta)
 
     tooltip:Show()
 end
@@ -4770,6 +5075,15 @@ GetTooltipBagSlot = function(tooltip)
     if bag and slot then
         bag = tonumber(bag)
         slot = tonumber(slot)
+
+        local parent = owner:GetParent()
+        if parent and parent.GetID then
+            local ok, actualBag = pcall(function() return parent:GetID() end)
+            if ok and actualBag ~= nil then
+                return actualBag, slot
+            end
+        end
+
         -- bag索引转换：UI上的bag1=背包4, bag2=背包3, bag3=背包2, bag4=背包1, bag5=背包0(主背包)
         local actualBag = (5 - bag)
         -- 【日志精简】常规日志已注释
@@ -4827,8 +5141,7 @@ GetTooltipBagSlot = function(tooltip)
                 if tooltipItemString ~= slotItemString then
                     -- 槽位不匹配！搜索正确的槽位
                     local allMatches = {}
-                    for searchBag = 0, 4 do
-                        local numSlots = GetContainerNumSlots(searchBag)
+                    ForEachSearchBag(function(searchBag, numSlots)
                         for searchSlot = 1, numSlots do
                             local searchLink = GetContainerItemLink(searchBag, searchSlot)
                             if searchLink then
@@ -4838,7 +5151,7 @@ GetTooltipBagSlot = function(tooltip)
                                 end
                             end
                         end
-                    end
+                    end)
 
                     if #allMatches > 0 then
                         return allMatches[1].bag, allMatches[1].slot
@@ -4934,23 +5247,28 @@ GetTooltipBagSlot = function(tooltip)
             if targetItemID then
                 local targetItemString = string.match(itemLink, "item[%-?%d:]+")
 
-                for bagIndex = 0, 4 do
-                    local numSlots = GetContainerNumSlots(bagIndex)
+                local matchedBag, matchedSlot = nil, nil
+                ForEachSearchBag(function(bagIndex, numSlots)
                     for slotIndex = 1, numSlots do
                         local bagItemLink = GetContainerItemLink(bagIndex, slotIndex)
                         if bagItemLink then
                             local bagItemString = string.match(bagItemLink, "item[%-?%d:]+")
                             if targetItemString == bagItemString then
-                                return bagIndex, slotIndex
+                                matchedBag = bagIndex
+                                matchedSlot = slotIndex
+                                return true
                             end
                         end
                     end
+                end)
+
+                if matchedBag ~= nil and matchedSlot ~= nil then
+                    return matchedBag, matchedSlot
                 end
 
                 -- 如果完全匹配失败，按itemID匹配
                 local matches = {}
-                for bagIndex = 0, 4 do
-                    local numSlots = GetContainerNumSlots(bagIndex)
+                ForEachSearchBag(function(bagIndex, numSlots)
                     for slotIndex = 1, numSlots do
                         local bagItemLink = GetContainerItemLink(bagIndex, slotIndex)
                         if bagItemLink then
@@ -4960,7 +5278,7 @@ GetTooltipBagSlot = function(tooltip)
                             end
                         end
                     end
-                end
+                end)
 
                 if #matches > 0 then
                     return matches[1].bag, matches[1].slot
@@ -5171,8 +5489,7 @@ local function OnTooltipSetItem(tooltip)
             else
                 -- ?????itemID???????????????
                 local foundBag, foundSlot, foundGuid = nil, nil, nil
-                for searchBag = 0, 4 do
-                    local numSlots = GetContainerNumSlots(searchBag)
+                ForEachSearchBag(function(searchBag, numSlots)
                     for searchSlot = 1, numSlots do
                         local searchLink = GetContainerItemLink(searchBag, searchSlot)
                         if searchLink then
@@ -5187,7 +5504,7 @@ local function OnTooltipSetItem(tooltip)
                             end
                         end
                     end
-                end
+                end)
 
                 if foundBag and foundSlot then
                     bagNum = foundBag
@@ -5252,8 +5569,7 @@ local function OnTooltipSetItem(tooltip)
 
             -- 如果装备栏没找到，搜索背包
             if bagNum == nil then
-                for searchBag = 0, 4 do
-                    local numSlots = GetContainerNumSlots(searchBag)
+                ForEachSearchBag(function(searchBag, numSlots)
                     for searchSlot = 1, numSlots do
                         local bagLink = GetContainerItemLink(searchBag, searchSlot)
                         if bagLink then
@@ -5271,12 +5587,11 @@ local function OnTooltipSetItem(tooltip)
                                 if DB.debug then
                                     print(string.format("|cff00ff00[聊天框搜索]|r 在背包找到! bag=%d, slot=%d", searchBag, searchSlot))
                                 end
-                                break
+                                return true
                             end
                         end
                     end
-                    if bagNum ~= nil then break end
-                end
+                end)
             end
 
             if DB.debug and bagNum == nil then

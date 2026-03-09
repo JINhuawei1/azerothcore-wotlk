@@ -246,7 +246,60 @@ struct IdentificationTemplate
     uint32 runeSlotMaxCount;
 
     uint32 announcementTemplate;
+    std::string qualityColor;
+    std::string itemNamePrefix;
+    std::string itemNameSuffix;
+    std::string itemNameColors;
+    std::string itemBottomDescription;
 };
+
+static std::string UrlEncodeAddonField(const std::string& value)
+{
+    static char const* hex = "0123456789ABCDEF";
+
+    if (value.empty())
+        return "";
+
+    std::string encoded;
+    encoded.reserve(value.size() * 3);
+
+    for (unsigned char ch : value)
+    {
+        if ((ch >= '0' && ch <= '9') ||
+            (ch >= 'A' && ch <= 'Z') ||
+            (ch >= 'a' && ch <= 'z') ||
+            ch == '-' || ch == '_' || ch == '.' || ch == '~' || ch == ' ')
+        {
+            encoded.push_back(static_cast<char>(ch));
+        }
+        else
+        {
+            encoded.push_back('%');
+            encoded.push_back(hex[(ch >> 4) & 0x0F]);
+            encoded.push_back(hex[ch & 0x0F]);
+        }
+    }
+
+    return encoded;
+}
+
+static std::string BuildIdentificationDisplayData(const IdentificationTemplate& tmpl)
+{
+    if (tmpl.qualityColor.empty() && tmpl.itemNamePrefix.empty() && tmpl.itemNameSuffix.empty() &&
+        tmpl.itemNameColors.empty() && tmpl.itemBottomDescription.empty())
+    {
+        return "";
+    }
+
+    std::ostringstream stream;
+    stream << "IDDISP|"
+           << UrlEncodeAddonField(tmpl.qualityColor) << "|"
+           << UrlEncodeAddonField(tmpl.itemNamePrefix) << "|"
+           << UrlEncodeAddonField(tmpl.itemNameSuffix) << "|"
+           << UrlEncodeAddonField(tmpl.itemNameColors) << "|"
+           << UrlEncodeAddonField(tmpl.itemBottomDescription);
+    return stream.str();
+}
 
 // 存储所有鉴定模板
 std::map<uint32, IdentificationTemplate> _identificationTemplates;
@@ -269,7 +322,8 @@ void ItemIdentificationSystem::LoadIdentificationTemplates()
         "`物品属性_模板_组`, `追加属性最小数量`, `追加属性最大数量`, `追加属性最小值`, `追加属性最大值`, `追加属性允许重复`, "
         "`物品技能_模板_组`, `追加技能最小数量`, `追加技能最大数量`, `追加技能允许重复`, "
         "`技能魔次_模板_组`, `技能魔次最小数量`, `技能魔次最大数量`, `技能魔次最小魔次`, `技能魔次最大魔次`, `技能魔次允许重复`, "
-        "`需求_模板`, `符文系统_符文`, `符文凹槽最小数量`, `符文凹槽最大数量`, `技能模板_套装_组`, `公告模板` "
+        "`需求_模板`, `符文系统_符文`, `符文凹槽最小数量`, `符文凹槽最大数量`, `技能模板_套装_组`, `公告模板`, "
+        "`品质颜色`, `物品名字前缀`, `物品名字后缀`, `物品名字颜色_多个逗号隔开`, `物品底部描述` "
         "FROM `_物品鉴定_模板`");
 
     if (!result)
@@ -295,7 +349,8 @@ void ItemIdentificationSystem::LoadIdentificationTemplates()
         // 21:物品属性_模板_组, 22:追加属性最小数量, 23:追加属性最大数量, 24:追加属性最小值, 25:追加属性最大值, 26:追加属性允许重复,
         // 27:物品技能_模板_组, 28:追加技能最小数量, 29:追加技能最大数量, 30:追加技能允许重复,
         // 31:技能魔次_模板_组, 32:技能魔次最小数量, 33:技能魔次最大数量, 34:技能魔次最小魔次, 35:技能魔次最大魔次, 36:技能魔次允许重复,
-        // 37:需求_模板, 38:符文系统_符文, 39:符文凹槽最小数量, 40:符文凹槽最大数量, 41:技能模板_套装_组, 42:公告模板
+        // 37:需求_模板, 38:符文系统_符文, 39:符文凹槽最小数量, 40:符文凹槽最大数量, 41:技能模板_套装_组, 42:公告模板,
+        // 43:品质颜色, 44:物品名字前缀, 45:物品名字后缀, 46:物品名字颜色_多个逗号隔开, 47:物品底部描述
 
         tmpl.comment = fields[0].Get<std::string>();
         tmpl.id = fields[1].Get<uint32>();
@@ -360,6 +415,13 @@ void ItemIdentificationSystem::LoadIdentificationTemplates()
 
         // 公告配置
         tmpl.announcementTemplate = fields[42].Get<uint32>();                  // 公告模板
+
+        // 名称显示配置
+        tmpl.qualityColor = fields[43].Get<std::string>();                     // 品质颜色
+        tmpl.itemNamePrefix = fields[44].Get<std::string>();                   // 物品名字前缀
+        tmpl.itemNameSuffix = fields[45].Get<std::string>();                   // 物品名字后缀
+        tmpl.itemNameColors = fields[46].Get<std::string>();                   // 物品名字颜色_多个逗号隔开
+        tmpl.itemBottomDescription = fields[47].Get<std::string>();            // 物品底部描述
 
         _identificationTemplates[tmpl.id] = tmpl;
         groups.insert(tmpl.group);
@@ -2667,7 +2729,7 @@ public:
         std::string params = command.substr(6);  // 去掉"QUERY:"
 
         // 【修改】新格式：QUERY:bag:slot:itemID（WoW 3.3.5客户端物品链接不包含GUID）
-        // bag=255表示装备栏，其他值表示背包编号
+        // bag=255表示装备栏，0-4表示背包，-1/5-11表示银行
         std::vector<std::string> parts;
         std::istringstream stream(params);
         std::string part;
@@ -2680,7 +2742,7 @@ public:
         // 新格式：QUERY:bag:slot:itemID（三个参数）
         uint32 itemID = 0;
         uint32 guid = 0;
-        uint8 bag = 255;   // 默认值255表示装备栏（旧格式兼容）
+        int32 bag = 255;   // 默认值255表示装备栏（旧格式兼容）
         uint8 slot = 0;
 
         if (parts.size() == 2)
@@ -2704,9 +2766,14 @@ public:
             // 新格式：bag:slot:itemID
             try
             {
-                bag = static_cast<uint8>(std::stoul(parts[0]));
-                slot = static_cast<uint8>(std::stoul(parts[1]));
+                bag = std::stoi(parts[0]);
+                int32 parsedSlot = std::stoi(parts[1]);
                 itemID = std::stoul(parts[2]);
+
+                if (parsedSlot < 0 || parsedSlot > 255)
+                    return;
+
+                slot = static_cast<uint8>(parsedSlot);
             }
             catch (...)
             {
@@ -2752,7 +2819,7 @@ public:
             {
                 // bag=1-4是额外背包
                 // 客户端发送的bag需要转换为服务器的背包槽位
-                uint8 serverBagSlot = INVENTORY_SLOT_BAG_START + (bag - 1);
+                uint8 serverBagSlot = INVENTORY_SLOT_BAG_START + static_cast<uint8>(bag - 1);
                 if (Bag* bagPtr = player->GetBagByPos(serverBagSlot))
                 {
                     // 背包内的槽位是0-based
@@ -2760,6 +2827,38 @@ public:
                         item = bagPtr->GetItemByPos(slot - 1);
                     else
                         item = bagPtr->GetItemByPos(slot);
+                }
+            }
+            else if (bag == -1)
+            {
+                // bag=-1是主银行
+                uint8 bankSlot = (slot > 0) ? (slot - 1) : slot;
+                item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, BANK_SLOT_ITEM_START + bankSlot);
+
+                if (sItemIdentificationSystem->_debugMode)
+                {
+                    LOG_INFO("module.itemidentification",
+                             "[QUERY] 银行主仓查询: 客户端slot={}, 服务器bankSlot={}, itemID={}",
+                             slot, BANK_SLOT_ITEM_START + bankSlot, itemID);
+                }
+            }
+            else if (bag >= 5 && bag <= 11)
+            {
+                // bag=5-11是银行背包
+                uint8 serverBagSlot = BANK_SLOT_BAG_START + static_cast<uint8>(bag - 5);
+                if (Bag* bagPtr = player->GetBagByPos(serverBagSlot))
+                {
+                    if (slot > 0)
+                        item = bagPtr->GetItemByPos(slot - 1);
+                    else
+                        item = bagPtr->GetItemByPos(slot);
+                }
+
+                if (sItemIdentificationSystem->_debugMode)
+                {
+                    LOG_INFO("module.itemidentification",
+                             "[QUERY] 银行背包查询: 客户端bag={}, slot={}, 服务器bagSlot={}, itemID={}",
+                             bag, slot, serverBagSlot, itemID);
                 }
             }
 
@@ -2972,7 +3071,7 @@ private:
     }
 
     // 【修改】添加bag和slot参数，用于客户端精确匹配响应
-    void HandleAddonBatchQuery(Player* player, uint32 itemID, uint32 guid, uint8 bag = 255, uint8 slot = 0)
+    void HandleAddonBatchQuery(Player* player, uint32 itemID, uint32 guid, int32 bag = 255, uint8 slot = 0)
     {
         if (!player)
         {
@@ -3049,12 +3148,13 @@ private:
         }
 
         // 构建Addon响应消息
-        // 【修改】新格式：ALL_MODULE_DATA:bag:slot:itemID:guid:base:additional:growth:enhancement:skills:magic:rune:set
+        // 【修改】新格式：ALL_MODULE_DATA:bag:slot:itemID:guid:base:additional:identDisplay:growth:enhancement:skills:magic:rune:set:huanjing
         // 添加bag:slot用于客户端精确匹配响应到正确的pending记录
         std::ostringstream response;
-        response << "ALL_MODULE_DATA:" << static_cast<uint32>(bag) << ":" << static_cast<uint32>(slot) << ":" << itemID << ":" << guid << ":"
+        response << "ALL_MODULE_DATA:" << bag << ":" << static_cast<uint32>(slot) << ":" << itemID << ":" << guid << ":"
                  << moduleData.baseAttributes << ":"
                  << moduleData.additionalAttributes << ":"
+                 << moduleData.identificationDisplayData << ":"
                  << moduleData.growthData << ":"
                  << moduleData.enhancementData << ":"
                  << moduleData.skillsData << ":"
@@ -3276,7 +3376,7 @@ private:
             response << "IDENTIFY_RESULT:SUCCESS:" << clientBag << ":" << clientSlot << ":" << itemId << ":" << huanJingMultiplier;
             SendAddonResponse(player, response.str());
 
-            HandleAddonBatchQuery(player, itemId, itemGuid, static_cast<uint8>(clientBag), static_cast<uint8>(clientSlot));
+            HandleAddonBatchQuery(player, itemId, itemGuid, clientBag, static_cast<uint8>(clientSlot));
         }
         else
         {
@@ -3742,6 +3842,7 @@ void AddItemIdentificationSystemScripts()
 ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModuleData(uint32 itemID, uint32 guid)
 {
     AllModuleData result;
+    result.identificationDisplayData = "IDDISP|||||";
     result.hasData = false;
 
     // 【修复】不再依赖内存缓存判断是否鉴定，直接查询数据库
@@ -4259,6 +4360,29 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
 #endif
     }
 
+    if (isIdentified && TableExists("物品_鉴定记录"))
+    {
+        QueryResult templateResult = CharacterDatabase.Query(
+            "SELECT `鉴定模板ID` FROM `物品_鉴定记录` WHERE `物品GUID` = {} LIMIT 1",
+            guid);
+
+        if (templateResult)
+        {
+            uint32 templateId = templateResult->Fetch()[0].Get<uint32>();
+            auto tmplItr = _identificationTemplates.find(templateId);
+            if (tmplItr != _identificationTemplates.end())
+            {
+                result.identificationDisplayData = BuildIdentificationDisplayData(tmplItr->second);
+                if (!result.identificationDisplayData.empty())
+                {
+                    result.hasData = true;
+                    DebugLog("[批量查询-优化-鉴定显示] templateId={}, data=[{}]",
+                             templateId, result.identificationDisplayData);
+                }
+            }
+        }
+    }
+
     // 【新增】查询幻境系统倍率数据
     // 优先查询 玩家装备属性增强 表（已鉴定物品）
     // 如果没有找到，回退查询 待鉴定物品标记 表（未鉴定物品）
@@ -4347,6 +4471,7 @@ void ItemIdentificationSystem::SendAllModuleDataAddon(Player* player, uint32 ite
     response << "ALL_MODULE_DATA:" << itemID << ":" << guid << ":"
              << data.baseAttributes << ":"
              << data.additionalAttributes << ":"
+             << data.identificationDisplayData << ":"
              << data.growthData << ":"
              << data.enhancementData << ":"
              << data.skillsData << ":"
@@ -4431,11 +4556,12 @@ void ItemIdentificationSystem::HandleBatchQueryCommand(Player* player, uint32 it
         DebugLog("[批量查询缓存] 新数据已缓存: itemID={}, guid={}", itemID, guid);
     }
 
-    // 新格式消息：ALL_MODULE_DATA:itemID:guid:base:additional:growth:enhancement:skills:magic:rune:set
+    // 新格式消息：ALL_MODULE_DATA:itemID:guid:base:additional:identDisplay:growth:enhancement:skills:magic:rune:set:huanjing
     std::ostringstream response;
     response << "ALL_MODULE_DATA:" << itemID << ":" << guid << ":"
              << data.baseAttributes << ":"
              << data.additionalAttributes << ":"
+             << data.identificationDisplayData << ":"
              << data.growthData << ":"
              << data.enhancementData << ":"
              << data.skillsData << ":"
@@ -4449,6 +4575,7 @@ void ItemIdentificationSystem::HandleBatchQueryCommand(Player* player, uint32 it
     DebugLog("[批量查询命令] 各字段详情:");
     DebugLog("  - 基础属性: [{}]", data.baseAttributes);
     DebugLog("  - 追加属性: [{}]", data.additionalAttributes);
+    DebugLog("  - 鉴定显示: [{}]", data.identificationDisplayData);
     DebugLog("  - 成长数据: [{}]", data.growthData);
     DebugLog("  - 强化数据: [{}]", data.enhancementData);
     DebugLog("  - 技能数据: [{}]", data.skillsData);
