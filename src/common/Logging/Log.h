@@ -67,6 +67,11 @@ public:
     [[nodiscard]] bool ShouldLog(std::string const& type, LogLevel level) const;
     bool SetLogLevel(std::string const& name, int32 level, bool isLogger = true);
 
+    inline void outMessage(std::string const& filter, LogLevel const level, std::string_view message)
+    {
+        _outMessage(filter, level, message);
+    }
+
     template<typename... Args>
     inline void outMessage(std::string const& filter, LogLevel const level, Acore::FormatString<Args...> fmt, Args&&... args)
     {

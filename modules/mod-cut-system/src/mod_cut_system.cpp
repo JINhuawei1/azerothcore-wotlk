@@ -15,6 +15,7 @@
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "Log.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
 #include "Random.h"
 #include "ScriptMgr.h"
@@ -22,6 +23,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -60,6 +62,8 @@ struct CutEntry
     float cutDamage = 0.0f;
     float chance = 0.0f;
 };
+
+void SendCutSystemHitNotification(Player* player, std::vector<uint32> const& damages);
 
 class CutSystemMgr
 {
@@ -360,6 +364,35 @@ public:
         return _entries;
     }
 
+    void QueueHitNotification(ObjectGuid::LowType playerGuid, uint32 damage)
+    {
+        if (!playerGuid || damage == 0)
+            return;
+
+        _pendingHitNotifications[playerGuid].push_back(damage);
+    }
+
+    void FlushHitNotifications()
+    {
+        if (_pendingHitNotifications.empty())
+            return;
+
+        auto pendingNotifications = std::move(_pendingHitNotifications);
+        _pendingHitNotifications.clear();
+
+        for (auto const& [playerGuid, damages] : pendingNotifications)
+        {
+            if (damages.empty())
+                continue;
+
+            Player* player = ObjectAccessor::FindPlayerByLowGUID(playerGuid);
+            if (!player)
+                continue;
+
+            SendCutSystemHitNotification(player, damages);
+        }
+    }
+
     uint32 CalculateCutDisplayDamage(Unit* attacker, Unit* victim, CutEntry const& entry) const
     {
         if (!attacker || !victim)
@@ -421,6 +454,7 @@ public:
 private:
     std::vector<CutEntry> _entries;
     std::unordered_map<uint32, uint32> _playerCutLevels;
+    std::unordered_map<uint32, std::vector<uint32>> _pendingHitNotifications;
 };
 
 void SendCutSystemPayload(Player* player, std::string const& payload)
@@ -551,13 +585,27 @@ void SendCutSystemActionResult(Player* player, char const* action, bool success,
     SendCutSystemPayload(player, payload.str());
 }
 
-void SendCutSystemHitNotification(Player* player, uint32 damage)
+void SendCutSystemHitNotification(Player* player, std::vector<uint32> const& damages)
 {
-    if (!player || damage == 0)
+    if (!player || damages.empty())
         return;
 
     std::ostringstream payload;
-    payload << "CT_HIT:" << damage;
+    payload << "CT_HITS:";
+
+    bool first = true;
+    for (uint32 damage : damages)
+    {
+        if (damage == 0)
+            continue;
+
+        if (!first)
+            payload << '~';
+
+        first = false;
+        payload << damage;
+    }
+
     SendCutSystemPayload(player, payload.str());
 }
 
@@ -589,25 +637,36 @@ public:
         _initialized = false;
         _loadTime = 0;
         _displayedLog = false;
+        _hitFlushTime = 0;
     }
 
     void OnUpdate(uint32 diff) override
     {
-        if (!CutSystemMgr::Instance()->IsEnabled() || _initialized)
+        if (!CutSystemMgr::Instance()->IsEnabled())
             return;
 
-        _loadTime += diff;
-
-        if (_loadTime >= 3000 && !_displayedLog)
+        if (!_initialized)
         {
-            LOG_INFO("server.loading", "→切割系统√");
-            _displayedLog = true;
+            _loadTime += diff;
+
+            if (_loadTime >= 3000 && !_displayedLog)
+            {
+                LOG_INFO("server.loading", "→切割系统√");
+                _displayedLog = true;
+            }
+
+            if (_loadTime >= 3000 && _displayedLog)
+            {
+                CutSystemMgr::Instance()->LoadEntries();
+                _initialized = true;
+            }
         }
 
-        if (_loadTime >= 3000 && _displayedLog)
+        _hitFlushTime += diff;
+        if (_initialized && _hitFlushTime >= 50)
         {
-            CutSystemMgr::Instance()->LoadEntries();
-            _initialized = true;
+            CutSystemMgr::Instance()->FlushHitNotifications();
+            _hitFlushTime = 0;
         }
     }
 
@@ -615,6 +674,7 @@ private:
     bool _initialized = false;
     uint32 _loadTime = 0;
     bool _displayedLog = false;
+    uint32 _hitFlushTime = 0;
 };
 
 class CutSystemPlayerScript : public PlayerScript
@@ -731,24 +791,24 @@ public:
 
     void OnDamage(Unit* attacker, Unit* victim, uint32& damage) override
     {
-        if (damage == 0 || !attacker || !victim || !victim->IsAlive())
+        if (!attacker || !victim || !victim->IsAlive())
             return;
 
         uint32 displayDamage = 0;
         if (!CutSystemMgr::Instance()->TryPrepareCutDamage(attacker, victim, displayDamage))
             return;
 
-        uint32 appliedDamage = std::min(displayDamage, victim->GetHealth());
+        uint32 appliedDamage = displayDamage;
+        if (appliedDamage > std::numeric_limits<uint32>::max() - damage)
+            appliedDamage = std::numeric_limits<uint32>::max() - damage;
+
         if (appliedDamage == 0)
             return;
 
-        victim->ModifyHealth(-static_cast<int32>(appliedDamage));
-
-        if (victim->IsCreature() && attacker != victim)
-            victim->AddThreat(attacker, float(appliedDamage), SPELL_SCHOOL_MASK_NORMAL, nullptr);
+        damage += appliedDamage;
 
         if (Player* player = attacker->ToPlayer())
-            SendCutSystemHitNotification(player, appliedDamage);
+            CutSystemMgr::Instance()->QueueHitNotification(player->GetGUID().GetCounter(), appliedDamage);
     }
 };
 

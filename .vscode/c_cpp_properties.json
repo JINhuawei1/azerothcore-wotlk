@@ -1,0 +1,46 @@
+{
+    "version": 4,
+    "configurations": [
+        {
+            "name": "AzerothCore-Win64",
+            "compilerPath": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe",
+            "intelliSenseMode": "windows-msvc-x64",
+            "cStandard": "c17",
+            "cppStandard": "c++20",
+            "includePath": [
+                "${workspaceFolder}",
+                "C:/boost",
+                "${workspaceFolder}/src/**",
+                "${workspaceFolder}/modules/**",
+                "${workspaceFolder}/deps/**",
+                "${workspaceFolder}/build/**",
+                "${workspaceFolder}/build/src/**",
+                "${workspaceFolder}/build/modules/**",
+                "${workspaceFolder}/src/server/game/**",
+                "${workspaceFolder}/src/server/shared/**",
+                "${workspaceFolder}/src/server/database/**",
+                "${workspaceFolder}/src/common/**",
+                "${workspaceFolder}/modules/mod-item-sets/src",
+                "${workspaceFolder}/modules/mod-fashion-system/src"
+            ],
+            "browse": {
+                "path": [
+                    "${workspaceFolder}",
+                    "C:/boost",
+                    "${workspaceFolder}/src",
+                    "${workspaceFolder}/modules",
+                    "${workspaceFolder}/deps",
+                    "${workspaceFolder}/build"
+                ],
+                "limitSymbolsToIncludedHeaders": true
+            },
+            "defines": [
+                "_WINDOWS",
+                "WIN32",
+                "_WIN64",
+                "NOMINMAX",
+                "_CRT_SECURE_NO_WARNINGS"
+            ]
+        }
+    ]
+}

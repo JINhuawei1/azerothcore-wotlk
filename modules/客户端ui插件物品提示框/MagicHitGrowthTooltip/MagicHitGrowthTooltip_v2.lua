@@ -55,6 +55,7 @@ for k, v in pairs(DEFAULTS) do
 end
 
 local DB = UnifiedItemTooltipDB
+local IsTooltipFromChat
 
 -- ============================================================================
 -- 调试工具
@@ -3001,11 +3002,11 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
         local mult = hjData.multiplier
 
         local baseStatConfig = {
-            { key = "ITEM_MOD_STRENGTH_SHORT",  name = _G.ITEM_MOD_STRENGTH_SHORT or "力量" },
-            { key = "ITEM_MOD_AGILITY_SHORT",   name = _G.ITEM_MOD_AGILITY_SHORT or "敏捷" },
-            { key = "ITEM_MOD_INTELLECT_SHORT", name = _G.ITEM_MOD_INTELLECT_SHORT or "智力" },
-            { key = "ITEM_MOD_STAMINA_SHORT",   name = _G.ITEM_MOD_STAMINA_SHORT or "耐力" },
-            { key = "ITEM_MOD_SPIRIT_SHORT",    name = _G.ITEM_MOD_SPIRIT_SHORT or "精神" },
+            { key = "ITEM_MOD_STRENGTH_SHORT",  name = ITEM_MOD_STRENGTH_SHORT or "力量" },
+            { key = "ITEM_MOD_AGILITY_SHORT",   name = ITEM_MOD_AGILITY_SHORT or "敏捷" },
+            { key = "ITEM_MOD_INTELLECT_SHORT", name = ITEM_MOD_INTELLECT_SHORT or "智力" },
+            { key = "ITEM_MOD_STAMINA_SHORT",   name = ITEM_MOD_STAMINA_SHORT or "耐力" },
+            { key = "ITEM_MOD_SPIRIT_SHORT",    name = ITEM_MOD_SPIRIT_SHORT or "精神" },
         }
 
         for _, conf in ipairs(baseStatConfig) do
@@ -3014,7 +3015,8 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
                 table.insert(officialBaseAttributes, {
                     name = conf.name,
                     value = amount,
-                    multiplier = mult
+                    multiplier = mult,
+                    mode = hjData.mode
                 })
             end
         end
@@ -3081,7 +3083,8 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
         for _, attr in ipairs(officialBaseAttributes) do
             local baseValue = attr.value
             local mult = attr.multiplier
-            tooltip:AddLine(FormatTooltipStatLine(attr.name, baseValue, mult, hjData.mode), 0, 1, 0)
+            local mode = attr.mode
+            tooltip:AddLine(FormatTooltipStatLine(attr.name, baseValue, mult, mode), 0, 1, 0)
         end
 
         for index, attr in ipairs(baseAttributes) do
@@ -3520,7 +3523,12 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
             end
 
             -- 保存当前包的数据
-            PendingIdentifyState.packetBuffer[packetNum] = itemsData or ""
+            local packetBuffer = PendingIdentifyState.packetBuffer or {}
+            PendingIdentifyState.packetBuffer = packetBuffer
+            if not packetNum then
+                return
+            end
+            packetBuffer[packetNum] = itemsData or ""
             PendingIdentifyState.receivedPackets = (PendingIdentifyState.receivedPackets or 0) + 1
 
             -- 检查是否收到所有包
@@ -4853,8 +4861,8 @@ local function GetExtraTooltip(ownerTooltip)
         return nil
     end
 
-    if ownertooltip.UIT_Tooltip2 then
-        return ownertooltip.UIT_Tooltip2
+    if ownerTooltip.UIT_Tooltip2 then
+        return ownerTooltip.UIT_Tooltip2
     end
 
     local baseName = ownerTooltip:GetName() or "UnifiedItemTooltip"
@@ -4864,12 +4872,12 @@ local function GetExtraTooltip(ownerTooltip)
     extra:SetFrameStrata(ownerTooltip:GetFrameStrata())
     extra:SetScale(ownerTooltip:GetScale())
 
-    ownertooltip.UIT_Tooltip2 = extra
+    ownerTooltip.UIT_Tooltip2 = extra
     return extra
 end
 
 -- 判断一个提示框是否源自聊天框/聊天链接
-local function IsTooltipFromChat(tooltip)
+IsTooltipFromChat = function(tooltip)
 	if not tooltip or not tooltip.GetOwner then return false end
 
 	local current = tooltip
@@ -4879,7 +4887,7 @@ local function IsTooltipFromChat(tooltip)
 		if name and name:match("^ChatFrame%d+") then
 			return true
 		end
-		if _G.ItemRefTooltip and current == _G.ItemRefTooltip then
+		if ItemRefTooltip and current == ItemRefTooltip then
 			return true
 		end
 		if not current.GetOwner then break end
@@ -4946,8 +4954,8 @@ local function FixExtraTooltipOffscreen(extra, ownerTooltip)
 		return 
 	end
 
-	local screenWidth = GetScreenWidth() or 0
-	local screenHeight = GetScreenHeight() or 0
+	local screenWidth = GetScreenWidth and GetScreenWidth() or 0
+	local screenHeight = GetScreenHeight and GetScreenHeight() or 0
 	if screenWidth <= 0 or screenHeight <= 0 then 
 		return 
 	end
@@ -5328,7 +5336,7 @@ local function OnTooltipSetItem(tooltip)
 			end
 		end
 
-		local compareText = _G.ITEM_COMPARE_TOOLTIP_TEXT
+		local compareText = ITEM_COMPARE_TOOLTIP_TEXT
 		for i = 1, tooltip:NumLines() do
 			local left = _G[tName .. "TextLeft" .. i]
 			if left then

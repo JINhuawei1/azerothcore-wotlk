@@ -1,0 +1,10 @@
+#############################################
+#            回血神符系统模块配置            #
+#############################################
+
+[worldserver]
+
+HealRune.Enable = 1
+HealRune.NotifyPlayer = 1
+HealRune.TickIntervalMs = 1000
+HealRune.Debug = 0
