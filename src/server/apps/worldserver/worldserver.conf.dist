@@ -449,6 +449,34 @@ SOAP.Port = 7878
 ###################################################################################################
 
 ###################################################################################################
+# CONSOLE STREAM (实时控制台流)
+#
+#    ConsoleStream.Enable
+#        Description: 启用实时控制台流 TCP 服务
+#                     客户端连接后可接收所有控制台输出，并可发送命令
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+ConsoleStream.Enable = 0
+
+#
+#    ConsoleStream.IP
+#        Description: 绑定 ConsoleStream 服务的 IP 地址
+#        Default:     "127.0.0.1" - (仅本地访问)
+
+ConsoleStream.IP = "127.0.0.1"
+
+#
+#    ConsoleStream.Port
+#        Description: ConsoleStream 服务的 TCP 端口
+#        Default:     3680
+
+ConsoleStream.Port = 3680
+
+#
+###################################################################################################
+
+###################################################################################################
 # CRYPTOGRAPHY
 #
 #    TOTPMasterSecret
@@ -658,6 +686,7 @@ Appender.Server=2,5,0,Server.log,w
 # Appender.GM=2,5,15,gm_%s.log
 Appender.Errors=2,5,0,Errors.log
 # Appender.DB=3,5,0
+# Appender.Stream=4,4,0  # ConsoleStream 实时推送（需启用 ConsoleStream.Enable）
 
 #  Logger config values: Given a logger "name"
 #    Logger.name

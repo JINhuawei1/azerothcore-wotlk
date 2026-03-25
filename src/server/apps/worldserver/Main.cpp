@@ -21,6 +21,7 @@
 
 #include "ACSoap.h"
 #include "AppenderDB.h"
+#include "ConsoleStream.h"
 #include "AsyncAcceptor.h"
 #include "Banner.h"
 #include "BattlegroundMgr.h"
@@ -187,6 +188,7 @@ int main(int argc, char** argv)
 
     // Init all logs
     sLog->RegisterAppender<AppenderDB>();
+    sLog->RegisterAppender<AppenderStream>();
     // If logs are supposed to be handled async then we need to pass the IoContext into the Log singleton
     sLog->Initialize(sConfigMgr->GetOption<bool>("Log.Async.Enable", false) ? ioContext.get() : nullptr);
 
@@ -336,6 +338,14 @@ int main(int argc, char** argv)
         });
     }
 
+    // 启动 ConsoleStream 实时控制台流服务
+    if (sConfigMgr->GetOption<bool>("ConsoleStream.Enable", false))
+    {
+        std::string csHost = sConfigMgr->GetOption<std::string>("ConsoleStream.IP", "127.0.0.1");
+        uint16 csPort = uint16(sConfigMgr->GetOption<int32>("ConsoleStream.Port", 3680));
+        sConsoleStream->Start(csHost, csPort);
+    }
+
     // Launch the worldserver listener socket
     uint16 worldPort = uint16(sWorld->getIntConfig(CONFIG_PORT_WORLD));
     std::string worldListener = sConfigMgr->GetOption<std::string>("BindIP", "0.0.0.0");
@@ -400,6 +410,9 @@ int main(int argc, char** argv)
 
     // Shutdown starts here
     threadPool.reset();
+
+    // 停止 ConsoleStream
+    sConsoleStream->Stop();
 
     sLog->SetSynchronous();
 
@@ -552,6 +565,19 @@ void ShutdownCLIThread(std::thread* cliThread)
     }
 }
 
+// ConsoleStream 命令回调：输出推送到客户端
+void ConsoleStreamPrint(void* /*arg*/, std::string_view text)
+{
+    std::string output(text);
+    if (!output.empty())
+        sConsoleStream->BroadcastOutput(output);
+}
+
+// ConsoleStream 命令完成回调
+void ConsoleStreamCommandFinished(void* /*arg*/, bool /*success*/)
+{
+}
+
 void WorldUpdateLoop()
 {
     uint32 minUpdateDiff = uint32(sConfigMgr->GetOption<int32>("MinWorldUpdateTime", 1));
@@ -582,6 +608,18 @@ void WorldUpdateLoop()
             // sleep until enough time passes that we can update all timers
             std::this_thread::sleep_for(Milliseconds(sleepTime));
             continue;
+        }
+
+        // 处理 ConsoleStream 收到的命令
+        if (sConsoleStream->IsRunning())
+        {
+            std::string csCmd;
+            while (sConsoleStream->GetNextCommand(csCmd))
+            {
+                auto* holder = new CliCommandHolder(nullptr, csCmd.c_str(),
+                    &ConsoleStreamPrint, &ConsoleStreamCommandFinished);
+                sWorld->QueueCliCommand(holder);
+            }
         }
 
         sWorld->Update(diff);

@@ -1,0 +1,29 @@
+########################################
+# 修仙系统配置
+########################################
+
+#
+#    Cultivation.Enable
+#        Description: 是否启用修仙系统
+#        Default:     1  - (启用)
+#                     0  - (禁用)
+#
+
+Cultivation.Enable = 1
+
+#
+#    Cultivation.Debug
+#        Description: 是否启用调试模式
+#        Default:     0  - (禁用)
+#                     1  - (启用)
+#
+
+Cultivation.Debug = 0
+
+#
+#    Cultivation.TribulationCooldown
+#        Description: 渡劫冷却时间（秒）
+#        Default:     600
+#
+
+Cultivation.TribulationCooldown = 600
