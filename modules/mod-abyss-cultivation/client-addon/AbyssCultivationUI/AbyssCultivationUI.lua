@@ -1207,7 +1207,7 @@ function App:ShowModePrompt(chapterId, chapterName, modeMask, corruptionTier)
     self:CreateModePromptFrame()
 
     local availableModes = {}
-    for _, modeType in ipairs({ 2, 3, 4 }) do
+    for _, modeType in ipairs({ 1, 2, 3, 4 }) do
         if HasModeInMask(modeMask, modeType) then
             table.insert(availableModes, modeType)
         end

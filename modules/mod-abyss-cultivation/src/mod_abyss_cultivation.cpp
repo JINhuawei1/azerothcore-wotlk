@@ -754,7 +754,7 @@ struct AbyssChapterAccessState
     std::string reason;
 };
 
-void SendAbyssModePrompt(Player* player, AbyssChapterConfig const& chapter, PlayerAbyssData const& data);
+void SendAbyssModePrompt(Player* player, AbyssChapterConfig const& chapter, PlayerAbyssData const& data, uint32 modeMask);
 
 class AbyssCultivationMgr
 {
@@ -1489,7 +1489,7 @@ public:
         entry.chapterId = chapterId;
 
         uint32 grantMask = 0;
-        for (uint8 currentMode = 2; currentMode <= modeType; ++currentMode)
+        for (uint8 currentMode = 1; currentMode <= modeType; ++currentMode)
             grantMask |= GetModeTypeMask(currentMode);
 
         if ((entry.unlockedModeMask & grantMask) == grantMask)
@@ -4255,6 +4255,7 @@ public:
                 creatureEntry);
         }
 
+        bool hadActiveRun = false;
         auto runItr = _playerRunStates.find(playerGuid);
         if (runItr == _playerRunStates.end())
         {
@@ -4301,6 +4302,10 @@ public:
                 chapterByMap->chapterId,
                 creatureEntry);
         }
+        else
+        {
+            hadActiveRun = true;
+        }
 
         auto playerItr = _playerData.find(playerGuid);
         if (playerItr == _playerData.end())
@@ -4342,8 +4347,10 @@ public:
 
         if (state.modeType == 1)
         {
-            uint32 availableModeMask = GetChapterUnlockedModeMask(player, data, *chapterConfig) &
-                (GetModeTypeMask(2) | GetModeTypeMask(3) | GetModeTypeMask(4));
+            uint32 availableModeMask = GetChapterUnlockedModeMask(player, data, *chapterConfig);
+            if (hadActiveRun)
+                availableModeMask &= (GetModeTypeMask(2) | GetModeTypeMask(3) | GetModeTypeMask(4));
+
             if (trackedMaskBit != 0)
             {
                 LOG_INFO("module", "mod-abyss-cultivation: story-mode kill player={} ({}) chapter={} creature={} trackedMaskBit={} anchorMask={} availableModeMask={} readyForPrompt={} promptShown={}",
@@ -4362,7 +4369,7 @@ public:
                 readyForPrompt &&
                 !procState.abyssModePromptShown)
             {
-                SendAbyssModePrompt(player, *chapterConfig, data);
+                SendAbyssModePrompt(player, *chapterConfig, data, availableModeMask);
                 procState.abyssModePromptShown = true;
             }
             else if (trackedMaskBit != 0)
@@ -4688,7 +4695,7 @@ public:
             if (unlockedModeType >= 1)
             {
                 if (AbyssChapterConfig const* chapterConfig = GetChapterConfig(docking->chapterId))
-                    SendAbyssModePrompt(player, *chapterConfig, data);
+                    SendAbyssModePrompt(player, *chapterConfig, data, GetChapterUnlockedModeMask(player, data, *chapterConfig));
             }
         }
 
@@ -4753,13 +4760,11 @@ void SendAbyssResult(Player* player, std::string const& action, bool success, st
     SendAbyssPayload(player, payload.str());
 }
 
-void SendAbyssModePrompt(Player* player, AbyssChapterConfig const& chapter, PlayerAbyssData const& data)
+void SendAbyssModePrompt(Player* player, AbyssChapterConfig const& chapter, PlayerAbyssData const& data, uint32 modeMask)
 {
     if (!player)
         return;
 
-    uint32 modeMask = sAbyssCultivationMgr->GetChapterUnlockedModeMask(player, data, chapter) &
-        (GetModeTypeMask(2) | GetModeTypeMask(3) | GetModeTypeMask(4));
     if (modeMask == 0)
     {
         LOG_INFO("module", "mod-abyss-cultivation: skip MODE_PROMPT for player {} ({}) chapter {} because modeMask=0 unlockedMask={}",
