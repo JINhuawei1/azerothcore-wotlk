@@ -34,8 +34,13 @@
 #include <unordered_map>
 #include <vector>
 #include <string>
+#include <sstream>
 
 using namespace Acore::ChatCommands;
+
+// Addon消息通信常量
+static constexpr const char* CULTIVATION_ADDON_PREFIX = "CULT_SYS";
+static constexpr size_t CULTIVATION_MAX_ADDON_PAYLOAD = 220;
 
 // ============================================
 // 数据结构
@@ -267,6 +272,21 @@ public:
     std::vector<CultivationSkillConfig> const& GetSkillConfigs() const
     {
         return _skillConfigs;
+    }
+
+    // 获取全部境界配置
+    std::unordered_map<uint32, CultivationRealmConfig> const& GetAllRealmConfigs() const
+    {
+        return _realmConfigs;
+    }
+
+    // 获取玩家数据
+    PlayerCultivationData const* GetPlayerData(uint32 guid) const
+    {
+        auto itr = _playerData.find(guid);
+        if (itr != _playerData.end())
+            return &itr->second;
+        return nullptr;
     }
 
     // 入门修仙（从0级变1级）
@@ -611,6 +631,172 @@ private:
 
 #define sCultivationMgr CultivationMgr::instance()
 
+// ============================================
+// Addon消息发送函数
+// ============================================
+
+void SendCultivationPayload(Player* player, std::string const& payload)
+{
+    if (!player || payload.empty())
+        return;
+
+    if (payload.length() <= CULTIVATION_MAX_ADDON_PAYLOAD)
+    {
+        std::string fullMessage = std::string(CULTIVATION_ADDON_PREFIX) + '\t' + payload;
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
+        player->SendDirectMessage(&data);
+        return;
+    }
+
+    // 分块发送
+    size_t totalChunks = (payload.length() + CULTIVATION_MAX_ADDON_PAYLOAD - 1) / CULTIVATION_MAX_ADDON_PAYLOAD;
+    for (size_t i = 0; i < totalChunks; ++i)
+    {
+        size_t start = i * CULTIVATION_MAX_ADDON_PAYLOAD;
+        size_t len = std::min(CULTIVATION_MAX_ADDON_PAYLOAD, payload.length() - start);
+        std::string chunk = payload.substr(start, len);
+
+        std::ostringstream chunkMessage;
+        chunkMessage << "CHUNK:" << (i + 1) << ":" << totalChunks << ":" << chunk;
+
+        std::string fullMessage = std::string(CULTIVATION_ADDON_PREFIX) + '\t' + chunkMessage.str();
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
+        player->SendDirectMessage(&data);
+    }
+}
+
+void SendCultivationOpenUI(Player* player)
+{
+    SendCultivationPayload(player, "CS_OPEN");
+}
+
+void SendCultivationRealmList(Player* player)
+{
+    if (!player)
+        return;
+
+    auto const& configs = sCultivationMgr->GetAllRealmConfigs();
+
+    // 按等级排序
+    std::vector<CultivationRealmConfig const*> sorted;
+    sorted.reserve(configs.size());
+    for (auto const& pair : configs)
+        sorted.push_back(&pair.second);
+
+    std::sort(sorted.begin(), sorted.end(), [](CultivationRealmConfig const* a, CultivationRealmConfig const* b)
+    {
+        return a->level < b->level;
+    });
+
+    std::ostringstream payload;
+    payload << "CS_REALMS:";
+
+    bool first = true;
+    for (auto const* cfg : sorted)
+    {
+        if (!first)
+            payload << '~';
+        first = false;
+
+        payload << cfg->level << '^'
+                << cfg->name << '^'
+                << static_cast<uint32>(cfg->majorRealm) << '^'
+                << static_cast<uint32>(cfg->minorRealm) << '^'
+                << cfg->statBonus << '^'
+                << cfg->upgradeRequireId << '^'
+                << (cfg->needTribulation ? 1 : 0) << '^'
+                << cfg->tribRequireId << '^'
+                << cfg->tribBossEntry;
+    }
+
+    SendCultivationPayload(player, payload.str());
+}
+
+void SendCultivationSkillList(Player* player)
+{
+    if (!player)
+        return;
+
+    auto const& skills = sCultivationMgr->GetSkillConfigs();
+
+    std::ostringstream payload;
+    payload << "CS_SKILLS:";
+
+    bool first = true;
+    for (auto const& skill : skills)
+    {
+        if (!first)
+            payload << '~';
+        first = false;
+
+        payload << skill.skillId << '^'
+                << skill.name << '^'
+                << skill.unlockLevel << '^'
+                << skill.spellId << '^'
+                << static_cast<uint32>(skill.skillType) << '^'
+                << skill.description;
+    }
+
+    SendCultivationPayload(player, payload.str());
+}
+
+void SendCultivationState(Player* player)
+{
+    if (!player)
+        return;
+
+    uint32 guid = player->GetGUID().GetCounter();
+    uint32 pLevel = sCultivationMgr->GetPlayerLevel(guid);
+    float statBonus = sCultivationMgr->GetPlayerStatBonus(guid);
+
+    CultivationRealmConfig const* curConfig = sCultivationMgr->GetRealmConfig(pLevel);
+    std::string realmName = curConfig ? curConfig->name : "凡人";
+    int32 majorRealm = curConfig ? curConfig->majorRealm : 0;
+
+    PlayerCultivationData const* pData = sCultivationMgr->GetPlayerData(guid);
+    uint32 tribCooldown = pData ? pData->tribCooldown : 0;
+
+    // 已解锁技能列表
+    std::ostringstream skillIds;
+    bool firstSkill = true;
+    for (auto const& skill : sCultivationMgr->GetSkillConfigs())
+    {
+        if (pLevel >= skill.unlockLevel)
+        {
+            if (!firstSkill)
+                skillIds << ',';
+            firstSkill = false;
+            skillIds << skill.spellId;
+        }
+    }
+
+    std::ostringstream payload;
+    payload << "CS_STATE:" << pLevel << '|'
+            << realmName << '|'
+            << majorRealm << '|'
+            << statBonus << '|'
+            << tribCooldown << '|'
+            << skillIds.str();
+
+    SendCultivationPayload(player, payload.str());
+}
+
+void SendCultivationResult(Player* player, std::string const& action, bool success, std::string const& message)
+{
+    std::ostringstream payload;
+    payload << "CS_RESULT:" << action << '^' << (success ? 1 : 0) << '^' << message;
+    SendCultivationPayload(player, payload.str());
+}
+
+void SendCultivationAllData(Player* player)
+{
+    SendCultivationRealmList(player);
+    SendCultivationSkillList(player);
+    SendCultivationState(player);
+}
+
 // 技能ID宏定义
 #define CULT_SPELL_YUFENG       371001
 #define CULT_SPELL_LINGREN      371002
@@ -769,6 +955,103 @@ public:
         if (!player || !sConfigMgr->GetOption("Cultivation.Enable", true))
             return;
         sCultivationMgr->OnPlayerDeath(player);
+    }
+
+    // Addon消息处理（客户端UI通信）
+    void OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg, Player* /*receiver*/) override
+    {
+        if (!sConfigMgr->GetOption("Cultivation.Enable", true) || !player || type != CHAT_MSG_WHISPER || lang != LANG_ADDON)
+            return;
+
+        size_t tabPos = msg.find('\t');
+        if (tabPos == std::string::npos)
+            return;
+
+        std::string prefix = msg.substr(0, tabPos);
+        if (prefix != CULTIVATION_ADDON_PREFIX)
+            return;
+
+        std::string command = msg.substr(tabPos + 1);
+
+        if (command == "REQ_ALL")
+        {
+            SendCultivationAllData(player);
+            return;
+        }
+
+        if (command == "REQ_STATE")
+        {
+            sCultivationMgr->LoadPlayerData(player);
+            SendCultivationState(player);
+            return;
+        }
+
+        if (command == "OPEN")
+        {
+            SendCultivationOpenUI(player);
+            return;
+        }
+
+        if (command == "UPG")
+        {
+            uint32 guid = player->GetGUID().GetCounter();
+            uint32 oldLevel = sCultivationMgr->GetPlayerLevel(guid);
+
+            bool success = sCultivationMgr->TryUpgrade(player);
+
+            if (success)
+            {
+                uint32 newLevel = sCultivationMgr->GetPlayerLevel(guid);
+                auto const* newConfig = sCultivationMgr->GetRealmConfig(newLevel);
+                std::string newName = newConfig ? newConfig->name : "未知";
+                float bonus = sCultivationMgr->GetPlayerStatBonus(guid);
+
+                std::ostringstream resultMsg;
+                resultMsg << "修炼成功！突破至【" << newName << "】，全属性加成 +" << bonus << "%";
+                SendCultivationResult(player, "UPG", true, resultMsg.str());
+            }
+            else
+            {
+                SendCultivationResult(player, "UPG", false, "修炼失败，请检查材料或条件");
+            }
+
+            SendCultivationState(player);
+            return;
+        }
+
+        if (command == "TRIB")
+        {
+            bool success = sCultivationMgr->StartTribulation(player);
+            if (success)
+            {
+                SendCultivationResult(player, "TRIB", true, "天劫降临！击败劫兽方可突破！");
+            }
+            else
+            {
+                SendCultivationResult(player, "TRIB", false, "渡劫失败，请检查条件");
+            }
+            SendCultivationState(player);
+            return;
+        }
+
+        if (command == "ENTER")
+        {
+            bool success = sCultivationMgr->StartCultivation(player);
+            if (success)
+            {
+                SendCultivationResult(player, "ENTER", true, "恭喜踏入修仙之路！你已成为炼气一层修士");
+                SendCultivationAllData(player);
+            }
+            else
+            {
+                uint32 pLevel = sCultivationMgr->GetPlayerLevel(player->GetGUID().GetCounter());
+                if (pLevel > 0)
+                    SendCultivationResult(player, "ENTER", false, "你已经踏入修仙之路");
+                else
+                    SendCultivationResult(player, "ENTER", false, "入门失败");
+            }
+            return;
+        }
     }
 
     // ============================================
@@ -1119,6 +1402,7 @@ public:
             { "渡劫", HandleTribulationCommand, SEC_PLAYER,     Console::No },
             { "技能", HandleSkillsCommand,      SEC_PLAYER,     Console::No },
             { "入门", HandleStartCommand,       SEC_PLAYER,     Console::No },
+            { "界面", HandleOpenUICommand,      SEC_PLAYER,     Console::No },
             { "重载", HandleReloadCommand,      SEC_GAMEMASTER, Console::Yes },
             { "设置", HandleSetCommand,         SEC_GAMEMASTER, Console::No },
         };
@@ -1337,6 +1621,18 @@ public:
                     "|cff00ff00[修仙系统]|r GM已将你的修仙等级设置为 {} ({})", level, realmName);
             }
         }
+        return true;
+    }
+
+    // .修仙 界面
+    static bool HandleOpenUICommand(ChatHandler* handler, char const* /*args*/)
+    {
+        Player* player = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
+        if (!player)
+            return false;
+
+        SendCultivationOpenUI(player);
+        SendCultivationAllData(player);
         return true;
     }
 };

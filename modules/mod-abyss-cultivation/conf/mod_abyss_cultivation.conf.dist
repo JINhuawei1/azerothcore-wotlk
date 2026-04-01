@@ -1,0 +1,15 @@
+[worldserver]
+
+#
+# mod-abyss-cultivation
+#
+
+# Enable or disable the module.
+AbyssCultivation.Enable = 1
+
+# Enable verbose debug logging.
+AbyssCultivation.Debug = 0
+
+# Automatically start abyss runs when players enter a mapped dungeon/raid.
+# Keep this disabled to avoid affecting official instances unless players explicitly enter through the addon.
+AbyssCultivation.AutoBeginOnMapEnter = 0

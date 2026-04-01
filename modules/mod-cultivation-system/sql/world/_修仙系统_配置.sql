@@ -2,6 +2,25 @@
 -- 修仙系统 - 世界配置
 -- ============================================
 
+-- 修仙导师NPC模板
+INSERT IGNORE INTO `creature_template`
+(`entry`, `name`, `subname`, `minlevel`, `maxlevel`, `exp`, `faction`, `npcflag`, `speed_walk`, `speed_run`, `scale`, `rank`, `dmgschool`, `BaseAttackTime`,
+ `RangeAttackTime`, `BaseVariance`, `RangeVariance`, `unit_class`, `unit_flags`, `unit_flags2`, `dynamicflags`, `family`, `trainer_type`, `trainer_spell`,
+ `trainer_class`, `trainer_race`, `type`, `type_flags`, `lootid`, `pickpocketloot`, `skinloot`, `PetSpellDataId`, `VehicleId`, `mingold`, `maxgold`,
+ `AIName`, `MovementType`, `HoverHeight`, `HealthModifier`, `ManaModifier`, `ArmorModifier`, `ExperienceModifier`, `RacialLeader`, `movementId`, `RegenHealth`,
+ `mechanic_immune_mask`, `spell_school_immune_mask`, `flags_extra`, `ScriptName`, `VerifiedBuild`)
+VALUES
+(390001, '修仙导师', '万劫轮回引路人', 80, 80, 2, 35, 1, 1, 1.14286, 1, 0, 0, 2000,
+ 2000, 1, 1, 1, 0, 0, 0, 0, 0, 0,
+ 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0,
+ '', 0, 1, 1, 1, 1, 1, 0, 0, 1,
+ 0, 0, 2, 'npc_cultivation_master', NULL);
+
+REPLACE INTO `creature_template_model`
+(`CreatureID`, `Idx`, `CreatureDisplayID`, `DisplayScale`, `Probability`, `VerifiedBuild`)
+VALUES
+(390001, 0, 18860, 1, 1, NULL);
+
 -- 修仙境界配置表
 DROP TABLE IF EXISTS `_修仙境界配置`;
 CREATE TABLE `_修仙境界配置` (
