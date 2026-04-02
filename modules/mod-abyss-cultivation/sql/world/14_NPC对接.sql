@@ -1,0 +1,416 @@
+﻿-- ============================================
+-- 首版任务发布/交付 NPC 对接：补 creature_queststarter / creature_questender
+-- 说明：为每个章节生成“接引 NPC / 验收 NPC”两类友善任务 NPC，
+--       避免把任务错误绑定到敌对首领身上
+-- ============================================
+
+DELETE FROM `creature_queststarter`
+WHERE `quest` BETWEEN 700001 AND 740074;
+
+DELETE FROM `creature_questender`
+WHERE `quest` BETWEEN 700001 AND 740074;
+
+DELETE FROM `creature`
+WHERE `id1` BETWEEN 191001 AND 191074
+   OR `id1` BETWEEN 192001 AND 192074;
+
+DELETE FROM `creature_template_model`
+WHERE `CreatureID` BETWEEN 191001 AND 191074
+   OR `CreatureID` BETWEEN 192001 AND 192074;
+
+DELETE FROM `creature_template_addon`
+WHERE `entry` BETWEEN 191001 AND 191074
+   OR `entry` BETWEEN 192001 AND 192074;
+
+DELETE FROM `creature_template`
+WHERE `entry` BETWEEN 191001 AND 191074
+   OR `entry` BETWEEN 192001 AND 192074;
+
+-- 回滚上一版误加到敌对首领身上的 questgiver 标记
+UPDATE `creature_template` ct
+JOIN `_深渊章节配置` c ON ct.`entry` IN (c.`锚点首领入口`, c.`最终首领入口`)
+SET ct.`npcflag` = (ct.`npcflag` & 4294967293)
+WHERE c.`章节ID` BETWEEN 1 AND 74;
+
+REPLACE INTO `creature_template`
+(`entry`, `difficulty_entry_1`, `difficulty_entry_2`, `difficulty_entry_3`, `KillCredit1`, `KillCredit2`, `name`, `subname`, `IconName`, `gossip_menu_id`,
+ `minlevel`, `maxlevel`, `exp`, `faction`, `npcflag`, `speed_walk`, `speed_run`, `speed_swim`, `speed_flight`, `detection_range`, `scale`, `rank`, `dmgschool`,
+ `DamageModifier`, `BaseAttackTime`, `RangeAttackTime`, `BaseVariance`, `RangeVariance`, `unit_class`, `unit_flags`, `unit_flags2`, `dynamicflags`, `family`,
+ `trainer_type`, `trainer_spell`, `trainer_class`, `trainer_race`, `type`, `type_flags`, `lootid`, `pickpocketloot`, `skinloot`, `PetSpellDataId`, `VehicleId`,
+ `mingold`, `maxgold`, `AIName`, `MovementType`, `HoverHeight`, `HealthModifier`, `ManaModifier`, `ArmorModifier`, `ExperienceModifier`, `RacialLeader`,
+ `movementId`, `RegenHealth`, `mechanic_immune_mask`, `spell_school_immune_mask`, `flags_extra`, `ScriptName`, `VerifiedBuild`)
+SELECT
+  191000 + c.`章节ID`,
+  0,
+  0,
+  0,
+  0,
+  0,
+  CONCAT('深渊接引使·', c.`章节名称`),
+  '章节任务发布',
+  'Speak',
+  0,
+  GREATEST(1, LEAST(c.`需求修仙等级`, 80)),
+  GREATEST(1, LEAST(c.`需求修仙等级`, 80)),
+  s.`exp`,
+  35,
+  2,
+  s.`speed_walk`,
+  s.`speed_run`,
+  s.`speed_swim`,
+  s.`speed_flight`,
+  s.`detection_range`,
+  s.`scale`,
+  0,
+  s.`dmgschool`,
+  s.`DamageModifier`,
+  s.`BaseAttackTime`,
+  s.`RangeAttackTime`,
+  s.`BaseVariance`,
+  s.`RangeVariance`,
+  s.`unit_class`,
+  0,
+  0,
+  0,
+  s.`family`,
+  0,
+  0,
+  0,
+  0,
+  s.`type`,
+  s.`type_flags`,
+  0,
+  0,
+  0,
+  s.`PetSpellDataId`,
+  s.`VehicleId`,
+  0,
+  0,
+  '',
+  0,
+  s.`HoverHeight`,
+  1,
+  1,
+  1,
+  1,
+  0,
+  0,
+  1,
+  0,
+  0,
+  0,
+  '',
+  NULL
+FROM `_深渊章节配置` c
+JOIN `creature_template` s ON s.`entry` = 392
+WHERE c.`章节ID` BETWEEN 1 AND 74;
+
+REPLACE INTO `creature_template`
+(`entry`, `difficulty_entry_1`, `difficulty_entry_2`, `difficulty_entry_3`, `KillCredit1`, `KillCredit2`, `name`, `subname`, `IconName`, `gossip_menu_id`,
+ `minlevel`, `maxlevel`, `exp`, `faction`, `npcflag`, `speed_walk`, `speed_run`, `speed_swim`, `speed_flight`, `detection_range`, `scale`, `rank`, `dmgschool`,
+ `DamageModifier`, `BaseAttackTime`, `RangeAttackTime`, `BaseVariance`, `RangeVariance`, `unit_class`, `unit_flags`, `unit_flags2`, `dynamicflags`, `family`,
+ `trainer_type`, `trainer_spell`, `trainer_class`, `trainer_race`, `type`, `type_flags`, `lootid`, `pickpocketloot`, `skinloot`, `PetSpellDataId`, `VehicleId`,
+ `mingold`, `maxgold`, `AIName`, `MovementType`, `HoverHeight`, `HealthModifier`, `ManaModifier`, `ArmorModifier`, `ExperienceModifier`, `RacialLeader`,
+ `movementId`, `RegenHealth`, `mechanic_immune_mask`, `spell_school_immune_mask`, `flags_extra`, `ScriptName`, `VerifiedBuild`)
+SELECT
+  192000 + c.`章节ID`,
+  0,
+  0,
+  0,
+  0,
+  0,
+  CONCAT('深渊验收使·', c.`章节名称`),
+  '章节任务交付',
+  'Speak',
+  0,
+  GREATEST(1, LEAST(c.`需求修仙等级`, 80)),
+  GREATEST(1, LEAST(c.`需求修仙等级`, 80)),
+  s.`exp`,
+  35,
+  2,
+  s.`speed_walk`,
+  s.`speed_run`,
+  s.`speed_swim`,
+  s.`speed_flight`,
+  s.`detection_range`,
+  s.`scale`,
+  0,
+  s.`dmgschool`,
+  s.`DamageModifier`,
+  s.`BaseAttackTime`,
+  s.`RangeAttackTime`,
+  s.`BaseVariance`,
+  s.`RangeVariance`,
+  s.`unit_class`,
+  0,
+  0,
+  0,
+  s.`family`,
+  0,
+  0,
+  0,
+  0,
+  s.`type`,
+  s.`type_flags`,
+  0,
+  0,
+  0,
+  s.`PetSpellDataId`,
+  s.`VehicleId`,
+  0,
+  0,
+  '',
+  0,
+  s.`HoverHeight`,
+  1,
+  1,
+  1,
+  1,
+  0,
+  0,
+  1,
+  0,
+  0,
+  0,
+  '',
+  NULL
+FROM `_深渊章节配置` c
+JOIN `creature_template` s ON s.`entry` = 392
+WHERE c.`章节ID` BETWEEN 1 AND 74;
+
+REPLACE INTO `creature_template_model`
+(`CreatureID`, `Idx`, `CreatureDisplayID`, `DisplayScale`, `Probability`, `VerifiedBuild`)
+SELECT 191000 + c.`章节ID`, 0, 1279, 1, 1, NULL
+FROM `_深渊章节配置` c
+WHERE c.`章节ID` BETWEEN 1 AND 74;
+
+REPLACE INTO `creature_template_model`
+(`CreatureID`, `Idx`, `CreatureDisplayID`, `DisplayScale`, `Probability`, `VerifiedBuild`)
+SELECT 192000 + c.`章节ID`, 0, 1279, 1, 1, NULL
+FROM `_深渊章节配置` c
+WHERE c.`章节ID` BETWEEN 1 AND 74;
+
+REPLACE INTO `creature_template_addon`
+(`entry`, `path_id`, `mount`, `bytes1`, `bytes2`, `emote`, `visibilityDistanceType`, `auras`)
+SELECT 191000 + c.`章节ID`, 0, 0, 0, 1, 0, 0, NULL
+FROM `_深渊章节配置` c
+WHERE c.`章节ID` BETWEEN 1 AND 74;
+
+REPLACE INTO `creature_template_addon`
+(`entry`, `path_id`, `mount`, `bytes1`, `bytes2`, `emote`, `visibilityDistanceType`, `auras`)
+SELECT 192000 + c.`章节ID`, 0, 0, 0, 1, 0, 0, NULL
+FROM `_深渊章节配置` c
+WHERE c.`章节ID` BETWEEN 1 AND 74;
+
+REPLACE INTO `creature`
+(`id1`, `id2`, `id3`, `map`, `zoneId`, `areaId`, `spawnMask`, `phaseMask`, `equipment_id`,
+ `position_x`, `position_y`, `position_z`, `orientation`, `spawntimesecs`, `wander_distance`,
+ `currentwaypoint`, `curhealth`, `curmana`, `MovementType`, `npcflag`, `unit_flags`, `dynamicflags`,
+ `ScriptName`, `VerifiedBuild`, `CreateObject`, `Comment`)
+SELECT
+  191000 + c.`章节ID`,
+  0,
+  0,
+  c.`副本地图ID`,
+  0,
+  0,
+  1,
+  1,
+  0,
+  t.`target_position_x` + COS(t.`target_orientation` + 1.5707963) * 2.5,
+  t.`target_position_y` + SIN(t.`target_orientation` + 1.5707963) * 2.5,
+  t.`target_position_z`,
+  t.`target_orientation` + 3.1415926,
+  120,
+  0,
+  0,
+  1000,
+  0,
+  0,
+  2,
+  0,
+  0,
+  '',
+  NULL,
+  0,
+  CONCAT('深渊章节起始任务 NPC·章节', c.`章节ID`)
+FROM `_深渊章节配置` c
+JOIN `areatrigger_teleport` t
+  ON t.`ID` = (
+    SELECT MIN(t2.`ID`)
+    FROM `areatrigger_teleport` t2
+    WHERE t2.`target_map` = c.`副本地图ID`
+  )
+WHERE c.`章节ID` BETWEEN 1 AND 74;
+
+REPLACE INTO `creature`
+(`id1`, `id2`, `id3`, `map`, `zoneId`, `areaId`, `spawnMask`, `phaseMask`, `equipment_id`,
+ `position_x`, `position_y`, `position_z`, `orientation`, `spawntimesecs`, `wander_distance`,
+ `currentwaypoint`, `curhealth`, `curmana`, `MovementType`, `npcflag`, `unit_flags`, `dynamicflags`,
+ `ScriptName`, `VerifiedBuild`, `CreateObject`, `Comment`)
+SELECT
+  192000 + c.`章节ID`,
+  0,
+  0,
+  c.`副本地图ID`,
+  0,
+  0,
+  1,
+  1,
+  0,
+  t.`target_position_x` + COS(t.`target_orientation` - 1.5707963) * 2.5,
+  t.`target_position_y` + SIN(t.`target_orientation` - 1.5707963) * 2.5,
+  t.`target_position_z`,
+  t.`target_orientation` + 3.1415926,
+  120,
+  0,
+  0,
+  1000,
+  0,
+  0,
+  2,
+  0,
+  0,
+  '',
+  NULL,
+  0,
+  CONCAT('深渊章节完成任务 NPC·章节', c.`章节ID`)
+FROM `_深渊章节配置` c
+JOIN `areatrigger_teleport` t
+  ON t.`ID` = (
+    SELECT MIN(t2.`ID`)
+    FROM `areatrigger_teleport` t2
+    WHERE t2.`target_map` = c.`副本地图ID`
+  )
+WHERE c.`章节ID` BETWEEN 1 AND 74;
+
+REPLACE INTO `creature_queststarter`
+(`id`, `quest`)
+SELECT
+  191000 + c.`章节ID`,
+  c.`起始任务ID`
+FROM `_深渊章节配置` c
+WHERE c.`起始任务ID` BETWEEN 700001 AND 700074;
+
+REPLACE INTO `creature_queststarter`
+(`id`, `quest`)
+SELECT
+  191000 + c.`章节ID`,
+  c.`完成任务ID`
+FROM `_深渊章节配置` c
+WHERE c.`完成任务ID` BETWEEN 710001 AND 710074;
+
+REPLACE INTO `creature_queststarter`
+(`id`, `quest`)
+SELECT
+  191000 + c.`章节ID`,
+  720000 + c.`章节ID`
+FROM `_深渊章节配置` c
+WHERE c.`章节ID` BETWEEN 1 AND 74;
+
+REPLACE INTO `creature_queststarter`
+(`id`, `quest`)
+SELECT
+  191000 + c.`章节ID`,
+  730000 + c.`章节ID`
+FROM `_深渊章节配置` c
+WHERE c.`章节ID` BETWEEN 1 AND 74;
+
+REPLACE INTO `creature_queststarter`
+(`id`, `quest`)
+SELECT
+  191000 + c.`章节ID`,
+  740000 + c.`章节ID`
+FROM `_深渊章节配置` c
+WHERE c.`章节ID` BETWEEN 1 AND 74;
+
+REPLACE INTO `creature_questender`
+(`id`, `quest`)
+SELECT
+  192000 + c.`章节ID`,
+  c.`起始任务ID`
+FROM `_深渊章节配置` c
+WHERE c.`起始任务ID` BETWEEN 700001 AND 700074;
+
+REPLACE INTO `creature_questender`
+(`id`, `quest`)
+SELECT
+  192000 + c.`章节ID`,
+  c.`完成任务ID`
+FROM `_深渊章节配置` c
+WHERE c.`完成任务ID` BETWEEN 710001 AND 710074;
+
+REPLACE INTO `creature_questender`
+(`id`, `quest`)
+SELECT
+  192000 + c.`章节ID`,
+  720000 + c.`章节ID`
+FROM `_深渊章节配置` c
+WHERE c.`章节ID` BETWEEN 1 AND 74;
+
+REPLACE INTO `creature_questender`
+(`id`, `quest`)
+SELECT
+  192000 + c.`章节ID`,
+  730000 + c.`章节ID`
+FROM `_深渊章节配置` c
+WHERE c.`章节ID` BETWEEN 1 AND 74;
+
+REPLACE INTO `creature_questender`
+(`id`, `quest`)
+SELECT
+  192000 + c.`章节ID`,
+  740000 + c.`章节ID`
+FROM `_深渊章节配置` c
+WHERE c.`章节ID` BETWEEN 1 AND 74;
+
+DROP TABLE IF EXISTS `_深渊自定义首领对接`;
+CREATE TABLE `_深渊自定义首领对接` (
+  `首领入口` int unsigned NOT NULL COMMENT '目标 creature_template.entry',
+  `首领名称` varchar(96) NOT NULL DEFAULT '' COMMENT '首领名称',
+  `首领类型` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '2=深渊首领 3=秘藏首领',
+  `幕ID` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '所属幕',
+  `章节ID` smallint unsigned NOT NULL DEFAULT 0 COMMENT '所属章节',
+  `建议等级` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '建议等级',
+  `建议阵营` smallint unsigned NOT NULL DEFAULT 14 COMMENT '建议 faction',
+  `建议模型组` int unsigned NOT NULL DEFAULT 0 COMMENT '建议 modelid 预留组',
+  `建议脚本名` varchar(64) NOT NULL DEFAULT '' COMMENT '建议 AI / ScriptName',
+  `是否写入生物模板` tinyint unsigned NOT NULL DEFAULT 1 COMMENT '是否需要写 creature_template',
+  `是否写入掉落模板` tinyint unsigned NOT NULL DEFAULT 1 COMMENT '是否需要写 creature_loot_template',
+  `对接状态` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '0待建 1已建 2已校验',
+  `说明` varchar(255) NOT NULL DEFAULT '' COMMENT '备注',
+  PRIMARY KEY (`首领入口`),
+  KEY `索引_首领类型` (`首领类型`),
+  KEY `索引_章节ID` (`章节ID`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='深渊自定义首领对接';
+
+DELETE FROM `_深渊自定义首领对接` WHERE `首领入口` BETWEEN 910001 AND 910074 OR `首领入口` BETWEEN 919001 AND 919012;
+INSERT INTO `_深渊自定义首领对接`
+(`首领入口`, `首领名称`, `首领类型`, `幕ID`, `章节ID`, `建议等级`, `建议阵营`, `建议模型组`, `建议脚本名`, `是否写入生物模板`, `是否写入掉落模板`, `对接状态`, `说明`)
+SELECT
+  `首领入口`,
+  `首领名称`,
+  `首领类型`,
+  `幕ID`,
+  CASE
+    WHEN `章节ID` <> 0 THEN `章节ID`
+    WHEN `首领类型` = 3 AND `幕ID` = 1 THEN 1
+    WHEN `首领类型` = 3 AND `幕ID` = 2 THEN 21
+    WHEN `首领类型` = 3 AND `幕ID` = 4 THEN 53
+    WHEN `首领类型` = 3 AND `幕ID` = 5 THEN 58
+    WHEN `首领类型` = 3 AND `幕ID` = 6 THEN 67
+    ELSE `章节ID`
+  END,
+  CASE WHEN `幕ID` <= 1 THEN 35 WHEN `幕ID` = 2 THEN 70 WHEN `幕ID` = 3 THEN 80 WHEN `幕ID` = 4 THEN 83 WHEN `幕ID` = 5 THEN 83 ELSE 83 END,
+  14,
+  0,
+  '',
+  1,
+  1,
+  0,
+  CASE WHEN `首领类型` = 2 THEN '章节深渊首领，占位待写 creature_template 与 AI'
+       WHEN `首领类型` = 3 THEN '秘藏首领，占位待写 creature_template 与 AI'
+       ELSE '未分类' END
+FROM `_深渊首领配置`
+WHERE `首领类型` IN (2, 3);
+

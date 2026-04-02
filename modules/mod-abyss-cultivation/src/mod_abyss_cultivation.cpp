@@ -5,7 +5,7 @@
 #include "Creature.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
-#include "Log.h"
+#include "Logging/Log.h"
 #include "LootMgr.h"
 #include "Map.h"
 #include "ObjectAccessor.h"
@@ -17,6 +17,7 @@
 #include "ScriptedCreature.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstddef>
 #include <cmath>
@@ -87,10 +88,11 @@ char const* GetTaskTypeName(uint8 taskType)
 {
     switch (taskType)
     {
-        case 1: return "official";
-        case 2: return "story";
-        case 3: return "abyss";
-        case 4: return "corruption";
+        case 1: return "start";
+        case 2: return "official";
+        case 3: return "story";
+        case 4: return "abyss";
+        case 5: return "corruption";
         default: return "unknown";
     }
 }
@@ -161,8 +163,11 @@ enum AbyssRelicSlot : uint8
     ABYSS_RELIC_SLOT_MAIN = 1,
     ABYSS_RELIC_SLOT_SUB_1 = 2,
     ABYSS_RELIC_SLOT_SUB_2 = 3,
-    ABYSS_RELIC_SLOT_PHASE = 4,
-    ABYSS_RELIC_SLOT_ULTIMATE = 5
+    ABYSS_RELIC_SLOT_SUB_3 = 4,
+    ABYSS_RELIC_SLOT_SUB_4 = 5,
+    ABYSS_RELIC_SLOT_SUB_5 = 6,
+    ABYSS_RELIC_SLOT_PHASE = 7,
+    ABYSS_RELIC_SLOT_ULTIMATE = 8
 };
 
 char const* GetRelicSlotName(uint8 slot)
@@ -172,6 +177,9 @@ char const* GetRelicSlotName(uint8 slot)
         case ABYSS_RELIC_SLOT_MAIN: return "主遗物";
         case ABYSS_RELIC_SLOT_SUB_1: return "副遗物1";
         case ABYSS_RELIC_SLOT_SUB_2: return "副遗物2";
+        case ABYSS_RELIC_SLOT_SUB_3: return "副遗物3";
+        case ABYSS_RELIC_SLOT_SUB_4: return "副遗物4";
+        case ABYSS_RELIC_SLOT_SUB_5: return "副遗物5";
         case ABYSS_RELIC_SLOT_PHASE: return "阶段神器";
         case ABYSS_RELIC_SLOT_ULTIMATE: return "终极神器";
         default: return "未知";
@@ -255,13 +263,31 @@ bool TryParseRelicSlotToken(std::string token, uint8& slot)
         return true;
     }
 
-    if (token == "4" || token == "phase" || token == "artifact" || token == "阶段" || token == "阶段神器")
+    if (token == "4" || token == "sub3" || token == "secondary3" || token == "副3" || token == "副遗物3")
+    {
+        slot = ABYSS_RELIC_SLOT_SUB_3;
+        return true;
+    }
+
+    if (token == "5" || token == "sub4" || token == "secondary4" || token == "副4" || token == "副遗物4")
+    {
+        slot = ABYSS_RELIC_SLOT_SUB_4;
+        return true;
+    }
+
+    if (token == "6" || token == "sub5" || token == "secondary5" || token == "副5" || token == "副遗物5")
+    {
+        slot = ABYSS_RELIC_SLOT_SUB_5;
+        return true;
+    }
+
+    if (token == "7" || token == "phase" || token == "artifact" || token == "阶段" || token == "阶段神器")
     {
         slot = ABYSS_RELIC_SLOT_PHASE;
         return true;
     }
 
-    if (token == "5" || token == "ultimate" || token == "终极" || token == "终极神器")
+    if (token == "8" || token == "ultimate" || token == "终极" || token == "终极神器")
     {
         slot = ABYSS_RELIC_SLOT_ULTIMATE;
         return true;
@@ -335,6 +361,34 @@ std::string SanitizeAddonText(std::string value)
     return value;
 }
 
+std::string BuildAddonIconPath(char const* inventoryIcon)
+{
+    if (!inventoryIcon || !*inventoryIcon)
+        return "Interface\\Icons\\INV_Misc_QuestionMark";
+
+    std::string icon(inventoryIcon);
+    if (icon.find("Interface\\") == 0 || icon.find("interface\\") == 0)
+        return icon;
+
+    return "Interface\\Icons\\" + icon;
+}
+
+std::string GetItemIconPathForAddon(uint32 itemId, uint32 fallbackDisplayId = 0)
+{
+    uint32 displayId = fallbackDisplayId;
+
+    if (ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(itemId))
+        displayId = itemTemplate->DisplayInfoID;
+
+    if (displayId == 0)
+        return "Interface\\Icons\\INV_Misc_QuestionMark";
+
+    if (ItemDisplayInfoEntry const* displayInfo = sItemDisplayInfoStore.LookupEntry(displayId))
+        return BuildAddonIconPath(displayInfo->inventoryIcon);
+
+    return "Interface\\Icons\\INV_Misc_QuestionMark";
+}
+
 std::vector<std::string> SplitCsvTokens(std::string const& value)
 {
     std::vector<std::string> result;
@@ -358,13 +412,20 @@ char const* const kLoadChaptersSql =
     "SELECT * FROM `_\xE6\xB7\xB1\xE6\xB8\x8A\xE7\xAB\xA0\xE8\x8A\x82\xE9\x85\x8D\xE7\xBD\xAE` WHERE `\xE6\x98\xAF\xE5\x90\xA6\xE5\x90\xAF\xE7\x94\xA8` = 1 ORDER BY `\xE7\xAB\xA0\xE8\x8A\x82ID`";
 
 char const* const kLoadPlayerSql =
-    "SELECT `\xE5\xBD\x93\xE5\x89\x8D\xE7\xAB\xA0\xE8\x8A\x82`, `\xE5\x8E\x86\xE5\x8F\xB2\xE6\x9C\x80\xE9\xAB\x98\xE7\xAB\xA0\xE8\x8A\x82`, `\xE5\xBD\x93\xE5\x89\x8D\xE4\xBF\xAE\xE4\xBB\x99\xE9\x97\xA8\xE6\xA7\x9B\xE7\xAD\x89\xE7\xBA\xA7`, `\xE6\x9C\x80\xE9\xAB\x98\xE8\x85\x90\xE5\x8C\x96\xE5\xB1\x82`, `\xE5\xB7\xB2\xE8\xA7\xA3\xE9\x94\x81\xE6\xA8\xA1\xE5\xBC\x8F\xE6\x8E\xA9\xE7\xA0\x81`, `\xE5\x89\xA7\xE6\x83\x85\xE7\x8A\xB6\xE6\x80\x81`, `\xE4\xB8\xBB\xE9\x81\x97\xE7\x89\xA9`, `\xE5\x89\xAF\xE9\x81\x97\xE7\x89\xA9\x31`, `\xE5\x89\xAF\xE9\x81\x97\xE7\x89\xA9\x32`, `\xE9\x98\xB6\xE6\xAE\xB5\xE7\xA5\x9E\xE5\x99\xA8`, `\xE7\xBB\x88\xE6\x9E\x81\xE7\xA5\x9E\xE5\x99\xA8`, `\xE9\xA2\x84\xE8\xAE\xBE\xE7\xBC\x96\xE5\x8F\xB7`, `\xE5\xBD\x93\xE5\x89\x8D\xE4\xBF\x9D\xE5\xBA\x95\xE7\xAB\xA0\xE8\x8A\x82ID`, `\xE6\xB7\xB1\xE6\xB8\x8A\xE8\xA3\x85\xE5\xA4\xB1\xE8\xB4\xA5\xE6\xAC\xA1\xE6\x95\xB0`, `\xE7\xA7\x98\xE8\x97\x8F\xE9\xA6\x96\xE9\xA2\x86\xE5\xA4\xB1\xE8\xB4\xA5\xE6\xAC\xA1\xE6\x95\xB0`, `\xE6\x9C\x80\xE5\x90\x8E\xE6\x9B\xB4\xE6\x96\xB0\xE6\x97\xB6\xE9\x97\xB4` FROM `_\xE7\x8E\xA9\xE5\xAE\xB6\xE6\xB7\xB1\xE6\xB8\x8A\xE4\xB8\xBB\xE6\x95\xB0\xE6\x8D\xAE` WHERE `\xE8\xA7\x92\xE8\x89\xB2ID` = {}";
+    "SELECT `当前章节`, `历史最高章节`, `当前修仙门槛等级`, `最高腐化层`, `已解锁模式掩码`, `剧情状态`, "
+    "`主遗物`, `副遗物1`, `副遗物2`, `副遗物3`, `副遗物4`, `副遗物5`, `阶段神器`, `终极神器`, "
+    "`预设编号`, `当前保底章节ID`, `深渊装失败次数`, `秘藏首领失败次数`, `最后更新时间` "
+    "FROM `_玩家深渊主数据` WHERE `角色ID` = {}";
 
 char const* const kInsertPlayerSql =
     "INSERT IGNORE INTO `_\xE7\x8E\xA9\xE5\xAE\xB6\xE6\xB7\xB1\xE6\xB8\x8A\xE4\xB8\xBB\xE6\x95\xB0\xE6\x8D\xAE` (`\xE8\xA7\x92\xE8\x89\xB2ID`) VALUES ({})";
 
 char const* const kSavePlayerSql =
-    "REPLACE INTO `_\xE7\x8E\xA9\xE5\xAE\xB6\xE6\xB7\xB1\xE6\xB8\x8A\xE4\xB8\xBB\xE6\x95\xB0\xE6\x8D\xAE` (`\xE8\xA7\x92\xE8\x89\xB2ID`, `\xE5\xBD\x93\xE5\x89\x8D\xE7\xAB\xA0\xE8\x8A\x82`, `\xE5\x8E\x86\xE5\x8F\xB2\xE6\x9C\x80\xE9\xAB\x98\xE7\xAB\xA0\xE8\x8A\x82`, `\xE5\xBD\x93\xE5\x89\x8D\xE4\xBF\xAE\xE4\xBB\x99\xE9\x97\xA8\xE6\xA7\x9B\xE7\xAD\x89\xE7\xBA\xA7`, `\xE6\x9C\x80\xE9\xAB\x98\xE8\x85\x90\xE5\x8C\x96\xE5\xB1\x82`, `\xE5\xB7\xB2\xE8\xA7\xA3\xE9\x94\x81\xE6\xA8\xA1\xE5\xBC\x8F\xE6\x8E\xA9\xE7\xA0\x81`, `\xE5\x89\xA7\xE6\x83\x85\xE7\x8A\xB6\xE6\x80\x81`, `\xE4\xB8\xBB\xE9\x81\x97\xE7\x89\xA9`, `\xE5\x89\xAF\xE9\x81\x97\xE7\x89\xA9\x31`, `\xE5\x89\xAF\xE9\x81\x97\xE7\x89\xA9\x32`, `\xE9\x98\xB6\xE6\xAE\xB5\xE7\xA5\x9E\xE5\x99\xA8`, `\xE7\xBB\x88\xE6\x9E\x81\xE7\xA5\x9E\xE5\x99\xA8`, `\xE9\xA2\x84\xE8\xAE\xBE\xE7\xBC\x96\xE5\x8F\xB7`, `\xE5\xBD\x93\xE5\x89\x8D\xE4\xBF\x9D\xE5\xBA\x95\xE7\xAB\xA0\xE8\x8A\x82ID`, `\xE6\xB7\xB1\xE6\xB8\x8A\xE8\xA3\x85\xE5\xA4\xB1\xE8\xB4\xA5\xE6\xAC\xA1\xE6\x95\xB0`, `\xE7\xA7\x98\xE8\x97\x8F\xE9\xA6\x96\xE9\xA2\x86\xE5\xA4\xB1\xE8\xB4\xA5\xE6\xAC\xA1\xE6\x95\xB0`, `\xE6\x9C\x80\xE5\x90\x8E\xE6\x9B\xB4\xE6\x96\xB0\xE6\x97\xB6\xE9\x97\xB4`) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+    "REPLACE INTO `_玩家深渊主数据` "
+    "(`角色ID`, `当前章节`, `历史最高章节`, `当前修仙门槛等级`, `最高腐化层`, `已解锁模式掩码`, `剧情状态`, "
+    "`主遗物`, `副遗物1`, `副遗物2`, `副遗物3`, `副遗物4`, `副遗物5`, `阶段神器`, `终极神器`, "
+    "`预设编号`, `当前保底章节ID`, `深渊装失败次数`, `秘藏首领失败次数`, `最后更新时间`) "
+    "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 char const* const kDeletePlayerSql =
     "DELETE FROM `_\xE7\x8E\xA9\xE5\xAE\xB6\xE6\xB7\xB1\xE6\xB8\x8A\xE4\xB8\xBB\xE6\x95\xB0\xE6\x8D\xAE` WHERE `\xE8\xA7\x92\xE8\x89\xB2ID` = {}";
@@ -379,10 +440,14 @@ char const* const kDeletePlayerChapterModeSql =
     "DELETE FROM `\x5F\xE7\x8E\xA9\xE5\xAE\xB6\xE6\xB7\xB1\xE6\xB8\x8A\xE7\xAB\xA0\xE8\x8A\x82\xE6\xA8\xA1\xE5\xBC\x8F` WHERE `\xE8\xA7\x92\xE8\x89\xB2ID` = {}";
 
 char const* const kLoadPlayerRunStateSql =
-    "SELECT * FROM `\x5F\xE7\x8E\xA9\xE5\xAE\xB6\xE6\xB7\xB1\xE6\xB8\x8A\xE5\xB1\x80\xE5\x86\x85\xE7\x8A\xB6\xE6\x80\x81` WHERE `\xE8\xA7\x92\xE8\x89\xB2ID` = {}";
+    "SELECT `角色ID`, `当前副本地图ID`, `当前章节ID`, `模式类型`, `腐化层`, `本局主遗物`, `本局副遗物1`, `本局副遗物2`, "
+    "`本局副遗物3`, `本局副遗物4`, `本局副遗物5`, `锚点首领击杀掩码`, `是否已召唤深渊首领`, `是否已召唤秘藏首领`, `开局时间` "
+    "FROM `_玩家深渊局内状态` WHERE `角色ID` = {}";
 
 char const* const kSavePlayerRunStateSql =
-    "REPLACE INTO `\x5F\xE7\x8E\xA9\xE5\xAE\xB6\xE6\xB7\xB1\xE6\xB8\x8A\xE5\xB1\x80\xE5\x86\x85\xE7\x8A\xB6\xE6\x80\x81` VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+    "REPLACE INTO `_玩家深渊局内状态` "
+    "(`角色ID`, `当前副本地图ID`, `当前章节ID`, `模式类型`, `腐化层`, `本局主遗物`, `本局副遗物1`, `本局副遗物2`, `本局副遗物3`, `本局副遗物4`, `本局副遗物5`, `锚点首领击杀掩码`, `是否已召唤深渊首领`, `是否已召唤秘藏首领`, `开局时间`) "
+    "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 char const* const kDeletePlayerRunStateSql =
     "DELETE FROM `\x5F\xE7\x8E\xA9\xE5\xAE\xB6\xE6\xB7\xB1\xE6\xB8\x8A\xE5\xB1\x80\xE5\x86\x85\xE7\x8A\xB6\xE6\x80\x81` WHERE `\xE8\xA7\x92\xE8\x89\xB2ID` = {}";
@@ -422,6 +487,10 @@ char const* const kLoadAffixTemplatesSql =
 
 char const* const kLoadSpecialEffectTemplatesSql =
     "SELECT `\xE7\x89\xB9\xE6\x95\x88ID`, `\xE7\x89\xB9\xE6\x95\x88\xE5\x90\x8D\xE7\xA7\xB0`, `\xE8\xA7\xA6\xE5\x8F\x91\xE7\xB1\xBB\xE5\x9E\x8B`, `\xE8\xA7\xA6\xE5\x8F\x91\xE5\x8F\x82\xE6\x95\xB0" "1`, `\xE8\xA7\xA6\xE5\x8F\x91\xE5\x8F\x82\xE6\x95\xB0" "2`, `\xE5\x86\xB7\xE5\x8D\xB4\xE6\xAF\xAB\xE7\xA7\x92`, `\xE6\xAF\x8F\xE5\x88\x86\xE9\x92\x9F\xE8\xA7\xA6\xE5\x8F\x91\xE7\x8E\x87`, `\xE7\x89\xB9\xE6\x95\x88\xE5\xAE\xB6\xE6\x97\x8F`, `\xE6\x95\xB0\xE5\x80\xBC\xE5\x85\xAC\xE5\xBC\x8F`, `\xE5\x85\x81\xE8\xAE\xB8\xE9\x83\xA8\xE4\xBD\x8D\xE6\x8E\xA9\xE7\xA0\x81`, `\xE8\x84\x9A\xE6\x9C\xAC\xE7\xBB\x84`, `\xE6\x8F\x8F\xE8\xBF\xB0`, `\xE6\x98\xAF\xE5\x90\xA6\xE5\x90\xAF\xE7\x94\xA8` FROM `\x5F\xE6\xB7\xB1\xE6\xB8\x8A\xE7\x89\xB9\xE6\x95\x88\xE6\xA8\xA1\xE6\x9D\xBF` WHERE `\xE6\x98\xAF\xE5\x90\xA6\xE5\x90\xAF\xE7\x94\xA8` = 1 ORDER BY `\xE7\x89\xB9\xE6\x95\x88ID`";
+
+// _深渊套装配置
+char const* const kLoadSetBonusConfigsSql =
+    "SELECT * FROM `\x5F\xE6\xB7\xB1\xE6\xB8\x8A\xE5\xA5\x97\xE8\xA3\x85\xE9\x85\x8D\xE7\xBD\xAE` WHERE `\xE6\x98\xAF\xE5\x90\xA6\xE5\x90\xAF\xE7\x94\xA8` = 1 ORDER BY `\xE5\xA5\x97\xE8\xA3\x85ID`";
 
 struct AbyssChapterConfig
 {
@@ -480,6 +549,16 @@ struct AbyssRelicConfig
     float subSlotScale = 0.0f;
     std::string briefDescription;
     std::string fullDescription;
+    uint8 agilityWeight = 0;
+    uint8 strengthWeight = 0;
+    uint8 intellectWeight = 0;
+    uint8 spiritWeight = 0;
+    uint8 staminaWeight = 0;
+    uint8 hitRatingWeight = 0;
+    uint8 critRatingWeight = 0;
+    uint8 hasteRatingWeight = 0;
+    uint8 attackPowerWeight = 0;
+    uint8 spellPowerWeight = 0;
 };
 
 struct AbyssBossConfig
@@ -531,6 +610,7 @@ struct AbyssEquipmentTemplate
     bool fromCacheBoss = false;
     bool requiresFragments = false;
     std::string flavorText;
+    uint32 setId = 0;
     bool enabled = false;
 };
 
@@ -563,6 +643,39 @@ struct AbyssSpecialEffectTemplate
     uint32 allowedSlotMask = 0;
     std::string scriptGroup;
     std::string description;
+};
+
+// 套装配置
+struct AbyssSetBonusConfig
+{
+    uint32 setId = 0;
+    std::string setName;
+    uint8 actId = 0;
+    uint8 sourceMode = 0;
+    // 2件效果
+    uint16 twoPieceAllStat = 0;
+    uint16 twoPieceCrit = 0;
+    uint16 twoPieceHaste = 0;
+    uint16 twoPieceAP = 0;
+    uint16 twoPieceSP = 0;
+    std::string twoPieceDesc;
+    // 4件效果
+    uint8  fourPieceDmgPct = 0;
+    uint8  fourPieceHpPct = 0;
+    uint16 fourPieceCrit = 0;
+    uint16 fourPieceHaste = 0;
+    std::string fourPieceSpecialEffect;
+    std::string fourPieceDesc;
+    bool enabled = true;
+};
+
+// 玩家当前活跃套装buff状态
+struct PlayerSetBonusState
+{
+    uint32 setId = 0;
+    uint8 pieceCount = 0;
+    bool hasTwoPieceBonus = false;
+    bool hasFourPieceBonus = false;
 };
 
 struct AbyssTaskDocking
@@ -626,6 +739,9 @@ struct PlayerAbyssData
     uint32 mainRelic = 0;
     uint32 subRelic1 = 0;
     uint32 subRelic2 = 0;
+    uint32 subRelic3 = 0;
+    uint32 subRelic4 = 0;
+    uint32 subRelic5 = 0;
     uint32 phaseArtifact = 0;
     uint32 ultimateArtifact = 0;
     uint8 presetIndex = 0;
@@ -652,6 +768,9 @@ struct PlayerAbyssRunState
     uint32 runMainRelic = 0;
     uint32 runSubRelic1 = 0;
     uint32 runSubRelic2 = 0;
+    uint32 runSubRelic3 = 0;
+    uint32 runSubRelic4 = 0;
+    uint32 runSubRelic5 = 0;
     uint64 anchorBossKillMask = 0;
     bool abyssBossSummoned = false;
     bool cacheBossSummoned = false;
@@ -705,6 +824,11 @@ struct PlayerAbyssProcState
     uint32 lastDominionTime = 0;
     uint32 matrixCastCounter = 0;
     uint32 dominionCounter = 0;
+    float lastPromptX = 0.0f;
+    float lastPromptY = 0.0f;
+    float lastPromptZ = 0.0f;
+    float lastPromptO = 0.0f;
+    bool hasPromptPosition = false;
     uint8 beastMode = 0;
     bool abyssModePromptShown = false;
     bool replayingSpell = false;
@@ -771,6 +895,7 @@ public:
         _relicConfigs.clear();
         _bossConfigs.clear();
         _equipmentTemplates.clear();
+        _setBonusConfigs.clear();
         _affixTemplates.clear();
         _specialEffectTemplates.clear();
         _taskDockings.clear();
@@ -1064,6 +1189,16 @@ public:
             config.subSlotScale = fields[11].Get<float>();
             config.briefDescription = fields[13].Get<std::string>();
             config.fullDescription = fields[14].Get<std::string>();
+            config.agilityWeight = fields[15].Get<uint8>();
+            config.strengthWeight = fields[16].Get<uint8>();
+            config.intellectWeight = fields[17].Get<uint8>();
+            config.spiritWeight = fields[18].Get<uint8>();
+            config.staminaWeight = fields[19].Get<uint8>();
+            config.hitRatingWeight = fields[20].Get<uint8>();
+            config.critRatingWeight = fields[21].Get<uint8>();
+            config.hasteRatingWeight = fields[22].Get<uint8>();
+            config.attackPowerWeight = fields[23].Get<uint8>();
+            config.spellPowerWeight = fields[24].Get<uint8>();
 
             _relicConfigs[config.itemId] = config;
             ++count;
@@ -1161,13 +1296,58 @@ public:
             config.fromCacheBoss = fields[19].Get<bool>();
             config.requiresFragments = fields[20].Get<bool>();
             config.flavorText = fields[21].Get<std::string>();
-            config.enabled = fields[22].Get<bool>();
+            config.setId = fields[22].Get<uint32>();
+            config.enabled = fields[23].Get<bool>();
 
             _equipmentTemplates[config.itemId] = config;
             ++count;
         } while (result->NextRow());
 
         LOG_INFO("server.loading", ">> mod-abyss-cultivation: loaded {} equipment templates in {} ms",
+            count, GetMSTimeDiffToNow(oldMSTime));
+    }
+
+    void LoadSetBonusConfigs()
+    {
+        uint32 oldMSTime = getMSTime();
+        _setBonusConfigs.clear();
+
+        QueryResult result = WorldDatabase.Query(kLoadSetBonusConfigsSql);
+        if (!result)
+        {
+            LOG_WARN("module", "mod-abyss-cultivation: no set bonus config rows found");
+            return;
+        }
+
+        uint32 count = 0;
+        do
+        {
+            Field* fields = result->Fetch();
+
+            AbyssSetBonusConfig config;
+            config.setId            = fields[0].Get<uint32>();
+            config.setName          = fields[1].Get<std::string>();
+            config.actId            = fields[2].Get<uint8>();
+            config.sourceMode       = fields[3].Get<uint8>();
+            config.twoPieceDesc     = fields[4].Get<std::string>();
+            config.twoPieceAllStat  = fields[5].Get<uint16>();
+            config.twoPieceCrit     = fields[6].Get<uint16>();
+            config.twoPieceHaste    = fields[7].Get<uint16>();
+            config.twoPieceAP       = fields[8].Get<uint16>();
+            config.twoPieceSP       = fields[9].Get<uint16>();
+            config.fourPieceDesc    = fields[10].Get<std::string>();
+            config.fourPieceDmgPct  = fields[11].Get<uint8>();
+            config.fourPieceHpPct   = fields[12].Get<uint8>();
+            config.fourPieceCrit    = fields[13].Get<uint16>();
+            config.fourPieceHaste   = fields[14].Get<uint16>();
+            config.fourPieceSpecialEffect = fields[15].Get<std::string>();
+            config.enabled          = fields[16].Get<bool>();
+
+            _setBonusConfigs[config.setId] = config;
+            ++count;
+        } while (result->NextRow());
+
+        LOG_INFO("server.loading", ">> mod-abyss-cultivation: loaded {} set bonus configs in {} ms",
             count, GetMSTimeDiffToNow(oldMSTime));
     }
 
@@ -1287,13 +1467,16 @@ public:
         data.mainRelic = fields[6].Get<uint32>();
         data.subRelic1 = fields[7].Get<uint32>();
         data.subRelic2 = fields[8].Get<uint32>();
-        data.phaseArtifact = fields[9].Get<uint32>();
-        data.ultimateArtifact = fields[10].Get<uint32>();
-        data.presetIndex = fields[11].Get<uint8>();
-        data.pityChapterId = fields[12].Get<uint16>();
-        data.abyssGearFailCount = fields[13].Get<uint16>();
-        data.cacheBossFailCount = fields[14].Get<uint16>();
-        data.lastUpdated = fields[15].Get<uint32>();
+        data.subRelic3 = fields[9].Get<uint32>();
+        data.subRelic4 = fields[10].Get<uint32>();
+        data.subRelic5 = fields[11].Get<uint32>();
+        data.phaseArtifact = fields[12].Get<uint32>();
+        data.ultimateArtifact = fields[13].Get<uint32>();
+        data.presetIndex = fields[14].Get<uint8>();
+        data.pityChapterId = fields[15].Get<uint16>();
+        data.abyssGearFailCount = fields[16].Get<uint16>();
+        data.cacheBossFailCount = fields[17].Get<uint16>();
+        data.lastUpdated = fields[18].Get<uint32>();
         data.hasDatabaseRow = true;
 
         _playerData[guid] = data;
@@ -1410,6 +1593,9 @@ public:
             data.mainRelic,
             data.subRelic1,
             data.subRelic2,
+            data.subRelic3,
+            data.subRelic4,
+            data.subRelic5,
             data.phaseArtifact,
             data.ultimateArtifact,
             data.presetIndex,
@@ -1522,10 +1708,13 @@ public:
         state.runMainRelic = fields[5].Get<uint32>();
         state.runSubRelic1 = fields[6].Get<uint32>();
         state.runSubRelic2 = fields[7].Get<uint32>();
-        state.anchorBossKillMask = fields[8].Get<uint64>();
-        state.abyssBossSummoned = fields[9].Get<bool>();
-        state.cacheBossSummoned = fields[10].Get<bool>();
-        state.startTime = fields[11].Get<uint32>();
+        state.runSubRelic3 = fields[8].Get<uint32>();
+        state.runSubRelic4 = fields[9].Get<uint32>();
+        state.runSubRelic5 = fields[10].Get<uint32>();
+        state.anchorBossKillMask = fields[11].Get<uint64>();
+        state.abyssBossSummoned = fields[12].Get<bool>();
+        state.cacheBossSummoned = fields[13].Get<bool>();
+        state.startTime = fields[14].Get<uint32>();
         state.hasDatabaseRow = true;
         _playerRunStates[guid] = state;
     }
@@ -1552,6 +1741,9 @@ public:
             state.runMainRelic,
             state.runSubRelic1,
             state.runSubRelic2,
+            state.runSubRelic3,
+            state.runSubRelic4,
+            state.runSubRelic5,
             state.anchorBossKillMask,
             state.abyssBossSummoned,
             state.cacheBossSummoned,
@@ -1663,6 +1855,11 @@ public:
         return _equipmentTemplates;
     }
 
+    std::unordered_map<uint32, AbyssSetBonusConfig> const& GetSetBonusConfigs() const
+    {
+        return _setBonusConfigs;
+    }
+
     uint32 GetAffixTemplateCount() const
     {
         return static_cast<uint32>(_affixTemplates.size());
@@ -1761,6 +1958,9 @@ public:
             case ABYSS_RELIC_SLOT_MAIN:
             case ABYSS_RELIC_SLOT_SUB_1:
             case ABYSS_RELIC_SLOT_SUB_2:
+            case ABYSS_RELIC_SLOT_SUB_3:
+            case ABYSS_RELIC_SLOT_SUB_4:
+            case ABYSS_RELIC_SLOT_SUB_5:
                 return config.relicType == 1;
             case ABYSS_RELIC_SLOT_PHASE:
                 return config.relicType == 2;
@@ -1779,6 +1979,9 @@ public:
             { ABYSS_RELIC_SLOT_MAIN, &data.mainRelic },
             { ABYSS_RELIC_SLOT_SUB_1, &data.subRelic1 },
             { ABYSS_RELIC_SLOT_SUB_2, &data.subRelic2 },
+            { ABYSS_RELIC_SLOT_SUB_3, &data.subRelic3 },
+            { ABYSS_RELIC_SLOT_SUB_4, &data.subRelic4 },
+            { ABYSS_RELIC_SLOT_SUB_5, &data.subRelic5 },
             { ABYSS_RELIC_SLOT_PHASE, &data.phaseArtifact },
             { ABYSS_RELIC_SLOT_ULTIMATE, &data.ultimateArtifact }
         };
@@ -1843,6 +2046,12 @@ public:
             return ABYSS_RELIC_SLOT_SUB_1;
         if (data.subRelic2 == itemId)
             return ABYSS_RELIC_SLOT_SUB_2;
+        if (data.subRelic3 == itemId)
+            return ABYSS_RELIC_SLOT_SUB_3;
+        if (data.subRelic4 == itemId)
+            return ABYSS_RELIC_SLOT_SUB_4;
+        if (data.subRelic5 == itemId)
+            return ABYSS_RELIC_SLOT_SUB_5;
         if (data.phaseArtifact == itemId)
             return ABYSS_RELIC_SLOT_PHASE;
         if (data.ultimateArtifact == itemId)
@@ -2015,6 +2224,26 @@ public:
             return &itr->second;
 
         return nullptr;
+    }
+
+    std::string GetBossDisplayName(uint32 bossEntry) const
+    {
+        if (bossEntry == 0)
+            return "";
+
+        if (AbyssBossConfig const* bossConfig = GetBossConfig(bossEntry))
+            if (!bossConfig->bossName.empty())
+                return bossConfig->bossName;
+
+        if (AbyssBossDocking const* docking = GetBossDocking(bossEntry))
+            if (!docking->bossName.empty())
+                return docking->bossName;
+
+        if (CreatureTemplate const* creatureTemplate = sObjectMgr->GetCreatureTemplate(bossEntry))
+            if (!creatureTemplate->Name.empty())
+                return creatureTemplate->Name;
+
+        return "";
     }
 
     std::vector<AbyssTaskDocking const*> GetTaskDockingsForChapter(uint16 chapterId) const
@@ -2481,6 +2710,24 @@ public:
                 state.runSubRelic2 = playerData->subRelic2;
                 changed = true;
             }
+
+            if (state.runSubRelic3 == 0 && playerData->subRelic3 != 0)
+            {
+                state.runSubRelic3 = playerData->subRelic3;
+                changed = true;
+            }
+
+            if (state.runSubRelic4 == 0 && playerData->subRelic4 != 0)
+            {
+                state.runSubRelic4 = playerData->subRelic4;
+                changed = true;
+            }
+
+            if (state.runSubRelic5 == 0 && playerData->subRelic5 != 0)
+            {
+                state.runSubRelic5 = playerData->subRelic5;
+                changed = true;
+            }
         }
 
         return changed;
@@ -2526,6 +2773,15 @@ public:
                 break;
             case ABYSS_RELIC_SLOT_SUB_2:
                 slotValue = &data.subRelic2;
+                break;
+            case ABYSS_RELIC_SLOT_SUB_3:
+                slotValue = &data.subRelic3;
+                break;
+            case ABYSS_RELIC_SLOT_SUB_4:
+                slotValue = &data.subRelic4;
+                break;
+            case ABYSS_RELIC_SLOT_SUB_5:
+                slotValue = &data.subRelic5;
                 break;
             case ABYSS_RELIC_SLOT_PHASE:
                 slotValue = &data.phaseArtifact;
@@ -2591,6 +2847,9 @@ public:
         clearIfMatches(data.mainRelic);
         clearIfMatches(data.subRelic1);
         clearIfMatches(data.subRelic2);
+        clearIfMatches(data.subRelic3);
+        clearIfMatches(data.subRelic4);
+        clearIfMatches(data.subRelic5);
         clearIfMatches(data.phaseArtifact);
         clearIfMatches(data.ultimateArtifact);
 
@@ -2606,6 +2865,9 @@ public:
         if (hasExclusiveConflict(data.mainRelic) ||
             hasExclusiveConflict(data.subRelic1) ||
             hasExclusiveConflict(data.subRelic2) ||
+            hasExclusiveConflict(data.subRelic3) ||
+            hasExclusiveConflict(data.subRelic4) ||
+            hasExclusiveConflict(data.subRelic5) ||
             hasExclusiveConflict(data.phaseArtifact) ||
             hasExclusiveConflict(data.ultimateArtifact))
         {
@@ -2656,6 +2918,9 @@ public:
             considerRelicGroup(runState->runMainRelic, 1.0f);
             considerRelicGroup(runState->runSubRelic1, GetConfiguredSubRelicScale(runState->runSubRelic1));
             considerRelicGroup(runState->runSubRelic2, GetConfiguredSubRelicScale(runState->runSubRelic2));
+            considerRelicGroup(runState->runSubRelic3, GetConfiguredSubRelicScale(runState->runSubRelic3));
+            considerRelicGroup(runState->runSubRelic4, GetConfiguredSubRelicScale(runState->runSubRelic4));
+            considerRelicGroup(runState->runSubRelic5, GetConfiguredSubRelicScale(runState->runSubRelic5));
         }
 
         if (playerData)
@@ -3265,6 +3530,152 @@ public:
     }
 
 private:
+    enum RelicRuntimeAttribute : uint8
+    {
+        RELIC_ATTR_AGILITY = 1,
+        RELIC_ATTR_STRENGTH = 2,
+        RELIC_ATTR_INTELLECT = 3,
+        RELIC_ATTR_SPIRIT = 4,
+        RELIC_ATTR_STAMINA = 5,
+        RELIC_ATTR_HIT_RATING = 6,
+        RELIC_ATTR_CRIT_RATING = 7,
+        RELIC_ATTR_HASTE_RATING = 8,
+        RELIC_ATTR_ATTACK_POWER = 9,
+        RELIC_ATTR_SPELL_POWER = 10
+    };
+
+    uint32 GetRelicWeightTotal(AbyssRelicConfig const& relic) const
+    {
+        return relic.agilityWeight + relic.strengthWeight + relic.intellectWeight + relic.spiritWeight + relic.staminaWeight +
+            relic.hitRatingWeight + relic.critRatingWeight + relic.hasteRatingWeight + relic.attackPowerWeight + relic.spellPowerWeight;
+    }
+
+    uint32 GetRelicAttributeWeight(AbyssRelicConfig const& relic, RelicRuntimeAttribute attribute) const
+    {
+        switch (attribute)
+        {
+            case RELIC_ATTR_AGILITY: return relic.agilityWeight;
+            case RELIC_ATTR_STRENGTH: return relic.strengthWeight;
+            case RELIC_ATTR_INTELLECT: return relic.intellectWeight;
+            case RELIC_ATTR_SPIRIT: return relic.spiritWeight;
+            case RELIC_ATTR_STAMINA: return relic.staminaWeight;
+            case RELIC_ATTR_HIT_RATING: return relic.hitRatingWeight;
+            case RELIC_ATTR_CRIT_RATING: return relic.critRatingWeight;
+            case RELIC_ATTR_HASTE_RATING: return relic.hasteRatingWeight;
+            case RELIC_ATTR_ATTACK_POWER: return relic.attackPowerWeight;
+            case RELIC_ATTR_SPELL_POWER: return relic.spellPowerWeight;
+            default: return 0;
+        }
+    }
+
+    float GetRelicSlotScale(AbyssRelicConfig const& relic, uint8 slot) const
+    {
+        switch (slot)
+        {
+            case ABYSS_RELIC_SLOT_MAIN:
+                return 1.0f;
+            case ABYSS_RELIC_SLOT_SUB_1:
+            case ABYSS_RELIC_SLOT_SUB_2:
+            case ABYSS_RELIC_SLOT_SUB_3:
+            case ABYSS_RELIC_SLOT_SUB_4:
+            case ABYSS_RELIC_SLOT_SUB_5:
+                return ClampRelicScale(relic.subSlotScale > 0.0f ? relic.subSlotScale : 0.5f);
+            case ABYSS_RELIC_SLOT_PHASE:
+                return 1.25f;
+            case ABYSS_RELIC_SLOT_ULTIMATE:
+                return 1.60f;
+            default:
+                return 0.0f;
+        }
+    }
+
+    float GetRelicBaseBudget(AbyssRelicConfig const& relic) const
+    {
+        switch (relic.relicType)
+        {
+            case 1:
+                return 12.0f + static_cast<float>(relic.actId) * 4.0f + static_cast<float>(std::min<uint16>(relic.relatedChapterId, 74)) * 0.50f;
+            case 2:
+                return 48.0f + static_cast<float>(relic.actId) * 8.0f;
+            case 3:
+                return 96.0f + static_cast<float>(relic.actId) * 10.0f;
+            default:
+                return 0.0f;
+        }
+    }
+
+    float GetRelicModeScale(Player* player) const
+    {
+        if (!player)
+            return 1.0f;
+
+        PlayerAbyssRunState const* runState = GetPlayerRunState(player->GetGUID().GetCounter());
+        if (!runState)
+            return 1.0f;
+
+        switch (runState->modeType)
+        {
+            case 2: return 1.10f;
+            case 3: return 1.25f;
+            case 4: return 1.40f;
+            default: return 1.0f;
+        }
+    }
+
+    int32 GetRelicAttributeContribution(AbyssRelicConfig const& relic, uint8 slot, RelicRuntimeAttribute attribute, float modeScale) const
+    {
+        uint32 totalWeight = GetRelicWeightTotal(relic);
+        uint32 weight = GetRelicAttributeWeight(relic, attribute);
+        if (totalWeight == 0 || weight == 0)
+            return 0;
+
+        float slotScale = GetRelicSlotScale(relic, slot);
+        if (slotScale <= 0.0f)
+            return 0;
+
+        float budget = GetRelicBaseBudget(relic) * slotScale * std::max(modeScale, 0.1f);
+        float value = budget * (static_cast<float>(weight) / static_cast<float>(totalWeight));
+        return static_cast<int32>(std::lround(value));
+    }
+
+    int32 GetPlayerRuntimeRelicAttributeBonus(Player* player, RelicRuntimeAttribute attribute) const
+    {
+        if (!player)
+            return 0;
+
+        PlayerAbyssData const* data = GetPlayerData(player->GetGUID().GetCounter());
+        if (!data)
+            return 0;
+
+        std::array<std::pair<uint8, uint32>, 8> slots =
+        {{
+            { ABYSS_RELIC_SLOT_MAIN, data->mainRelic },
+            { ABYSS_RELIC_SLOT_SUB_1, data->subRelic1 },
+            { ABYSS_RELIC_SLOT_SUB_2, data->subRelic2 },
+            { ABYSS_RELIC_SLOT_SUB_3, data->subRelic3 },
+            { ABYSS_RELIC_SLOT_SUB_4, data->subRelic4 },
+            { ABYSS_RELIC_SLOT_SUB_5, data->subRelic5 },
+            { ABYSS_RELIC_SLOT_PHASE, data->phaseArtifact },
+            { ABYSS_RELIC_SLOT_ULTIMATE, data->ultimateArtifact }
+        }};
+
+        float modeScale = GetRelicModeScale(player);
+        int32 total = 0;
+        for (auto const& slotEntry : slots)
+        {
+            if (slotEntry.second == 0)
+                continue;
+
+            AbyssRelicConfig const* relic = GetRelicConfig(slotEntry.second);
+            if (!relic)
+                continue;
+
+            total += GetRelicAttributeContribution(*relic, slotEntry.first, attribute, modeScale);
+        }
+
+        return total;
+    }
+
     float GetPlayerRuntimeProgressionBonusPct(Player* player) const
     {
         if (!player)
@@ -3281,6 +3692,12 @@ private:
             bonus += 2.0f * GetConfiguredSubRelicScale(data->subRelic1);
         if (data->subRelic2 != 0)
             bonus += 2.0f * GetConfiguredSubRelicScale(data->subRelic2);
+        if (data->subRelic3 != 0)
+            bonus += 2.0f * GetConfiguredSubRelicScale(data->subRelic3);
+        if (data->subRelic4 != 0)
+            bonus += 2.0f * GetConfiguredSubRelicScale(data->subRelic4);
+        if (data->subRelic5 != 0)
+            bonus += 2.0f * GetConfiguredSubRelicScale(data->subRelic5);
         if (data->phaseArtifact != 0)
             bonus += 5.0f;
         if (data->ultimateArtifact != 0)
@@ -3324,11 +3741,61 @@ private:
             bonus += 3.0f * GetConfiguredSubRelicScale(runState->runSubRelic1);
         if (runState->runSubRelic2 != 0)
             bonus += 3.0f * GetConfiguredSubRelicScale(runState->runSubRelic2);
+        if (runState->runSubRelic3 != 0)
+            bonus += 3.0f * GetConfiguredSubRelicScale(runState->runSubRelic3);
+        if (runState->runSubRelic4 != 0)
+            bonus += 3.0f * GetConfiguredSubRelicScale(runState->runSubRelic4);
+        if (runState->runSubRelic5 != 0)
+            bonus += 3.0f * GetConfiguredSubRelicScale(runState->runSubRelic5);
 
         return bonus;
     }
 
 public:
+
+    int32 GetPlayerRuntimeRelicStatFlatBonus(Player* player, Stats stat) const
+    {
+        switch (stat)
+        {
+            case STAT_AGILITY: return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_AGILITY);
+            case STAT_STRENGTH: return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_STRENGTH);
+            case STAT_INTELLECT: return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_INTELLECT);
+            case STAT_SPIRIT: return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_SPIRIT);
+            case STAT_STAMINA: return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_STAMINA);
+            default: return 0;
+        }
+    }
+
+    int32 GetPlayerRuntimeRelicRatingBonus(Player* player, CombatRating cr) const
+    {
+        switch (cr)
+        {
+            case CR_HIT_MELEE:
+            case CR_HIT_RANGED:
+            case CR_HIT_SPELL:
+                return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_HIT_RATING);
+            case CR_CRIT_MELEE:
+            case CR_CRIT_RANGED:
+            case CR_CRIT_SPELL:
+                return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_CRIT_RATING);
+            case CR_HASTE_MELEE:
+            case CR_HASTE_RANGED:
+            case CR_HASTE_SPELL:
+                return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_HASTE_RATING);
+            default:
+                return 0;
+        }
+    }
+
+    int32 GetPlayerRuntimeRelicAttackPowerBonus(Player* player) const
+    {
+        return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_ATTACK_POWER);
+    }
+
+    int32 GetPlayerRuntimeRelicSpellPowerBonus(Player* player) const
+    {
+        return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_SPELL_POWER);
+    }
 
     float GetPlayerRuntimeStatBonusPct(Player* player) const
     {
@@ -3394,6 +3861,197 @@ public:
         player->UpdateAllRatings();
     }
 
+    // 套装系统：检测玩家穿戴的底材件数并施加/移除buff
+    void RefreshPlayerSetBonuses(Player* player)
+    {
+        if (!player)
+            return;
+
+        uint32 guid = player->GetGUID().GetCounter();
+
+        // 统计每个套装ID穿了几件
+        std::unordered_map<uint32, uint8> setCounts;
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        {
+            Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+            if (!item)
+                continue;
+
+            auto itr = _equipmentTemplates.find(item->GetEntry());
+            if (itr == _equipmentTemplates.end())
+                continue;
+
+            if (itr->second.setId == 0)
+                continue;
+
+            setCounts[itr->second.setId]++;
+        }
+
+        auto& oldStates = _playerSetBonusStates[guid];
+
+        // 移除不再满足条件的套装buff
+        for (auto itr = oldStates.begin(); itr != oldStates.end(); )
+        {
+            uint32 setId = itr->first;
+            PlayerSetBonusState& state = itr->second;
+            uint8 newCount = 0;
+            auto countItr = setCounts.find(setId);
+            if (countItr != setCounts.end())
+                newCount = countItr->second;
+
+            bool shouldHaveTwo = newCount >= 2;
+            bool shouldHaveFour = newCount >= 4;
+
+            if (state.hasTwoPieceBonus && !shouldHaveTwo)
+            {
+                RemoveSetBonusAura(player, setId, 2);
+                state.hasTwoPieceBonus = false;
+            }
+            if (state.hasFourPieceBonus && !shouldHaveFour)
+            {
+                RemoveSetBonusAura(player, setId, 4);
+                state.hasFourPieceBonus = false;
+            }
+
+            state.pieceCount = newCount;
+            if (newCount == 0)
+                itr = oldStates.erase(itr);
+            else
+                ++itr;
+        }
+
+        // 添加新满足条件的套装buff
+        for (auto& [setId, count] : setCounts)
+        {
+            auto& state = oldStates[setId];
+            state.setId = setId;
+            state.pieceCount = count;
+
+            if (count >= 2 && !state.hasTwoPieceBonus)
+            {
+                ApplySetBonusAura(player, setId, 2);
+                state.hasTwoPieceBonus = true;
+            }
+            if (count >= 4 && !state.hasFourPieceBonus)
+            {
+                ApplySetBonusAura(player, setId, 4);
+                state.hasFourPieceBonus = true;
+            }
+        }
+    }
+
+    void CleanupPlayerSetBonuses(uint32 guid)
+    {
+        _playerSetBonusStates.erase(guid);
+    }
+
+    AbyssSetBonusConfig const* GetSetBonusConfig(uint32 setId) const
+    {
+        auto itr = _setBonusConfigs.find(setId);
+        return itr != _setBonusConfigs.end() ? &itr->second : nullptr;
+    }
+
+private:
+    // 应用套装buff：通过修改玩家属性实现
+    void ApplySetBonusAura(Player* player, uint32 setId, uint8 tier)
+    {
+        AbyssSetBonusConfig const* config = GetSetBonusConfig(setId);
+        if (!config)
+            return;
+
+        if (tier == 2)
+        {
+            // 2件效果：直接加属性
+            if (config->twoPieceAllStat > 0)
+            {
+                player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, TOTAL_VALUE, float(config->twoPieceAllStat), true);
+                player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, TOTAL_VALUE, float(config->twoPieceAllStat), true);
+                player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, TOTAL_VALUE, float(config->twoPieceAllStat), true);
+                player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, TOTAL_VALUE, float(config->twoPieceAllStat), true);
+                player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, TOTAL_VALUE, float(config->twoPieceAllStat), true);
+            }
+            if (config->twoPieceCrit > 0)
+                player->ApplyRatingMod(CR_CRIT_MELEE, config->twoPieceCrit, true);
+            if (config->twoPieceHaste > 0)
+                player->ApplyRatingMod(CR_HASTE_MELEE, config->twoPieceHaste, true);
+            if (config->twoPieceAP > 0)
+                player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, float(config->twoPieceAP), true);
+            if (config->twoPieceSP > 0)
+                player->HandleStatModifier(UNIT_MOD_DAMAGE_MAINHAND, TOTAL_VALUE, float(config->twoPieceSP), true);
+
+            ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff00[套装] 已激活 %s (2件)：%s|r",
+                config->setName.c_str(), config->twoPieceDesc.c_str());
+        }
+        else if (tier == 4)
+        {
+            // 4件效果：加属性 + 特殊效果标记
+            if (config->fourPieceCrit > 0)
+                player->ApplyRatingMod(CR_CRIT_MELEE, config->fourPieceCrit, true);
+            if (config->fourPieceHaste > 0)
+                player->ApplyRatingMod(CR_HASTE_MELEE, config->fourPieceHaste, true);
+            if (config->fourPieceHpPct > 0)
+            {
+                float bonus = player->GetMaxHealth() * config->fourPieceHpPct / 100.0f;
+                player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, bonus, true);
+            }
+
+            ChatHandler(player->GetSession()).PSendSysMessage("|cffff8000[套装] 已激活 %s (4件)：%s|r",
+                config->setName.c_str(), config->fourPieceDesc.c_str());
+        }
+
+        player->UpdateAllStats();
+        player->UpdateAllRatings();
+    }
+
+    void RemoveSetBonusAura(Player* player, uint32 setId, uint8 tier)
+    {
+        AbyssSetBonusConfig const* config = GetSetBonusConfig(setId);
+        if (!config)
+            return;
+
+        if (tier == 2)
+        {
+            if (config->twoPieceAllStat > 0)
+            {
+                player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, TOTAL_VALUE, float(config->twoPieceAllStat), false);
+                player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, TOTAL_VALUE, float(config->twoPieceAllStat), false);
+                player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, TOTAL_VALUE, float(config->twoPieceAllStat), false);
+                player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, TOTAL_VALUE, float(config->twoPieceAllStat), false);
+                player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, TOTAL_VALUE, float(config->twoPieceAllStat), false);
+            }
+            if (config->twoPieceCrit > 0)
+                player->ApplyRatingMod(CR_CRIT_MELEE, config->twoPieceCrit, false);
+            if (config->twoPieceHaste > 0)
+                player->ApplyRatingMod(CR_HASTE_MELEE, config->twoPieceHaste, false);
+            if (config->twoPieceAP > 0)
+                player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, float(config->twoPieceAP), false);
+            if (config->twoPieceSP > 0)
+                player->HandleStatModifier(UNIT_MOD_DAMAGE_MAINHAND, TOTAL_VALUE, float(config->twoPieceSP), false);
+
+            ChatHandler(player->GetSession()).PSendSysMessage("|cffff0000[套装] 已失去 %s (2件) 效果|r",
+                config->setName.c_str());
+        }
+        else if (tier == 4)
+        {
+            if (config->fourPieceCrit > 0)
+                player->ApplyRatingMod(CR_CRIT_MELEE, config->fourPieceCrit, false);
+            if (config->fourPieceHaste > 0)
+                player->ApplyRatingMod(CR_HASTE_MELEE, config->fourPieceHaste, false);
+            if (config->fourPieceHpPct > 0)
+            {
+                float bonus = player->GetMaxHealth() * config->fourPieceHpPct / 100.0f;
+                player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, bonus, false);
+            }
+
+            ChatHandler(player->GetSession()).PSendSysMessage("|cffff0000[套装] 已失去 %s (4件) 效果|r",
+                config->setName.c_str());
+        }
+
+        player->UpdateAllStats();
+        player->UpdateAllRatings();
+    }
+
+public:
     float GetBossModeModifier(AbyssBossConfig const& config, uint8 modeType) const
     {
         switch (modeType)
@@ -3748,7 +4406,7 @@ public:
             if (inferredCurrentChapter < docking.chapterId)
                 inferredCurrentChapter = docking.chapterId;
 
-            if (docking.taskType == 4 && (rewarded || questStatus == QUEST_STATUS_COMPLETE))
+            if (docking.taskType == 5 && (rewarded || questStatus == QUEST_STATUS_COMPLETE))
             {
                 if (inferredHighestChapter < docking.chapterId)
                     inferredHighestChapter = docking.chapterId;
@@ -3764,7 +4422,7 @@ public:
 
         if (inferredCurrentChapter != 0)
         {
-            AbyssTaskDocking const* currentComplete = GetTaskDockingForChapter(inferredCurrentChapter, 4);
+            AbyssTaskDocking const* currentComplete = GetTaskDockingForChapter(inferredCurrentChapter, 5);
             AbyssTaskDocking const* currentStart = GetTaskDockingForChapter(inferredCurrentChapter, 1);
 
             if (currentComplete)
@@ -3851,7 +4509,7 @@ public:
                 }
             }
 
-            AbyssTaskDocking const* corruptionTask = GetTaskDockingForChapter(chapter.chapterId, 4);
+            AbyssTaskDocking const* corruptionTask = GetTaskDockingForChapter(chapter.chapterId, 5);
             if (corruptionTask)
             {
                 QuestStatus status = player->GetQuestStatus(corruptionTask->questId);
@@ -4024,6 +4682,13 @@ public:
         if (requestedModeType == 0)
             requestedModeType = 1;
 
+        if (requestedModeType == 1)
+        {
+            std::string switchFailureReason;
+            if (TryEnterTriggeredStoryMode(player, chapterId, &switchFailureReason))
+                return true;
+        }
+
         if (requestedModeType >= 2)
         {
             std::string switchFailureReason;
@@ -4115,6 +4780,9 @@ public:
         state.runMainRelic = playerItr->second.mainRelic;
         state.runSubRelic1 = playerItr->second.subRelic1;
         state.runSubRelic2 = playerItr->second.subRelic2;
+        state.runSubRelic3 = playerItr->second.subRelic3;
+        state.runSubRelic4 = playerItr->second.subRelic4;
+        state.runSubRelic5 = playerItr->second.subRelic5;
         state.anchorBossKillMask = 0;
         state.abyssBossSummoned = false;
         state.cacheBossSummoned = false;
@@ -4236,6 +4904,78 @@ public:
         return true;
     }
 
+    bool TryEnterTriggeredStoryMode(Player* player, uint16 chapterId, std::string* failureReason)
+    {
+        if (failureReason)
+            failureReason->clear();
+
+        if (!player)
+        {
+            if (failureReason)
+                *failureReason = "no_player";
+            return false;
+        }
+
+        if (!_worldDataLoaded)
+            return false;
+
+        uint32 guid = player->GetGUID().GetCounter();
+        auto runItr = _playerRunStates.find(guid);
+        if (runItr == _playerRunStates.end())
+            return false;
+
+        auto playerItr = _playerData.find(guid);
+        if (playerItr == _playerData.end())
+        {
+            if (failureReason)
+                *failureReason = "player_data_missing";
+            return false;
+        }
+
+        PlayerAbyssRunState& state = runItr->second;
+        PlayerAbyssData& data = playerItr->second;
+        if (state.currentChapterId == 0 || state.currentChapterId != chapterId || state.modeType != 1)
+            return false;
+
+        AbyssChapterConfig const* chapterConfig = GetChapterConfig(state.currentChapterId);
+        if (!chapterConfig)
+            return false;
+
+        if (!IsChapterModeUnlocked(player, data, *chapterConfig, 1))
+        {
+            if (failureReason)
+                *failureReason = "mode_locked";
+            return false;
+        }
+
+        PlayerAbyssProcState& procState = GetOrCreatePlayerProcState(guid);
+        float x = player->GetPositionX();
+        float y = player->GetPositionY();
+        float z = player->GetPositionZ();
+        float o = player->GetOrientation();
+
+        if (procState.hasPromptPosition)
+        {
+            x = procState.lastPromptX;
+            y = procState.lastPromptY;
+            z = procState.lastPromptZ;
+            o = procState.lastPromptO;
+        }
+
+        Creature* summon = player->SummonCreature(chapterConfig->anchorBossEntry, x, y, z, o, TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, 300000);
+        if (!summon)
+        {
+            if (failureReason)
+                *failureReason = "summon_failed";
+            return false;
+        }
+
+        summon->SetInCombatWith(player);
+        summon->AddThreat(player, 1000.0f);
+        procState.abyssModePromptShown = true;
+        return true;
+    }
+
     bool HandleCreatureKill(Player* player, Creature* creature)
     {
         if (!player || !creature || !_worldDataLoaded)
@@ -4245,15 +4985,6 @@ public:
         uint32 creatureEntry = creature->GetEntry();
 
         AbyssChapterConfig const* mappedChapterByMap = GetChapterConfigByMapId(player->GetMapId());
-        if (mappedChapterByMap)
-        {
-            LOG_INFO("module", "mod-abyss-cultivation: HandleCreatureKill player={} ({}) map={} chapterByMap={} creatureEntry={}",
-                player->GetName(),
-                playerGuid,
-                player->GetMapId(),
-                mappedChapterByMap->chapterId,
-                creatureEntry);
-        }
 
         bool hadActiveRun = false;
         auto runItr = _playerRunStates.find(playerGuid);
@@ -4265,29 +4996,12 @@ public:
 
             uint64 lazyTrackedMaskBit = GetTrackedBossMaskBit(*chapterByMap, creatureEntry);
             bool isLazyBootstrapKill = lazyTrackedMaskBit == (1ULL << 0) || lazyTrackedMaskBit == (1ULL << 1);
-            LOG_INFO("module", "mod-abyss-cultivation: no active run for player {} ({}) map {} chapter {} creature {} lazyTrackedMaskBit={} bootstrapEligible={}",
-                player->GetName(),
-                playerGuid,
-                player->GetMapId(),
-                chapterByMap->chapterId,
-                creatureEntry,
-                lazyTrackedMaskBit,
-                isLazyBootstrapKill);
-
             if (!isLazyBootstrapKill)
                 return false;
 
             std::string bootstrapFailureReason;
             if (!BeginPlayerRun(player, chapterByMap->chapterId, 1, 0, &bootstrapFailureReason))
             {
-                LOG_INFO("module", "mod-abyss-cultivation: skipped lazy story run bootstrap for player {} ({}) map {} chapter {} creature {} reason={}",
-                    player->GetName(),
-                    playerGuid,
-                    player->GetMapId(),
-                    chapterByMap->chapterId,
-                    creatureEntry,
-                    bootstrapFailureReason);
-
                 return false;
             }
 
@@ -4295,12 +5009,6 @@ public:
             if (runItr == _playerRunStates.end())
                 return false;
 
-            LOG_INFO("module", "mod-abyss-cultivation: lazily bootstrapped story run for player {} ({}) map {} chapter {} on boss kill {}",
-                player->GetName(),
-                playerGuid,
-                player->GetMapId(),
-                chapterByMap->chapterId,
-                creatureEntry);
         }
         else
         {
@@ -4337,10 +5045,13 @@ public:
             changed = true;
         }
 
-        if (trackedMaskBit != 0)
+        if (trackedMaskBit == (1ULL << 0) || trackedMaskBit == (1ULL << 1))
         {
-            LOG_INFO("module", "mod-abyss-cultivation: player {} ({}) killed tracked creature {} for chapter {} mask={}",
-                player->GetName(), playerGuid, creatureEntry, chapterConfig->chapterId, state.anchorBossKillMask);
+            procState.lastPromptX = creature->GetPositionX();
+            procState.lastPromptY = creature->GetPositionY();
+            procState.lastPromptZ = creature->GetPositionZ();
+            procState.lastPromptO = creature->GetOrientation();
+            procState.hasPromptPosition = true;
         }
 
         bool readyForPrompt = IsAbyssSummonReady(*chapterConfig, state);
@@ -4350,20 +5061,6 @@ public:
             uint32 availableModeMask = GetChapterUnlockedModeMask(player, data, *chapterConfig);
             if (hadActiveRun)
                 availableModeMask &= (GetModeTypeMask(2) | GetModeTypeMask(3) | GetModeTypeMask(4));
-
-            if (trackedMaskBit != 0)
-            {
-                LOG_INFO("module", "mod-abyss-cultivation: story-mode kill player={} ({}) chapter={} creature={} trackedMaskBit={} anchorMask={} availableModeMask={} readyForPrompt={} promptShown={}",
-                    player->GetName(),
-                    playerGuid,
-                    chapterConfig->chapterId,
-                    creatureEntry,
-                    trackedMaskBit,
-                    state.anchorBossKillMask,
-                    availableModeMask,
-                    readyForPrompt,
-                    procState.abyssModePromptShown);
-            }
 
             if (availableModeMask != 0 &&
                 readyForPrompt &&
@@ -4592,7 +5289,7 @@ public:
                 changed = true;
             }
         }
-        else if (docking->taskType == 4)
+        else if (docking->taskType == 5)
         {
             if (data.highestChapter < docking->chapterId)
             {
@@ -4650,6 +5347,14 @@ public:
                 unlockedModeType = 3;
             }
         }
+        else if (docking->taskType == 5)
+        {
+            if (UnlockChapterMode(player, docking->chapterId, 4))
+            {
+                changed = true;
+                unlockedModeType = 4;
+            }
+        }
 
         changed = NormalizePlayerData(guid, data) || changed;
 
@@ -4671,7 +5376,7 @@ public:
                     static_cast<uint32>(data.storyState));
             }
 
-            if (docking->taskType == 4)
+            if (docking->taskType == 5)
             {
                 if (runItr != _playerRunStates.end() && runItr->second.currentChapterId == docking->chapterId)
                 {
@@ -4707,6 +5412,8 @@ private:
     std::unordered_map<uint32, AbyssRelicConfig> _relicConfigs;
     std::unordered_map<uint32, AbyssBossConfig> _bossConfigs;
     std::unordered_map<uint32, AbyssEquipmentTemplate> _equipmentTemplates;
+    std::unordered_map<uint32, AbyssSetBonusConfig> _setBonusConfigs;
+    std::unordered_map<uint32 /*playerGuid*/, std::unordered_map<uint32 /*setId*/, PlayerSetBonusState>> _playerSetBonusStates;
     std::unordered_map<uint32, AbyssAffixTemplate> _affixTemplates;
     std::unordered_map<uint32, AbyssSpecialEffectTemplate> _specialEffectTemplates;
     std::unordered_map<uint32, AbyssTaskDocking> _taskDockings;
@@ -4782,14 +5489,6 @@ void SendAbyssModePrompt(Player* player, AbyssChapterConfig const& chapter, Play
             << modeMask << '|'
             << data.highestCorruptionTier;
 
-    LOG_INFO("module", "mod-abyss-cultivation: sending MODE_PROMPT to player {} ({}) chapter={} name='{}' modeMask={} highestCorruptionTier={}",
-        player->GetName(),
-        player->GetGUID().GetCounter(),
-        chapter.chapterId,
-        chapter.chapterName,
-        modeMask,
-        data.highestCorruptionTier);
-
     SendAbyssPayload(player, payload.str());
 }
 
@@ -4823,6 +5522,9 @@ void SendAbyssStateToAddon(Player* player)
             << playerData->mainRelic << '|'
             << playerData->subRelic1 << '|'
             << playerData->subRelic2 << '|'
+            << playerData->subRelic3 << '|'
+            << playerData->subRelic4 << '|'
+            << playerData->subRelic5 << '|'
             << playerData->phaseArtifact << '|'
             << playerData->ultimateArtifact << '|'
             << playerData->highestCorruptionTier << '|'
@@ -4874,7 +5576,15 @@ void SendAbyssChapterListToAddon(Player* player)
                 << chapter->requiredCultivationLevel << '^'
                 << chapter->startQuestId << '^'
                 << chapter->completeQuestId << '^'
-                << (playerData ? sAbyssCultivationMgr->GetChapterUnlockedModeMask(player, *playerData, *chapter) : 0u);
+                << (playerData ? sAbyssCultivationMgr->GetChapterUnlockedModeMask(player, *playerData, *chapter) : 0u) << '^'
+                << chapter->anchorBossEntry << '^'
+                << SanitizeAddonText(sAbyssCultivationMgr->GetBossDisplayName(chapter->anchorBossEntry)) << '^'
+                << chapter->finalBossEntry << '^'
+                << SanitizeAddonText(sAbyssCultivationMgr->GetBossDisplayName(chapter->finalBossEntry)) << '^'
+                << chapter->abyssBossEntry << '^'
+                << SanitizeAddonText(sAbyssCultivationMgr->GetBossDisplayName(chapter->abyssBossEntry)) << '^'
+                << chapter->cacheBossEntry << '^'
+                << SanitizeAddonText(sAbyssCultivationMgr->GetBossDisplayName(chapter->cacheBossEntry));
     }
 
     SendAbyssPayload(player, payload.str());
@@ -4913,6 +5623,7 @@ void SendAbyssRelicsToAddon(Player* player)
 
         bool owned = sAbyssCultivationMgr->PlayerOwnsCollectedRelic(guid, relic->itemId);
         uint8 activeSlot = (owned && playerData) ? sAbyssCultivationMgr->GetActiveRelicSlot(*playerData, relic->itemId) : 0;
+        std::string iconPath = GetItemIconPathForAddon(relic->itemId);
 
         payload << relic->itemId << '^'
                 << SanitizeAddonText(relic->name) << '^'
@@ -4925,7 +5636,8 @@ void SendAbyssRelicsToAddon(Player* player)
                 << static_cast<uint32>(relic->recommendedSlot) << '^'
                 << relic->subSlotScale << '^'
                 << static_cast<uint32>(activeSlot) << '^'
-                << SanitizeAddonText(relic->briefDescription);
+                << SanitizeAddonText(relic->briefDescription) << '^'
+                << SanitizeAddonText(iconPath);
     }
 
     SendAbyssPayload(player, payload.str());
@@ -4965,6 +5677,7 @@ void SendAbyssEquipmentsToAddon(Player* player)
         first = false;
 
         AbyssChapterConfig const* sourceChapter = sAbyssCultivationMgr->GetChapterConfig(equipment->sourceChapter);
+        std::string iconPath = GetItemIconPathForAddon(equipment->itemId);
 
         payload << equipment->itemId << '^'
                 << SanitizeAddonText(equipment->itemName) << '^'
@@ -4977,7 +5690,35 @@ void SendAbyssEquipmentsToAddon(Player* player)
                 << equipment->baseItemLevel << '^'
                 << (equipment->fromCacheBoss ? 1 : 0) << '^'
                 << (equipment->requiresFragments ? 1 : 0) << '^'
-                << SanitizeAddonText(equipment->flavorText);
+                << SanitizeAddonText(equipment->flavorText) << '^'
+                << SanitizeAddonText(iconPath);
+    }
+
+    SendAbyssPayload(player, payload.str());
+}
+
+void SendAbyssSetBonusesToAddon(Player* player)
+{
+    if (!player)
+        return;
+
+    std::ostringstream payload;
+    payload << "SET_BONUSES:";
+    bool first = true;
+    for (auto const& [setId, config] : sAbyssCultivationMgr->GetSetBonusConfigs())
+    {
+        if (!config.enabled)
+            continue;
+        if (!first)
+            payload << '~';
+        first = false;
+
+        payload << config.setId << '^'
+                << SanitizeAddonText(config.setName) << '^'
+                << static_cast<uint32>(config.actId) << '^'
+                << static_cast<uint32>(config.sourceMode) << '^'
+                << SanitizeAddonText(config.twoPieceDesc) << '^'
+                << SanitizeAddonText(config.fourPieceDesc);
     }
 
     SendAbyssPayload(player, payload.str());
@@ -5273,6 +6014,7 @@ public:
         sAbyssCultivationMgr->LoadRelicConfigs();
         sAbyssCultivationMgr->LoadBossConfigs();
         sAbyssCultivationMgr->LoadEquipmentTemplates();
+        sAbyssCultivationMgr->LoadSetBonusConfigs();
         sAbyssCultivationMgr->LoadAffixTemplates();
         sAbyssCultivationMgr->LoadSpecialEffectTemplates();
         sAbyssCultivationMgr->LoadTaskDockings();
@@ -5303,6 +6045,7 @@ public:
         sAbyssCultivationMgr->LoadRelicConfigs();
         sAbyssCultivationMgr->LoadBossConfigs();
         sAbyssCultivationMgr->LoadEquipmentTemplates();
+        sAbyssCultivationMgr->LoadSetBonusConfigs();
         sAbyssCultivationMgr->LoadAffixTemplates();
         sAbyssCultivationMgr->LoadSpecialEffectTemplates();
         sAbyssCultivationMgr->LoadTaskDockings();
@@ -5338,7 +6081,10 @@ public:
             PLAYERHOOK_ON_AFTER_UPDATE_ATTACK_POWER_AND_DAMAGE,
             PLAYERHOOK_ON_AFTER_UPDATE_ARMOR,
             PLAYERHOOK_ON_AFTER_UPDATE_SPELL_DAMAGE_AND_HEALING,
-            PLAYERHOOK_ON_DELETE
+            PLAYERHOOK_ON_AFTER_UPDATE_RATING,
+            PLAYERHOOK_ON_DELETE,
+            PLAYERHOOK_ON_EQUIP,
+            PLAYERHOOK_ON_AFTER_MOVE_ITEM_FROM_INVENTORY
         })
     {
     }
@@ -5361,6 +6107,7 @@ public:
 
         bool changed = sAbyssCultivationMgr->SyncPlayerData(player, true);
         sAbyssCultivationMgr->RefreshPlayerRuntimeStats(player);
+        sAbyssCultivationMgr->RefreshPlayerSetBonuses(player);
 
         if (!IsDebugEnabled())
             return;
@@ -5400,6 +6147,23 @@ public:
         sAbyssCultivationMgr->ClearPlayerData(guid);
         sAbyssCultivationMgr->ClearPlayerRunState(guid);
         sAbyssCultivationMgr->ClearPlayerProcState(guid);
+        sAbyssCultivationMgr->CleanupPlayerSetBonuses(guid);
+    }
+
+    void OnPlayerEquip(Player* player, Item* /*it*/, uint8 /*bag*/, uint8 /*slot*/, bool /*update*/) override
+    {
+        if (!player || !IsModuleEnabled())
+            return;
+
+        sAbyssCultivationMgr->RefreshPlayerSetBonuses(player);
+    }
+
+    void OnPlayerAfterMoveItemFromInventory(Player* player, Item* /*it*/, uint8 /*bag*/, uint8 /*slot*/, bool /*update*/) override
+    {
+        if (!player || !IsModuleEnabled())
+            return;
+
+        sAbyssCultivationMgr->RefreshPlayerSetBonuses(player);
     }
 
     void OnPlayerDelete(ObjectGuid guid, uint32 /*accountId*/) override
@@ -5423,7 +6187,7 @@ public:
             return true;
 
         AbyssTaskDocking const* docking = sAbyssCultivationMgr->GetTaskDocking(qinfo->GetQuestId());
-        if (!docking || docking->taskType < 2 || docking->taskType > 4)
+        if (!docking || docking->taskType < 2 || docking->taskType > 5)
             return true;
 
         AbyssChapterConfig const* chapterConfig = sAbyssCultivationMgr->GetChapterConfig(docking->chapterId);
@@ -5435,6 +6199,8 @@ public:
             requiredEntry = chapterConfig->anchorBossEntry;
         else if (docking->taskType == 3)
             requiredEntry = chapterConfig->anchorBossEntry;
+        else if (docking->taskType == 4)
+            requiredEntry = chapterConfig->abyssBossEntry;
         else
             requiredEntry = chapterConfig->abyssBossEntry;
 
@@ -5447,7 +6213,7 @@ public:
             if (!runState || runState->currentChapterId != docking->chapterId)
                 return false;
 
-            uint8 requiredMode = docking->taskType == 3 ? 1 : 2;
+            uint8 requiredMode = docking->taskType == 3 ? 1 : (docking->taskType == 4 ? 2 : 3);
             if (runState->modeType != requiredMode)
                 return false;
         }
@@ -5506,6 +6272,7 @@ public:
         if (command == "REQ_EQUIPMENTS")
         {
             SendAbyssEquipmentsToAddon(player);
+            SendAbyssSetBonusesToAddon(player);
             return;
         }
 
@@ -5650,7 +6417,7 @@ public:
             amount = static_cast<uint32>(static_cast<float>(amount) * (1.0f + bonusPct / 100.0f));
     }
 
-    void OnPlayerAfterUpdateStat(Player* player, Stats /*stat*/, float& value) override
+    void OnPlayerAfterUpdateStat(Player* player, Stats stat, float& value) override
     {
         if (!player || !IsModuleEnabled())
             return;
@@ -5658,6 +6425,10 @@ public:
         float bonusPct = sAbyssCultivationMgr->GetPlayerRuntimeStatBonusPct(player);
         if (bonusPct != 0.0f)
             value *= (1.0f + bonusPct / 100.0f);
+
+        int32 flatBonus = sAbyssCultivationMgr->GetPlayerRuntimeRelicStatFlatBonus(player, stat);
+        if (flatBonus != 0)
+            value += static_cast<float>(flatBonus);
     }
 
     void OnPlayerAfterUpdateMaxPower(Player* player, Powers& /*power*/, float& value) override
@@ -5680,7 +6451,7 @@ public:
             value *= (1.0f + bonusPct / 100.0f);
     }
 
-    void OnPlayerAfterUpdateAttackPowerAndDamage(Player* player, float& /*level*/, float& /*base_attPower*/, float& /*attPowerMod*/, float& attPowerMultiplier, bool /*ranged*/) override
+    void OnPlayerAfterUpdateAttackPowerAndDamage(Player* player, float& /*level*/, float& /*base_attPower*/, float& attPowerMod, float& attPowerMultiplier, bool /*ranged*/) override
     {
         if (!player || !IsModuleEnabled())
             return;
@@ -5688,6 +6459,10 @@ public:
         float bonusPct = sAbyssCultivationMgr->GetPlayerRuntimeAttackBonusPct(player);
         if (bonusPct != 0.0f)
             attPowerMultiplier += bonusPct / 100.0f;
+
+        int32 flatAttackPower = sAbyssCultivationMgr->GetPlayerRuntimeRelicAttackPowerBonus(player);
+        if (flatAttackPower != 0)
+            attPowerMod += static_cast<float>(flatAttackPower);
     }
 
     void OnPlayerAfterUpdateArmor(Player* player, float& value) override
@@ -5713,6 +6488,22 @@ public:
         healingBonus = static_cast<int32>(static_cast<float>(healingBonus) * multiplier);
         for (uint8 school = 0; school < 7; ++school)
             spellDamage[school] = static_cast<int32>(static_cast<float>(spellDamage[school]) * multiplier);
+
+        int32 flatSpellPower = sAbyssCultivationMgr->GetPlayerRuntimeRelicSpellPowerBonus(player);
+        if (flatSpellPower != 0)
+        {
+            healingBonus += flatSpellPower;
+            for (uint8 school = 0; school < 7; ++school)
+                spellDamage[school] += flatSpellPower;
+        }
+    }
+
+    void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int32& amount) override
+    {
+        if (!player || !IsModuleEnabled())
+            return;
+
+        amount += sAbyssCultivationMgr->GetPlayerRuntimeRelicRatingBonus(player, cr);
     }
 
     void OnPlayerCompleteQuest(Player* player, Quest const* quest) override
@@ -5810,10 +6601,13 @@ public:
             static_cast<uint32>(playerData->presetIndex),
             playerData->pityChapterId,
             playerData->lastUpdated);
-        handler->PSendSysMessage("  relics={} / {} / {} artifacts={} / {}",
+        handler->PSendSysMessage("  relics={} / {} / {} / {} / {} / {} artifacts={} / {}",
             playerData->mainRelic,
             playerData->subRelic1,
             playerData->subRelic2,
+            playerData->subRelic3,
+            playerData->subRelic4,
+            playerData->subRelic5,
             playerData->phaseArtifact,
             playerData->ultimateArtifact);
         handler->PSendSysMessage("  failCounts=abyss:{} cacheBoss:{}",
@@ -6037,14 +6831,17 @@ public:
 
         if (IsRelicStateActionToken(action))
         {
-            handler->PSendSysMessage("{} 的遗物槽位：主={} 副1={} 副2={} 阶段={} 终极={}",
+            handler->PSendSysMessage("{} 的遗物槽位：主={} 副1={} 副2={} 副3={} 副4={} 副5={} 阶段={} 终极={}",
                 target->GetName(),
                 playerData->mainRelic,
                 playerData->subRelic1,
                 playerData->subRelic2,
+                playerData->subRelic3,
+                playerData->subRelic4,
+                playerData->subRelic5,
                 playerData->phaseArtifact,
                 playerData->ultimateArtifact);
-            handler->SendSysMessage("用法：.深渊 遗物 列表 | .深渊 遗物 设置 <主|副1|副2|阶段|终极> <物品ID> | .深渊 遗物 清空 <槽位>");
+            handler->SendSysMessage("用法：.深渊 遗物 列表 | .深渊 遗物 设置 <主|副1|副2|副3|副4|副5|阶段|终极> <物品ID> | .深渊 遗物 清空 <槽位>");
             return true;
         }
 
@@ -6166,6 +6963,7 @@ public:
         sAbyssCultivationMgr->LoadRelicConfigs();
         sAbyssCultivationMgr->LoadBossConfigs();
         sAbyssCultivationMgr->LoadEquipmentTemplates();
+        sAbyssCultivationMgr->LoadSetBonusConfigs();
         sAbyssCultivationMgr->LoadAffixTemplates();
         sAbyssCultivationMgr->LoadSpecialEffectTemplates();
         sAbyssCultivationMgr->LoadTaskDockings();
@@ -7023,10 +7821,13 @@ private:
             runState->currentMapId,
             runState->corruptionTier,
             runState->startTime);
-        handler->PSendSysMessage("  activeRun relics={} / {} / {} killMask={} abyssSummoned={} cacheSummoned={} abyssReady={}",
+        handler->PSendSysMessage("  activeRun relics={} / {} / {} / {} / {} / {} killMask={} abyssSummoned={} cacheSummoned={} abyssReady={}",
             runState->runMainRelic,
             runState->runSubRelic1,
             runState->runSubRelic2,
+            runState->runSubRelic3,
+            runState->runSubRelic4,
+            runState->runSubRelic5,
             runState->anchorBossKillMask,
             runState->abyssBossSummoned,
             runState->cacheBossSummoned,

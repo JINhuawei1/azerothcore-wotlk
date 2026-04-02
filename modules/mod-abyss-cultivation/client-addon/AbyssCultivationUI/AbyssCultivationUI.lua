@@ -1,5 +1,6 @@
 -- 深渊修仙 UI
 -- 当前实现：专属装备、装备模板图鉴、剧情章节详情
+---@diagnostic disable: undefined-global
 
 local ADDON_PREFIX = "ABYSS_UI"
 
@@ -12,6 +13,16 @@ AbyssCultivationUI = AbyssCultivationUI or {}
 local App = AbyssCultivationUI
 App.iconButton = nil
 App.itemIconCache = App.itemIconCache or {}
+App.pendingItemInfo = App.pendingItemInfo or {}
+App.itemInfoRefreshQueued = false
+App.itemPrefetchQueue = App.itemPrefetchQueue or {}
+App.itemPrefetchQueued = App.itemPrefetchQueued or {}
+App.itemPrefetchIndex = App.itemPrefetchIndex or 1
+
+local ITEM_PREFETCH_BATCH = 12
+local ITEM_PREFETCH_INTERVAL = 0.03
+local ICON_TEX_COORD_MIN = 0.08
+local ICON_TEX_COORD_MAX = 0.92
 
 -- 状态数据
 App.state = {
@@ -25,6 +36,9 @@ App.state = {
     mainRelic = 0,
     subRelic1 = 0,
     subRelic2 = 0,
+    subRelic3 = 0,
+    subRelic4 = 0,
+    subRelic5 = 0,
     phaseArtifact = 0,
     ultimateArtifact = 0,
     highestCorruptionTier = 0,
@@ -44,6 +58,7 @@ App.relicList = {}  -- 有序列表 { { id, name, relicType, activeSlot, actId, 
 App.relicMap = {}   -- { [itemId] = relicData }
 App.equipmentList = {}
 App.equipmentMap = {}
+App.setBonusMap = {}  -- { [setKey] = { setId, setName, actId, sourceMode, twoPieceDesc, fourPieceDesc } }
 App.chapters = {}
 App.chapterMap = {}
 App.selectedChapterId = 0
@@ -60,6 +75,12 @@ App.equipmentFilterMode = 0
 App.equipmentOwnedOnly = false
 App.equipmentFilterSlot = 0
 App.equipmentFilterChapter = 0
+App.setOverviewFilterMode = 0
+App.setOverviewCurrentActOnly = false
+App.artifactFilterType = 0
+App.artifactOwnedOnly = false
+App.selectedRelicButtonKey = ""
+App.selectedArtifactButtonKey = ""
 App.chapterEnterMode = 1
 App.chapterLastActionText = ""
 App.modePrompt = {
@@ -96,19 +117,74 @@ local SLOTS = {
     { cmd = "main",     label = "主",   stateKey = "mainRelic" },
     { cmd = "sub1",     label = "副1",  stateKey = "subRelic1" },
     { cmd = "sub2",     label = "副2",  stateKey = "subRelic2" },
+    { cmd = "sub3",     label = "副3",  stateKey = "subRelic3" },
+    { cmd = "sub4",     label = "副4",  stateKey = "subRelic4" },
+    { cmd = "sub5",     label = "副5",  stateKey = "subRelic5" },
     { cmd = "phase",    label = "阶段", stateKey = "phaseArtifact" },
     { cmd = "ultimate", label = "终极", stateKey = "ultimateArtifact" },
 }
 
 -- 遗物类型可用的槽位索引
 local SLOT_MAP = {
-    [1] = { 1, 2, 3 },       -- 章节遗物 → 主/副1/副2
-    [2] = { 4 },              -- 阶段神器 → 阶段
-    [3] = { 5 },              -- 终极神器 → 终极
+    [1] = { 1, 2, 3, 4, 5, 6 }, -- 章节遗物 → 主/副1~副5
+    [2] = { 7 },                 -- 阶段神器 → 阶段
+    [3] = { 8 },                 -- 终极神器 → 终极
 }
 
 -- 工具函数
 local function ToNumber(v) return tonumber(v) or 0 end
+
+local function GetRelicTypeName(t)
+    local names = { [1] = "章节遗物", [2] = "阶段神器", [3] = "终极神器" }
+    return names[ToNumber(t)] or "未知"
+end
+
+local function GetRelicTypeColor(t)
+    local colors = { [1] = THEME.relicType1, [2] = THEME.relicType2, [3] = THEME.relicType3 }
+    return colors[ToNumber(t)] or THEME.muted
+end
+
+local function GetSlotName(slot)
+    local names = {
+        [1] = "主遗物",
+        [2] = "副遗物1",
+        [3] = "副遗物2",
+        [4] = "副遗物3",
+        [5] = "副遗物4",
+        [6] = "副遗物5",
+        [7] = "阶段神器",
+        [8] = "终极神器"
+    }
+    return names[ToNumber(slot)] or ""
+end
+
+local function GetChapterTypeName(t)
+    return ToNumber(t) == 2 and "团队本" or "五人本"
+end
+
+local function HasChapterModeUnlocked(chapter, modeType)
+    if not chapter then
+        return false
+    end
+    local mask = bit and bit.lshift(1, ToNumber(modeType) - 1)
+    if not mask or ToNumber(modeType) <= 0 then
+        return false
+    end
+    if App.modePrompt and App.modePrompt.active and App.modePrompt.chapterId == chapter.id then
+        if bit.band(App.modePrompt.modeMask or 0, mask) ~= 0 then
+            return true
+        end
+    end
+    return bit.band(chapter.unlockedModeMask or 0, mask) ~= 0
+end
+
+local function HasModeInMask(modeMask, modeType)
+    local mask = bit and bit.lshift(1, ToNumber(modeType) - 1)
+    if not mask or ToNumber(modeType) <= 0 then
+        return false
+    end
+    return bit.band(ToNumber(modeMask), mask) ~= 0
+end
 
 local function Split(text, sep)
     local result = {}
@@ -166,6 +242,74 @@ local GetEquipmentTypeColor
 local GetEquipmentSourceModeName
 local GetEquipmentSlotMaskName
 
+local function HideTooltipExtra()
+    if App.tooltipExtraFrame then
+        App.tooltipExtraFrame:Hide()
+    end
+end
+
+local function EnsureTooltipExtraFrame()
+    if App.tooltipExtraFrame then
+        return App.tooltipExtraFrame
+    end
+
+    local frame = CreateFrame("Frame", "AbyssCultivationUITooltipExtra", UIParent)
+    frame:SetFrameStrata("TOOLTIP")
+    frame:SetFrameLevel(GameTooltip:GetFrameLevel() + 8)
+    StylePanel(frame, 0.04, 0.03, 0.08, 0.97)
+    frame.lines = {}
+    frame:Hide()
+
+    if GameTooltip and not App.tooltipExtraHooked then
+        GameTooltip:HookScript("OnHide", HideTooltipExtra)
+        App.tooltipExtraHooked = true
+    end
+
+    App.tooltipExtraFrame = frame
+    return frame
+end
+
+local function ShowTooltipExtra(lines)
+    if not lines or #lines == 0 then
+        HideTooltipExtra()
+        return
+    end
+
+    local frame = EnsureTooltipExtraFrame()
+    local width = math.max(GameTooltip:GetWidth() or 280, 320)
+    local y = -10
+
+    frame:SetWidth(width)
+
+    for index, line in ipairs(lines) do
+        local fs = frame.lines[index]
+        if not fs then
+            fs = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            fs:SetJustifyH("LEFT")
+            fs:SetJustifyV("TOP")
+            frame.lines[index] = fs
+        end
+
+        fs:ClearAllPoints()
+        fs:SetPoint("TOPLEFT", 12, y)
+        fs:SetWidth(width - 24)
+        fs:SetText(line.text or "")
+        fs:SetTextColor(line.r or THEME.text[1], line.g or THEME.text[2], line.b or THEME.text[3])
+        fs:Show()
+        y = y - (fs:GetStringHeight() or 14) - (line.gap or 4)
+    end
+
+    for index = #lines + 1, #frame.lines do
+        frame.lines[index]:Hide()
+    end
+
+    frame:SetHeight(math.max(-y + 8, 24))
+    frame:ClearAllPoints()
+    frame:SetPoint("TOPLEFT", GameTooltip, "BOTTOMLEFT", 0, -2)
+    frame:SetPoint("TOPRIGHT", GameTooltip, "BOTTOMRIGHT", 0, -2)
+    frame:Show()
+end
+
 local function SetRelicItemTooltip(self)
     local itemId = self and self.itemId
     if not itemId or itemId <= 0 then
@@ -174,10 +318,57 @@ local function SetRelicItemTooltip(self)
 
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
     GameTooltip:SetHyperlink("item:" .. itemId)
-    GameTooltip:AddLine(" ")
-    GameTooltip:AddLine("双击图标可自动激活到可用槽位", THEME.accent[1], THEME.accent[2], THEME.accent[3], true)
-    GameTooltip:AddLine("右键图标可选择穿戴或收藏专属", THEME.muted[1], THEME.muted[2], THEME.muted[3], true)
+    local relic = App.relicMap and App.relicMap[itemId]
+    local extraLines = {}
+    if relic then
+        local function AddRelicBonusLine(label, bonusBase)
+            local health = bonusBase
+            local armor = bonusBase * 0.75
+            local attack = bonusBase * 0.8
+            local spell = bonusBase * 0.9
+            table.insert(extraLines, {
+                text = string.format("%s：全属性+%.1f%%  生命+%.1f%%  护甲+%.1f%%  攻击+%.1f%%  法术+%.1f%%",
+                    label, bonusBase, health, armor, attack, spell),
+                r = 0.62, g = 0.92, b = 0.72
+            })
+        end
+
+        table.insert(extraLines, {
+            text = string.format("%s加成", GetRelicTypeName(relic.relicType)),
+            r = relic.relicType == 3 and 1.0 or (relic.relicType == 2 and 1.0 or 0.78),
+            g = relic.relicType == 3 and 0.55 or (relic.relicType == 2 and 0.74 or 0.92),
+            b = relic.relicType == 3 and 0.86 or (relic.relicType == 2 and 0.26 or 1.0),
+            gap = 2
+        })
+
+        if relic.relicType == 1 then
+            AddRelicBonusLine("主槽", 2.0)
+            AddRelicBonusLine("副槽", 2.0 * math.max(relic.subSlotScale or 0.5, 0.1))
+        elseif relic.relicType == 2 then
+            AddRelicBonusLine("阶段神器槽", 5.0)
+        elseif relic.relicType == 3 then
+            AddRelicBonusLine("终极神器槽", 10.0)
+        end
+
+        if relic.activeSlot and relic.activeSlot > 0 then
+            table.insert(extraLines, { text = string.format("当前激活位置：%s", GetSlotName(relic.activeSlot)), r = 0.40, g = 0.95, b = 0.45 })
+        elseif relic.recommendedSlot and relic.recommendedSlot > 0 then
+            table.insert(extraLines, { text = string.format("推荐激活位置：%s", GetSlotName(relic.recommendedSlot)), r = 0.92, g = 0.82, b = 0.40 })
+        end
+
+        if relic.exclusiveGroup and relic.exclusiveGroup > 0 then
+            table.insert(extraLines, { text = string.format("互斥组：%d", relic.exclusiveGroup), r = 0.85, g = 0.60, b = 0.60 })
+        end
+
+        if relic.desc and relic.desc ~= "" then
+            table.insert(extraLines, { text = "核心特效", r = 1.0, g = 0.82, b = 0.28, gap = 2 })
+            table.insert(extraLines, { text = relic.desc, r = 0.82, g = 0.82, b = 0.78 })
+        end
+    end
     GameTooltip:Show()
+    table.insert(extraLines, { text = "双击图标可自动激活到可用槽位", r = THEME.accent[1], g = THEME.accent[2], b = THEME.accent[3], gap = 2 })
+    table.insert(extraLines, { text = "右键图标可选择穿戴或收藏专属", r = THEME.muted[1], g = THEME.muted[2], b = THEME.muted[3] })
+    ShowTooltipExtra(extraLines)
 end
 
 local function SetEquipmentItemTooltip(self)
@@ -186,20 +377,9 @@ local function SetEquipmentItemTooltip(self)
         return
     end
 
+    HideTooltipExtra()
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
     GameTooltip:SetHyperlink("item:" .. itemId)
-
-    if self.equipmentData then
-        local equipment = self.equipmentData
-        local chapterName = equipment.sourceChapterName ~= "" and equipment.sourceChapterName or ("章节#" .. equipment.sourceChapter)
-        GameTooltip:AddLine(" ")
-        GameTooltip:AddLine(string.format("来源：第%d幕 %s", equipment.actId, chapterName), THEME.accent[1], THEME.accent[2], THEME.accent[3], true)
-        GameTooltip:AddLine(string.format("模式：%s  |  部位：%s", GetEquipmentSourceModeName(equipment.sourceMode), GetEquipmentSlotMaskName(equipment.slotMask)), THEME.muted[1], THEME.muted[2], THEME.muted[3], true)
-        if equipment.desc and equipment.desc ~= "" then
-            GameTooltip:AddLine(equipment.desc, 0.78, 0.78, 0.74, true)
-        end
-    end
-
     GameTooltip:Show()
 end
 
@@ -244,20 +424,142 @@ local function GetCachedItemIcon(itemId)
     return nil
 end
 
-local function ResolveItemDisplay(itemId, fallbackName)
-    local cachedIcon = GetCachedItemIcon(itemId)
+local function NormalizeIconPath(iconPath)
+    if not iconPath or iconPath == "" then
+        return nil
+    end
+
+    if string.find(iconPath, "\\") or string.find(iconPath, "/") then
+        return iconPath
+    end
+
+    return "Interface\\Icons\\" .. iconPath
+end
+
+local function ApplyIconTexCoords(texture)
+    if not texture then
+        return
+    end
+
+    texture:SetTexCoord(
+        ICON_TEX_COORD_MIN,
+        ICON_TEX_COORD_MAX,
+        ICON_TEX_COORD_MIN,
+        ICON_TEX_COORD_MAX
+    )
+end
+
+local function ResolveItemDisplay(itemId, fallbackName, preferredIcon)
+    local directIcon = NormalizeIconPath(preferredIcon)
+    if directIcon then
+        CacheItemIcon(itemId, directIcon)
+        return fallbackName, directIcon
+    end
+
+    local cachedIcon = NormalizeIconPath(GetCachedItemIcon(itemId))
     local itemName, _, _, _, _, _, _, _, _, itemIcon = GetItemInfo(itemId)
-    local iconPath = itemIcon or GetItemIcon(itemId) or cachedIcon or "Interface\\Icons\\INV_Misc_QuestionMark"
+    local iconPath = NormalizeIconPath(itemIcon) or NormalizeIconPath(GetItemIcon(itemId)) or cachedIcon or "Interface\\Icons\\INV_Misc_QuestionMark"
+
+    if itemId and itemId > 0 and iconPath == "Interface\\Icons\\INV_Misc_QuestionMark" then
+        App.pendingItemInfo[itemId] = fallbackName or true
+        GetItemInfo(itemId)
+        GetItemIcon(itemId)
+    end
 
     if iconPath and iconPath ~= "Interface\\Icons\\INV_Misc_QuestionMark" then
         CacheItemIcon(itemId, iconPath)
+        App.pendingItemInfo[itemId] = nil
     end
 
     return itemName or fallbackName, iconPath
 end
 
-local function ResolveRelicItemDisplay(itemId, fallbackName)
-    return ResolveItemDisplay(itemId, fallbackName)
+local function ResolveRelicItemDisplay(itemId, fallbackName, preferredIcon)
+    return ResolveItemDisplay(itemId, fallbackName, preferredIcon)
+end
+
+local function EnsureItemPrefetchDriver()
+    if App.itemPrefetchDriver then
+        return App.itemPrefetchDriver
+    end
+
+    local frame = CreateFrame("Frame")
+    frame.elapsed = 0
+    frame:Hide()
+    frame:SetScript("OnUpdate", function(self, elapsed)
+        self.elapsed = self.elapsed + elapsed
+        if self.elapsed < ITEM_PREFETCH_INTERVAL then
+            return
+        end
+        self.elapsed = 0
+
+        local processed = 0
+        while processed < ITEM_PREFETCH_BATCH do
+            local queueIndex = App.itemPrefetchIndex or 1
+            local itemId = App.itemPrefetchQueue[queueIndex]
+            if not itemId then
+                wipe(App.itemPrefetchQueue)
+                wipe(App.itemPrefetchQueued)
+                App.itemPrefetchIndex = 1
+                self:Hide()
+                return
+            end
+
+            App.itemPrefetchQueue[queueIndex] = nil
+            App.itemPrefetchIndex = queueIndex + 1
+            App.itemPrefetchQueued[itemId] = nil
+            processed = processed + 1
+
+            if not GetCachedItemIcon(itemId) then
+                local _, _, _, _, _, _, _, _, _, itemIcon = GetItemInfo(itemId)
+                if itemIcon and itemIcon ~= "Interface\\Icons\\INV_Misc_QuestionMark" then
+                    CacheItemIcon(itemId, itemIcon)
+                    App.pendingItemInfo[itemId] = nil
+                else
+                    App.pendingItemInfo[itemId] = true
+                    GetItemInfo(itemId)
+                    GetItemIcon(itemId)
+                end
+            end
+        end
+    end)
+
+    App.itemPrefetchDriver = frame
+    return frame
+end
+
+local function QueueItemPrefetch(itemId)
+    itemId = ToNumber(itemId)
+    if itemId <= 0 then
+        return
+    end
+
+    if GetCachedItemIcon(itemId) or App.pendingItemInfo[itemId] or App.itemPrefetchQueued[itemId] then
+        return
+    end
+
+    table.insert(App.itemPrefetchQueue, itemId)
+    App.itemPrefetchQueued[itemId] = true
+
+    local driver = EnsureItemPrefetchDriver()
+    if driver and not driver:IsShown() then
+        driver.elapsed = 0
+        driver:Show()
+    end
+end
+
+local function QueueItemPrefetchList(items)
+    if not items then
+        return
+    end
+
+    for _, item in ipairs(items) do
+        if type(item) == "table" then
+            QueueItemPrefetch(item.id or item.itemId)
+        else
+            QueueItemPrefetch(item)
+        end
+    end
 end
 
 local function FormatResultMessage(action, success, message)
@@ -660,24 +962,7 @@ local function TryActivateRelicByItemId(itemId)
     StartRelicCollection(itemId, slotIdx, true)
 end
 
-local function GetRelicTypeName(t)
-    local names = { [1] = "章节遗物", [2] = "阶段神器", [3] = "终极神器" }
-    return names[ToNumber(t)] or "未知"
-end
-
-local function GetRelicTypeColor(t)
-    local colors = { [1] = THEME.relicType1, [2] = THEME.relicType2, [3] = THEME.relicType3 }
-    return colors[ToNumber(t)] or THEME.muted
-end
-
-local function GetSlotName(slot)
-    local names = { [1] = "主遗物", [2] = "副遗物1", [3] = "副遗物2", [4] = "阶段神器", [5] = "终极神器" }
-    return names[ToNumber(slot)] or ""
-end
-
-local function GetChapterTypeName(t)
-    return ToNumber(t) == 2 and "团队本" or "五人本"
-end
+-- (已移至文件前部 ToNumber 之后)
 
 local function GetModeTypeName(t)
     local names = {
@@ -697,6 +982,48 @@ local function GetRewardBossCategoryName(category)
         cache = "秘藏首领",
     }
     return names[category] or category
+end
+
+local function FormatBossDisplay(entry, name)
+    entry = ToNumber(entry)
+    if name and name ~= "" then
+        if entry > 0 then
+            return string.format("【%s】(%d)", name, entry)
+        end
+        return string.format("【%s】", name)
+    end
+
+    if entry > 0 then
+        return string.format("entry:%d", entry)
+    end
+
+    return "未配置"
+end
+
+local function GetChapterBossCategoryTitle(chapter, category)
+    local names = {
+        anchor = { entryKey = "anchorBossEntry", nameKey = "anchorBossName" },
+        final = { entryKey = "finalBossEntry", nameKey = "finalBossName" },
+        abyss = { entryKey = "abyssBossEntry", nameKey = "abyssBossName" },
+        cache = { entryKey = "cacheBossEntry", nameKey = "cacheBossName" },
+    }
+
+    local info = names[category]
+    local label = GetRewardBossCategoryName(category)
+    if not chapter or not info then
+        return label
+    end
+
+    local bossName = chapter[info.nameKey] or ""
+    local bossEntry = ToNumber(chapter[info.entryKey])
+    if bossName ~= "" then
+        return string.format("%s【%s】", label, bossName)
+    end
+    if bossEntry > 0 then
+        return string.format("%s(entry:%d)", label, bossEntry)
+    end
+
+    return label
 end
 
 local function GetRewardDockingTypeName(dockingType)
@@ -740,26 +1067,7 @@ local function HasModeUnlocked(modeType)
     return bit.band(App.state.unlockedModeMask or 0, mask) ~= 0
 end
 
-local function HasChapterModeUnlocked(chapter, modeType)
-    if not chapter then
-        return false
-    end
-
-    local mask = bit and bit.lshift(1, ToNumber(modeType) - 1)
-    if not mask or ToNumber(modeType) <= 0 then
-        return false
-    end
-
-    return bit.band(chapter.unlockedModeMask or 0, mask) ~= 0
-end
-
-local function HasModeInMask(modeMask, modeType)
-    local mask = bit and bit.lshift(1, ToNumber(modeType) - 1)
-    if not mask or ToNumber(modeType) <= 0 then
-        return false
-    end
-    return bit.band(ToNumber(modeMask), mask) ~= 0
-end
+-- (HasChapterModeUnlocked / HasModeInMask 已移至文件前部)
 
 local function GetEffectQualityColor(quality)
     if ToNumber(quality) >= 4 then
@@ -900,15 +1208,92 @@ local function GetEquipmentFilterSummary()
     return table.concat(parts, " / ")
 end
 
-local function SendEnterSelectedChapter(modeType, corruptionTier)
-    local chapterId = App.selectedChapterId or 0
+local function GetCurrentActId()
+    local currentChapter = App.chapterMap and App.chapterMap[App.state.currentChapter or 0]
+    return currentChapter and currentChapter.actId or 0
+end
+
+local function ExtractEquipmentSetTheme(name)
+    local theme = name or ""
+    local suffixes = {
+        "断刃胚", "法轮胚", "头冠胚", "胸铠胚", "战带胚",
+        "战靴胚", "指环胚", "魂坠胚", "披影胚",
+    }
+
+    for _, suffix in ipairs(suffixes) do
+        theme = string.gsub(theme, suffix .. "$", "")
+    end
+
+    return theme ~= "" and theme or "无名"
+end
+
+local function BuildEquipmentSetGroups()
+    local groupsByKey = {}
+
+    for _, equipment in ipairs(App.equipmentList) do
+        if equipment.equipmentType == 1 then
+            local key = string.format("%d:%d:%d", equipment.sourceMode, equipment.actId, equipment.sourceChapter)
+            local group = groupsByKey[key]
+            if not group then
+                group = {
+                    key = key,
+                    sourceMode = equipment.sourceMode,
+                    actId = equipment.actId,
+                    sourceChapter = equipment.sourceChapter,
+                    sourceChapterName = equipment.sourceChapterName,
+                    theme = ExtractEquipmentSetTheme(equipment.name),
+                    items = {},
+                }
+                groupsByKey[key] = group
+            end
+
+            table.insert(group.items, equipment)
+        end
+    end
+
+    local groups = {}
+    for _, group in pairs(groupsByKey) do
+        table.sort(group.items, function(a, b)
+            if a.slotMask ~= b.slotMask then
+                return a.slotMask < b.slotMask
+            end
+            return a.id < b.id
+        end)
+
+        group.slotSummary = ""
+        local slotNames = {}
+        for _, item in ipairs(group.items) do
+            table.insert(slotNames, GetEquipmentSlotMaskName(item.slotMask))
+        end
+
+        group.slotSummary = table.concat(slotNames, " / ")
+        group.pieceCount = #group.items
+        group.representative = group.items[1]
+        group.name = string.format("%s·第%d幕·%s套装", GetEquipmentSourceModeName(group.sourceMode), group.actId, group.theme)
+        table.insert(groups, group)
+    end
+
+    table.sort(groups, function(a, b)
+        if a.actId ~= b.actId then
+            return a.actId < b.actId
+        end
+        if a.sourceMode ~= b.sourceMode then
+            return a.sourceMode < b.sourceMode
+        end
+        return a.sourceChapter < b.sourceChapter
+    end)
+
+    return groups
+end
+
+local function SendEnterChapter(chapterId, modeType, corruptionTier, skipUnlockCheck)
     if chapterId <= 0 then
         NotifyMessage("当前没有选中章节。")
         return
     end
 
     local chapter = App.chapterMap and App.chapterMap[chapterId] or nil
-    if not HasChapterModeUnlocked(chapter, modeType) then
+    if not skipUnlockCheck and not HasChapterModeUnlocked(chapter, modeType) then
         NotifyMessage("该章节的此模式尚未解锁。")
         return
     end
@@ -920,6 +1305,11 @@ local function SendEnterSelectedChapter(modeType, corruptionTier)
         ToNumber(corruptionTier)
     )
     SendAddon(string.format("ENTER:%d %d %d", chapterId, ToNumber(modeType), ToNumber(corruptionTier)))
+end
+
+local function SendEnterSelectedChapter(modeType, corruptionTier)
+    local chapterId = App.selectedChapterId or 0
+    SendEnterChapter(chapterId, modeType, corruptionTier, false)
 end
 
 -------------------------------------------------------
@@ -937,20 +1327,23 @@ local function ParseState(payload)
     App.state.mainRelic          = ToNumber(f[9])
     App.state.subRelic1          = ToNumber(f[10])
     App.state.subRelic2          = ToNumber(f[11])
-    App.state.phaseArtifact      = ToNumber(f[12])
-    App.state.ultimateArtifact   = ToNumber(f[13])
-    App.state.highestCorruptionTier = ToNumber(f[14])
-    App.state.cacheBossFailCount = ToNumber(f[15])
-    App.state.inRun              = ToNumber(f[16]) == 1
-    App.state.runChapterId       = ToNumber(f[17])
-    App.state.runModeType        = ToNumber(f[18])
-    App.state.runCorruptionTier  = ToNumber(f[19])
-    App.state.runMapId           = ToNumber(f[20])
-    App.state.anchorBossKillMask = ToNumber(f[21])
-    App.state.abyssBossSummoned  = ToNumber(f[22]) == 1
-    App.state.cacheBossSummoned  = ToNumber(f[23]) == 1
-    App.state.nextChapter        = ToNumber(f[24])
-    App.state.nextChapterName    = f[25] or ""
+    App.state.subRelic3          = ToNumber(f[12])
+    App.state.subRelic4          = ToNumber(f[13])
+    App.state.subRelic5          = ToNumber(f[14])
+    App.state.phaseArtifact      = ToNumber(f[15])
+    App.state.ultimateArtifact   = ToNumber(f[16])
+    App.state.highestCorruptionTier = ToNumber(f[17])
+    App.state.cacheBossFailCount = ToNumber(f[18])
+    App.state.inRun              = ToNumber(f[19]) == 1
+    App.state.runChapterId       = ToNumber(f[20])
+    App.state.runModeType        = ToNumber(f[21])
+    App.state.runCorruptionTier  = ToNumber(f[22])
+    App.state.runMapId           = ToNumber(f[23])
+    App.state.anchorBossKillMask = ToNumber(f[24])
+    App.state.abyssBossSummoned  = ToNumber(f[25]) == 1
+    App.state.cacheBossSummoned  = ToNumber(f[26]) == 1
+    App.state.nextChapter        = ToNumber(f[27])
+    App.state.nextChapterName    = f[28] or ""
 
     if App.HideModePrompt and (not App.state.inRun or App.state.runModeType >= 2) then
         App:HideModePrompt()
@@ -963,6 +1356,11 @@ local function ParseModePrompt(payload)
     local chapterName = f[2] or ""
     local modeMask = ToNumber(f[3])
     local corruptionTier = ToNumber(f[4])
+
+    if App.chapterMap and App.chapterMap[chapterId] then
+        local chapter = App.chapterMap[chapterId]
+        chapter.unlockedModeMask = bit and bit.bor(chapter.unlockedModeMask or 0, modeMask) or modeMask
+    end
 
     NotifyMessage(string.format(
         "调试: 收到模式选择请求 章节[%s] mask[%d] 腐化层[%d]",
@@ -990,9 +1388,17 @@ local function ParseRelics(payload)
                 chapterId = ToNumber(f[4]),
                 actId = ToNumber(f[5]),
                 owned = ToNumber(f[6]) == 1,  -- 是否已收藏
+                activeRule = ToNumber(f[7]),
+                exclusiveGroup = ToNumber(f[8]),
+                recommendedSlot = ToNumber(f[9]),
+                subSlotScale = tonumber(f[10]) or 0,
                 activeSlot = ToNumber(f[11]),
                 desc = f[12] or "",
+                icon = f[13] or "",
             }
+            if relic.icon and relic.icon ~= "" then
+                CacheItemIcon(relic.id, NormalizeIconPath(relic.icon))
+            end
             table.insert(App.relicList, relic)
             App.relicMap[relic.id] = relic
         end
@@ -1007,6 +1413,8 @@ local function ParseRelics(payload)
         if a.actId ~= b.actId then return a.actId < b.actId end
         return a.id < b.id
     end)
+
+    QueueItemPrefetchList(App.relicList)
 end
 
 local function ParseEquipments(payload)
@@ -1029,7 +1437,11 @@ local function ParseEquipments(payload)
                 fromCacheBoss = ToNumber(f[10]) == 1,
                 requiresFragments = ToNumber(f[11]) == 1,
                 desc = f[12] or "",
+                icon = f[13] or "",
             }
+            if equipment.icon and equipment.icon ~= "" then
+                CacheItemIcon(equipment.id, NormalizeIconPath(equipment.icon))
+            end
             table.insert(App.equipmentList, equipment)
             App.equipmentMap[equipment.id] = equipment
         end
@@ -1045,6 +1457,29 @@ local function ParseEquipments(payload)
         if a.slotMask ~= b.slotMask then return a.slotMask < b.slotMask end
         return a.id < b.id
     end)
+
+    QueueItemPrefetchList(App.equipmentList)
+end
+
+local function ParseSetBonuses(payload)
+    App.setBonusMap = {}
+    if not payload or payload == "" then return end
+    for _, raw in ipairs(Split(payload, "~")) do
+        local f = Split(raw, "%^")
+        if f[1] and f[1] ~= "" then
+            local bonus = {
+                setId = ToNumber(f[1]),
+                setName = f[2] or "",
+                actId = ToNumber(f[3]),
+                sourceMode = ToNumber(f[4]),
+                twoPieceDesc = f[5] or "",
+                fourPieceDesc = f[6] or "",
+            }
+            -- 用 mode:actId 作为key匹配套装分组
+            local key = string.format("%d:%d", bonus.sourceMode, bonus.actId)
+            App.setBonusMap[key] = bonus
+        end
+    end
 end
 
 local function ParseChapters(payload)
@@ -1064,6 +1499,14 @@ local function ParseChapters(payload)
                 startQuestId = ToNumber(f[7]),
                 completeQuestId = ToNumber(f[8]),
                 unlockedModeMask = ToNumber(f[9]),
+                anchorBossEntry = ToNumber(f[10]),
+                anchorBossName = f[11] or "",
+                finalBossEntry = ToNumber(f[12]),
+                finalBossName = f[13] or "",
+                abyssBossEntry = ToNumber(f[14]),
+                abyssBossName = f[15] or "",
+                cacheBossEntry = ToNumber(f[16]),
+                cacheBossName = f[17] or "",
             }
             table.insert(App.chapters, chapter)
             App.chapterMap[chapter.id] = chapter
@@ -1133,14 +1576,51 @@ local function CreateSmallButton(parent, text, width, onClick)
     btn.label = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     btn.label:SetPoint("CENTER")
     btn.label:SetText(text)
+    btn.isSelected = false
+    btn.isEquippedChoice = false
+    btn.isHovered = false
+
+    btn.ApplySelectedState = function(self, selected, equippedChoice)
+        self.isSelected = selected and true or false
+        self.isEquippedChoice = equippedChoice and true or false
+
+        if self.isEquippedChoice and self.isHovered then
+            self:SetBackdropColor(0.08, 0.22, 0.10, 1)
+            self:SetBackdropBorderColor(0.42, 1.00, 0.52, 1)
+            self.label:SetTextColor(0.82, 1.00, 0.84, 1)
+        elseif self.isEquippedChoice then
+            self:SetBackdropColor(0.05, 0.17, 0.08, 0.98)
+            self:SetBackdropBorderColor(0.30, 0.85, 0.40, 1)
+            self.label:SetTextColor(0.72, 0.98, 0.76, 1)
+        elseif self.isSelected and self.isHovered then
+            self:SetBackdropColor(0.30, 0.20, 0.05, 1)
+            self:SetBackdropBorderColor(1.0, 0.86, 0.30, 1)
+            self.label:SetTextColor(1.0, 0.96, 0.72, 1)
+        elseif self.isSelected then
+            self:SetBackdropColor(0.22, 0.15, 0.04, 0.98)
+            self:SetBackdropBorderColor(THEME.accent[1], THEME.accent[2], THEME.accent[3], 1)
+            self.label:SetTextColor(1.0, 0.92, 0.62, 1)
+        elseif self.isHovered then
+            self:SetBackdropColor(0.12, 0.09, 0.18, 0.98)
+            self:SetBackdropBorderColor(0.78, 0.60, 0.18, 0.95)
+            self.label:SetTextColor(0.98, 0.90, 0.76, 1)
+        else
+            self:SetBackdropColor(THEME.panel[1], THEME.panel[2], THEME.panel[3], 0.92)
+            self:SetBackdropBorderColor(THEME.border[1], THEME.border[2], THEME.border[3], THEME.border[4])
+            self.label:SetTextColor(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        end
+    end
 
     btn:SetScript("OnClick", onClick)
     btn:SetScript("OnEnter", function(self)
-        self:SetBackdropBorderColor(THEME.accent[1], THEME.accent[2], THEME.accent[3], 1)
+        self.isHovered = true
+        self:ApplySelectedState(self.isSelected, self.isEquippedChoice)
     end)
     btn:SetScript("OnLeave", function(self)
-        self:SetBackdropBorderColor(THEME.border[1], THEME.border[2], THEME.border[3], THEME.border[4])
+        self.isHovered = false
+        self:ApplySelectedState(self.isSelected, self.isEquippedChoice)
     end)
+    btn:ApplySelectedState(false, false)
 
     return btn
 end
@@ -1189,12 +1669,13 @@ function App:CreateModePromptFrame()
                 return
             end
 
-            App.selectedChapterId = App.modePrompt.chapterId
+            local chapterId = ToNumber(App.modePrompt.chapterId)
             App.chapterEnterMode = modeType
-            App:HideModePrompt()
+            App.selectedChapterId = chapterId
 
             local corruptionTier = modeType == 3 and ToNumber(App.modePrompt.corruptionTier) or 0
-            SendEnterSelectedChapter(modeType, corruptionTier)
+            App:HideModePrompt()
+            SendEnterChapter(chapterId, modeType, corruptionTier, true)
         end)
         btn:SetPoint("BOTTOMLEFT", 22 + (i - 1) * 96, 16)
         frame.buttons[i] = btn
@@ -1230,6 +1711,11 @@ function App:ShowModePrompt(chapterId, chapterName, modeMask, corruptionTier)
     self.modePrompt.chapterName = chapterName
     self.modePrompt.modeMask = modeMask
     self.modePrompt.corruptionTier = corruptionTier
+
+    if self.chapterMap and self.chapterMap[chapterId] then
+        local chapter = self.chapterMap[chapterId]
+        chapter.unlockedModeMask = bit and bit.bor(chapter.unlockedModeMask or 0, modeMask) or modeMask
+    end
 
     local displayName = chapterName ~= "" and chapterName or ("章节#" .. ToNumber(chapterId))
     local detailText = string.format("已击破【%s】的锚点首领，是否立即进入更高模式？", displayName)
@@ -1278,13 +1764,14 @@ local EQUIP_CONTENT_W = CARD_W * CARDS_PER_ROW + CARD_GAP * (CARDS_PER_ROW - 1)
 local CHAPTER_CONTENT_W = 1120
 local CHAPTER_LIST_W = 392
 local SLOT_BAR_W = 1140
-local SLOT_INDICATOR_W = 220
-local SLOT_INDICATOR_STEP = 226
+local SLOT_INDICATOR_W = 260
+local SLOT_INDICATOR_STEP = 274
+local SLOT_INDICATORS_PER_ROW = 4
 
 function App:BuildEquipPage(parent)
-    -- 顶部：5个槽位概览
+    -- 顶部：8个槽位概览
     self.slotBar = CreateFrame("Frame", nil, parent)
-    self.slotBar:SetSize(SLOT_BAR_W, 46)
+    self.slotBar:SetSize(SLOT_BAR_W, 82)
     self.slotBar:SetPoint("TOPLEFT", 6, -4)
     StylePanel(self.slotBar)
 
@@ -1292,7 +1779,9 @@ function App:BuildEquipPage(parent)
     for i, slot in ipairs(SLOTS) do
         local ind = CreateFrame("Frame", nil, self.slotBar)
         ind:SetSize(SLOT_INDICATOR_W, 34)
-        ind:SetPoint("LEFT", 8 + (i - 1) * SLOT_INDICATOR_STEP, 0)
+        local col = (i - 1) % SLOT_INDICATORS_PER_ROW
+        local row = math.floor((i - 1) / SLOT_INDICATORS_PER_ROW)
+        ind:SetPoint("TOPLEFT", 8 + col * SLOT_INDICATOR_STEP, -6 - row * 34)
 
         ind.dot = ind:CreateTexture(nil, "OVERLAY")
         ind.dot:SetSize(8, 8)
@@ -1313,11 +1802,11 @@ function App:BuildEquipPage(parent)
 
     -- 状态栏
     self.equipStatus = parent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    self.equipStatus:SetPoint("TOPLEFT", 10, -56)
+    self.equipStatus:SetPoint("TOPLEFT", 10, -92)
 
     -- 滚动区域
     self.equipScroll = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
-    self.equipScroll:SetPoint("TOPLEFT", 6, -74)
+    self.equipScroll:SetPoint("TOPLEFT", 6, -110)
     self.equipScroll:SetPoint("BOTTOMRIGHT", -28, 6)
 
     self.equipContent = CreateFrame("Frame", nil, self.equipScroll)
@@ -1359,6 +1848,7 @@ function App:GetOrCreateRelicCard(index)
     card.iconButton:SetScript("OnEnter", SetRelicItemTooltip)
     card.iconButton:SetScript("OnLeave", function()
         GameTooltip:Hide()
+        HideTooltipExtra()
     end)
     card.iconButton:SetScript("OnClick", function(self, button)
         if button == "RightButton" then
@@ -1386,12 +1876,13 @@ function App:GetOrCreateRelicCard(index)
     card.icon = card.iconButton:CreateTexture(nil, "ARTWORK")
     card.icon:SetAllPoints()
     card.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+    ApplyIconTexCoords(card.icon)
 
-    card.iconBorder = card.iconButton:CreateTexture(nil, "OVERLAY")
-    card.iconBorder:SetPoint("TOPLEFT", -2, 2)
-    card.iconBorder:SetPoint("BOTTOMRIGHT", 2, -2)
-    card.iconBorder:SetTexture("Interface\\Buttons\\UI-Quickslot2")
-    card.iconBorder:SetBlendMode("BLEND")
+    card.iconBorder = CreateFrame("Frame", nil, card)
+    card.iconBorder:SetPoint("TOPLEFT", card.iconButton, "TOPLEFT", -3, 3)
+    card.iconBorder:SetPoint("BOTTOMRIGHT", card.iconButton, "BOTTOMRIGHT", 3, -3)
+    card.iconBorder:SetFrameLevel(math.max(card:GetFrameLevel(), card.iconButton:GetFrameLevel() - 1))
+    StylePanel(card.iconBorder, 0.02, 0.02, 0.03, 0.35)
 
     -- 遗物名称
     card.nameLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -1421,6 +1912,8 @@ function App:GetOrCreateRelicCard(index)
 end
 
 function App:RefreshEquipPage()
+    QueueItemPrefetchList(self.relicList)
+
     local equippedRelicsBySlot = {}
     for _, relic in ipairs(self.relicList) do
         if relic.activeSlot and relic.activeSlot > 0 then
@@ -1457,8 +1950,8 @@ function App:RefreshEquipPage()
         if r.activeSlot and r.activeSlot > 0 then equipped = equipped + 1 end
     end
     self.equipStatus:SetText(string.format(
-        "全部: %d 件  |  已收藏: %d  |  已装配: %d / 5  |  当前章节: %s",
-        total, owned, equipped,
+        "全部: %d 件  |  已收藏: %d  |  已装配: %d / %d  |  当前章节: %s",
+        total, owned, equipped, #SLOTS,
         self.state.currentChapterName ~= "" and self.state.currentChapterName or "无"
     ))
 
@@ -1477,7 +1970,7 @@ function App:RefreshEquipPage()
 
         local isOwned = relic.owned
         local isEquipped = relic.activeSlot > 0
-        local itemName, iconPath = ResolveRelicItemDisplay(relic.id, relic.name)
+        local itemName, iconPath = ResolveRelicItemDisplay(relic.id, relic.name, relic.icon)
 
         card.icon:SetTexture(iconPath)
         card.iconButton.itemId = relic.id
@@ -1516,19 +2009,19 @@ function App:RefreshEquipPage()
         -- 卡片背景和状态条
         if isEquipped then
             card.statusBar:SetVertexColor(THEME.equipped[1], THEME.equipped[2], THEME.equipped[3], 1)
-            card.iconBorder:SetVertexColor(THEME.equipped[1], THEME.equipped[2], THEME.equipped[3], 0.95)
+            card.iconBorder:SetBackdropBorderColor(THEME.equipped[1], THEME.equipped[2], THEME.equipped[3], 0.95)
             card.slotLabel:SetText("|cff4dcc4d" .. GetSlotName(relic.activeSlot) .. "|r")
             card:SetBackdropColor(THEME.cardEquip[1], THEME.cardEquip[2], THEME.cardEquip[3], THEME.cardEquip[4])
             card:SetBackdropBorderColor(THEME.equipped[1], THEME.equipped[2], THEME.equipped[3], 0.6)
         elseif isOwned then
             card.statusBar:SetVertexColor(typeColor[1], typeColor[2], typeColor[3], 0.6)
-            card.iconBorder:SetVertexColor(typeColor[1], typeColor[2], typeColor[3], 0.90)
+            card.iconBorder:SetBackdropBorderColor(typeColor[1], typeColor[2], typeColor[3], 0.90)
             card.slotLabel:SetText("")
             card:SetBackdropColor(THEME.cardBg[1], THEME.cardBg[2], THEME.cardBg[3], THEME.cardBg[4])
             card:SetBackdropBorderColor(THEME.border[1], THEME.border[2], THEME.border[3], THEME.border[4])
         else
             card.statusBar:SetVertexColor(0.25, 0.25, 0.25, 0.5)
-            card.iconBorder:SetVertexColor(0.30, 0.30, 0.32, 0.75)
+            card.iconBorder:SetBackdropBorderColor(0.30, 0.30, 0.32, 0.75)
             card.slotLabel:SetText("|cff666666\230\156\170\230\148\182\233\155\134|r")  -- "未收藏"
             card:SetBackdropColor(0.04, 0.04, 0.06, 0.85)
             card:SetBackdropBorderColor(0.20, 0.20, 0.25, 0.6)
@@ -1555,9 +2048,11 @@ function App:RefreshEquipPage()
                 local slotCmd = SLOTS[relic.activeSlot] and SLOTS[relic.activeSlot].cmd
                 btn:SetScript("OnClick", function()
                     if slotCmd then
+                        App.selectedRelicButtonKey = ""
                         SendAddon("CLEAR_RELIC:" .. slotCmd)
                         SendAddon("REQ_STATE")
                         SendAddon("REQ_RELICS")
+                        App:RefreshEquipPage()
                     end
                 end)
                 btn:Show()
@@ -1576,13 +2071,16 @@ function App:RefreshEquipPage()
                 end
                 btn:SetPoint("BOTTOMRIGHT", -(8 + (btnIdx - 1) * 40), 6)
                 btn.label:SetText(slotDef.label)
-                btn.label:SetTextColor(THEME.accent[1], THEME.accent[2], THEME.accent[3], 1)
+                local buttonKey = string.format("%d:%d", relic.id, slotIdx)
+                btn:ApplySelectedState(App.selectedRelicButtonKey == buttonKey, relic.activeSlot == slotIdx)
                 local relicId = relic.id
                 local slotCommand = slotDef.cmd
                 btn:SetScript("OnClick", function()
+                    App.selectedRelicButtonKey = buttonKey
                     SendAddon(string.format("SET_RELIC:%s %d", slotCommand, relicId))
                     SendAddon("REQ_STATE")
                     SendAddon("REQ_RELICS")
+                    App:RefreshEquipPage()
                 end)
                 btn:Show()
             end
@@ -1595,6 +2093,253 @@ function App:RefreshEquipPage()
     local totalRows = math.ceil(#self.relicList / CARDS_PER_ROW)
     self.equipContent:SetHeight(math.max(totalRows * (CARD_H + CARD_GAP), 100))
     self.equipScroll:UpdateScrollChildRect()
+end
+
+-------------------------------------------------------
+-- 神器页
+-------------------------------------------------------
+function App:BuildArtifactPage(parent)
+    self.artifactStatus = parent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    self.artifactStatus:SetPoint("TOPLEFT", 10, -8)
+    self.artifactStatus:SetPoint("RIGHT", -10, 0)
+    self.artifactStatus:SetJustifyH("LEFT")
+
+    self.artifactActionBar = CreateFrame("Frame", nil, parent)
+    self.artifactActionBar:SetPoint("TOPLEFT", 8, -28)
+    self.artifactActionBar:SetPoint("RIGHT", -8, 0)
+    self.artifactActionBar:SetHeight(24)
+
+    self.artifactAllBtn = CreateSmallButton(self.artifactActionBar, "全部神器", 68, function()
+        App.artifactFilterType = 0
+        App:RefreshArtifactPage()
+    end)
+    self.artifactAllBtn:SetPoint("LEFT", 0, 0)
+
+    self.artifactPhaseBtn = CreateSmallButton(self.artifactActionBar, "阶段神器", 68, function()
+        App.artifactFilterType = 2
+        App:RefreshArtifactPage()
+    end)
+    self.artifactPhaseBtn:SetPoint("LEFT", self.artifactAllBtn, "RIGHT", 6, 0)
+
+    self.artifactUltimateBtn = CreateSmallButton(self.artifactActionBar, "终极神器", 68, function()
+        App.artifactFilterType = 3
+        App:RefreshArtifactPage()
+    end)
+    self.artifactUltimateBtn:SetPoint("LEFT", self.artifactPhaseBtn, "RIGHT", 6, 0)
+
+    self.artifactOwnedBtn = CreateSmallButton(self.artifactActionBar, "仅已持有", 68, function()
+        App.artifactOwnedOnly = not App.artifactOwnedOnly
+        App:RefreshArtifactPage()
+    end)
+    self.artifactOwnedBtn:SetPoint("LEFT", self.artifactUltimateBtn, "RIGHT", 16, 0)
+
+    self.artifactScroll = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
+    self.artifactScroll:SetPoint("TOPLEFT", 6, -56)
+    self.artifactScroll:SetPoint("BOTTOMRIGHT", -28, 6)
+
+    self.artifactContent = CreateFrame("Frame", nil, self.artifactScroll)
+    self.artifactContent:SetWidth(EQUIP_CONTENT_W)
+    self.artifactContent:SetHeight(100)
+    self.artifactScroll:SetScrollChild(self.artifactContent)
+    EnableScrollMouseWheel(self.artifactScroll, CARD_H)
+
+    self.artifactCards = {}
+end
+
+function App:GetOrCreateArtifactCard(index)
+    if self.artifactCards[index] then
+        return self.artifactCards[index]
+    end
+
+    local card = CreateFrame("Frame", nil, self.artifactContent)
+    card:SetSize(CARD_W, CARD_H)
+    StylePanel(card, THEME.cardBg[1], THEME.cardBg[2], THEME.cardBg[3], THEME.cardBg[4])
+
+    card.statusBar = card:CreateTexture(nil, "ARTWORK")
+    card.statusBar:SetSize(3, CARD_H - 8)
+    card.statusBar:SetPoint("LEFT", 4, 0)
+    card.statusBar:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+
+    card.iconButton = CreateFrame("Button", nil, card)
+    card.iconButton:SetSize(CARD_ICON_SIZE, CARD_ICON_SIZE)
+    card.iconButton:SetPoint("LEFT", 12, 0)
+    card.iconButton:EnableMouse(true)
+    card.iconButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    card.iconButton:SetScript("OnEnter", SetRelicItemTooltip)
+    card.iconButton:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+        HideTooltipExtra()
+    end)
+
+    card.icon = card.iconButton:CreateTexture(nil, "ARTWORK")
+    card.icon:SetAllPoints()
+    card.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+    ApplyIconTexCoords(card.icon)
+
+    card.iconBorder = CreateFrame("Frame", nil, card)
+    card.iconBorder:SetPoint("TOPLEFT", card.iconButton, "TOPLEFT", -3, 3)
+    card.iconBorder:SetPoint("BOTTOMRIGHT", card.iconButton, "BOTTOMRIGHT", 3, -3)
+    card.iconBorder:SetFrameLevel(math.max(card:GetFrameLevel(), card.iconButton:GetFrameLevel() - 1))
+    StylePanel(card.iconBorder, 0.02, 0.02, 0.03, 0.35)
+
+    card.nameLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    card.nameLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -8)
+    card.nameLabel:SetPoint("RIGHT", -8, 0)
+    card.nameLabel:SetJustifyH("LEFT")
+
+    card.typeLabel = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    card.typeLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -26)
+    card.typeLabel:SetPoint("RIGHT", -76, 0)
+    card.typeLabel:SetJustifyH("LEFT")
+
+    card.slotLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    card.slotLabel:SetPoint("TOPRIGHT", -8, -8)
+
+    card.descLabel = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    card.descLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -40)
+    card.descLabel:SetPoint("RIGHT", -84, 0)
+    card.descLabel:SetJustifyH("LEFT")
+
+    card.actionButtons = {}
+    self.artifactCards[index] = card
+    return card
+end
+
+function App:RefreshArtifactButtons()
+    if not self.artifactActionBar then
+        return
+    end
+
+    self.artifactAllBtn:ApplySelectedState(App.artifactFilterType == 0)
+    self.artifactPhaseBtn:ApplySelectedState(App.artifactFilterType == 2)
+    self.artifactUltimateBtn:ApplySelectedState(App.artifactFilterType == 3)
+    self.artifactOwnedBtn:ApplySelectedState(App.artifactOwnedOnly)
+end
+
+function App:RefreshArtifactPage()
+    QueueItemPrefetchList(self.relicList)
+    self:RefreshArtifactButtons()
+
+    local filteredRelics = {}
+    local phaseOwned = 0
+    local ultimateOwned = 0
+
+    for _, relic in ipairs(self.relicList) do
+        if relic.relicType == 2 or relic.relicType == 3 then
+            if relic.relicType == 2 and relic.owned then
+                phaseOwned = phaseOwned + 1
+            elseif relic.relicType == 3 and relic.owned then
+                ultimateOwned = ultimateOwned + 1
+            end
+
+            local typeMatch = App.artifactFilterType == 0 or relic.relicType == App.artifactFilterType
+            local ownedMatch = not App.artifactOwnedOnly or relic.owned
+            if typeMatch and ownedMatch then
+                table.insert(filteredRelics, relic)
+            end
+        end
+    end
+
+    self.artifactStatus:SetText(string.format(
+        "当前页为神器图鉴  |  显示: %d  |  阶段神器: %d  |  终极神器: %d  |  当前激活: %s / %s",
+        #filteredRelics,
+        phaseOwned,
+        ultimateOwned,
+        self.state.phaseArtifact > 0 and "阶段已激活" or "阶段未激活",
+        self.state.ultimateArtifact > 0 and "终极已激活" or "终极未激活"
+    ))
+
+    for _, card in ipairs(self.artifactCards) do
+        card:Hide()
+        for _, btn in ipairs(card.actionButtons) do
+            btn:Hide()
+        end
+    end
+
+    for idx, relic in ipairs(filteredRelics) do
+        local card = self:GetOrCreateArtifactCard(idx)
+        local col = (idx - 1) % CARDS_PER_ROW
+        local row = math.floor((idx - 1) / CARDS_PER_ROW)
+        local isOwned = relic.owned
+        local isEquipped = relic.activeSlot and relic.activeSlot > 0
+        local typeColor = GetRelicTypeColor(relic.relicType)
+        local itemName, iconPath = ResolveRelicItemDisplay(relic.id, relic.name, relic.icon)
+        local descText = relic.desc
+
+        if descText and #descText > 32 then
+            descText = string.sub(descText, 1, 32) .. "..."
+        end
+
+        card:SetPoint("TOPLEFT", col * (CARD_W + CARD_GAP), -row * (CARD_H + CARD_GAP))
+        card.icon:SetTexture(iconPath)
+        card.iconButton.itemId = relic.id
+
+        card.nameLabel:SetText(itemName or relic.name)
+        card.nameLabel:SetTextColor(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        card.typeLabel:SetText(string.format("%s  |  第%d幕", GetRelicTypeName(relic.relicType), relic.actId or 0))
+        card.typeLabel:SetTextColor(typeColor[1], typeColor[2], typeColor[3], 0.9)
+        card.slotLabel:SetText(isEquipped and ("|cff4dcc4d" .. GetSlotName(relic.activeSlot) .. "|r") or "")
+        card.descLabel:SetText(descText or "")
+        card.descLabel:SetTextColor(THEME.muted[1], THEME.muted[2], THEME.muted[3], 1)
+        card.statusBar:SetVertexColor(typeColor[1], typeColor[2], typeColor[3], isEquipped and 1 or 0.75)
+        card.iconBorder:SetBackdropBorderColor(typeColor[1], typeColor[2], typeColor[3], isEquipped and 1 or 0.9)
+
+        local btnIdx = 0
+        if isOwned then
+            if isEquipped then
+                btnIdx = btnIdx + 1
+                local btn = card.actionButtons[btnIdx]
+                if not btn then
+                    btn = CreateSmallButton(card, "卸下", 36, nil)
+                    card.actionButtons[btnIdx] = btn
+                end
+                btn:SetPoint("BOTTOMRIGHT", -8, 6)
+                btn.label:SetText("卸下")
+                btn.label:SetTextColor(1.0, 0.5, 0.5, 1)
+                local slotCmd = SLOTS[relic.activeSlot] and SLOTS[relic.activeSlot].cmd
+                btn:SetScript("OnClick", function()
+                    if slotCmd then
+                        App.selectedArtifactButtonKey = ""
+                        SendAddon("CLEAR_RELIC:" .. slotCmd)
+                        SendAddon("REQ_STATE")
+                        SendAddon("REQ_RELICS")
+                        App:RefreshArtifactPage()
+                    end
+                end)
+                btn:Show()
+            end
+
+            local validSlots = SLOT_MAP[relic.relicType] or {}
+            for _, slotIdx in ipairs(validSlots) do
+                btnIdx = btnIdx + 1
+                local btn = card.actionButtons[btnIdx]
+                if not btn then
+                    btn = CreateSmallButton(card, "", 42, nil)
+                    card.actionButtons[btnIdx] = btn
+                end
+                btn:SetPoint("BOTTOMRIGHT", -(8 + (btnIdx - 1) * 46), 6)
+                btn.label:SetText(SLOTS[slotIdx].label)
+                local buttonKey = string.format("%d:%d", relic.id, slotIdx)
+                btn:ApplySelectedState(App.selectedArtifactButtonKey == buttonKey, relic.activeSlot == slotIdx)
+                local relicId = relic.id
+                local slotCommand = SLOTS[slotIdx].cmd
+                btn:SetScript("OnClick", function()
+                    App.selectedArtifactButtonKey = buttonKey
+                    SendAddon(string.format("SET_RELIC:%s %d", slotCommand, relicId))
+                    SendAddon("REQ_STATE")
+                    SendAddon("REQ_RELICS")
+                    App:RefreshArtifactPage()
+                end)
+                btn:Show()
+            end
+        end
+
+        card:Show()
+    end
+
+    local totalRows = math.ceil(#filteredRelics / CARDS_PER_ROW)
+    self.artifactContent:SetHeight(math.max(totalRows * (CARD_H + CARD_GAP), 100))
+    self.artifactScroll:UpdateScrollChildRect()
 end
 
 -------------------------------------------------------
@@ -1758,6 +2503,7 @@ function App:GetOrCreateEquipmentCard(index)
     card.iconButton:SetScript("OnEnter", SetEquipmentItemTooltip)
     card.iconButton:SetScript("OnLeave", function()
         GameTooltip:Hide()
+        HideTooltipExtra()
     end)
     card.iconButton:SetScript("OnClick", function(self)
         if self.equipmentData and self.equipmentData.sourceChapter and self.equipmentData.sourceChapter > 0 then
@@ -1769,12 +2515,13 @@ function App:GetOrCreateEquipmentCard(index)
     card.icon = card.iconButton:CreateTexture(nil, "ARTWORK")
     card.icon:SetAllPoints()
     card.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+    ApplyIconTexCoords(card.icon)
 
-    card.iconBorder = card.iconButton:CreateTexture(nil, "OVERLAY")
-    card.iconBorder:SetPoint("TOPLEFT", -2, 2)
-    card.iconBorder:SetPoint("BOTTOMRIGHT", 2, -2)
-    card.iconBorder:SetTexture("Interface\\Buttons\\UI-Quickslot2")
-    card.iconBorder:SetBlendMode("BLEND")
+    card.iconBorder = CreateFrame("Frame", nil, card)
+    card.iconBorder:SetPoint("TOPLEFT", card.iconButton, "TOPLEFT", -3, 3)
+    card.iconBorder:SetPoint("BOTTOMRIGHT", card.iconButton, "BOTTOMRIGHT", 3, -3)
+    card.iconBorder:SetFrameLevel(math.max(card:GetFrameLevel(), card.iconButton:GetFrameLevel() - 1))
+    StylePanel(card.iconBorder, 0.02, 0.02, 0.03, 0.35)
 
     card.nameLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     card.nameLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -8)
@@ -1796,6 +2543,33 @@ function App:GetOrCreateEquipmentCard(index)
 
     self.equipmentCards[index] = card
     return card
+end
+
+function App:RefreshEquipmentFilterButtons()
+    if not self.equipmentActionBar then
+        return
+    end
+
+    self.equipmentFilterAllBtn:ApplySelectedState(App.equipmentFilterType == 0)
+    self.equipmentFilterBaseBtn:ApplySelectedState(App.equipmentFilterType == 1)
+    self.equipmentFilterUniqueBtn:ApplySelectedState(App.equipmentFilterType == 2)
+
+    self.equipmentModeAllBtn:ApplySelectedState(App.equipmentFilterMode == 0)
+    self.equipmentModeStoryBtn:ApplySelectedState(App.equipmentFilterMode == 1)
+    self.equipmentModeAbyssBtn:ApplySelectedState(App.equipmentFilterMode == 2)
+    self.equipmentModeCorruptBtn:ApplySelectedState(App.equipmentFilterMode == 3)
+    self.equipmentModeReincarnationBtn:ApplySelectedState(App.equipmentFilterMode == 4)
+
+    self.equipmentOwnedBtn:ApplySelectedState(App.equipmentOwnedOnly)
+    self.equipmentClearFilterBtn:ApplySelectedState(false)
+    self.equipmentFilterCurrentChapterBtn:ApplySelectedState(App.equipmentFilterChapter ~= 0)
+
+    self.equipmentFilterWeaponBtn:ApplySelectedState(App.equipmentFilterSlot == 1)
+    self.equipmentFilterAccessoryBtn:ApplySelectedState(App.equipmentFilterSlot == 128)
+    self.equipmentFilterHeadBtn:ApplySelectedState(App.equipmentFilterSlot == 2)
+    self.equipmentFilterChestBtn:ApplySelectedState(App.equipmentFilterSlot == 4)
+    self.equipmentFilterRingBtn:ApplySelectedState(App.equipmentFilterSlot == 64)
+    self.equipmentFilterFocusBtn:ApplySelectedState(App.equipmentFilterSlot == 512)
 end
 
 function App:RefreshEquipmentPage()
@@ -1826,6 +2600,9 @@ function App:RefreshEquipmentPage()
         end
     end
 
+    QueueItemPrefetchList(filteredEquipments)
+    self:RefreshEquipmentFilterButtons()
+
     self.equipmentStatus:SetText(string.format(
         "当前页为装备图鉴  |  显示: %d / %d  |  传奇唯一: %d  |  底材: %d  |  当前章节: %s  |  当前筛选: %s  |  点击图标跳转章节",
         #filteredEquipments, total, uniqueCount, baseCount,
@@ -1843,7 +2620,7 @@ function App:RefreshEquipmentPage()
         local row = math.floor((idx - 1) / CARDS_PER_ROW)
         card:SetPoint("TOPLEFT", col * (CARD_W + CARD_GAP), -row * (CARD_H + CARD_GAP))
 
-        local itemName, iconPath = ResolveItemDisplay(equipment.id, equipment.name)
+        local itemName, iconPath = ResolveItemDisplay(equipment.id, equipment.name, equipment.icon)
         local chapterName = equipment.sourceChapterName ~= "" and equipment.sourceChapterName or ("章节#" .. equipment.sourceChapter)
         local typeColor = equipment.fromCacheBoss and THEME.cacheBoss or GetEquipmentTypeColor(equipment.equipmentType)
         local descText = equipment.desc
@@ -1884,7 +2661,7 @@ function App:RefreshEquipmentPage()
         card.descLabel:SetTextColor(THEME.muted[1], THEME.muted[2], THEME.muted[3], 1)
 
         card.statusBar:SetVertexColor(typeColor[1], typeColor[2], typeColor[3], 0.9)
-        card.iconBorder:SetVertexColor(typeColor[1], typeColor[2], typeColor[3], 0.9)
+        card.iconBorder:SetBackdropBorderColor(typeColor[1], typeColor[2], typeColor[3], 0.9)
         if equipment.equipmentType == 2 then
             card:SetBackdropColor(0.17, 0.12, 0.08, 0.95)
             card:SetBackdropBorderColor(typeColor[1], typeColor[2], typeColor[3], 0.7)
@@ -1899,6 +2676,228 @@ function App:RefreshEquipmentPage()
     local totalRows = math.ceil(#filteredEquipments / CARDS_PER_ROW)
     self.equipmentContent:SetHeight(math.max(totalRows * (CARD_H + CARD_GAP), 100))
     self.equipmentScroll:UpdateScrollChildRect()
+end
+
+-------------------------------------------------------
+-- 套装图鉴页
+-------------------------------------------------------
+function App:BuildSetOverviewPage(parent)
+    self.setOverviewStatus = parent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    self.setOverviewStatus:SetPoint("TOPLEFT", 10, -8)
+    self.setOverviewStatus:SetPoint("RIGHT", -10, 0)
+    self.setOverviewStatus:SetJustifyH("LEFT")
+
+    self.setOverviewActionBar = CreateFrame("Frame", nil, parent)
+    self.setOverviewActionBar:SetPoint("TOPLEFT", 8, -28)
+    self.setOverviewActionBar:SetPoint("RIGHT", -8, 0)
+    self.setOverviewActionBar:SetHeight(24)
+
+    self.setOverviewAllBtn = CreateSmallButton(self.setOverviewActionBar, "全部", 52, function()
+        App.setOverviewFilterMode = 0
+        App:RefreshSetOverviewPage()
+    end)
+    self.setOverviewAllBtn:SetPoint("LEFT", 0, 0)
+
+    self.setOverviewStoryBtn = CreateSmallButton(self.setOverviewActionBar, "正传", 52, function()
+        App.setOverviewFilterMode = 1
+        App:RefreshSetOverviewPage()
+    end)
+    self.setOverviewStoryBtn:SetPoint("LEFT", self.setOverviewAllBtn, "RIGHT", 6, 0)
+
+    self.setOverviewCorruptBtn = CreateSmallButton(self.setOverviewActionBar, "腐化", 52, function()
+        App.setOverviewFilterMode = 3
+        App:RefreshSetOverviewPage()
+    end)
+    self.setOverviewCorruptBtn:SetPoint("LEFT", self.setOverviewStoryBtn, "RIGHT", 6, 0)
+
+    self.setOverviewReincarnationBtn = CreateSmallButton(self.setOverviewActionBar, "轮回", 52, function()
+        App.setOverviewFilterMode = 4
+        App:RefreshSetOverviewPage()
+    end)
+    self.setOverviewReincarnationBtn:SetPoint("LEFT", self.setOverviewCorruptBtn, "RIGHT", 6, 0)
+
+    self.setOverviewCurrentActBtn = CreateSmallButton(self.setOverviewActionBar, "当前幕", 60, function()
+        App.setOverviewCurrentActOnly = not App.setOverviewCurrentActOnly
+        App:RefreshSetOverviewPage()
+    end)
+    self.setOverviewCurrentActBtn:SetPoint("LEFT", self.setOverviewReincarnationBtn, "RIGHT", 16, 0)
+
+    self.setOverviewScroll = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
+    self.setOverviewScroll:SetPoint("TOPLEFT", 6, -56)
+    self.setOverviewScroll:SetPoint("BOTTOMRIGHT", -28, 6)
+
+    self.setOverviewContent = CreateFrame("Frame", nil, self.setOverviewScroll)
+    self.setOverviewContent:SetWidth(EQUIP_CONTENT_W)
+    self.setOverviewContent:SetHeight(100)
+    self.setOverviewScroll:SetScrollChild(self.setOverviewContent)
+    EnableScrollMouseWheel(self.setOverviewScroll, CARD_H)
+
+    self.setOverviewCards = {}
+end
+
+function App:GetOrCreateSetOverviewCard(index)
+    if self.setOverviewCards[index] then
+        return self.setOverviewCards[index]
+    end
+
+    local card = CreateFrame("Frame", nil, self.setOverviewContent)
+    card:SetSize(CARD_W, CARD_H)
+    StylePanel(card, THEME.cardBg[1], THEME.cardBg[2], THEME.cardBg[3], THEME.cardBg[4])
+
+    card.statusBar = card:CreateTexture(nil, "ARTWORK")
+    card.statusBar:SetSize(3, CARD_H - 8)
+    card.statusBar:SetPoint("LEFT", 4, 0)
+    card.statusBar:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+
+    card.iconButton = CreateFrame("Button", nil, card)
+    card.iconButton:SetSize(CARD_ICON_SIZE, CARD_ICON_SIZE)
+    card.iconButton:SetPoint("LEFT", 12, 0)
+    card.iconButton:RegisterForClicks("LeftButtonUp")
+    card.iconButton:SetScript("OnClick", function(self)
+        local setData = self.setData
+        if not setData then
+            return
+        end
+
+        ResetEquipmentFilters()
+        App.equipmentFilterType = 1
+        App.equipmentFilterMode = setData.sourceMode
+        App.equipmentFilterChapter = setData.sourceChapter
+        App:ShowTab("set")
+    end)
+
+    card.icon = card.iconButton:CreateTexture(nil, "ARTWORK")
+    card.icon:SetAllPoints()
+    card.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+    ApplyIconTexCoords(card.icon)
+
+    card.iconBorder = CreateFrame("Frame", nil, card)
+    card.iconBorder:SetPoint("TOPLEFT", card.iconButton, "TOPLEFT", -3, 3)
+    card.iconBorder:SetPoint("BOTTOMRIGHT", card.iconButton, "BOTTOMRIGHT", 3, -3)
+    card.iconBorder:SetFrameLevel(math.max(card:GetFrameLevel(), card.iconButton:GetFrameLevel() - 1))
+    StylePanel(card.iconBorder, 0.02, 0.02, 0.03, 0.35)
+
+    card.nameLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    card.nameLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -8)
+    card.nameLabel:SetPoint("RIGHT", -8, 0)
+    card.nameLabel:SetJustifyH("LEFT")
+
+    card.typeLabel = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    card.typeLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -26)
+    card.typeLabel:SetPoint("RIGHT", -8, 0)
+    card.typeLabel:SetJustifyH("LEFT")
+
+    card.slotLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    card.slotLabel:SetPoint("TOPRIGHT", -8, -8)
+
+    card.descLabel = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    card.descLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -40)
+    card.descLabel:SetPoint("RIGHT", -8, 0)
+    card.descLabel:SetJustifyH("LEFT")
+
+    self.setOverviewCards[index] = card
+    return card
+end
+
+function App:RefreshSetOverviewButtons()
+    if not self.setOverviewActionBar then
+        return
+    end
+
+    self.setOverviewAllBtn:ApplySelectedState(App.setOverviewFilterMode == 0)
+    self.setOverviewStoryBtn:ApplySelectedState(App.setOverviewFilterMode == 1)
+    self.setOverviewCorruptBtn:ApplySelectedState(App.setOverviewFilterMode == 3)
+    self.setOverviewReincarnationBtn:ApplySelectedState(App.setOverviewFilterMode == 4)
+    self.setOverviewCurrentActBtn:ApplySelectedState(App.setOverviewCurrentActOnly)
+end
+
+function App:RefreshSetOverviewPage()
+    local currentActId = GetCurrentActId()
+    local allGroups = BuildEquipmentSetGroups()
+    local filteredGroups = {}
+
+    for _, group in ipairs(allGroups) do
+        local modeMatch = App.setOverviewFilterMode == 0 or group.sourceMode == App.setOverviewFilterMode
+        local actMatch = not App.setOverviewCurrentActOnly or (currentActId > 0 and group.actId == currentActId)
+        if modeMatch and actMatch then
+            table.insert(filteredGroups, group)
+        end
+    end
+
+    self:RefreshSetOverviewButtons()
+    self.setOverviewStatus:SetText(string.format(
+        "当前页为套装图鉴  |  显示: %d / %d  |  当前幕: %s  |  点击图标跳转到对应装备图鉴",
+        #filteredGroups,
+        #allGroups,
+        currentActId > 0 and ("第" .. currentActId .. "幕") or "无"
+    ))
+
+    for _, card in ipairs(self.setOverviewCards) do
+        card:Hide()
+    end
+
+    for idx, group in ipairs(filteredGroups) do
+        local card = self:GetOrCreateSetOverviewCard(idx)
+        local col = (idx - 1) % CARDS_PER_ROW
+        local row = math.floor((idx - 1) / CARDS_PER_ROW)
+        local rep = group.representative
+        local itemName, iconPath = ResolveItemDisplay(rep.id, rep.name, rep.icon)
+        local typeColor = GetEquipmentTypeColor(1)
+
+        card:SetPoint("TOPLEFT", col * (CARD_W + CARD_GAP), -row * (CARD_H + CARD_GAP))
+        card.icon:SetTexture(iconPath)
+        card.iconButton.itemId = rep.id
+        card.iconButton.setData = group
+
+        card.nameLabel:SetText(group.name)
+        card.nameLabel:SetTextColor(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        card.typeLabel:SetText(string.format(
+            "来源章节: %s  |  模式: %s  |  件数: %d/9",
+            group.sourceChapterName ~= "" and group.sourceChapterName or ("章节#" .. group.sourceChapter),
+            GetEquipmentSourceModeName(group.sourceMode),
+            group.pieceCount or 0
+        ))
+        card.typeLabel:SetTextColor(typeColor[1], typeColor[2], typeColor[3], 0.85)
+        card.slotLabel:SetText("|cffDBA64A套装|r")
+
+        -- 卡片本体只显示部位概览
+        card.descLabel:SetText(group.slotSummary ~= "" and group.slotSummary or (itemName or rep.name))
+        card.descLabel:SetTextColor(THEME.muted[1], THEME.muted[2], THEME.muted[3], 1)
+
+        -- tooltip显示套装效果（不重复卡片内容）
+        local bonusKey = string.format("%d:%d", group.sourceMode, group.actId)
+        local bonus = App.setBonusMap[bonusKey]
+        card.bonusData = bonus
+        card.groupData = group
+        card:EnableMouse(true)
+        card:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:AddLine(self.groupData.name, 1.0, 0.82, 0.28)
+            GameTooltip:AddLine(string.format("件数: %d/9  |  模式: %s", self.groupData.pieceCount or 0, GetEquipmentSourceModeName(self.groupData.sourceMode)), 0.7, 0.7, 0.7)
+            local b = self.bonusData
+            if b then
+                if b.twoPieceDesc ~= "" then
+                    GameTooltip:AddLine(" ")
+                    GameTooltip:AddLine("|cff00ff00(2件) " .. b.twoPieceDesc .. "|r", 0, 1, 0, true)
+                end
+                if b.fourPieceDesc ~= "" then
+                    GameTooltip:AddLine("|cffff8000(4件) " .. b.fourPieceDesc .. "|r", 1, 0.5, 0, true)
+                end
+            else
+                GameTooltip:AddLine(" ")
+                GameTooltip:AddLine("暂无套装效果数据", 0.5, 0.5, 0.5)
+            end
+            GameTooltip:Show()
+        end)
+        card:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        card.statusBar:SetVertexColor(typeColor[1], typeColor[2], typeColor[3], 0.85)
+        card.iconBorder:SetBackdropBorderColor(typeColor[1], typeColor[2], typeColor[3], 0.9)
+        card:Show()
+    end
+
+    local totalRows = math.ceil(#filteredGroups / CARDS_PER_ROW)
+    self.setOverviewContent:SetHeight(math.max(totalRows * (CARD_H + CARD_GAP), 100))
+    self.setOverviewScroll:UpdateScrollChildRect()
 end
 
 -------------------------------------------------------
@@ -2197,6 +3196,16 @@ function App:RefreshChapterDetail()
     local lines = {}
     table.insert(lines, string.format("|cffDBA64A章节任务|r  起始任务: |cffffffff%d|r  完成任务: |cffffffff%d|r", chapter.startQuestId, chapter.completeQuestId))
     table.insert(lines, string.format(
+        "|cffDBA64A首领映射|r  锚点: |cffffffff%s|r  |  最终: |cffffffff%s|r",
+        FormatBossDisplay(chapter.anchorBossEntry, chapter.anchorBossName),
+        FormatBossDisplay(chapter.finalBossEntry, chapter.finalBossName)
+    ))
+    table.insert(lines, string.format(
+        "|cffDBA64A模式首领|r  深渊: |cffffffff%s|r  |  秘藏: |cffffffff%s|r",
+        FormatBossDisplay(chapter.abyssBossEntry, chapter.abyssBossName),
+        FormatBossDisplay(chapter.cacheBossEntry, chapter.cacheBossName)
+    ))
+    table.insert(lines, string.format(
         "|cffDBA64A章节模式|r  正传:%s  深渊:%s  腐化:%s  轮回:%s",
         HasChapterModeUnlocked(chapter, 1) and "|cff4dcc4d已解锁|r" or "|cffff6b6b未解锁|r",
         HasChapterModeUnlocked(chapter, 2) and "|cff4dcc4d已解锁|r" or "|cffff6b6b未解锁|r",
@@ -2235,7 +3244,7 @@ function App:RefreshChapterDetail()
     local categoryOrder = { "anchor", "final", "abyss", "cache" }
     for _, category in ipairs(categoryOrder) do
         table.insert(lines, " ")
-        table.insert(lines, string.format("|cffDBA64A%s掉落预览|r", GetRewardBossCategoryName(category)))
+        table.insert(lines, string.format("|cffDBA64A%s掉落预览|r", GetChapterBossCategoryTitle(chapter, category)))
 
         local rewards = preview and preview.categories and preview.categories[category] or nil
         if rewards and #rewards > 0 then
@@ -2337,8 +3346,10 @@ function App:OnLoad(frame)
 
     -- 标签
     self.tabEquip = CreateTabButton(frame, "专属装备", 16, function() App:ShowTab("equip") end)
-    self.tabSet = CreateTabButton(frame, "装备图鉴", 152, function() App:ShowTab("set") end)
-    self.tabChapter = CreateTabButton(frame, "剧情章节", 288, function() App:ShowTab("chapter") end)
+    self.tabArtifact = CreateTabButton(frame, "神器图鉴", 152, function() App:ShowTab("artifact") end)
+    self.tabSet = CreateTabButton(frame, "装备图鉴", 288, function() App:ShowTab("set") end)
+    self.tabSuit = CreateTabButton(frame, "套装图鉴", 424, function() App:ShowTab("suit") end)
+    self.tabChapter = CreateTabButton(frame, "剧情章节", 560, function() App:ShowTab("chapter") end)
 
     -- 内容区域
     self.contentFrame = CreateFrame("Frame", nil, frame)
@@ -2350,10 +3361,18 @@ function App:OnLoad(frame)
     self.equipFrame:SetAllPoints()
     self:BuildEquipPage(self.equipFrame)
 
+    self.artifactFrame = CreateFrame("Frame", nil, self.contentFrame)
+    self.artifactFrame:SetAllPoints()
+    self:BuildArtifactPage(self.artifactFrame)
+
     -- 套装页
     self.setFrame = CreateFrame("Frame", nil, self.contentFrame)
     self.setFrame:SetAllPoints()
     self:BuildEquipmentPage(self.setFrame)
+
+    self.suitFrame = CreateFrame("Frame", nil, self.contentFrame)
+    self.suitFrame:SetAllPoints()
+    self:BuildSetOverviewPage(self.suitFrame)
 
     -- 章节页
     self.chapterFrame = CreateFrame("Frame", nil, self.contentFrame)
@@ -2368,22 +3387,45 @@ function App:ShowTab(tab)
     self.activeTab = tab
     self:HideRelicContextMenu()
     self.tabEquip:SetActive(tab == "equip")
+    self.tabArtifact:SetActive(tab == "artifact")
     self.tabSet:SetActive(tab == "set")
+    self.tabSuit:SetActive(tab == "suit")
     self.tabChapter:SetActive(tab == "chapter")
 
     if tab == "equip" then
         SendAddon("REQ_STATE")
         SendAddon("REQ_RELICS")
         self.equipFrame:Show()
+        self.artifactFrame:Hide()
         self.setFrame:Hide()
+        self.suitFrame:Hide()
         self.chapterFrame:Hide()
         self:RefreshEquipPage()
+    elseif tab == "artifact" then
+        SendAddon("REQ_STATE")
+        SendAddon("REQ_RELICS")
+        self.equipFrame:Hide()
+        self.artifactFrame:Show()
+        self.setFrame:Hide()
+        self.suitFrame:Hide()
+        self.chapterFrame:Hide()
+        self:RefreshArtifactPage()
     elseif tab == "set" then
         SendAddon("REQ_EQUIPMENTS")
         self.equipFrame:Hide()
+        self.artifactFrame:Hide()
         self.setFrame:Show()
+        self.suitFrame:Hide()
         self.chapterFrame:Hide()
         self:RefreshEquipmentPage()
+    elseif tab == "suit" then
+        SendAddon("REQ_EQUIPMENTS")
+        self.equipFrame:Hide()
+        self.artifactFrame:Hide()
+        self.setFrame:Hide()
+        self.suitFrame:Show()
+        self.chapterFrame:Hide()
+        self:RefreshSetOverviewPage()
     else
         SendAddon("REQ_STATE")
         SendAddon("REQ_CHAPTERS")
@@ -2393,7 +3435,9 @@ function App:ShowTab(tab)
             SendAddon("REQ_REWARD_CHAPTER:" .. self.selectedChapterId)
         end
         self.equipFrame:Hide()
+        self.artifactFrame:Hide()
         self.setFrame:Hide()
+        self.suitFrame:Hide()
         self.chapterFrame:Show()
         self:RefreshChapterPage()
     end
@@ -2410,8 +3454,12 @@ function App:RefreshCurrent()
     if not self.frame or not self.frame:IsShown() then return end
     if self.activeTab == "equip" then
         self:RefreshEquipPage()
+    elseif self.activeTab == "artifact" then
+        self:RefreshArtifactPage()
     elseif self.activeTab == "set" then
         self:RefreshEquipmentPage()
+    elseif self.activeTab == "suit" then
+        self:RefreshSetOverviewPage()
     else
         self:RefreshChapterPage()
     end
@@ -2579,6 +3627,8 @@ local function HandleMessage(message)
         end
     elseif cmd == "EQUIPMENTS" then
         ParseEquipments(payload)
+    elseif cmd == "SET_BONUSES" then
+        ParseSetBonuses(payload)
     elseif cmd == "CHAPTERS" then
         ParseChapters(payload)
         if App.activeTab == "chapter" and App.selectedChapterId and App.selectedChapterId > 0 then
@@ -2656,6 +3706,7 @@ end
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
 eventFrame:RegisterEvent("CHAT_MSG_ADDON")
+eventFrame:RegisterEvent("GET_ITEM_INFO_RECEIVED")
 eventFrame:SetScript("OnEvent", function(_, event, ...)
     if event == "PLAYER_LOGIN" then
         if RegisterAddonMessagePrefix then
@@ -2665,6 +3716,39 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         end
         App:CreateModePromptFrame()
         App:CreateIconButton()
+        return
+    end
+
+    if event == "GET_ITEM_INFO_RECEIVED" then
+        local itemId, ok = ...
+        if not itemId or itemId <= 0 or not App.pendingItemInfo[itemId] then
+            return
+        end
+
+        if ok then
+            local _, _, _, _, _, _, _, _, _, itemIcon = GetItemInfo(itemId)
+            if itemIcon and itemIcon ~= "Interface\\Icons\\INV_Misc_QuestionMark" then
+                CacheItemIcon(itemId, itemIcon)
+            end
+        end
+
+        App.pendingItemInfo[itemId] = nil
+
+        if App.frame and App.frame:IsShown() and not App.itemInfoRefreshQueued then
+            App.itemInfoRefreshQueued = true
+            local refresh = function()
+                App.itemInfoRefreshQueued = false
+                if App.frame and App.frame:IsShown() then
+                    App:RefreshCurrent()
+                end
+            end
+
+            if C_Timer and C_Timer.After then
+                C_Timer.After(0.05, refresh)
+            else
+                refresh()
+            end
+        end
         return
     end
 
