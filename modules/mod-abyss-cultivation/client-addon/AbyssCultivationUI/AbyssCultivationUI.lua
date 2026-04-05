@@ -91,22 +91,46 @@ App.modePrompt = {
     corruptionTier = 0,
 }
 
--- 主题色
+-- 主题色 —— 灵渊幽境
 local THEME = {
-    bg          = { 0.05, 0.04, 0.08, 0.95 },
-    panel       = { 0.08, 0.06, 0.12, 0.92 },
-    border      = { 0.35, 0.18, 0.55, 0.95 },
+    -- 核心背景（三级递进：深渊黑 → 暗紫 → 面板紫）
+    bg          = { 0.03, 0.02, 0.06, 0.98 },
+    panelDark   = { 0.05, 0.03, 0.09, 0.96 },
+    panel       = { 0.07, 0.05, 0.12, 0.94 },
+    panelLight  = { 0.10, 0.07, 0.16, 0.92 },
+    headerBg    = { 0.04, 0.03, 0.08, 0.90 },
+    -- 金色系
     accent      = { 0.86, 0.66, 0.16, 1.0 },
+    gold        = { 0.86, 0.66, 0.16, 1.0 },
+    goldLight   = { 1.00, 0.84, 0.36, 1.0 },
+    goldDim     = { 0.50, 0.38, 0.10, 1.0 },
+    -- 紫色系
+    purple      = { 0.55, 0.30, 0.80, 1.0 },
+    purpleLight = { 0.70, 0.48, 0.92, 1.0 },
+    purpleDim   = { 0.28, 0.16, 0.42, 0.90 },
+    -- 边框
+    border      = { 0.32, 0.20, 0.50, 0.90 },
+    borderGold  = { 0.60, 0.46, 0.16, 0.95 },
+    borderBright= { 0.45, 0.28, 0.65, 1.0 },
+    -- 分割线
+    divider     = { 0.55, 0.42, 0.12, 0.50 },
+    -- 文字
     text        = { 0.94, 0.92, 0.86, 1.0 },
-    muted       = { 0.60, 0.58, 0.52, 1.0 },
+    textBright  = { 1.00, 0.98, 0.92, 1.0 },
+    muted       = { 0.52, 0.50, 0.46, 1.0 },
+    -- 状态
     equipped    = { 0.30, 0.80, 0.40, 1.0 },
-    empty       = { 0.40, 0.40, 0.40, 1.0 },
-    cardBg      = { 0.10, 0.08, 0.15, 0.95 },
-    cardEquip   = { 0.12, 0.18, 0.12, 0.95 },
-    currentCh   = { 0.86, 0.66, 0.16, 0.25 },
+    empty       = { 0.32, 0.32, 0.36, 1.0 },
+    -- 卡片
+    cardBg      = { 0.06, 0.04, 0.10, 0.96 },
+    cardHover   = { 0.09, 0.06, 0.15, 0.98 },
+    cardEquip   = { 0.06, 0.12, 0.08, 0.96 },
+    currentCh   = { 0.86, 0.66, 0.16, 0.20 },
+    -- 遗物类型色
     relicType1  = { 0.60, 0.80, 1.00, 1.0 },  -- 章节遗物 蓝
     relicType2  = { 1.00, 0.60, 0.20, 1.0 },  -- 阶段神器 橙
     relicType3  = { 1.00, 0.40, 0.80, 1.0 },  -- 终极神器 粉
+    -- 装备类型色
     equipType1  = { 0.62, 0.84, 1.00, 1.0 },  -- 套装底材 蓝
     equipType2  = { 1.00, 0.74, 0.24, 1.0 },  -- 传奇唯一 金
     cacheBoss   = { 0.88, 0.30, 0.30, 1.0 },  -- 秘藏首领 红
@@ -209,11 +233,238 @@ local function StylePanel(frame, r, g, b, a)
     frame:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true, tileSize = 16, edgeSize = 12,
+        tile = true, tileSize = 16, edgeSize = 14,
         insets = { left = 3, right = 3, top = 3, bottom = 3 },
     })
     frame:SetBackdropColor(r or THEME.panel[1], g or THEME.panel[2], b or THEME.panel[3], a or THEME.panel[4])
     frame:SetBackdropBorderColor(THEME.border[1], THEME.border[2], THEME.border[3], THEME.border[4])
+end
+
+local function StylePanelPremium(frame)
+    frame:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+        tile = true, tileSize = 32, edgeSize = 24,
+        insets = { left = 5, right = 5, top = 5, bottom = 5 },
+    })
+    frame:SetBackdropColor(THEME.bg[1], THEME.bg[2], THEME.bg[3], THEME.bg[4])
+    frame:SetBackdropBorderColor(THEME.borderGold[1], THEME.borderGold[2], THEME.borderGold[3], THEME.borderGold[4])
+end
+
+local function StylePanelCard(frame, r, g, b, a)
+    frame:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 10,
+        insets = { left = 2, right = 2, top = 2, bottom = 2 },
+    })
+    frame:SetBackdropColor(r or THEME.cardBg[1], g or THEME.cardBg[2], b or THEME.cardBg[3], a or THEME.cardBg[4])
+    frame:SetBackdropBorderColor(THEME.border[1], THEME.border[2], THEME.border[3], 0.70)
+end
+
+local function StylePanelFlat(frame, r, g, b, a)
+    frame:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        tile = true, tileSize = 16,
+        insets = { left = 0, right = 0, top = 0, bottom = 0 },
+    })
+    frame:SetBackdropColor(r or THEME.panelDark[1], g or THEME.panelDark[2], b or THEME.panelDark[3], a or THEME.panelDark[4])
+end
+
+local function CreateDivider(parent, anchorPoint, yOffset, xLeft, xRight)
+    local line = parent:CreateTexture(nil, "ARTWORK")
+    line:SetHeight(1)
+    line:SetPoint("LEFT", xLeft or 8, 0)
+    line:SetPoint("RIGHT", -(xRight or 8), 0)
+    line:SetPoint(anchorPoint or "TOP", 0, yOffset or 0)
+    line:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    line:SetVertexColor(THEME.divider[1], THEME.divider[2], THEME.divider[3], THEME.divider[4])
+    return line
+end
+
+local function CreateCornerGlow(parent)
+    local corners = {}
+    local positions = {
+        { "TOPLEFT", 6, -6 },
+        { "TOPRIGHT", -6, -6 },
+        { "BOTTOMLEFT", 6, 6 },
+        { "BOTTOMRIGHT", -6, 6 },
+    }
+    for _, pos in ipairs(positions) do
+        local glow = parent:CreateTexture(nil, "OVERLAY")
+        glow:SetSize(28, 28)
+        glow:SetPoint(pos[1], pos[2], pos[3])
+        glow:SetTexture("Interface\\Buttons\\CheckButtonGlow")
+        glow:SetBlendMode("ADD")
+        glow:SetVertexColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 0.12)
+        table.insert(corners, glow)
+    end
+    return corners
+end
+
+local function CreateGlowTitle(parent, text, fontObj)
+    local shadow = parent:CreateFontString(nil, "ARTWORK", fontObj or "GameFontNormalLarge")
+    shadow:SetText(text)
+    shadow:SetTextColor(0.40, 0.25, 0.05, 0.55)
+
+    local title = parent:CreateFontString(nil, "OVERLAY", fontObj or "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", shadow, "TOPLEFT", 1, -1)
+    title:SetText(text)
+    title:SetTextColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 1.0)
+    return title, shadow
+end
+
+-- 创建带品质色边框光晕的图标框架
+local function CreateStyledIconFrame(parent, size, borderSize)
+    size = size or CARD_ICON_SIZE or 40
+    borderSize = borderSize or 3
+    local holder = CreateFrame("Frame", nil, parent)
+    holder:SetSize(size + borderSize * 2, size + borderSize * 2)
+
+    local iconBtn = CreateFrame("Button", nil, holder)
+    iconBtn:SetSize(size, size)
+    iconBtn:SetPoint("CENTER")
+    iconBtn:EnableMouse(true)
+    iconBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+
+    local icon = iconBtn:CreateTexture(nil, "ARTWORK")
+    icon:SetAllPoints()
+    icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+    icon:SetTexCoord(ICON_TEX_COORD_MIN, ICON_TEX_COORD_MAX, ICON_TEX_COORD_MIN, ICON_TEX_COORD_MAX)
+
+    local overlay = iconBtn:CreateTexture(nil, "OVERLAY")
+    overlay:SetAllPoints()
+    overlay:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    overlay:SetVertexColor(0, 0, 0, 0)
+
+    local border = CreateFrame("Frame", nil, holder)
+    border:SetPoint("TOPLEFT", iconBtn, "TOPLEFT", -borderSize, borderSize)
+    border:SetPoint("BOTTOMRIGHT", iconBtn, "BOTTOMRIGHT", borderSize, -borderSize)
+    border:SetFrameLevel(math.max(holder:GetFrameLevel(), iconBtn:GetFrameLevel() - 1))
+    StylePanelCard(border, 0.02, 0.02, 0.04, 0.40)
+
+    local glow = holder:CreateTexture(nil, "BACKGROUND")
+    glow:SetPoint("CENTER", iconBtn)
+    glow:SetSize(size + 18, size + 18)
+    glow:SetTexture("Interface\\Buttons\\CheckButtonGlow")
+    glow:SetBlendMode("ADD")
+    glow:SetAlpha(0)
+
+    holder.iconButton = iconBtn
+    holder.icon = icon
+    holder.iconOverlay = overlay
+    holder.iconBorder = border
+    holder.iconGlow = glow
+
+    -- 设置品质色
+    function holder:SetQualityColor(r, g, b, equipped)
+        self.iconBorder:SetBackdropBorderColor(r, g, b, equipped and 1 or 0.90)
+        if self.iconGlow then
+            self.iconGlow:SetVertexColor(r, g, b, 1)
+            self.iconGlow:SetAlpha(equipped and 0.20 or 0.10)
+        end
+    end
+
+    -- 设置灰色遮罩（未收藏状态）
+    function holder:SetDesaturated(desaturate)
+        if self.iconOverlay then
+            self.iconOverlay:SetVertexColor(0, 0, 0, desaturate and 0.45 or 0)
+        end
+    end
+
+    return holder
+end
+
+-- 创建 pill 样式的标签背景（用于卡片右上角的槽位/类型标签）
+local function CreatePillLabel(parent, fontObj)
+    local pill = CreateFrame("Frame", nil, parent)
+    pill:SetHeight(18)
+    StylePanelFlat(pill, 0.10, 0.07, 0.16, 0.70)
+
+    pill.label = pill:CreateFontString(nil, "OVERLAY", fontObj or "GameFontHighlightSmall")
+    pill.label:SetPoint("LEFT", 6, 0)
+    pill.label:SetPoint("RIGHT", -6, 0)
+    pill.label:SetJustifyH("CENTER")
+
+    function pill:SetLabelText(text)
+        self.label:SetText(text or "")
+        if not text or text == "" then
+            self:Hide()
+            return
+        end
+        -- 自动调整宽度
+        local textWidth = self.label:GetStringWidth() or 0
+        self:SetWidth(math.max(textWidth + 14, 28))
+        self:Show()
+    end
+
+    function pill:SetLabelColor(r, g, b, a)
+        self.label:SetTextColor(r or 1, g or 1, b or 1, a or 1)
+    end
+
+    function pill:SetPillColor(r, g, b, a)
+        self:SetBackdropColor(r or 0.10, g or 0.07, b or 0.16, a or 0.70)
+    end
+
+    return pill
+end
+
+-- 美化滚动条（暗紫色 thumb + 降低按钮透明度）
+local function StyleScrollBar(scrollFrame)
+    if not scrollFrame then return end
+
+    -- 尝试通过名称访问（UIPanelScrollFrameTemplate 通常用 $parentScrollBar 命名）
+    local scrollBarName = scrollFrame:GetName()
+    local scrollBar
+    if scrollBarName then
+        scrollBar = _G[scrollBarName .. "ScrollBar"]
+    end
+
+    -- 如果没有名称，尝试遍历子元素查找 Slider 类型的滚动条
+    if not scrollBar then
+        local children = { scrollFrame:GetChildren() }
+        for _, child in ipairs(children) do
+            if child and child.GetObjectType and child:GetObjectType() == "Slider" then
+                scrollBar = child
+                break
+            end
+        end
+    end
+
+    if not scrollBar then return end
+
+    local thumbTex = scrollBar.GetThumbTexture and scrollBar:GetThumbTexture()
+    if thumbTex then
+        thumbTex:SetVertexColor(THEME.purpleDim[1], THEME.purpleDim[2], THEME.purpleDim[3], 0.85)
+    end
+
+    -- 尝试降低上下按钮透明度
+    local sbName = scrollBar:GetName()
+    if sbName then
+        local upBtn = _G[sbName .. "ScrollUpButton"]
+        if upBtn then upBtn:SetAlpha(0.50) end
+        local downBtn = _G[sbName .. "ScrollDownButton"]
+        if downBtn then downBtn:SetAlpha(0.50) end
+    end
+end
+
+-- 创建筛选组竖线分隔符
+local function CreateFilterSeparator(parent, anchorFrame)
+    local sep = parent:CreateTexture(nil, "ARTWORK")
+    sep:SetSize(1, 16)
+    sep:SetPoint("LEFT", anchorFrame, "RIGHT", 8, 0)
+    sep:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    sep:SetVertexColor(THEME.divider[1], THEME.divider[2], THEME.divider[3], 0.60)
+    return sep
+end
+
+-- 创建筛选组金色标签
+local function CreateFilterGroupLabel(parent, text, anchorFrame, xOffset)
+    local label = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    label:SetPoint("LEFT", anchorFrame, "RIGHT", xOffset or 4, 0)
+    label:SetText(text)
+    label:SetTextColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 0.85)
+    return label
 end
 
 local function EnableScrollMouseWheel(scrollFrame, step)
@@ -1568,10 +1819,11 @@ end
 -------------------------------------------------------
 local function CreateSmallButton(parent, text, width, onClick)
     local btn = CreateFrame("Button", nil, parent)
-    btn:SetSize(width, 20)
-    StylePanel(btn)
+    btn:SetSize(width + 4, 22)
     btn:EnableMouse(true)
     btn:RegisterForClicks("LeftButtonUp")
+
+    StylePanelCard(btn, THEME.panelDark[1], THEME.panelDark[2], THEME.panelDark[3], 0.90)
 
     btn.label = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     btn.label:SetPoint("CENTER")
@@ -1585,29 +1837,29 @@ local function CreateSmallButton(parent, text, width, onClick)
         self.isEquippedChoice = equippedChoice and true or false
 
         if self.isEquippedChoice and self.isHovered then
-            self:SetBackdropColor(0.08, 0.22, 0.10, 1)
-            self:SetBackdropBorderColor(0.42, 1.00, 0.52, 1)
-            self.label:SetTextColor(0.82, 1.00, 0.84, 1)
+            self:SetBackdropColor(0.06, 0.20, 0.08, 0.98)
+            self:SetBackdropBorderColor(0.40, 0.95, 0.50, 1)
+            self.label:SetTextColor(0.80, 1.00, 0.82, 1)
         elseif self.isEquippedChoice then
-            self:SetBackdropColor(0.05, 0.17, 0.08, 0.98)
-            self:SetBackdropBorderColor(0.30, 0.85, 0.40, 1)
-            self.label:SetTextColor(0.72, 0.98, 0.76, 1)
+            self:SetBackdropColor(0.04, 0.14, 0.06, 0.96)
+            self:SetBackdropBorderColor(0.28, 0.80, 0.38, 1)
+            self.label:SetTextColor(0.70, 0.96, 0.74, 1)
         elseif self.isSelected and self.isHovered then
-            self:SetBackdropColor(0.30, 0.20, 0.05, 1)
-            self:SetBackdropBorderColor(1.0, 0.86, 0.30, 1)
-            self.label:SetTextColor(1.0, 0.96, 0.72, 1)
+            self:SetBackdropColor(0.25, 0.18, 0.04, 0.98)
+            self:SetBackdropBorderColor(THEME.goldLight[1], THEME.goldLight[2], THEME.goldLight[3], 1)
+            self.label:SetTextColor(1.0, 0.94, 0.68, 1)
         elseif self.isSelected then
-            self:SetBackdropColor(0.22, 0.15, 0.04, 0.98)
-            self:SetBackdropBorderColor(THEME.accent[1], THEME.accent[2], THEME.accent[3], 1)
-            self.label:SetTextColor(1.0, 0.92, 0.62, 1)
+            self:SetBackdropColor(0.18, 0.12, 0.03, 0.96)
+            self:SetBackdropBorderColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 0.95)
+            self.label:SetTextColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 1)
         elseif self.isHovered then
-            self:SetBackdropColor(0.12, 0.09, 0.18, 0.98)
-            self:SetBackdropBorderColor(0.78, 0.60, 0.18, 0.95)
-            self.label:SetTextColor(0.98, 0.90, 0.76, 1)
+            self:SetBackdropColor(THEME.panelLight[1], THEME.panelLight[2], THEME.panelLight[3], 0.96)
+            self:SetBackdropBorderColor(THEME.borderBright[1], THEME.borderBright[2], THEME.borderBright[3], 0.85)
+            self.label:SetTextColor(THEME.textBright[1], THEME.textBright[2], THEME.textBright[3], 1)
         else
-            self:SetBackdropColor(THEME.panel[1], THEME.panel[2], THEME.panel[3], 0.92)
-            self:SetBackdropBorderColor(THEME.border[1], THEME.border[2], THEME.border[3], THEME.border[4])
-            self.label:SetTextColor(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+            self:SetBackdropColor(THEME.panelDark[1], THEME.panelDark[2], THEME.panelDark[3], 0.90)
+            self:SetBackdropBorderColor(THEME.border[1], THEME.border[2], THEME.border[3], 0.60)
+            self.label:SetTextColor(THEME.text[1], THEME.text[2], THEME.text[3], 0.85)
         end
     end
 
@@ -1638,27 +1890,34 @@ function App:CreateModePromptFrame()
     end
 
     local frame = CreateFrame("Frame", nil, UIParent)
-    frame:SetSize(420, 168)
+    frame:SetSize(440, 180)
     frame:SetPoint("CENTER", UIParent, "CENTER", 0, 120)
     frame:SetFrameStrata("DIALOG")
     frame:EnableMouse(true)
-    StylePanel(frame, 0.05, 0.04, 0.08, 0.98)
+    StylePanelPremium(frame)
     frame:Hide()
 
-    frame.title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    frame.title:SetPoint("TOP", 0, -14)
-    frame.title:SetTextColor(THEME.accent[1], THEME.accent[2], THEME.accent[3], 1)
-    frame.title:SetText("深渊模式选择")
+    -- 四角装饰光效
+    CreateCornerGlow(frame)
+
+    -- 标题（带辉光效果，居中加大）
+    local titleMain, titleShadow = CreateGlowTitle(frame, "深渊模式选择")
+    titleShadow:SetPoint("TOP", 0, -16)
+    titleMain:SetPoint("TOPLEFT", titleShadow, "TOPLEFT", 1, -1)
+    frame.title = titleMain
+
+    -- 标题下方金色分割线
+    CreateDivider(frame, "TOP", -38, 16, 16)
 
     frame.desc = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    frame.desc:SetPoint("TOPLEFT", 20, -42)
-    frame.desc:SetPoint("TOPRIGHT", -20, -42)
+    frame.desc:SetPoint("TOPLEFT", 24, -46)
+    frame.desc:SetPoint("TOPRIGHT", -24, -46)
     frame.desc:SetJustifyH("LEFT")
     frame.desc:SetJustifyV("TOP")
 
     frame.buttons = {}
     for i = 1, 4 do
-        local btn = CreateSmallButton(frame, "", 90, function(self)
+        local btn = CreateSmallButton(frame, "", 92, function(self)
             if self.isCancel then
                 App:HideModePrompt()
                 return
@@ -1677,7 +1936,7 @@ function App:CreateModePromptFrame()
             App:HideModePrompt()
             SendEnterChapter(chapterId, modeType, corruptionTier, true)
         end)
-        btn:SetPoint("BOTTOMLEFT", 22 + (i - 1) * 96, 16)
+        btn:SetPoint("BOTTOMLEFT", 24 + (i - 1) * 100, 20)
         frame.buttons[i] = btn
     end
 
@@ -1754,12 +2013,12 @@ end
 -- 装备页：槽位概览 + 遗物卡片网格
 -------------------------------------------------------
 -- 卡片尺寸和布局
-local CARD_W = 274
-local CARD_H = 72
-local CARD_GAP = 8
+local CARD_W = 276
+local CARD_H = 78
+local CARD_GAP = 10
 local CARDS_PER_ROW = 4
-local CARD_ICON_SIZE = 36
-local CARD_TEXT_LEFT = 18 + CARD_ICON_SIZE
+local CARD_ICON_SIZE = 40
+local CARD_TEXT_LEFT = 20 + CARD_ICON_SIZE
 local EQUIP_CONTENT_W = CARD_W * CARDS_PER_ROW + CARD_GAP * (CARDS_PER_ROW - 1)
 local CHAPTER_CONTENT_W = 1120
 local CHAPTER_LIST_W = 392
@@ -1771,22 +2030,30 @@ local SLOT_INDICATORS_PER_ROW = 4
 function App:BuildEquipPage(parent)
     -- 顶部：8个槽位概览
     self.slotBar = CreateFrame("Frame", nil, parent)
-    self.slotBar:SetSize(SLOT_BAR_W, 82)
+    self.slotBar:SetSize(SLOT_BAR_W, 90)
     self.slotBar:SetPoint("TOPLEFT", 6, -4)
     StylePanel(self.slotBar)
 
     self.slotIndicators = {}
     for i, slot in ipairs(SLOTS) do
         local ind = CreateFrame("Frame", nil, self.slotBar)
-        ind:SetSize(SLOT_INDICATOR_W, 34)
+        ind:SetSize(SLOT_INDICATOR_W, 38)
         local col = (i - 1) % SLOT_INDICATORS_PER_ROW
         local row = math.floor((i - 1) / SLOT_INDICATORS_PER_ROW)
-        ind:SetPoint("TOPLEFT", 8 + col * SLOT_INDICATOR_STEP, -6 - row * 34)
+        ind:SetPoint("TOPLEFT", 8 + col * SLOT_INDICATOR_STEP, -6 - row * 40)
+        StylePanelFlat(ind, THEME.panelDark[1], THEME.panelDark[2], THEME.panelDark[3], 0.60)
 
         ind.dot = ind:CreateTexture(nil, "OVERLAY")
-        ind.dot:SetSize(8, 8)
-        ind.dot:SetPoint("LEFT", 4, 0)
+        ind.dot:SetSize(10, 10)
+        ind.dot:SetPoint("LEFT", 6, 0)
         ind.dot:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+
+        ind.slotIcon = ind:CreateTexture(nil, "ARTWORK")
+        ind.slotIcon:SetSize(18, 18)
+        ind.slotIcon:SetPoint("LEFT", 20, 0)
+        ind.slotIcon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+        ind.slotIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        ind.slotIcon:Hide()
 
         ind.slotName = ind:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
         ind.slotName:SetPoint("LEFT", ind.dot, "RIGHT", 4, 0)
@@ -1794,19 +2061,27 @@ function App:BuildEquipPage(parent)
 
         ind.relicName = ind:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         ind.relicName:SetPoint("LEFT", ind.slotName, "RIGHT", 4, 0)
-        ind.relicName:SetPoint("RIGHT", -4, 0)
+        ind.relicName:SetPoint("RIGHT", -6, 0)
         ind.relicName:SetJustifyH("LEFT")
 
         self.slotIndicators[i] = ind
     end
 
-    -- 状态栏
-    self.equipStatus = parent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    self.equipStatus:SetPoint("TOPLEFT", 10, -92)
+    -- 统计信息栏（带底色面板）
+    self.equipStatusBar = CreateFrame("Frame", nil, parent)
+    self.equipStatusBar:SetHeight(20)
+    self.equipStatusBar:SetPoint("TOPLEFT", 6, -98)
+    self.equipStatusBar:SetPoint("RIGHT", -6, 0)
+    StylePanelFlat(self.equipStatusBar, THEME.panelDark[1], THEME.panelDark[2], THEME.panelDark[3], 0.50)
+
+    self.equipStatus = self.equipStatusBar:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    self.equipStatus:SetPoint("LEFT", 10, 0)
+    self.equipStatus:SetPoint("RIGHT", -10, 0)
+    self.equipStatus:SetJustifyH("LEFT")
 
     -- 滚动区域
     self.equipScroll = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
-    self.equipScroll:SetPoint("TOPLEFT", 6, -110)
+    self.equipScroll:SetPoint("TOPLEFT", 6, -122)
     self.equipScroll:SetPoint("BOTTOMRIGHT", -28, 6)
 
     self.equipContent = CreateFrame("Frame", nil, self.equipScroll)
@@ -1814,6 +2089,7 @@ function App:BuildEquipPage(parent)
     self.equipContent:SetHeight(100)
     self.equipScroll:SetScrollChild(self.equipContent)
     EnableScrollMouseWheel(self.equipScroll, CARD_H)
+    StyleScrollBar(self.equipScroll)
 
     self.relicCards = {}
 end
@@ -1825,24 +2101,27 @@ function App:GetOrCreateRelicCard(index)
 
     local card = CreateFrame("Frame", nil, self.equipContent)
     card:SetSize(CARD_W, CARD_H)
+    card:EnableMouse(true)
 
-    -- 背景
-    card.bg = card:CreateTexture(nil, "BACKGROUND")
-    card.bg:SetAllPoints()
-    card.bg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-    card.bg:SetVertexColor(THEME.cardBg[1], THEME.cardBg[2], THEME.cardBg[3], THEME.cardBg[4])
-
-    StylePanel(card, THEME.cardBg[1], THEME.cardBg[2], THEME.cardBg[3], THEME.cardBg[4])
+    StylePanelCard(card)
 
     -- 状态指示条（左侧竖条）
     card.statusBar = card:CreateTexture(nil, "ARTWORK")
-    card.statusBar:SetSize(3, CARD_H - 8)
+    card.statusBar:SetSize(4, CARD_H - 12)
     card.statusBar:SetPoint("LEFT", 4, 0)
     card.statusBar:SetTexture("Interface\\BUTTONS\\WHITE8X8")
 
+    -- 状态条发光
+    card.statusGlow = card:CreateTexture(nil, "ARTWORK")
+    card.statusGlow:SetSize(8, CARD_H - 12)
+    card.statusGlow:SetPoint("LEFT", 2, 0)
+    card.statusGlow:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    card.statusGlow:SetBlendMode("ADD")
+    card.statusGlow:SetAlpha(0)
+
     card.iconButton = CreateFrame("Button", nil, card)
     card.iconButton:SetSize(CARD_ICON_SIZE, CARD_ICON_SIZE)
-    card.iconButton:SetPoint("LEFT", 12, 0)
+    card.iconButton:SetPoint("LEFT", 14, 0)
     card.iconButton:EnableMouse(true)
     card.iconButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     card.iconButton:SetScript("OnEnter", SetRelicItemTooltip)
@@ -1878,34 +2157,66 @@ function App:GetOrCreateRelicCard(index)
     card.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
     ApplyIconTexCoords(card.icon)
 
+    -- 未收藏灰色遮罩
+    card.iconOverlay = card.iconButton:CreateTexture(nil, "OVERLAY")
+    card.iconOverlay:SetAllPoints()
+    card.iconOverlay:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    card.iconOverlay:SetVertexColor(0, 0, 0, 0)
+
     card.iconBorder = CreateFrame("Frame", nil, card)
     card.iconBorder:SetPoint("TOPLEFT", card.iconButton, "TOPLEFT", -3, 3)
     card.iconBorder:SetPoint("BOTTOMRIGHT", card.iconButton, "BOTTOMRIGHT", 3, -3)
     card.iconBorder:SetFrameLevel(math.max(card:GetFrameLevel(), card.iconButton:GetFrameLevel() - 1))
-    StylePanel(card.iconBorder, 0.02, 0.02, 0.03, 0.35)
+    StylePanelCard(card.iconBorder, 0.02, 0.02, 0.04, 0.40)
+
+    -- 图标光晕
+    card.iconGlow = card:CreateTexture(nil, "BACKGROUND")
+    card.iconGlow:SetPoint("CENTER", card.iconButton)
+    card.iconGlow:SetSize(CARD_ICON_SIZE + 18, CARD_ICON_SIZE + 18)
+    card.iconGlow:SetTexture("Interface\\Buttons\\CheckButtonGlow")
+    card.iconGlow:SetBlendMode("ADD")
+    card.iconGlow:SetAlpha(0)
 
     -- 遗物名称
     card.nameLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    card.nameLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -8)
+    card.nameLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -10)
     card.nameLabel:SetPoint("RIGHT", -8, 0)
     card.nameLabel:SetJustifyH("LEFT")
 
     -- 类型标签
     card.typeLabel = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    card.typeLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -26)
+    card.typeLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -28)
 
-    -- 槽位状态
-    card.slotLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.slotLabel:SetPoint("TOPRIGHT", -8, -8)
+    -- 槽位状态（pill 样式）
+    card.slotPill = CreatePillLabel(card)
+    card.slotPill:SetPoint("TOPRIGHT", -8, -8)
+    card.slotLabel = card.slotPill.label
 
     -- 描述（单行）
     card.descLabel = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    card.descLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -40)
+    card.descLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -44)
     card.descLabel:SetPoint("RIGHT", -80, 0)
     card.descLabel:SetJustifyH("LEFT")
 
-    -- 操作按钮区（右下角）
+    -- 操作按钮区
     card.actionButtons = {}
+
+    -- 卡片悬停效果
+    card:SetScript("OnEnter", function(self)
+        if not self.isHovered then
+            self.isHovered = true
+            self:SetBackdropBorderColor(THEME.goldDim[1], THEME.goldDim[2], THEME.goldDim[3], 0.85)
+            self:SetBackdropColor(THEME.cardHover[1], THEME.cardHover[2], THEME.cardHover[3], THEME.cardHover[4])
+        end
+    end)
+    card:SetScript("OnLeave", function(self)
+        if self.isHovered then
+            self.isHovered = false
+            if self.restoreBg then
+                self.restoreBg()
+            end
+        end
+    end)
 
     self.relicCards[index] = card
     return card
@@ -1930,14 +2241,28 @@ function App:RefreshEquipPage()
             ind.dot:SetVertexColor(THEME.equipped[1], THEME.equipped[2], THEME.equipped[3], 1)
             ind.relicName:SetText(relic.name)
             ind.relicName:SetTextColor(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+            local _, iconPath = ResolveRelicItemDisplay(relic.id, relic.name, relic.icon)
+            if iconPath and ind.slotIcon then
+                ind.slotIcon:SetTexture(iconPath)
+                ind.slotIcon:Show()
+                ind.slotName:SetPoint("LEFT", ind.slotIcon, "RIGHT", 4, 0)
+            end
         elseif itemId > 0 then
             ind.dot:SetVertexColor(THEME.equipped[1], THEME.equipped[2], THEME.equipped[3], 1)
             ind.relicName:SetText("#" .. itemId)
             ind.relicName:SetTextColor(THEME.muted[1], THEME.muted[2], THEME.muted[3], 1)
+            if ind.slotIcon then
+                ind.slotIcon:Hide()
+                ind.slotName:SetPoint("LEFT", ind.dot, "RIGHT", 4, 0)
+            end
         else
             ind.dot:SetVertexColor(THEME.empty[1], THEME.empty[2], THEME.empty[3], 1)
             ind.relicName:SetText("空")
             ind.relicName:SetTextColor(THEME.empty[1], THEME.empty[2], THEME.empty[3], 1)
+            if ind.slotIcon then
+                ind.slotIcon:Hide()
+                ind.slotName:SetPoint("LEFT", ind.dot, "RIGHT", 4, 0)
+            end
         end
     end
 
@@ -2009,22 +2334,52 @@ function App:RefreshEquipPage()
         -- 卡片背景和状态条
         if isEquipped then
             card.statusBar:SetVertexColor(THEME.equipped[1], THEME.equipped[2], THEME.equipped[3], 1)
+            if card.statusGlow then
+                card.statusGlow:SetVertexColor(THEME.equipped[1], THEME.equipped[2], THEME.equipped[3], 0.25)
+                card.statusGlow:SetAlpha(0.25)
+            end
             card.iconBorder:SetBackdropBorderColor(THEME.equipped[1], THEME.equipped[2], THEME.equipped[3], 0.95)
-            card.slotLabel:SetText("|cff4dcc4d" .. GetSlotName(relic.activeSlot) .. "|r")
+            if card.iconGlow then
+                card.iconGlow:SetVertexColor(THEME.equipped[1], THEME.equipped[2], THEME.equipped[3], 1)
+                card.iconGlow:SetAlpha(0.20)
+            end
+            if card.iconOverlay then card.iconOverlay:SetVertexColor(0, 0, 0, 0) end
+            card.slotPill:SetLabelText("|cff4dcc4d" .. GetSlotName(relic.activeSlot) .. "|r")
             card:SetBackdropColor(THEME.cardEquip[1], THEME.cardEquip[2], THEME.cardEquip[3], THEME.cardEquip[4])
-            card:SetBackdropBorderColor(THEME.equipped[1], THEME.equipped[2], THEME.equipped[3], 0.6)
+            card:SetBackdropBorderColor(THEME.equipped[1], THEME.equipped[2], THEME.equipped[3], 0.50)
+            card.restoreBg = function()
+                card:SetBackdropColor(THEME.cardEquip[1], THEME.cardEquip[2], THEME.cardEquip[3], THEME.cardEquip[4])
+                card:SetBackdropBorderColor(THEME.equipped[1], THEME.equipped[2], THEME.equipped[3], 0.50)
+            end
         elseif isOwned then
-            card.statusBar:SetVertexColor(typeColor[1], typeColor[2], typeColor[3], 0.6)
+            card.statusBar:SetVertexColor(typeColor[1], typeColor[2], typeColor[3], 0.7)
+            if card.statusGlow then card.statusGlow:SetAlpha(0) end
             card.iconBorder:SetBackdropBorderColor(typeColor[1], typeColor[2], typeColor[3], 0.90)
-            card.slotLabel:SetText("")
+            if card.iconGlow then
+                card.iconGlow:SetVertexColor(typeColor[1], typeColor[2], typeColor[3], 1)
+                card.iconGlow:SetAlpha(0.10)
+            end
+            if card.iconOverlay then card.iconOverlay:SetVertexColor(0, 0, 0, 0) end
+            card.slotPill:SetLabelText("")
             card:SetBackdropColor(THEME.cardBg[1], THEME.cardBg[2], THEME.cardBg[3], THEME.cardBg[4])
             card:SetBackdropBorderColor(THEME.border[1], THEME.border[2], THEME.border[3], THEME.border[4])
+            card.restoreBg = function()
+                card:SetBackdropColor(THEME.cardBg[1], THEME.cardBg[2], THEME.cardBg[3], THEME.cardBg[4])
+                card:SetBackdropBorderColor(THEME.border[1], THEME.border[2], THEME.border[3], THEME.border[4])
+            end
         else
-            card.statusBar:SetVertexColor(0.25, 0.25, 0.25, 0.5)
-            card.iconBorder:SetBackdropBorderColor(0.30, 0.30, 0.32, 0.75)
-            card.slotLabel:SetText("|cff666666\230\156\170\230\148\182\233\155\134|r")  -- "未收藏"
-            card:SetBackdropColor(0.04, 0.04, 0.06, 0.85)
-            card:SetBackdropBorderColor(0.20, 0.20, 0.25, 0.6)
+            card.statusBar:SetVertexColor(0.22, 0.22, 0.25, 0.5)
+            if card.statusGlow then card.statusGlow:SetAlpha(0) end
+            card.iconBorder:SetBackdropBorderColor(0.25, 0.25, 0.28, 0.70)
+            if card.iconGlow then card.iconGlow:SetAlpha(0) end
+            if card.iconOverlay then card.iconOverlay:SetVertexColor(0, 0, 0, 0.45) end
+            card.slotPill:SetLabelText("|cff555555\230\156\170\230\148\182\233\155\134|r")
+            card:SetBackdropColor(0.03, 0.03, 0.05, 0.88)
+            card:SetBackdropBorderColor(0.18, 0.18, 0.22, 0.55)
+            card.restoreBg = function()
+                card:SetBackdropColor(0.03, 0.03, 0.05, 0.88)
+                card:SetBackdropBorderColor(0.18, 0.18, 0.22, 0.55)
+            end
         end
 
         -- 操作按钮：先隐藏旧的
@@ -2109,11 +2464,15 @@ function App:BuildArtifactPage(parent)
     self.artifactActionBar:SetPoint("RIGHT", -8, 0)
     self.artifactActionBar:SetHeight(24)
 
+    -- 类型标签
+    local artifactTypeLabel = CreateFilterGroupLabel(self.artifactActionBar, "类型:", self.artifactActionBar, 0)
+    artifactTypeLabel:SetPoint("LEFT", 0, 0)
+
     self.artifactAllBtn = CreateSmallButton(self.artifactActionBar, "全部神器", 68, function()
         App.artifactFilterType = 0
         App:RefreshArtifactPage()
     end)
-    self.artifactAllBtn:SetPoint("LEFT", 0, 0)
+    self.artifactAllBtn:SetPoint("LEFT", artifactTypeLabel, "RIGHT", 4, 0)
 
     self.artifactPhaseBtn = CreateSmallButton(self.artifactActionBar, "阶段神器", 68, function()
         App.artifactFilterType = 2
@@ -2127,11 +2486,14 @@ function App:BuildArtifactPage(parent)
     end)
     self.artifactUltimateBtn:SetPoint("LEFT", self.artifactPhaseBtn, "RIGHT", 6, 0)
 
+    -- 持有分隔符
+    local artifactOwnedSep = CreateFilterSeparator(self.artifactActionBar, self.artifactUltimateBtn)
+
     self.artifactOwnedBtn = CreateSmallButton(self.artifactActionBar, "仅已持有", 68, function()
         App.artifactOwnedOnly = not App.artifactOwnedOnly
         App:RefreshArtifactPage()
     end)
-    self.artifactOwnedBtn:SetPoint("LEFT", self.artifactUltimateBtn, "RIGHT", 16, 0)
+    self.artifactOwnedBtn:SetPoint("LEFT", artifactOwnedSep, "RIGHT", 4, 0)
 
     self.artifactScroll = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
     self.artifactScroll:SetPoint("TOPLEFT", 6, -56)
@@ -2142,6 +2504,7 @@ function App:BuildArtifactPage(parent)
     self.artifactContent:SetHeight(100)
     self.artifactScroll:SetScrollChild(self.artifactContent)
     EnableScrollMouseWheel(self.artifactScroll, CARD_H)
+    StyleScrollBar(self.artifactScroll)
 
     self.artifactCards = {}
 end
@@ -2153,16 +2516,24 @@ function App:GetOrCreateArtifactCard(index)
 
     local card = CreateFrame("Frame", nil, self.artifactContent)
     card:SetSize(CARD_W, CARD_H)
-    StylePanel(card, THEME.cardBg[1], THEME.cardBg[2], THEME.cardBg[3], THEME.cardBg[4])
+    card:EnableMouse(true)
+    StylePanelCard(card)
 
     card.statusBar = card:CreateTexture(nil, "ARTWORK")
-    card.statusBar:SetSize(3, CARD_H - 8)
+    card.statusBar:SetSize(4, CARD_H - 12)
     card.statusBar:SetPoint("LEFT", 4, 0)
     card.statusBar:SetTexture("Interface\\BUTTONS\\WHITE8X8")
 
+    card.statusGlow = card:CreateTexture(nil, "ARTWORK")
+    card.statusGlow:SetSize(8, CARD_H - 12)
+    card.statusGlow:SetPoint("LEFT", 2, 0)
+    card.statusGlow:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    card.statusGlow:SetBlendMode("ADD")
+    card.statusGlow:SetAlpha(0)
+
     card.iconButton = CreateFrame("Button", nil, card)
     card.iconButton:SetSize(CARD_ICON_SIZE, CARD_ICON_SIZE)
-    card.iconButton:SetPoint("LEFT", 12, 0)
+    card.iconButton:SetPoint("LEFT", 14, 0)
     card.iconButton:EnableMouse(true)
     card.iconButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     card.iconButton:SetScript("OnEnter", SetRelicItemTooltip)
@@ -2176,31 +2547,61 @@ function App:GetOrCreateArtifactCard(index)
     card.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
     ApplyIconTexCoords(card.icon)
 
+    card.iconOverlay = card.iconButton:CreateTexture(nil, "OVERLAY")
+    card.iconOverlay:SetAllPoints()
+    card.iconOverlay:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    card.iconOverlay:SetVertexColor(0, 0, 0, 0)
+
     card.iconBorder = CreateFrame("Frame", nil, card)
     card.iconBorder:SetPoint("TOPLEFT", card.iconButton, "TOPLEFT", -3, 3)
     card.iconBorder:SetPoint("BOTTOMRIGHT", card.iconButton, "BOTTOMRIGHT", 3, -3)
     card.iconBorder:SetFrameLevel(math.max(card:GetFrameLevel(), card.iconButton:GetFrameLevel() - 1))
-    StylePanel(card.iconBorder, 0.02, 0.02, 0.03, 0.35)
+    StylePanelCard(card.iconBorder, 0.02, 0.02, 0.04, 0.40)
+
+    card.iconGlow = card:CreateTexture(nil, "BACKGROUND")
+    card.iconGlow:SetPoint("CENTER", card.iconButton)
+    card.iconGlow:SetSize(CARD_ICON_SIZE + 18, CARD_ICON_SIZE + 18)
+    card.iconGlow:SetTexture("Interface\\Buttons\\CheckButtonGlow")
+    card.iconGlow:SetBlendMode("ADD")
+    card.iconGlow:SetAlpha(0)
 
     card.nameLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    card.nameLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -8)
+    card.nameLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -10)
     card.nameLabel:SetPoint("RIGHT", -8, 0)
     card.nameLabel:SetJustifyH("LEFT")
 
     card.typeLabel = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    card.typeLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -26)
+    card.typeLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -28)
     card.typeLabel:SetPoint("RIGHT", -76, 0)
     card.typeLabel:SetJustifyH("LEFT")
 
-    card.slotLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.slotLabel:SetPoint("TOPRIGHT", -8, -8)
+    card.slotPill = CreatePillLabel(card)
+    card.slotPill:SetPoint("TOPRIGHT", -8, -8)
+    card.slotLabel = card.slotPill.label
 
     card.descLabel = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    card.descLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -40)
+    card.descLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -44)
     card.descLabel:SetPoint("RIGHT", -84, 0)
     card.descLabel:SetJustifyH("LEFT")
 
     card.actionButtons = {}
+
+    card:SetScript("OnEnter", function(self)
+        if not self.isHovered then
+            self.isHovered = true
+            self:SetBackdropBorderColor(THEME.goldDim[1], THEME.goldDim[2], THEME.goldDim[3], 0.85)
+            self:SetBackdropColor(THEME.cardHover[1], THEME.cardHover[2], THEME.cardHover[3], THEME.cardHover[4])
+        end
+    end)
+    card:SetScript("OnLeave", function(self)
+        if self.isHovered then
+            self.isHovered = false
+            if self.restoreBg then
+                self.restoreBg()
+            end
+        end
+    end)
+
     self.artifactCards[index] = card
     return card
 end
@@ -2278,11 +2679,28 @@ function App:RefreshArtifactPage()
         card.nameLabel:SetTextColor(THEME.text[1], THEME.text[2], THEME.text[3], 1)
         card.typeLabel:SetText(string.format("%s  |  第%d幕", GetRelicTypeName(relic.relicType), relic.actId or 0))
         card.typeLabel:SetTextColor(typeColor[1], typeColor[2], typeColor[3], 0.9)
-        card.slotLabel:SetText(isEquipped and ("|cff4dcc4d" .. GetSlotName(relic.activeSlot) .. "|r") or "")
+        card.slotPill:SetLabelText(isEquipped and ("|cff4dcc4d" .. GetSlotName(relic.activeSlot) .. "|r") or "")
         card.descLabel:SetText(descText or "")
         card.descLabel:SetTextColor(THEME.muted[1], THEME.muted[2], THEME.muted[3], 1)
         card.statusBar:SetVertexColor(typeColor[1], typeColor[2], typeColor[3], isEquipped and 1 or 0.75)
+        if card.statusGlow then
+            if isEquipped then
+                card.statusGlow:SetVertexColor(typeColor[1], typeColor[2], typeColor[3], 0.30)
+                card.statusGlow:SetAlpha(0.30)
+            else
+                card.statusGlow:SetAlpha(0)
+            end
+        end
         card.iconBorder:SetBackdropBorderColor(typeColor[1], typeColor[2], typeColor[3], isEquipped and 1 or 0.9)
+        if card.iconGlow then
+            card.iconGlow:SetVertexColor(typeColor[1], typeColor[2], typeColor[3], 1)
+            card.iconGlow:SetAlpha(isEquipped and 0.20 or 0.08)
+        end
+        if card.iconOverlay then card.iconOverlay:SetVertexColor(0, 0, 0, isOwned and 0 or 0.45) end
+        card.restoreBg = function()
+            card:SetBackdropColor(THEME.cardBg[1], THEME.cardBg[2], THEME.cardBg[3], THEME.cardBg[4])
+            card:SetBackdropBorderColor(THEME.border[1], THEME.border[2], THEME.border[3], THEME.border[4])
+        end
 
         local btnIdx = 0
         if isOwned then
@@ -2356,11 +2774,15 @@ function App:BuildEquipmentPage(parent)
     self.equipmentActionBar:SetPoint("RIGHT", -8, 0)
     self.equipmentActionBar:SetHeight(24)
 
+    -- 类型组标签
+    local typeLabel = CreateFilterGroupLabel(self.equipmentActionBar, "类型:", self.equipmentActionBar, 0)
+    typeLabel:SetPoint("LEFT", 0, 0)
+
     self.equipmentFilterAllBtn = CreateSmallButton(self.equipmentActionBar, "全部", 52, function()
         App.equipmentFilterType = 0
         App:RefreshEquipmentPage()
     end)
-    self.equipmentFilterAllBtn:SetPoint("LEFT", 0, 0)
+    self.equipmentFilterAllBtn:SetPoint("LEFT", typeLabel, "RIGHT", 4, 0)
 
     self.equipmentFilterBaseBtn = CreateSmallButton(self.equipmentActionBar, "底材", 52, function()
         App.equipmentFilterType = 1
@@ -2374,11 +2796,15 @@ function App:BuildEquipmentPage(parent)
     end)
     self.equipmentFilterUniqueBtn:SetPoint("LEFT", self.equipmentFilterBaseBtn, "RIGHT", 6, 0)
 
+    -- 模式组分隔符+标签
+    local modeSep = CreateFilterSeparator(self.equipmentActionBar, self.equipmentFilterUniqueBtn)
+    local modeLabel = CreateFilterGroupLabel(self.equipmentActionBar, "模式:", modeSep)
+
     self.equipmentModeAllBtn = CreateSmallButton(self.equipmentActionBar, "全模式", 60, function()
         App.equipmentFilterMode = 0
         App:RefreshEquipmentPage()
     end)
-    self.equipmentModeAllBtn:SetPoint("LEFT", self.equipmentFilterUniqueBtn, "RIGHT", 18, 0)
+    self.equipmentModeAllBtn:SetPoint("LEFT", modeLabel, "RIGHT", 4, 0)
 
     self.equipmentModeStoryBtn = CreateSmallButton(self.equipmentActionBar, "正传", 52, function()
         App.equipmentFilterMode = 1
@@ -2404,11 +2830,14 @@ function App:BuildEquipmentPage(parent)
     end)
     self.equipmentModeReincarnationBtn:SetPoint("LEFT", self.equipmentModeCorruptBtn, "RIGHT", 6, 0)
 
+    -- 持有/筛选组分隔符
+    local ownedSep = CreateFilterSeparator(self.equipmentActionBar, self.equipmentModeReincarnationBtn)
+
     self.equipmentOwnedBtn = CreateSmallButton(self.equipmentActionBar, "仅已持有", 68, function()
         App.equipmentOwnedOnly = not App.equipmentOwnedOnly
         App:RefreshEquipmentPage()
     end)
-    self.equipmentOwnedBtn:SetPoint("LEFT", self.equipmentModeReincarnationBtn, "RIGHT", 18, 0)
+    self.equipmentOwnedBtn:SetPoint("LEFT", ownedSep, "RIGHT", 4, 0)
 
     self.equipmentClearFilterBtn = CreateSmallButton(self.equipmentActionBar, "清筛选", 60, function()
         ResetEquipmentFilters()
@@ -2426,11 +2855,15 @@ function App:BuildEquipmentPage(parent)
     end)
     self.equipmentFilterCurrentChapterBtn:SetPoint("LEFT", self.equipmentClearFilterBtn, "RIGHT", 12, 0)
 
+    -- 部位组分隔符+标签
+    local slotSep = CreateFilterSeparator(self.equipmentActionBar, self.equipmentFilterCurrentChapterBtn)
+    local slotLabel = CreateFilterGroupLabel(self.equipmentActionBar, "部位:", slotSep)
+
     self.equipmentFilterWeaponBtn = CreateSmallButton(self.equipmentActionBar, "武器", 52, function()
         App.equipmentFilterSlot = App.equipmentFilterSlot == 1 and 0 or 1
         App:RefreshEquipmentPage()
     end)
-    self.equipmentFilterWeaponBtn:SetPoint("LEFT", self.equipmentFilterCurrentChapterBtn, "RIGHT", 18, 0)
+    self.equipmentFilterWeaponBtn:SetPoint("LEFT", slotLabel, "RIGHT", 4, 0)
 
     self.equipmentFilterAccessoryBtn = CreateSmallButton(self.equipmentActionBar, "饰品", 52, function()
         App.equipmentFilterSlot = App.equipmentFilterSlot == 128 and 0 or 128
@@ -2471,6 +2904,7 @@ function App:BuildEquipmentPage(parent)
     self.equipmentContent:SetHeight(100)
     self.equipmentScroll:SetScrollChild(self.equipmentContent)
     EnableScrollMouseWheel(self.equipmentScroll, CARD_H)
+    StyleScrollBar(self.equipmentScroll)
 
     self.equipmentCards = {}
 end
@@ -2482,22 +2916,18 @@ function App:GetOrCreateEquipmentCard(index)
 
     local card = CreateFrame("Frame", nil, self.equipmentContent)
     card:SetSize(CARD_W, CARD_H)
+    card:EnableMouse(true)
 
-    card.bg = card:CreateTexture(nil, "BACKGROUND")
-    card.bg:SetAllPoints()
-    card.bg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-    card.bg:SetVertexColor(THEME.cardBg[1], THEME.cardBg[2], THEME.cardBg[3], THEME.cardBg[4])
-
-    StylePanel(card, THEME.cardBg[1], THEME.cardBg[2], THEME.cardBg[3], THEME.cardBg[4])
+    StylePanelCard(card)
 
     card.statusBar = card:CreateTexture(nil, "ARTWORK")
-    card.statusBar:SetSize(3, CARD_H - 8)
+    card.statusBar:SetSize(4, CARD_H - 12)
     card.statusBar:SetPoint("LEFT", 4, 0)
     card.statusBar:SetTexture("Interface\\BUTTONS\\WHITE8X8")
 
     card.iconButton = CreateFrame("Button", nil, card)
     card.iconButton:SetSize(CARD_ICON_SIZE, CARD_ICON_SIZE)
-    card.iconButton:SetPoint("LEFT", 12, 0)
+    card.iconButton:SetPoint("LEFT", 14, 0)
     card.iconButton:EnableMouse(true)
     card.iconButton:RegisterForClicks("LeftButtonUp")
     card.iconButton:SetScript("OnEnter", SetEquipmentItemTooltip)
@@ -2521,25 +2951,49 @@ function App:GetOrCreateEquipmentCard(index)
     card.iconBorder:SetPoint("TOPLEFT", card.iconButton, "TOPLEFT", -3, 3)
     card.iconBorder:SetPoint("BOTTOMRIGHT", card.iconButton, "BOTTOMRIGHT", 3, -3)
     card.iconBorder:SetFrameLevel(math.max(card:GetFrameLevel(), card.iconButton:GetFrameLevel() - 1))
-    StylePanel(card.iconBorder, 0.02, 0.02, 0.03, 0.35)
+    StylePanelCard(card.iconBorder, 0.02, 0.02, 0.04, 0.40)
+
+    card.iconGlow = card:CreateTexture(nil, "BACKGROUND")
+    card.iconGlow:SetPoint("CENTER", card.iconButton)
+    card.iconGlow:SetSize(CARD_ICON_SIZE + 18, CARD_ICON_SIZE + 18)
+    card.iconGlow:SetTexture("Interface\\Buttons\\CheckButtonGlow")
+    card.iconGlow:SetBlendMode("ADD")
+    card.iconGlow:SetAlpha(0)
 
     card.nameLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    card.nameLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -8)
+    card.nameLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -10)
     card.nameLabel:SetPoint("RIGHT", -8, 0)
     card.nameLabel:SetJustifyH("LEFT")
 
     card.typeLabel = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    card.typeLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -26)
+    card.typeLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -28)
     card.typeLabel:SetPoint("RIGHT", -74, 0)
     card.typeLabel:SetJustifyH("LEFT")
 
-    card.slotLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.slotLabel:SetPoint("TOPRIGHT", -8, -8)
+    card.slotPill = CreatePillLabel(card)
+    card.slotPill:SetPoint("TOPRIGHT", -8, -8)
+    card.slotLabel = card.slotPill.label
 
     card.descLabel = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    card.descLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -40)
+    card.descLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -44)
     card.descLabel:SetPoint("RIGHT", -8, 0)
     card.descLabel:SetJustifyH("LEFT")
+
+    card:SetScript("OnEnter", function(self)
+        if not self.isHovered then
+            self.isHovered = true
+            self:SetBackdropBorderColor(THEME.goldDim[1], THEME.goldDim[2], THEME.goldDim[3], 0.85)
+            self:SetBackdropColor(THEME.cardHover[1], THEME.cardHover[2], THEME.cardHover[3], THEME.cardHover[4])
+        end
+    end)
+    card:SetScript("OnLeave", function(self)
+        if self.isHovered then
+            self.isHovered = false
+            if self.restoreBg then
+                self.restoreBg()
+            end
+        end
+    end)
 
     self.equipmentCards[index] = card
     return card
@@ -2647,7 +3101,7 @@ function App:RefreshEquipmentPage()
         ))
         card.typeLabel:SetTextColor(typeColor[1], typeColor[2], typeColor[3], 0.85)
 
-        card.slotLabel:SetText("|cffDBA64A" .. GetEquipmentSlotMaskName(equipment.slotMask) .. "|r")
+        card.slotPill:SetLabelText("|cffDBA64A" .. GetEquipmentSlotMaskName(equipment.slotMask) .. "|r")
 
         if equipment.fromCacheBoss then
             card.descLabel:SetText((descText or "") .. "|cffff6b6b  [秘藏首领]|r")
@@ -2662,12 +3116,24 @@ function App:RefreshEquipmentPage()
 
         card.statusBar:SetVertexColor(typeColor[1], typeColor[2], typeColor[3], 0.9)
         card.iconBorder:SetBackdropBorderColor(typeColor[1], typeColor[2], typeColor[3], 0.9)
+        if card.iconGlow then
+            card.iconGlow:SetVertexColor(typeColor[1], typeColor[2], typeColor[3], 1)
+            card.iconGlow:SetAlpha(equipment.equipmentType == 2 and 0.15 or 0.06)
+        end
         if equipment.equipmentType == 2 then
-            card:SetBackdropColor(0.17, 0.12, 0.08, 0.95)
-            card:SetBackdropBorderColor(typeColor[1], typeColor[2], typeColor[3], 0.7)
+            card:SetBackdropColor(0.14, 0.10, 0.06, 0.96)
+            card:SetBackdropBorderColor(typeColor[1], typeColor[2], typeColor[3], 0.60)
+            card.restoreBg = function()
+                card:SetBackdropColor(0.14, 0.10, 0.06, 0.96)
+                card:SetBackdropBorderColor(typeColor[1], typeColor[2], typeColor[3], 0.60)
+            end
         else
             card:SetBackdropColor(THEME.cardBg[1], THEME.cardBg[2], THEME.cardBg[3], THEME.cardBg[4])
             card:SetBackdropBorderColor(THEME.border[1], THEME.border[2], THEME.border[3], THEME.border[4])
+            card.restoreBg = function()
+                card:SetBackdropColor(THEME.cardBg[1], THEME.cardBg[2], THEME.cardBg[3], THEME.cardBg[4])
+                card:SetBackdropBorderColor(THEME.border[1], THEME.border[2], THEME.border[3], THEME.border[4])
+            end
         end
 
         card:Show()
@@ -2692,11 +3158,15 @@ function App:BuildSetOverviewPage(parent)
     self.setOverviewActionBar:SetPoint("RIGHT", -8, 0)
     self.setOverviewActionBar:SetHeight(24)
 
+    -- 模式标签
+    local setModeLabel = CreateFilterGroupLabel(self.setOverviewActionBar, "模式:", self.setOverviewActionBar, 0)
+    setModeLabel:SetPoint("LEFT", 0, 0)
+
     self.setOverviewAllBtn = CreateSmallButton(self.setOverviewActionBar, "全部", 52, function()
         App.setOverviewFilterMode = 0
         App:RefreshSetOverviewPage()
     end)
-    self.setOverviewAllBtn:SetPoint("LEFT", 0, 0)
+    self.setOverviewAllBtn:SetPoint("LEFT", setModeLabel, "RIGHT", 4, 0)
 
     self.setOverviewStoryBtn = CreateSmallButton(self.setOverviewActionBar, "正传", 52, function()
         App.setOverviewFilterMode = 1
@@ -2716,11 +3186,14 @@ function App:BuildSetOverviewPage(parent)
     end)
     self.setOverviewReincarnationBtn:SetPoint("LEFT", self.setOverviewCorruptBtn, "RIGHT", 6, 0)
 
+    -- 当前幕分隔符
+    local setActSep = CreateFilterSeparator(self.setOverviewActionBar, self.setOverviewReincarnationBtn)
+
     self.setOverviewCurrentActBtn = CreateSmallButton(self.setOverviewActionBar, "当前幕", 60, function()
         App.setOverviewCurrentActOnly = not App.setOverviewCurrentActOnly
         App:RefreshSetOverviewPage()
     end)
-    self.setOverviewCurrentActBtn:SetPoint("LEFT", self.setOverviewReincarnationBtn, "RIGHT", 16, 0)
+    self.setOverviewCurrentActBtn:SetPoint("LEFT", setActSep, "RIGHT", 4, 0)
 
     self.setOverviewScroll = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
     self.setOverviewScroll:SetPoint("TOPLEFT", 6, -56)
@@ -2731,6 +3204,7 @@ function App:BuildSetOverviewPage(parent)
     self.setOverviewContent:SetHeight(100)
     self.setOverviewScroll:SetScrollChild(self.setOverviewContent)
     EnableScrollMouseWheel(self.setOverviewScroll, CARD_H)
+    StyleScrollBar(self.setOverviewScroll)
 
     self.setOverviewCards = {}
 end
@@ -2742,16 +3216,17 @@ function App:GetOrCreateSetOverviewCard(index)
 
     local card = CreateFrame("Frame", nil, self.setOverviewContent)
     card:SetSize(CARD_W, CARD_H)
-    StylePanel(card, THEME.cardBg[1], THEME.cardBg[2], THEME.cardBg[3], THEME.cardBg[4])
+    card:EnableMouse(true)
+    StylePanelCard(card)
 
     card.statusBar = card:CreateTexture(nil, "ARTWORK")
-    card.statusBar:SetSize(3, CARD_H - 8)
+    card.statusBar:SetSize(4, CARD_H - 12)
     card.statusBar:SetPoint("LEFT", 4, 0)
     card.statusBar:SetTexture("Interface\\BUTTONS\\WHITE8X8")
 
     card.iconButton = CreateFrame("Button", nil, card)
     card.iconButton:SetSize(CARD_ICON_SIZE, CARD_ICON_SIZE)
-    card.iconButton:SetPoint("LEFT", 12, 0)
+    card.iconButton:SetPoint("LEFT", 14, 0)
     card.iconButton:RegisterForClicks("LeftButtonUp")
     card.iconButton:SetScript("OnClick", function(self)
         local setData = self.setData
@@ -2775,25 +3250,42 @@ function App:GetOrCreateSetOverviewCard(index)
     card.iconBorder:SetPoint("TOPLEFT", card.iconButton, "TOPLEFT", -3, 3)
     card.iconBorder:SetPoint("BOTTOMRIGHT", card.iconButton, "BOTTOMRIGHT", 3, -3)
     card.iconBorder:SetFrameLevel(math.max(card:GetFrameLevel(), card.iconButton:GetFrameLevel() - 1))
-    StylePanel(card.iconBorder, 0.02, 0.02, 0.03, 0.35)
+    StylePanelCard(card.iconBorder, 0.02, 0.02, 0.04, 0.40)
 
     card.nameLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    card.nameLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -8)
+    card.nameLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -10)
     card.nameLabel:SetPoint("RIGHT", -8, 0)
     card.nameLabel:SetJustifyH("LEFT")
 
     card.typeLabel = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    card.typeLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -26)
+    card.typeLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -28)
     card.typeLabel:SetPoint("RIGHT", -8, 0)
     card.typeLabel:SetJustifyH("LEFT")
 
-    card.slotLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    card.slotLabel:SetPoint("TOPRIGHT", -8, -8)
+    card.slotPill = CreatePillLabel(card)
+    card.slotPill:SetPoint("TOPRIGHT", -8, -8)
+    card.slotLabel = card.slotPill.label
 
     card.descLabel = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    card.descLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -40)
+    card.descLabel:SetPoint("TOPLEFT", CARD_TEXT_LEFT, -44)
     card.descLabel:SetPoint("RIGHT", -8, 0)
     card.descLabel:SetJustifyH("LEFT")
+
+    card:SetScript("OnEnter", function(self)
+        if not self.isHovered then
+            self.isHovered = true
+            self:SetBackdropBorderColor(THEME.goldDim[1], THEME.goldDim[2], THEME.goldDim[3], 0.85)
+            self:SetBackdropColor(THEME.cardHover[1], THEME.cardHover[2], THEME.cardHover[3], THEME.cardHover[4])
+        end
+    end)
+    card:SetScript("OnLeave", function(self)
+        if self.isHovered then
+            self.isHovered = false
+            if self.restoreBg then
+                self.restoreBg()
+            end
+        end
+    end)
 
     self.setOverviewCards[index] = card
     return card
@@ -2858,7 +3350,7 @@ function App:RefreshSetOverviewPage()
             group.pieceCount or 0
         ))
         card.typeLabel:SetTextColor(typeColor[1], typeColor[2], typeColor[3], 0.85)
-        card.slotLabel:SetText("|cffDBA64A套装|r")
+        card.slotPill:SetLabelText("|cffDBA64A套装|r")
 
         -- 卡片本体只显示部位概览
         card.descLabel:SetText(group.slotSummary ~= "" and group.slotSummary or (itemName or rep.name))
@@ -2892,6 +3384,10 @@ function App:RefreshSetOverviewPage()
         card:SetScript("OnLeave", function() GameTooltip:Hide() end)
         card.statusBar:SetVertexColor(typeColor[1], typeColor[2], typeColor[3], 0.85)
         card.iconBorder:SetBackdropBorderColor(typeColor[1], typeColor[2], typeColor[3], 0.9)
+        card.restoreBg = function()
+            card:SetBackdropColor(THEME.cardBg[1], THEME.cardBg[2], THEME.cardBg[3], THEME.cardBg[4])
+            card:SetBackdropBorderColor(THEME.border[1], THEME.border[2], THEME.border[3], THEME.border[4])
+        end
         card:Show()
     end
 
@@ -2909,6 +3405,12 @@ function App:BuildChapterPage(parent)
     self.chapterSummary:SetPoint("RIGHT", -10, 0)
     self.chapterSummary:SetJustifyH("LEFT")
 
+    self.chapterListPanel = CreateFrame("Frame", nil, parent)
+    self.chapterListPanel:SetPoint("TOPLEFT", 8, -28)
+    self.chapterListPanel:SetPoint("BOTTOMLEFT", 8, 8)
+    self.chapterListPanel:SetWidth(CHAPTER_LIST_W + 28)
+    StylePanelFlat(self.chapterListPanel, THEME.panelDark[1], THEME.panelDark[2], THEME.panelDark[3], 0.40)
+
     self.chapterScroll = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
     self.chapterScroll:SetPoint("TOPLEFT", 8, -28)
     self.chapterScroll:SetPoint("BOTTOMLEFT", 8, 8)
@@ -2919,11 +3421,12 @@ function App:BuildChapterPage(parent)
     self.chapterContent:SetHeight(100)
     self.chapterScroll:SetScrollChild(self.chapterContent)
     EnableScrollMouseWheel(self.chapterScroll, 56)
+    StyleScrollBar(self.chapterScroll)
 
     self.chapterDetailPanel = CreateFrame("Frame", nil, parent)
     self.chapterDetailPanel:SetPoint("TOPLEFT", self.chapterScroll, "TOPRIGHT", 12, 0)
     self.chapterDetailPanel:SetPoint("BOTTOMRIGHT", -8, 8)
-    StylePanel(self.chapterDetailPanel, 0.07, 0.05, 0.11, 0.94)
+    StylePanel(self.chapterDetailPanel, THEME.panelDark[1], THEME.panelDark[2], THEME.panelDark[3], 0.95)
 
     self.chapterDetailTitle = self.chapterDetailPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     self.chapterDetailTitle:SetPoint("TOPLEFT", 16, -10)
@@ -2931,13 +3434,16 @@ function App:BuildChapterPage(parent)
     self.chapterDetailTitle:SetJustifyH("LEFT")
     self.chapterDetailTitle:SetTextColor(THEME.accent[1], THEME.accent[2], THEME.accent[3], 1)
 
+    -- 标题金色下划线
+    CreateDivider(self.chapterDetailPanel, "TOP", -30, 12, 12)
+
     self.chapterDetailMeta = self.chapterDetailPanel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    self.chapterDetailMeta:SetPoint("TOPLEFT", 16, -34)
+    self.chapterDetailMeta:SetPoint("TOPLEFT", 16, -36)
     self.chapterDetailMeta:SetPoint("RIGHT", -16, 0)
     self.chapterDetailMeta:SetJustifyH("LEFT")
 
     self.chapterActionStatus = self.chapterDetailPanel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    self.chapterActionStatus:SetPoint("TOPLEFT", 16, -58)
+    self.chapterActionStatus:SetPoint("TOPLEFT", 16, -54)
     self.chapterActionStatus:SetPoint("RIGHT", -16, 0)
     self.chapterActionStatus:SetJustifyH("LEFT")
 
@@ -2957,35 +3463,53 @@ function App:BuildChapterPage(parent)
     end)
     self.chapterAllEquipBtn:SetPoint("RIGHT", self.chapterEquipBtn, "LEFT", -8, 0)
 
-    self.chapterEnterStoryBtn = CreateSmallButton(self.chapterDetailPanel, "进入正传", 84, function()
+    -- 进入按钮操作面板
+    self.chapterActionPanel = CreateFrame("Frame", nil, self.chapterDetailPanel)
+    self.chapterActionPanel:SetHeight(32)
+    self.chapterActionPanel:SetPoint("TOPLEFT", 10, -70)
+    self.chapterActionPanel:SetPoint("RIGHT", -10, 0)
+    StylePanelFlat(self.chapterActionPanel, THEME.panelDark[1], THEME.panelDark[2], THEME.panelDark[3], 0.50)
+
+    local actionLabel = CreateFilterGroupLabel(self.chapterActionPanel, "进入:", self.chapterActionPanel, 0)
+    actionLabel:SetPoint("LEFT", 8, 0)
+
+    self.chapterEnterStoryBtn = CreateSmallButton(self.chapterActionPanel, "正传", 64, function()
         App.chapterEnterMode = 1
         SendEnterSelectedChapter(1, 0)
     end)
-    self.chapterEnterStoryBtn:SetPoint("TOPLEFT", 16, -78)
+    self.chapterEnterStoryBtn:SetPoint("LEFT", actionLabel, "RIGHT", 6, 0)
 
-    self.chapterEnterAbyssBtn = CreateSmallButton(self.chapterDetailPanel, "进入深渊", 84, function()
+    self.chapterEnterAbyssBtn = CreateSmallButton(self.chapterActionPanel, "深渊", 64, function()
         App.chapterEnterMode = 2
         SendEnterSelectedChapter(2, 0)
     end)
     self.chapterEnterAbyssBtn:SetPoint("LEFT", self.chapterEnterStoryBtn, "RIGHT", 6, 0)
 
-    self.chapterEnterCorruptBtn = CreateSmallButton(self.chapterDetailPanel, "进入腐化", 84, function()
+    self.chapterEnterCorruptBtn = CreateSmallButton(self.chapterActionPanel, "腐化", 64, function()
         App.chapterEnterMode = 3
         local tier = self.state.highestCorruptionTier and math.max(0, self.state.highestCorruptionTier) or 0
         SendEnterSelectedChapter(3, tier)
     end)
     self.chapterEnterCorruptBtn:SetPoint("LEFT", self.chapterEnterAbyssBtn, "RIGHT", 6, 0)
 
-    self.chapterEnterReincarnationBtn = CreateSmallButton(self.chapterDetailPanel, "进入轮回", 84, function()
+    self.chapterEnterReincarnationBtn = CreateSmallButton(self.chapterActionPanel, "轮回", 64, function()
         App.chapterEnterMode = 4
         SendEnterSelectedChapter(4, 0)
     end)
     self.chapterEnterReincarnationBtn:SetPoint("LEFT", self.chapterEnterCorruptBtn, "RIGHT", 6, 0)
 
+    -- 退出按钮（局内可用）
+    self.chapterLeaveBtn = CreateSmallButton(self.chapterActionPanel, "退出深渊", 72, function()
+        SendAddon("LEAVE")
+        SendAddon("REQ_STATE")
+    end)
+    self.chapterLeaveBtn:SetPoint("RIGHT", -8, 0)
+
     self.chapterDetailScroll = CreateFrame("ScrollFrame", nil, self.chapterDetailPanel, "UIPanelScrollFrameTemplate")
-    self.chapterDetailScroll:SetPoint("TOPLEFT", 12, -110)
+    self.chapterDetailScroll:SetPoint("TOPLEFT", 12, -108)
     self.chapterDetailScroll:SetPoint("BOTTOMRIGHT", -30, 12)
     EnableScrollMouseWheel(self.chapterDetailScroll, 56)
+    StyleScrollBar(self.chapterDetailScroll)
 
     self.chapterDetailContent = CreateFrame("Frame", nil, self.chapterDetailScroll)
     self.chapterDetailContent:SetWidth(720)
@@ -3031,11 +3555,33 @@ function App:RefreshChapterPage()
                 header:SetSize(CHAPTER_LIST_W, 24)
                 header:SetPoint("TOPLEFT", 0, -y)
                 header:SetBackdrop(nil)
-                header.nameLabel:SetText(string.format("|cffdba64a--- 第 %d 幕 ---|r", ch.actId))
+                header.isHeader = true
+                header.nameLabel:SetText(string.format("|cffdba64a第 %d 幕|r", ch.actId))
                 header.nameLabel:ClearAllPoints()
-                header.nameLabel:SetPoint("LEFT", 8, 0)
+                header.nameLabel:SetPoint("CENTER", 0, 0)
+                header.nameLabel:SetJustifyH("CENTER")
                 header.infoLabel:SetText("")
                 header.bg:Hide()
+                if header.statusBar then header.statusBar:Hide() end
+                -- 金色水平线（左右两条）
+                if not header.headerLineL then
+                    header.headerLineL = header:CreateTexture(nil, "ARTWORK")
+                    header.headerLineL:SetHeight(1)
+                    header.headerLineL:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+                    header.headerLineL:SetVertexColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 0.40)
+                end
+                header.headerLineL:SetPoint("LEFT", 8, 0)
+                header.headerLineL:SetPoint("RIGHT", header.nameLabel, "LEFT", -6, 0)
+                header.headerLineL:Show()
+                if not header.headerLineR then
+                    header.headerLineR = header:CreateTexture(nil, "ARTWORK")
+                    header.headerLineR:SetHeight(1)
+                    header.headerLineR:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+                    header.headerLineR:SetVertexColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 0.40)
+                end
+                header.headerLineR:SetPoint("LEFT", header.nameLabel, "RIGHT", 6, 0)
+                header.headerLineR:SetPoint("RIGHT", -8, 0)
+                header.headerLineR:Show()
                 header.chapterId = 0
                 header:SetScript("OnMouseDown", nil)
                 header:Show()
@@ -3045,9 +3591,14 @@ function App:RefreshChapterPage()
             local row = self:GetOrCreateChapterRow(#self.chapterRows + 1)
             row:SetSize(CHAPTER_LIST_W, 32)
             row:SetPoint("TOPLEFT", 0, -y)
+            row.isHeader = false
             row.nameLabel:ClearAllPoints()
             row.nameLabel:SetPoint("LEFT", 16, 0)
             row.nameLabel:SetPoint("RIGHT", -132, 0)
+            row.nameLabel:SetJustifyH("LEFT")
+            if row.headerLineL then row.headerLineL:Hide() end
+            if row.headerLineR then row.headerLineR:Hide() end
+            if row.statusBar then row.statusBar:Show() end
             row.infoLabel:SetText(string.format("|cffFFD700%s  Lv%d|r", GetChapterTypeName(ch.chapterType), ch.threshold))
             row.chapterId = ch.id
             row:SetScript("OnMouseDown", function()
@@ -3072,8 +3623,18 @@ function App:RefreshChapterPage()
                 local nameColor  = isCurrent and "4dff4d" or (isPast and "3aaa3a" or "2a5c2a")
                 local marker     = isCurrent and "  |cffffff00<< \229\189\147\229\137\141 >>|r" or ""
                 row.nameLabel:SetText(string.format("|cff%s[%02d] %s|r%s", nameColor, ch.id, ch.name, marker))
+                -- 左侧状态指示条
+                if row.statusBar then
+                    if isCurrent then
+                        row.statusBar:SetVertexColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 1)
+                    elseif isPast then
+                        row.statusBar:SetVertexColor(THEME.equipped[1], THEME.equipped[2], THEME.equipped[3], 0.80)
+                    else
+                        row.statusBar:SetVertexColor(THEME.empty[1], THEME.empty[2], THEME.empty[3], 0.40)
+                    end
+                end
                 if isSelected then
-                    row.bg:SetVertexColor(THEME.accent[1], THEME.accent[2], THEME.accent[3], 0.18)
+                    row.bg:SetVertexColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 0.15)
                     row.bg:Show()
                 elseif isCurrent then
                     row.bg:SetVertexColor(THEME.currentCh[1], THEME.currentCh[2], THEME.currentCh[3], THEME.currentCh[4])
@@ -3094,13 +3655,19 @@ function App:GetOrCreateChapterRow(index)
     end
 
     local row = CreateFrame("Frame", nil, self.chapterContent)
-    row:SetSize(CHAPTER_LIST_W, 32)
+    row:SetSize(CHAPTER_LIST_W, 36)
     row:EnableMouse(true)
 
     row.bg = row:CreateTexture(nil, "BACKGROUND")
     row.bg:SetAllPoints()
     row.bg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
     row.bg:Hide()
+
+    row.statusBar = row:CreateTexture(nil, "ARTWORK")
+    row.statusBar:SetSize(3, 28)
+    row.statusBar:SetPoint("LEFT", 2, 0)
+    row.statusBar:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    row.statusBar:SetVertexColor(THEME.empty[1], THEME.empty[2], THEME.empty[3], 0.50)
 
     row.nameLabel = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     row.nameLabel:SetPoint("LEFT", 16, 0)
@@ -3109,6 +3676,21 @@ function App:GetOrCreateChapterRow(index)
 
     row.infoLabel = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     row.infoLabel:SetPoint("RIGHT", -8, 0)
+
+    row:SetScript("OnEnter", function(self)
+        if self.chapterId and self.chapterId > 0 and not self.isHeader then
+            self.hoverBg = self.hoverBg or self:CreateTexture(nil, "BACKGROUND")
+            self.hoverBg:SetAllPoints()
+            self.hoverBg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+            self.hoverBg:SetVertexColor(THEME.purpleDim[1], THEME.purpleDim[2], THEME.purpleDim[3], 0.20)
+            self.hoverBg:Show()
+        end
+    end)
+    row:SetScript("OnLeave", function(self)
+        if self.hoverBg then
+            self.hoverBg:Hide()
+        end
+    end)
 
     self.chapterRows[index] = row
     return row
@@ -3191,6 +3773,14 @@ function App:RefreshChapterDetail()
         self.chapterEnterAbyssBtn:SetAlpha((self.state.inRun or not accessReady or not HasChapterModeUnlocked(chapter, 2)) and 0.45 or 1.0)
         self.chapterEnterCorruptBtn:SetAlpha((self.state.inRun or not accessReady or not HasChapterModeUnlocked(chapter, 3)) and 0.45 or 1.0)
         self.chapterEnterReincarnationBtn:SetAlpha((self.state.inRun or not accessReady or not HasChapterModeUnlocked(chapter, 4)) and 0.45 or 1.0)
+    end
+    if self.chapterLeaveBtn then
+        if self.state.inRun then
+            self.chapterLeaveBtn:Show()
+            self.chapterLeaveBtn:SetAlpha(1.0)
+        else
+            self.chapterLeaveBtn:Hide()
+        end
     end
 
     local lines = {}
@@ -3275,39 +3865,61 @@ function App:RefreshChapterDetail()
 end
 
 -------------------------------------------------------
--- 标签按钮
+-- 标签按钮（下划线指示器风格）
 -------------------------------------------------------
 local function CreateTabButton(parent, text, x, onClick)
     local btn = CreateFrame("Button", nil, parent)
-    btn:SetSize(130, 28)
+    btn:SetSize(120, 30)
     btn:SetPoint("TOPLEFT", x, -36)
-    StylePanel(btn)
-
-    btn.label = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    btn.label:SetPoint("CENTER")
-    btn.label:SetText(text)
-
     btn:EnableMouse(true)
     btn:RegisterForClicks("LeftButtonUp")
-    btn:SetScript("OnClick", onClick)
 
+    btn.label = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    btn.label:SetPoint("CENTER", 0, 2)
+    btn.label:SetText(text)
+    btn.label:SetTextColor(THEME.muted[1], THEME.muted[2], THEME.muted[3], 1)
+
+    btn.indicator = btn:CreateTexture(nil, "ARTWORK")
+    btn.indicator:SetHeight(2)
+    btn.indicator:SetPoint("BOTTOMLEFT", 8, 0)
+    btn.indicator:SetPoint("BOTTOMRIGHT", -8, 0)
+    btn.indicator:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    btn.indicator:SetVertexColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 1)
+    btn.indicator:Hide()
+
+    btn.hoverBg = btn:CreateTexture(nil, "BACKGROUND")
+    btn.hoverBg:SetAllPoints()
+    btn.hoverBg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    btn.hoverBg:SetVertexColor(THEME.purpleDim[1], THEME.purpleDim[2], THEME.purpleDim[3], 0)
+
+    btn:SetScript("OnClick", onClick)
     btn:SetScript("OnEnter", function(self)
-        self:SetBackdropBorderColor(THEME.accent[1], THEME.accent[2], THEME.accent[3], 1)
+        if not self.active then
+            self.label:SetTextColor(THEME.textBright[1], THEME.textBright[2], THEME.textBright[3], 1)
+            self.indicator:SetVertexColor(THEME.goldDim[1], THEME.goldDim[2], THEME.goldDim[3], 0.6)
+            self.indicator:Show()
+            self.hoverBg:SetVertexColor(THEME.purpleDim[1], THEME.purpleDim[2], THEME.purpleDim[3], 0.25)
+        end
     end)
     btn:SetScript("OnLeave", function(self)
         if not self.active then
-            self:SetBackdropBorderColor(THEME.border[1], THEME.border[2], THEME.border[3], THEME.border[4])
+            self.label:SetTextColor(THEME.muted[1], THEME.muted[2], THEME.muted[3], 1)
+            self.indicator:Hide()
+            self.hoverBg:SetVertexColor(THEME.purpleDim[1], THEME.purpleDim[2], THEME.purpleDim[3], 0)
         end
     end)
 
     function btn:SetActive(active)
         self.active = active
         if active then
-            self:SetBackdropBorderColor(THEME.accent[1], THEME.accent[2], THEME.accent[3], 1)
-            self.label:SetTextColor(THEME.accent[1], THEME.accent[2], THEME.accent[3], 1)
+            self.label:SetTextColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 1)
+            self.indicator:SetVertexColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 1)
+            self.indicator:Show()
+            self.hoverBg:SetVertexColor(THEME.purpleDim[1], THEME.purpleDim[2], THEME.purpleDim[3], 0.15)
         else
-            self:SetBackdropBorderColor(THEME.border[1], THEME.border[2], THEME.border[3], THEME.border[4])
-            self.label:SetTextColor(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+            self.label:SetTextColor(THEME.muted[1], THEME.muted[2], THEME.muted[3], 1)
+            self.indicator:Hide()
+            self.hoverBg:SetVertexColor(THEME.purpleDim[1], THEME.purpleDim[2], THEME.purpleDim[3], 0)
         end
     end
 
@@ -3323,37 +3935,66 @@ function App:OnLoad(frame)
         App:HideRelicContextMenu()
     end)
 
-    -- 主框架样式
-    frame:SetBackdrop({
-        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true, tileSize = 16, edgeSize = 16,
-        insets = { left = 4, right = 4, top = 4, bottom = 4 },
-    })
-    frame:SetBackdropColor(THEME.bg[1], THEME.bg[2], THEME.bg[3], THEME.bg[4])
-    frame:SetBackdropBorderColor(THEME.border[1], THEME.border[2], THEME.border[3], THEME.border[4])
+    -- 主框架样式（高级金色边框）
+    StylePanelPremium(frame)
 
-    -- 标题
-    self.titleText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    self.titleText:SetPoint("TOPLEFT", 16, -10)
-    self.titleText:SetText("|cffDBA64A深渊修仙|r")
+    -- 四角装饰光效
+    CreateCornerGlow(frame)
+
+    -- 顶部渐变装饰条
+    local topGlow = frame:CreateTexture(nil, "ARTWORK")
+    topGlow:SetHeight(3)
+    topGlow:SetPoint("TOPLEFT", 12, -6)
+    topGlow:SetPoint("TOPRIGHT", -12, -6)
+    topGlow:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    topGlow:SetVertexColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 0.25)
+
+    -- 标题栏区域
+    local headerBar = CreateFrame("Frame", nil, frame)
+    headerBar:SetHeight(32)
+    headerBar:SetPoint("TOPLEFT", 8, -4)
+    headerBar:SetPoint("TOPRIGHT", -8, -4)
+    StylePanelFlat(headerBar, THEME.headerBg[1], THEME.headerBg[2], THEME.headerBg[3], THEME.headerBg[4])
+
+    -- 标题文字（带辉光效果）
+    local titleMain, titleShadow = CreateGlowTitle(headerBar, "深渊修仙")
+    titleShadow:SetPoint("TOPLEFT", 12, -6)
+    titleMain:SetPoint("TOPLEFT", titleShadow, "TOPLEFT", 1, -1)
+
+    -- 角色状态概要（标题栏右侧）
+    self.headerStatus = headerBar:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    self.headerStatus:SetPoint("RIGHT", -48, 0)
+    self.headerStatus:SetJustifyH("RIGHT")
+    self.headerStatus:SetTextColor(THEME.muted[1], THEME.muted[2], THEME.muted[3], 1)
+
+    -- 标题栏下方金色分割线
+    CreateDivider(frame, "TOP", -37, 10, 10)
 
     -- 刷新按钮
     self.refreshBtn = CreateSmallButton(frame, "刷新", 48, function()
         App:RequestData()
     end)
-    self.refreshBtn:SetPoint("TOPRIGHT", -36, -6)
+    self.refreshBtn:SetPoint("TOPRIGHT", -36, -7)
 
-    -- 标签
+    -- 标签（下划线指示器风格）
+    local tabY = -38
     self.tabEquip = CreateTabButton(frame, "专属装备", 16, function() App:ShowTab("equip") end)
-    self.tabArtifact = CreateTabButton(frame, "神器图鉴", 152, function() App:ShowTab("artifact") end)
-    self.tabSet = CreateTabButton(frame, "装备图鉴", 288, function() App:ShowTab("set") end)
-    self.tabSuit = CreateTabButton(frame, "套装图鉴", 424, function() App:ShowTab("suit") end)
-    self.tabChapter = CreateTabButton(frame, "剧情章节", 560, function() App:ShowTab("chapter") end)
+    self.tabArtifact = CreateTabButton(frame, "神器图鉴", 140, function() App:ShowTab("artifact") end)
+    self.tabSet = CreateTabButton(frame, "装备图鉴", 264, function() App:ShowTab("set") end)
+    self.tabSuit = CreateTabButton(frame, "套装图鉴", 388, function() App:ShowTab("suit") end)
+    self.tabChapter = CreateTabButton(frame, "剧情章节", 512, function() App:ShowTab("chapter") end)
+
+    -- 标签区域底部分割线
+    local tabDivider = frame:CreateTexture(nil, "ARTWORK")
+    tabDivider:SetHeight(1)
+    tabDivider:SetPoint("TOPLEFT", 8, -68)
+    tabDivider:SetPoint("TOPRIGHT", -8, -68)
+    tabDivider:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    tabDivider:SetVertexColor(THEME.border[1], THEME.border[2], THEME.border[3], 0.50)
 
     -- 内容区域
     self.contentFrame = CreateFrame("Frame", nil, frame)
-    self.contentFrame:SetPoint("TOPLEFT", 8, -70)
+    self.contentFrame:SetPoint("TOPLEFT", 8, -72)
     self.contentFrame:SetPoint("BOTTOMRIGHT", -8, 8)
 
     -- 装备页
@@ -3452,6 +4093,15 @@ end
 
 function App:RefreshCurrent()
     if not self.frame or not self.frame:IsShown() then return end
+    -- 更新标题栏状态
+    if self.headerStatus then
+        self.headerStatus:SetText(string.format(
+            "Lv%d  |  %s  |  腐化层%d",
+            self.state.playerLevel or 0,
+            self.state.currentChapterName ~= "" and self.state.currentChapterName or "无章节",
+            self.state.highestCorruptionTier or 0
+        ))
+    end
     if self.activeTab == "equip" then
         self:RefreshEquipPage()
     elseif self.activeTab == "artifact" then
@@ -3489,8 +4139,8 @@ local function EnsureIconButtonConfig()
     cfg.relativePoint = cfg.relativePoint or "BOTTOMLEFT"
     cfg.x = cfg.x or 28
     cfg.y = cfg.y or 220
-    cfg.width = cfg.width or 22
-    cfg.height = cfg.height or 22
+    cfg.width = cfg.width or 24
+    cfg.height = cfg.height or 24
     if cfg.enabled == nil then cfg.enabled = true end
     return cfg
 end
@@ -3548,15 +4198,21 @@ function App:CreateIconButton()
     icon:SetTexture("Interface\\Icons\\Spell_Shadow_DeathCoil")
     btn.texture = icon
 
-    -- 外发光
+    -- 外发光（紫色调）
     local glow = btn:CreateTexture(nil, "OVERLAY")
     glow:SetPoint("CENTER")
-    glow:SetSize(48, 48)
+    glow:SetSize(52, 52)
     glow:SetTexture("Interface\\Buttons\\CheckButtonGlow")
     glow:SetBlendMode("ADD")
+    glow:SetVertexColor(THEME.purple[1], THEME.purple[2], THEME.purple[3], 1)
     glow:SetAlpha(0.35)
 
-    -- 文字标签
+    -- 文字标签（金色+阴影）
+    local labelShadow = btn:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+    labelShadow:SetPoint("LEFT", btn, "RIGHT", 5, -1)
+    labelShadow:SetText("深渊修仙")
+    labelShadow:SetTextColor(0.30, 0.20, 0.05, 0.60)
+
     local label = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     label:SetPoint("LEFT", btn, "RIGHT", 4, 0)
     label:SetText("|cffDBA64A深渊修仙|r")

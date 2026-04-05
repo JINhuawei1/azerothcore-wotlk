@@ -13,6 +13,8 @@
 #include "Player.h"
 #include "QuestDef.h"
 #include "Spell.h"
+#include "SpellAuraEffects.h"
+#include "SpellScript.h"
 #include "AllCreatureScript.h"
 #include "ScriptedCreature.h"
 
@@ -8796,10 +8798,472 @@ private:
 };
 }
 
+// ============================================
+// 装备特效 Spell IDs (89001-89028)
+// ============================================
+enum AbyssEquipSpells
+{
+    SPELL_ABYSS_BLOOD_BURST          = 89001,
+    SPELL_ABYSS_SOUL_SLASH           = 89002,
+    SPELL_ABYSS_THUNDER_CRUSH        = 89003,
+    SPELL_ABYSS_THUNDER_DEBUFF       = 89004,
+    SPELL_ABYSS_POISON_DOT           = 89005,
+    SPELL_ABYSS_POISON_DETONATE      = 89006,
+    SPELL_ABYSS_CRIT_STORM           = 89007,
+    SPELL_ABYSS_HELLFIRE_RAIN        = 89008,
+    SPELL_ABYSS_HELLFIRE_IGNITE      = 89009,
+    SPELL_ABYSS_BLOODLUST            = 89010,
+    SPELL_ABYSS_VOID_HOLE            = 89011,
+    SPELL_ABYSS_ARMOR_CRUSH          = 89012,
+    SPELL_ABYSS_ARMOR_DEBUFF         = 89013,
+    SPELL_ABYSS_CORPSE_EXPLODE       = 89014,
+    SPELL_ABYSS_ABYSS_TOUCH          = 89015,
+    SPELL_ABYSS_ABYSS_ROOT           = 89016,
+    SPELL_ABYSS_WORLD_CRUSH          = 89017,
+    SPELL_ABYSS_WORLD_STUN           = 89018,
+    SPELL_ABYSS_BERSERK              = 89019,
+    SPELL_ABYSS_LAVA_RIFT            = 89020,
+    SPELL_ABYSS_LAVA_SLOW            = 89021,
+    SPELL_ABYSS_DOOM_BLADE           = 89022,
+    SPELL_ABYSS_DOOM_DOT             = 89023,
+    SPELL_ABYSS_DESTROY_PULSE        = 89024,
+    SPELL_ABYSS_DESTROY_DEBUFF       = 89025,
+    SPELL_ABYSS_SOUL_REAP            = 89026,
+    SPELL_ABYSS_CHARGE_DESTROY       = 89027,
+    SPELL_ABYSS_CHARGE_BUFF          = 89028,
+};
+
+// ============================================
+// [1] 血爆裂变 - 命中AOE火焰+连锁爆炸
+// ============================================
+class spell_abyss_blood_burst : public SpellScript
+{
+    PrepareSpellScript(spell_abyss_blood_burst);
+
+    uint32 _hitCount = 0;
+    uint32 _killCount = 0;
+
+    void HandleScript(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target)
+            return;
+
+        float ap = caster->GetTotalAttackPowerValue(BASE_ATTACK);
+        int32 damage = int32(ap * 2.8f);
+
+        // 连锁递减：每击杀一个目标，后续目标伤害递减25%
+        float reduction = 1.0f - (_killCount * 0.25f);
+        if (reduction < 0.25f)
+            reduction = 0.25f;
+        damage = int32(damage * reduction);
+
+        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_FIRE);
+        ++_hitCount;
+
+        if (!target->IsAlive())
+            ++_killCount;
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_abyss_blood_burst::HandleScript, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+};
+
+// ============================================
+// [2] 碎魂连斩 - 5道穿透暗影斩击波，每穿透+20%
+// ============================================
+class spell_abyss_soul_slash : public SpellScript
+{
+    PrepareSpellScript(spell_abyss_soul_slash);
+
+    uint32 _targetIndex = 0;
+
+    void HandleScript(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target)
+            return;
+
+        float ap = caster->GetTotalAttackPowerValue(BASE_ATTACK);
+        // 每多命中一个目标伤害+20%，最高翻倍
+        float scale = 1.0f + (_targetIndex * 0.2f);
+        if (scale > 2.0f)
+            scale = 2.0f;
+        int32 damage = int32(ap * 1.6f * scale);
+
+        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW);
+        ++_targetIndex;
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_abyss_soul_slash::HandleScript, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+};
+
+// ============================================
+// [3] 淬毒裂伤·DOT - AuraScript，5层满自动引爆
+// ============================================
+class spell_abyss_poison_dot : public AuraScript
+{
+    PrepareAuraScript(spell_abyss_poison_dot);
+
+    void AfterApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (Aura* aura = GetAura())
+        {
+            if (aura->GetStackAmount() >= 5)
+            {
+                Unit* target = GetTarget();
+                Unit* caster = GetCaster();
+                if (caster && target)
+                {
+                    // 满5层引爆
+                    caster->CastSpell(target, SPELL_ABYSS_POISON_DETONATE, true);
+                    aura->Remove();
+                }
+            }
+        }
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(spell_abyss_poison_dot::AfterApply, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE, AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK);
+    }
+};
+
+// ============================================
+// [4] 淬毒裂伤·引爆 - AOE自然伤害+向周围传播毒层
+// ============================================
+class spell_abyss_poison_detonate : public SpellScript
+{
+    PrepareSpellScript(spell_abyss_poison_detonate);
+
+    void HandleScript(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target)
+            return;
+
+        float sp = caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_NATURE);
+        float ap = caster->GetTotalAttackPowerValue(BASE_ATTACK);
+        float power = std::max(sp, ap);
+        int32 damage = int32(power * 2.0f);
+
+        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE);
+
+        // 向周围传播3层毒素
+        if (target != GetExplTargetUnit())
+            return; // 只在主目标上执行传播逻辑一次
+
+        // 由于DBC已设定AOE目标，每个被命中的目标自动获得毒层传播
+        caster->CastSpell(target, SPELL_ABYSS_POISON_DOT, true);
+        caster->CastSpell(target, SPELL_ABYSS_POISON_DOT, true);
+        caster->CastSpell(target, SPELL_ABYSS_POISON_DOT, true);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_abyss_poison_detonate::HandleScript, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+};
+
+// ============================================
+// [5] 地狱火雨 - AOE火焰伤害+施加点燃DOT
+// ============================================
+class spell_abyss_hellfire_rain : public SpellScript
+{
+    PrepareSpellScript(spell_abyss_hellfire_rain);
+
+    void HandleScript(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target)
+            return;
+
+        float sp = caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_FIRE);
+        int32 damage = int32(sp * 1.2f);
+        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_FIRE);
+
+        // 施加点燃DOT（可叠加3层）
+        caster->CastSpell(target, SPELL_ABYSS_HELLFIRE_IGNITE, true);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_abyss_hellfire_rain::HandleScript, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+};
+
+// ============================================
+// [6] 虚空黑洞 - 暗影AOE+减速60%
+// ============================================
+class spell_abyss_void_hole : public SpellScript
+{
+    PrepareSpellScript(spell_abyss_void_hole);
+
+    void HandleScript(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target)
+            return;
+
+        float sp = caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_SHADOW);
+        int32 damage = int32(sp * 1.8f);
+        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW);
+
+        // 吸引效果：将目标拉向施法者（模拟黑洞吸引）
+        float dist = caster->GetDistance(target);
+        if (dist > 3.0f)
+        {
+            float angle = caster->GetAngle(target);
+            float pullDist = std::min(dist - 2.0f, 5.0f);
+            float newX = target->GetPositionX() + pullDist * cos(angle + M_PI);
+            float newY = target->GetPositionY() + pullDist * sin(angle + M_PI);
+            float newZ = target->GetPositionZ();
+            target->NearTeleportTo(newX, newY, newZ, target->GetOrientation());
+        }
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_abyss_void_hole::HandleScript, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+};
+
+// ============================================
+// [7] 尸爆连锁 - 击杀后尸体爆炸，连锁最多5次
+// ============================================
+class spell_abyss_corpse_explode : public SpellScript
+{
+    PrepareSpellScript(spell_abyss_corpse_explode);
+
+    uint32 _chainCount = 0;
+
+    void HandleScript(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target)
+            return;
+
+        // 伤害=目标最大生命值的25%，每次连锁递减15%
+        float reduction = 1.0f - (_chainCount * 0.15f);
+        if (reduction < 0.25f)
+            reduction = 0.25f;
+        int32 damage = int32(target->GetMaxHealth() * 0.25f * reduction);
+
+        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL);
+
+        // 如果目标死亡且还有连锁次数，再次触发爆炸
+        if (!target->IsAlive() && _chainCount < 5)
+        {
+            ++_chainCount;
+            caster->CastSpell(caster, SPELL_ABYSS_CORPSE_EXPLODE, true);
+        }
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_abyss_corpse_explode::HandleScript, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+};
+
+// ============================================
+// [8] 深渊之触 - 暗影AOE+定身3秒
+// ============================================
+class spell_abyss_abyss_touch : public SpellScript
+{
+    PrepareSpellScript(spell_abyss_abyss_touch);
+
+    void HandleScript(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target)
+            return;
+
+        float ap = caster->GetTotalAttackPowerValue(BASE_ATTACK);
+        int32 damage = int32(ap * 3.0f);
+        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW);
+
+        // 施加定身
+        caster->CastSpell(target, SPELL_ABYSS_ABYSS_ROOT, true);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_abyss_abyss_touch::HandleScript, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+};
+
+// ============================================
+// [9] 岩浆裂地 - 火焰伤害+减速
+// ============================================
+class spell_abyss_lava_rift : public SpellScript
+{
+    PrepareSpellScript(spell_abyss_lava_rift);
+
+    void HandleScript(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target)
+            return;
+
+        float sp = caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_FIRE);
+        int32 damage = int32(sp * 1.5f);
+        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_FIRE);
+
+        // 施加减速
+        caster->CastSpell(target, SPELL_ABYSS_LAVA_SLOW, true);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_abyss_lava_rift::HandleScript, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+};
+
+// ============================================
+// [10] 毁灭脉冲 - 奥术AOE+击退+施加易伤debuff
+// ============================================
+class spell_abyss_destroy_pulse : public SpellScript
+{
+    PrepareSpellScript(spell_abyss_destroy_pulse);
+
+    void HandleScript(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target)
+            return;
+
+        float sp = caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_ARCANE);
+        int32 damage = int32(sp * 4.0f);
+        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_ARCANE);
+
+        // 击退
+        float angle = caster->GetAngle(target);
+        target->KnockbackFrom(caster->GetPositionX(), caster->GetPositionY(), 8.0f, 6.0f);
+
+        // 施加易伤debuff (受伤+20%)
+        caster->CastSpell(target, SPELL_ABYSS_DESTROY_DEBUFF, true);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_abyss_destroy_pulse::HandleScript, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+};
+
+// ============================================
+// [11] 噬魂收割 - 暗影AOE+每命中回复3%生命
+// ============================================
+class spell_abyss_soul_reap : public SpellScript
+{
+    PrepareSpellScript(spell_abyss_soul_reap);
+
+    uint32 _hitCount = 0;
+
+    void HandleScript(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target)
+            return;
+
+        float sp = caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_SHADOW);
+        int32 damage = int32(sp * 2.6f);
+        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW);
+
+        ++_hitCount;
+    }
+
+    void AfterCastHandler()
+    {
+        // 施法结束后，根据命中数回血
+        Unit* caster = GetCaster();
+        if (!caster || _hitCount == 0)
+            return;
+
+        int32 healAmount = int32(caster->GetMaxHealth() * 0.03f * _hitCount);
+        caster->ModifyHealth(healAmount);
+
+        if (Player* player = caster->ToPlayer())
+            if (player->GetSession())
+                ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff00[噬魂收割]|r 命中{}个目标，回复{}点生命值。", _hitCount, healAmount);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_abyss_soul_reap::HandleScript, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+        AfterCast += SpellCastFn(spell_abyss_soul_reap::AfterCastHandler);
+    }
+};
+
+// ============================================
+// [12] 冲锋毁灭 - 物理AOE+击飞+自身buff
+// ============================================
+class spell_abyss_charge_destroy : public SpellScript
+{
+    PrepareSpellScript(spell_abyss_charge_destroy);
+
+    bool _buffApplied = false;
+
+    void HandleScript(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target)
+            return;
+
+        float ap = caster->GetTotalAttackPowerValue(BASE_ATTACK);
+        int32 damage = int32(ap * 3.0f);
+        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL);
+
+        // 击飞
+        target->KnockbackFrom(caster->GetPositionX(), caster->GetPositionY(), 5.0f, 4.0f);
+
+        // 给自身施加全属性+20%的buff（只施加一次）
+        if (!_buffApplied)
+        {
+            caster->CastSpell(caster, SPELL_ABYSS_CHARGE_BUFF, true);
+            _buffApplied = true;
+        }
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_abyss_charge_destroy::HandleScript, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+};
+
 void AddSC_mod_abyss_cultivation()
 {
     new AbyssCultivationWorldScript();
     new AbyssCultivationPlayerScript();
     new AbyssCultivationCreatureScript();
     new AbyssCultivationCommandScript();
+
+    // 装备特效 SpellScript 注册
+    RegisterSpellScript(spell_abyss_blood_burst);       // 89001 血爆裂变
+    RegisterSpellScript(spell_abyss_soul_slash);        // 89002 碎魂连斩
+    RegisterSpellScript(spell_abyss_poison_dot);        // 89005 淬毒裂伤(AuraScript)
+    RegisterSpellScript(spell_abyss_poison_detonate);   // 89006 淬毒裂伤·引爆
+    RegisterSpellScript(spell_abyss_hellfire_rain);     // 89008 地狱火雨
+    RegisterSpellScript(spell_abyss_void_hole);         // 89011 虚空黑洞
+    RegisterSpellScript(spell_abyss_corpse_explode);    // 89014 尸爆连锁
+    RegisterSpellScript(spell_abyss_abyss_touch);       // 89015 深渊之触
+    RegisterSpellScript(spell_abyss_lava_rift);         // 89020 岩浆裂地
+    RegisterSpellScript(spell_abyss_destroy_pulse);     // 89024 毁灭脉冲
+    RegisterSpellScript(spell_abyss_soul_reap);         // 89026 噬魂收割
+    RegisterSpellScript(spell_abyss_charge_destroy);    // 89027 冲锋毁灭
 }
