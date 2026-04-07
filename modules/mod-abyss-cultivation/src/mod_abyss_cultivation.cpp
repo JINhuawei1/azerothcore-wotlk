@@ -1,10 +1,13 @@
 #include "ScriptMgr.h"
 
+#include "Cell.h"
+#include "CellImpl.h"
 #include "Chat.h"
 #include "Configuration/Config.h"
 #include "Creature.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
+#include "GridNotifiers.h"
 #include "Logging/Log.h"
 #include "LootMgr.h"
 #include "Map.h"
@@ -26,6 +29,8 @@
 #include <cstdlib>
 #include <ctime>
 #include <initializer_list>
+#include <list>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -320,6 +325,86 @@ int32 ScaleIntValue(int32 value, float scale)
         return 0;
 
     return static_cast<int32>(std::lround(static_cast<double>(value) * scale));
+}
+
+constexpr uint32 ABYSS_RELIC_MANAGED_SPELL_START = 89101;
+constexpr uint32 ABYSS_RELIC_MANAGED_SPELL_END = 89181;
+constexpr uint32 ABYSS_RELIC_THEFT_KEY_ITEM = 950035;
+constexpr uint32 ABYSS_RELIC_BLESS_CURSE_ITEM = 950042;
+constexpr uint32 ABYSS_RELIC_STAGE_STANCE_ITEM = 950058;
+constexpr uint32 ABYSS_RELIC_PROTOCOL_EYE_ITEM = 950070;
+
+constexpr uint32 ABYSS_RELIC_THEFT_KEY_SPELL = 89135;
+constexpr uint32 ABYSS_RELIC_BLESS_CURSE_SPELL = 89142;
+constexpr uint32 ABYSS_RELIC_STAGE_STANCE_SPELL = 89158;
+constexpr uint32 ABYSS_RELIC_PROTOCOL_EYE_SPELL = 89170;
+constexpr uint32 ABYSS_PHASE_ARTIFACT_BURNING_PACT_ITEM = 960001;
+constexpr uint32 ABYSS_PHASE_ARTIFACT_VOID_EXPEDITION_ITEM = 960002;
+constexpr uint32 ABYSS_PHASE_ARTIFACT_ICE_TIMEBOX_ITEM = 960003;
+constexpr uint32 ABYSS_PHASE_ARTIFACT_BUG_DECREE_ITEM = 960004;
+constexpr uint32 ABYSS_PHASE_ARTIFACT_ECLIPSE_KING_ITEM = 960005;
+constexpr uint32 ABYSS_PHASE_ARTIFACT_SCOURGE_CHAPTER_ITEM = 960006;
+constexpr uint32 ABYSS_ULTIMATE_ARTIFACT_ABYSS_LORD_ITEM = 970001;
+
+struct PlayerAbyssData;
+
+    bool IsManagedRelicSpell(uint32 spellId)
+    {
+        return spellId >= ABYSS_RELIC_MANAGED_SPELL_START && spellId <= ABYSS_RELIC_MANAGED_SPELL_END;
+    }
+
+    bool HasAnyActiveRelicSlots(PlayerAbyssData const* data);
+
+bool IsSystemRelicItem(uint32 itemId)
+{
+    switch (itemId)
+    {
+        case ABYSS_RELIC_THEFT_KEY_ITEM:
+        case ABYSS_RELIC_BLESS_CURSE_ITEM:
+        case ABYSS_RELIC_STAGE_STANCE_ITEM:
+        case ABYSS_RELIC_PROTOCOL_EYE_ITEM:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool IsSystemRelicSpell(uint32 spellId)
+{
+    switch (spellId)
+    {
+        case ABYSS_RELIC_THEFT_KEY_SPELL:
+        case ABYSS_RELIC_BLESS_CURSE_SPELL:
+        case ABYSS_RELIC_STAGE_STANCE_SPELL:
+        case ABYSS_RELIC_PROTOCOL_EYE_SPELL:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool IsSelfTargetManagedRelicSpell(uint32 spellId)
+{
+    switch (spellId)
+    {
+        case 89135: // 禁狱零匙
+        case 89142: // 紫狱印典
+        case 89149: // 冠军封缄
+        case 89157: // 古神耳蜕
+        case 89158: // 幕星假面
+        case 89165: // 祖灵战鼓
+        case 89170: // 观察者棱眼
+        case 89175: // 焚界行契
+        case 89176: // 虚空远征印
+        case 89177: // 冰脉时匣
+        case 89178: // 虫神遗诏
+        case 89179: // 日蚀王契
+        case 89180: // 天灾断章
+        case 89181: // 渊主之印
+            return true;
+        default:
+            return false;
+    }
 }
 
 std::string EscapeSqlString(std::string const& value)
@@ -795,11 +880,24 @@ struct PlayerAbyssProcState
 {
     uint32 killCounter = 0;
     uint32 bloodKillCounter = 0;
+    uint32 sporeKillCounter = 0;
+    uint32 dragonRageKillCounter = 0;
+    uint32 mushroomKillCounter = 0;
+    uint32 soulLampKillCounter = 0;
+    uint32 soulFurnaceKillCounter = 0;
+    uint32 stitchKillCounter = 0;
     uint32 poisonCastCounter = 0;
     uint32 bloodFlameComboCounter = 0;
+    uint32 sunBurstComboCounter = 0;
     uint32 starfallCounter = 0;
     uint32 tideCastCounter = 0;
     uint32 bloomCastCounter = 0;
+    uint32 arcaneAshCastCounter = 0;
+    uint32 vineCastCounter = 0;
+    uint32 orbitalCastCounter = 0;
+    uint32 overloadCastCounter = 0;
+    uint32 dragonBreathCastCounter = 0;
+    uint32 laserOrbitCastCounter = 0;
     uint32 lastSpellId = 0;
     uint32 lastComboSpellId = 0;
     uint32 lastSpellCastTime = 0;
@@ -820,12 +918,75 @@ struct PlayerAbyssProcState
     uint32 lastBattleBannerTime = 0;
     uint32 lastRedJadeTime = 0;
     uint32 lastDreamBurstTime = 0;
+    uint32 lastSporeBurstTime = 0;
+    uint32 lastDragonRageTime = 0;
+    uint32 lastMushroomBurstTime = 0;
+    uint32 lastSoulLampTime = 0;
+    uint32 lastSoulFurnaceTime = 0;
+    uint32 lastStitchTime = 0;
+    uint32 lastArcaneAshTime = 0;
+    uint32 lastRiftRainTime = 0;
+    uint32 lastPhaseShotTime = 0;
+    uint32 lastVineBloomTime = 0;
+    uint32 lastSunBurstTime = 0;
+    uint32 lastOrbitalMissileTime = 0;
+    uint32 lastNoFaceEchoTime = 0;
+    uint32 lastTitanMeteorTime = 0;
+    uint32 lastThunderAncestorTime = 0;
+    uint32 lastArmyPressureTime = 0;
+    uint32 lastFearExecuteTime = 0;
+    uint32 lastOverloadTime = 0;
+    uint32 lastLavaCoreTime = 0;
+    uint32 lastDragonBreathTime = 0;
+    uint32 lastLaserOrbitTime = 0;
+    uint32 lastRekindleTime = 0;
+    uint32 lastStillnessTime = 0;
+    uint32 lastMountainBreakTime = 0;
+    uint32 lastTidePrisonTime = 0;
+    uint32 lastHellPrisonTime = 0;
+    uint32 lastSandEchoTime = 0;
+    uint32 lastPlagueSpreadTime = 0;
+    uint32 lastAncestorBlessTime = 0;
+    uint32 lastFrostExplodeTime = 0;
+    uint32 lastCorruptBloomTime = 0;
+    uint32 lastSteamCoreTime = 0;
+    uint32 lastChampionSealTime = 0;
+    uint32 lastOldGodGiftTime = 0;
+    uint32 lastCombatEnterTime = 0;
+    uint32 openingAttackCount = 0;
+    uint32 artifactMainProcCounter = 0;
+    uint32 lastPhaseArtifactTime = 0;
+    uint32 lastUltimateArtifactTime = 0;
+    uint32 lastWolfMoonTime = 0;
+    uint32 lastThornChargeTime = 0;
+    uint32 lastFireSchoolCastTime = 0;
+    uint32 lastBlackFurnaceTime = 0;
+    uint32 lastGeneralEchoTime = 0;
+    uint32 lastBulwarkTime = 0;
+    uint32 lastBloodOrbTime = 0;
+    uint32 lastClockMarkTime = 0;
+    uint32 lastSpiderEggTime = 0;
+    uint32 lastExecutionStakeTime = 0;
+    uint32 lastMirrorShardTime = 0;
+    uint32 lastReverseScaleTime = 0;
+    uint32 lastEclipseTime = 0;
     uint32 lastPrisonChoiceTime = 0;
     uint32 lastMatrixEchoTime = 0;
     uint32 lastHolyVerdictTime = 0;
     uint32 lastDominionTime = 0;
+    uint32 lastSystemRelicStateSyncTime = 0;
     uint32 matrixCastCounter = 0;
     uint32 dominionCounter = 0;
+    uint8 blessingCurseChoice = 0;
+    uint8 observerProtocol = 0;
+    uint8 stagePerformanceStance = 0;
+    uint32 stolenMechanicToken = 0;
+    bool artifactCombatEchoUsed = false;
+    bool artifactSubLinkUsed = false;
+    float trackedPosX = 0.0f;
+    float trackedPosY = 0.0f;
+    float trackedPosZ = 0.0f;
+    bool hasTrackedPosition = false;
     float lastPromptX = 0.0f;
     float lastPromptY = 0.0f;
     float lastPromptZ = 0.0f;
@@ -834,7 +995,24 @@ struct PlayerAbyssProcState
     uint8 beastMode = 0;
     bool abyssModePromptShown = false;
     bool replayingSpell = false;
+    uint32 managedSpellScaleFallbackSpellId = 0;
+    ObjectGuid managedSpellTargetGuid;
 };
+
+bool HasAnyActiveRelicSlots(PlayerAbyssData const* data)
+{
+    if (!data)
+        return false;
+
+    return data->mainRelic != 0 ||
+        data->subRelic1 != 0 ||
+        data->subRelic2 != 0 ||
+        data->subRelic3 != 0 ||
+        data->subRelic4 != 0 ||
+        data->subRelic5 != 0 ||
+        data->phaseArtifact != 0 ||
+        data->ultimateArtifact != 0;
+}
 
 struct AbyssRewardResult
 {
@@ -2882,6 +3060,7 @@ public:
         NormalizePlayerData(guid, data);
         SavePlayerData(player);
         RefreshPlayerRuntimeStats(player);
+
         return true;
     }
 
@@ -2901,6 +3080,7 @@ public:
             return 0.0f;
 
         uint32 guid = player->GetGUID().GetCounter();
+        PlayerAbyssProcState& procState = const_cast<AbyssCultivationMgr*>(this)->GetOrCreatePlayerProcState(guid);
         PlayerAbyssRunState const* runState = GetPlayerRunState(guid);
         PlayerAbyssData const* playerData = GetPlayerData(guid);
 
@@ -2924,11 +3104,120 @@ public:
             considerRelicGroup(runState->runSubRelic4, GetConfiguredSubRelicScale(runState->runSubRelic4));
             considerRelicGroup(runState->runSubRelic5, GetConfiguredSubRelicScale(runState->runSubRelic5));
         }
+        else if (playerData)
+        {
+            considerRelicGroup(playerData->mainRelic, 1.0f);
+            considerRelicGroup(playerData->subRelic1, GetConfiguredSubRelicScale(playerData->subRelic1));
+            considerRelicGroup(playerData->subRelic2, GetConfiguredSubRelicScale(playerData->subRelic2));
+            considerRelicGroup(playerData->subRelic3, GetConfiguredSubRelicScale(playerData->subRelic3));
+            considerRelicGroup(playerData->subRelic4, GetConfiguredSubRelicScale(playerData->subRelic4));
+            considerRelicGroup(playerData->subRelic5, GetConfiguredSubRelicScale(playerData->subRelic5));
+        }
 
         if (playerData)
         {
             considerRelicGroup(playerData->phaseArtifact, 1.0f);
             considerRelicGroup(playerData->ultimateArtifact, 1.0f);
+        }
+
+        if (bestScale <= 0.0f && procState.managedSpellScaleFallbackSpellId != 0)
+        {
+            uint32 fallbackSpellId = procState.managedSpellScaleFallbackSpellId;
+            auto fallbackMatches = [&](std::initializer_list<char const*> names)
+            {
+                for (char const* name : names)
+                {
+                    if (name && scriptGroup == name)
+                        return true;
+                }
+                return false;
+            };
+
+            switch (fallbackSpellId)
+            {
+                case 89101: if (fallbackMatches({ "遗物_裂火炭核", "特效_裂火爆环" })) return 1.0f; break;
+                case 89102: if (fallbackMatches({ "遗物_蛇蜕古胆" })) return 1.0f; break;
+                case 89103: if (fallbackMatches({ "遗物_黑潮齿轮", "祝福_追命飞刃" })) return 1.0f; break;
+                case 89104: if (fallbackMatches({ "遗物_狼王残月" })) return 1.0f; break;
+                case 89105: if (fallbackMatches({ "遗物_深海祈眼", "遗物_潮蛇王鳞" })) return 1.0f; break;
+                case 89106: if (fallbackMatches({ "遗物_断罪枷锁", "特效_锁链爆裂" })) return 1.0f; break;
+                case 89107: if (fallbackMatches({ "遗物_爆线电枢", "祝福_雷暴连极" })) return 1.0f; break;
+                case 89108: if (fallbackMatches({ "遗物_棘魂号角" })) return 1.0f; break;
+                case 89109: if (fallbackMatches({ "遗物_血焰圣经", "祝福_日蚀焚城", "特效_血焰审判" })) return 1.0f; break;
+                case 89110: if (fallbackMatches({ "遗物_枯王孢囊" })) return 1.0f; break;
+                case 89111: if (fallbackMatches({ "遗物_泰坦偏轴", "祝福_逆时回响", "特效_时痕回放" })) return 1.0f; break;
+                case 89112: if (fallbackMatches({ "遗物_黄沙时漏" })) return 1.0f; break;
+                case 89113: if (fallbackMatches({ "遗物_腐花心核" })) return 1.0f; break;
+                case 89114: if (fallbackMatches({ "遗物_梦沼眼膜" })) return 1.0f; break;
+                case 89115: if (fallbackMatches({ "遗物_黑炉王印" })) return 1.0f; break;
+                case 89116: if (fallbackMatches({ "遗物_龙骨炽芯" })) return 1.0f; break;
+                case 89117: if (fallbackMatches({ "遗物_将军狱旗" })) return 1.0f; break;
+                case 89118: if (fallbackMatches({ "遗物_古树孢祖" })) return 1.0f; break;
+                case 89119: if (fallbackMatches({ "遗物_圣疫火烙" })) return 1.0f; break;
+                case 89120: if (fallbackMatches({ "遗物_通灵逆契", "祝福_灵魂沸涌", "特效_魂火追击" })) return 1.0f; break;
+                case 89121: if (fallbackMatches({ "遗物_残垒战契" })) return 1.0f; break;
+                case 89122: if (fallbackMatches({ "遗物_邪血蒸馏器" })) return 1.0f; break;
+                case 89123: if (fallbackMatches({ "遗物_破军碎牌" })) return 1.0f; break;
+                case 89124: if (fallbackMatches({ "遗物_潮牢鳞灯" })) return 1.0f; break;
+                case 89125: if (fallbackMatches({ "遗物_孢毒母囊" })) return 1.0f; break;
+                case 89126: if (fallbackMatches({ "遗物_压阀导芯" })) return 1.0f; break;
+                case 89127: if (fallbackMatches({ "遗物_法陵星匣" })) return 1.0f; break;
+                case 89128: if (fallbackMatches({ "遗物_祭魂引灯" })) return 1.0f; break;
+                case 89129: case 89148: if (fallbackMatches({ "遗物_鸦神命羽", "遗物_王陨号角" })) return 1.0f; break;
+                case 89130: if (fallbackMatches({ "遗物_惧影迷盘" })) return 1.0f; break;
+                case 89131: if (fallbackMatches({ "遗物_时痕怀表" })) return 1.0f; break;
+                case 89132: if (fallbackMatches({ "遗物_裂隙砂轮" })) return 1.0f; break;
+                case 89133: if (fallbackMatches({ "遗物_相位动轮" })) return 1.0f; break;
+                case 89134: if (fallbackMatches({ "遗物_星植胚囊" })) return 1.0f; break;
+                case 89135: if (fallbackMatches({ "遗物_禁狱零匙" })) return 1.0f; break;
+                case 89136: if (fallbackMatches({ "遗物_逐日余晖" })) return 1.0f; break;
+                case 89137: if (fallbackMatches({ "遗物_维库战祷" })) return 1.0f; break;
+                case 89138: if (fallbackMatches({ "遗物_聚魔棱晶" })) return 1.0f; break;
+                case 89139: if (fallbackMatches({ "遗物_蛛网夜卵" })) return 1.0f; break;
+                case 89140: if (fallbackMatches({ "遗物_无面触冠" })) return 1.0f; break;
+                case 89141: if (fallbackMatches({ "遗物_尸霜獠牙" })) return 1.0f; break;
+                case 89142: if (fallbackMatches({ "遗物_紫狱印典" })) return 1.0f; break;
+                case 89143: if (fallbackMatches({ "遗物_神噬断爪" })) return 1.0f; break;
+                case 89144: if (fallbackMatches({ "遗物_泰坦记忆核" })) return 1.0f; break;
+                case 89145: if (fallbackMatches({ "遗物_雷祖导体" })) return 1.0f; break;
+                case 89146: if (fallbackMatches({ "遗物_时审钟摆" })) return 1.0f; break;
+                case 89147: if (fallbackMatches({ "遗物_星界虹膜" })) return 1.0f; break;
+                case 89149: if (fallbackMatches({ "遗物_冠军封缄" })) return 1.0f; break;
+                case 89150: if (fallbackMatches({ "遗物_魂炉熔渣" })) return 1.0f; break;
+                case 89151: if (fallbackMatches({ "遗物_萨钢骨钉" })) return 1.0f; break;
+                case 89152: if (fallbackMatches({ "遗物_映像碎镜" })) return 1.0f; break;
+                case 89153: if (fallbackMatches({ "遗物_熔界核髓" })) return 1.0f; break;
+                case 89154: if (fallbackMatches({ "遗物_逆鳞王冠" })) return 1.0f; break;
+                case 89155: if (fallbackMatches({ "遗物_畸变龙脊" })) return 1.0f; break;
+                case 89156: if (fallbackMatches({ "遗物_虫群主脑" })) return 1.0f; break;
+                case 89157: if (fallbackMatches({ "遗物_古神耳蜕" })) return 1.0f; break;
+                case 89158: if (fallbackMatches({ "遗物_幕星假面" })) return 1.0f; break;
+                case 89159: if (fallbackMatches({ "遗物_碎山指节" })) return 1.0f; break;
+                case 89160: if (fallbackMatches({ "遗物_深狱锁冠" })) return 1.0f; break;
+                case 89161: if (fallbackMatches({ "遗物_潮蛇王鳞" })) return 1.0f; break;
+                case 89162: if (fallbackMatches({ "遗物_虚空矩阵", "祝福_双生元婴" })) return 1.0f; break;
+                case 89163: if (fallbackMatches({ "遗物_守望战旌" })) return 1.0f; break;
+                case 89164: if (fallbackMatches({ "遗物_伊利影印", "遗物_映像碎镜" })) return 1.0f; break;
+                case 89165: if (fallbackMatches({ "遗物_祖灵战鼓" })) return 1.0f; break;
+                case 89166: if (fallbackMatches({ "遗物_日蚀残晕" })) return 1.0f; break;
+                case 89167: if (fallbackMatches({ "遗物_亡缝心炉" })) return 1.0f; break;
+                case 89168: if (fallbackMatches({ "遗物_暮炎龙瞳" })) return 1.0f; break;
+                case 89169: if (fallbackMatches({ "遗物_蓝脉天轮" })) return 1.0f; break;
+                case 89170: if (fallbackMatches({ "遗物_观察者棱眼" })) return 1.0f; break;
+                case 89171: if (fallbackMatches({ "遗物_圣陨判词", "祝福_断命法旨", "特效_圣陨终裁" })) return 1.0f; break;
+                case 89172: if (fallbackMatches({ "遗物_复燃逆鳞" })) return 1.0f; break;
+                case 89173: if (fallbackMatches({ "遗物_霜王残印", "祝福_极霜粉碎", "特效_霜王统御" })) return 1.0f; break;
+                case 89174: if (fallbackMatches({ "遗物_赤玉界针" })) return 1.0f; break;
+                case 89175: if (fallbackMatches({ "神器_焚界行契" })) return 1.0f; break;
+                case 89176: if (fallbackMatches({ "神器_虚空远征印" })) return 1.0f; break;
+                case 89177: if (fallbackMatches({ "神器_冰脉时匣" })) return 1.0f; break;
+                case 89178: if (fallbackMatches({ "神器_虫神遗诏" })) return 1.0f; break;
+                case 89179: if (fallbackMatches({ "神器_日蚀王契" })) return 1.0f; break;
+                case 89180: if (fallbackMatches({ "神器_天灾断章" })) return 1.0f; break;
+                case 89181: if (fallbackMatches({ "神器_渊主之印" })) return 1.0f; break;
+                default:
+                    break;
+            }
         }
 
         return bestScale;
@@ -2948,10 +3237,838 @@ public:
         return GetActiveScriptGroupScale(player, scriptGroup) > 0.0f;
     }
 
+    uint32 CountNearbyEnemies(Player* player, float radius) const
+    {
+        if (!player || radius <= 0.0f)
+            return 0;
+
+        std::list<Unit*> nearbyTargets;
+        Acore::AnyUnfriendlyUnitInObjectRangeCheck check(player, player, radius);
+        Acore::UnitListSearcher<Acore::AnyUnfriendlyUnitInObjectRangeCheck> searcher(player, nearbyTargets, check);
+        Cell::VisitAllObjects(player, searcher, radius);
+        return static_cast<uint32>(nearbyTargets.size());
+    }
+
+    bool HasCrowdControlAuras(Unit* unit) const
+    {
+        if (!unit)
+            return false;
+
+        return unit->HasAuraType(SPELL_AURA_MOD_ROOT) ||
+            unit->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) ||
+            unit->HasAuraType(SPELL_AURA_MOD_STUN) ||
+            unit->HasAuraType(SPELL_AURA_MOD_FEAR);
+    }
+
+    void EnsureSystemRelicState(Player* player) const
+    {
+        if (!player)
+            return;
+
+        PlayerAbyssProcState& procState = const_cast<AbyssCultivationMgr*>(this)->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+
+        if (GetActiveRelicScale(player, ABYSS_RELIC_BLESS_CURSE_ITEM) > 0.0f && procState.blessingCurseChoice == 0)
+            procState.blessingCurseChoice = 1;
+
+        if (GetActiveRelicScale(player, ABYSS_RELIC_PROTOCOL_EYE_ITEM) > 0.0f && procState.observerProtocol == 0)
+            procState.observerProtocol = 1;
+
+        if (GetActiveRelicScale(player, ABYSS_RELIC_STAGE_STANCE_ITEM) > 0.0f && procState.stagePerformanceStance == 0)
+            procState.stagePerformanceStance = 1;
+    }
+
+    char const* GetSystemRelicLabel(uint32 itemId) const
+    {
+        switch (itemId)
+        {
+            case ABYSS_RELIC_THEFT_KEY_ITEM:
+                return "禁狱零匙";
+            case ABYSS_RELIC_BLESS_CURSE_ITEM:
+                return "紫狱印典";
+            case ABYSS_RELIC_STAGE_STANCE_ITEM:
+                return "幕星假面";
+            case ABYSS_RELIC_PROTOCOL_EYE_ITEM:
+                return "观察者棱眼";
+            default:
+                return "系统型遗物";
+        }
+    }
+
+    void SyncSystemRelicState(Player* player) const
+    {
+        if (!player)
+            return;
+
+        EnsureSystemRelicState(player);
+
+        PlayerAbyssProcState& procState = const_cast<AbyssCultivationMgr*>(this)->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+        uint32 now = GetNow();
+        if (now <= procState.lastSystemRelicStateSyncTime + 30)
+            return;
+
+        procState.lastSystemRelicStateSyncTime = now;
+
+        if (!IsDebugEnabled() || !player->GetSession())
+            return;
+
+        if (GetActiveRelicScale(player, ABYSS_RELIC_BLESS_CURSE_ITEM) > 0.0f)
+            ChatHandler(player->GetSession()).PSendSysMessage("[AbyssSystemRelic] {} 已进入系统型骨架，当前暂用选择位={}。",
+                GetSystemRelicLabel(ABYSS_RELIC_BLESS_CURSE_ITEM), procState.blessingCurseChoice);
+
+        if (GetActiveRelicScale(player, ABYSS_RELIC_PROTOCOL_EYE_ITEM) > 0.0f)
+            ChatHandler(player->GetSession()).PSendSysMessage("[AbyssSystemRelic] {} 已进入系统型骨架，当前协议位={}。",
+                GetSystemRelicLabel(ABYSS_RELIC_PROTOCOL_EYE_ITEM), procState.observerProtocol);
+
+        if (GetActiveRelicScale(player, ABYSS_RELIC_STAGE_STANCE_ITEM) > 0.0f)
+            ChatHandler(player->GetSession()).PSendSysMessage("[AbyssSystemRelic] {} 已进入系统型骨架，当前姿态位={}。",
+                GetSystemRelicLabel(ABYSS_RELIC_STAGE_STANCE_ITEM), procState.stagePerformanceStance);
+
+        if (GetActiveRelicScale(player, ABYSS_RELIC_THEFT_KEY_ITEM) > 0.0f)
+            ChatHandler(player->GetSession()).PSendSysMessage("[AbyssSystemRelic] {} 已进入系统型骨架，当前窃取槽位={}。",
+                GetSystemRelicLabel(ABYSS_RELIC_THEFT_KEY_ITEM), procState.stolenMechanicToken);
+    }
+
+    float GetActiveRelicScale(Player* player, uint32 itemId) const
+    {
+        if (!player || itemId == 0)
+            return 0.0f;
+
+        AbyssRelicConfig const* relic = GetRelicConfig(itemId);
+        if (!relic)
+            return 0.0f;
+
+        uint32 guid = player->GetGUID().GetCounter();
+        PlayerAbyssRunState const* runState = GetPlayerRunState(guid);
+        PlayerAbyssData const* playerData = GetPlayerData(guid);
+
+        float bestScale = 0.0f;
+        auto considerSlot = [&](uint32 activeItemId, uint8 slot)
+        {
+            if (activeItemId != itemId)
+                return;
+
+            bestScale = std::max(bestScale, GetRelicSlotScale(*relic, slot));
+        };
+
+        if (runState)
+        {
+            considerSlot(runState->runMainRelic, ABYSS_RELIC_SLOT_MAIN);
+            considerSlot(runState->runSubRelic1, ABYSS_RELIC_SLOT_SUB_1);
+            considerSlot(runState->runSubRelic2, ABYSS_RELIC_SLOT_SUB_2);
+            considerSlot(runState->runSubRelic3, ABYSS_RELIC_SLOT_SUB_3);
+            considerSlot(runState->runSubRelic4, ABYSS_RELIC_SLOT_SUB_4);
+            considerSlot(runState->runSubRelic5, ABYSS_RELIC_SLOT_SUB_5);
+        }
+        else if (playerData)
+        {
+            considerSlot(playerData->mainRelic, ABYSS_RELIC_SLOT_MAIN);
+            considerSlot(playerData->subRelic1, ABYSS_RELIC_SLOT_SUB_1);
+            considerSlot(playerData->subRelic2, ABYSS_RELIC_SLOT_SUB_2);
+            considerSlot(playerData->subRelic3, ABYSS_RELIC_SLOT_SUB_3);
+            considerSlot(playerData->subRelic4, ABYSS_RELIC_SLOT_SUB_4);
+            considerSlot(playerData->subRelic5, ABYSS_RELIC_SLOT_SUB_5);
+        }
+
+        if (playerData)
+        {
+            considerSlot(playerData->phaseArtifact, ABYSS_RELIC_SLOT_PHASE);
+            considerSlot(playerData->ultimateArtifact, ABYSS_RELIC_SLOT_ULTIMATE);
+        }
+
+        return bestScale;
+    }
+
+    uint32 GetPreferredManagedRelicSpell(Player* player, std::initializer_list<std::pair<uint32, uint32>> relicSpells) const
+    {
+        if (!player)
+            return 0;
+
+        float bestScale = 0.0f;
+        uint32 bestSpellId = 0;
+        for (auto const& relicSpell : relicSpells)
+        {
+            float scale = GetActiveRelicScale(player, relicSpell.first);
+            if (scale > bestScale)
+            {
+                bestScale = scale;
+                bestSpellId = relicSpell.second;
+            }
+        }
+
+        return bestSpellId;
+    }
+
+    uint32 GetManagedSpellIdForRelicItem(uint32 itemId) const
+    {
+        if (itemId >= 950001 && itemId <= 950074)
+            return 89100 + (itemId - 950000);
+        if (itemId >= 960001 && itemId <= 960006)
+            return 89174 + (itemId - 960000);
+        if (itemId == 970001)
+            return 89181;
+        return 0;
+    }
+
+    bool CastManagedRelicSpell(Player* player, uint32 spellId) const
+    {
+        if (!player || !IsManagedRelicSpell(spellId))
+            return false;
+
+        Unit* castTarget = player;
+        if (!IsSelfTargetManagedRelicSpell(spellId))
+        {
+            if (Unit* primaryTarget = GetPrimaryCombatTarget(player))
+                castTarget = primaryTarget;
+            else
+            {
+                ExecuteManagedRelicSpell(player, spellId);
+                castTarget = nullptr;
+            }
+        }
+
+        if (castTarget)
+            player->CastSpell(castTarget, spellId, true);
+
+        if (spellId <= 89174)
+        {
+            PlayerAbyssProcState& procState = const_cast<AbyssCultivationMgr*>(this)->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+            PlayerAbyssData const* playerData = GetPlayerData(player->GetGUID().GetCounter());
+            if (playerData)
+            {
+                uint32 mainRelicSpell = GetManagedSpellIdForRelicItem(playerData->mainRelic);
+                uint32 subRelic1Spell = GetManagedSpellIdForRelicItem(playerData->subRelic1);
+                uint32 subRelic2Spell = GetManagedSpellIdForRelicItem(playerData->subRelic2);
+
+                if (mainRelicSpell != 0 && spellId == mainRelicSpell)
+                {
+                    ++procState.artifactMainProcCounter;
+
+                    switch (playerData->phaseArtifact)
+                    {
+                        case ABYSS_PHASE_ARTIFACT_BURNING_PACT_ITEM:
+                            if (procState.artifactMainProcCounter % 4 == 0 && subRelic1Spell != 0)
+                                player->CastSpell(player, subRelic1Spell, true);
+                            break;
+                        case ABYSS_PHASE_ARTIFACT_BUG_DECREE_ITEM:
+                            if (!procState.artifactCombatEchoUsed)
+                            {
+                                procState.artifactCombatEchoUsed = true;
+                                player->CastSpell(player, mainRelicSpell, true);
+                            }
+                            break;
+                        case ABYSS_PHASE_ARTIFACT_SCOURGE_CHAPTER_ITEM:
+                        {
+                            uint32 echoCandidates[6] = { subRelic1Spell, subRelic2Spell, GetManagedSpellIdForRelicItem(playerData->subRelic3), GetManagedSpellIdForRelicItem(playerData->subRelic4), GetManagedSpellIdForRelicItem(playerData->subRelic5), 0 };
+                            std::vector<uint32> valid;
+                            for (uint32 candidate : echoCandidates)
+                                if (candidate != 0)
+                                    valid.push_back(candidate);
+                            if (!valid.empty())
+                                player->CastSpell(player, valid[RollWeight(static_cast<uint32>(valid.size()))], true);
+                            break;
+                        }
+                        default:
+                            break;
+                    }
+                }
+
+                if ((spellId == subRelic1Spell || spellId == subRelic2Spell) && playerData->phaseArtifact == ABYSS_PHASE_ARTIFACT_ECLIPSE_KING_ITEM)
+                {
+                    if (!procState.artifactSubLinkUsed)
+                    {
+                        procState.artifactSubLinkUsed = true;
+                        player->CastSpell(player, 89166, true);
+                    }
+                }
+            }
+        }
+
+        return true;
+    }
+
+    void ExecuteManagedRelicSpell(Player* player, uint32 spellId, Unit* explicitTarget = nullptr) const
+    {
+        if (!player || !player->IsAlive())
+            return;
+
+        PlayerAbyssProcState& procState = const_cast<AbyssCultivationMgr*>(this)->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+        ObjectGuid previousManagedTargetGuid = procState.managedSpellTargetGuid;
+        uint32 previousManagedSpellScaleFallbackSpellId = procState.managedSpellScaleFallbackSpellId;
+
+        if (explicitTarget && explicitTarget->IsAlive() && player->IsValidAttackTarget(explicitTarget))
+            procState.managedSpellTargetGuid = explicitTarget->GetGUID();
+        else
+            procState.managedSpellTargetGuid.Clear();
+        procState.managedSpellScaleFallbackSpellId = spellId;
+
+        uint32 dummyCooldown = 0;
+        switch (spellId)
+        {
+            case 89101: // 裂火炭核
+            {
+                float scale = GetActiveScriptGroupScale(player, { "遗物_裂火炭核", "特效_裂火爆环" });
+                TriggerFireRing(player, dummyCooldown, scale);
+                break;
+            }
+            case 89102: // 蛇蜕古胆
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_蛇蜕古胆");
+                TriggerPoisonBurst(player, dummyCooldown, scale);
+                break;
+            }
+            case 89103: // 黑潮齿轮
+            {
+                float scale = GetActiveScriptGroupScale(player, { "遗物_黑潮齿轮", "祝福_追命飞刃" });
+                if (scale > 0.0f)
+                    if (Unit* target = GetPrimaryCombatTarget(player))
+                        DealConfiguredBurst(player, target, 100, 160, SPELL_SCHOOL_MASK_ARCANE, scale);
+                break;
+            }
+            case 89104: // 狼王残月
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_狼王残月");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 180, 260, SPELL_SCHOOL_MASK_NORMAL, scale);
+                break;
+            }
+            case 89105: // 深海祈眼 / 潮蛇王鳞
+            {
+                float scale = GetActiveScriptGroupScale(player, { "遗物_深海祈眼", "遗物_潮蛇王鳞" });
+                TriggerTideBurst(player, dummyCooldown, scale);
+                break;
+            }
+            case 89106: // 断罪枷锁
+            {
+                float scale = std::max(
+                    GetActiveScriptGroupScale(player, "遗物_断罪枷锁"),
+                    GetActiveScriptGroupScale(player, "特效_锁链爆裂"));
+                TriggerLowHealthRetaliation(player, dummyCooldown, scale);
+                break;
+            }
+            case 89107: // 爆线电枢
+            {
+                float scale = GetActiveScriptGroupScale(player, { "遗物_爆线电枢", "祝福_雷暴连极" });
+                TriggerChainLightning(player, dummyCooldown, scale);
+                break;
+            }
+            case 89108: // 棘魂号角
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_棘魂号角");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 170, 250, SPELL_SCHOOL_MASK_NORMAL, scale);
+                break;
+            }
+            case 89109: // 血焰圣经
+            {
+                float scale = GetActiveScriptGroupScale(player, { "遗物_血焰圣经", "祝福_日蚀焚城", "特效_血焰审判" });
+                TriggerBloodFlameBurst(player, dummyCooldown, scale);
+                break;
+            }
+            case 89110: // 枯王孢囊
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_枯王孢囊");
+                TriggerSwarmBurst(player, dummyCooldown, scale);
+                break;
+            }
+            case 89111: // 泰坦偏轴
+            {
+                float scale = GetActiveScriptGroupScale(player, { "遗物_泰坦偏轴", "祝福_逆时回响", "特效_时痕回放" });
+                PlayerAbyssProcState& procState = const_cast<AbyssCultivationMgr*>(this)->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+                TriggerMirrorEcho(player, procState.lastSpellId, dummyCooldown, "时痕回放", scale);
+                break;
+            }
+            case 89112: // 黄沙时漏
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_黄沙时漏");
+                PlayerAbyssProcState& procState = const_cast<AbyssCultivationMgr*>(this)->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+                TriggerMirrorEcho(player, procState.lastSpellId, dummyCooldown, "黄沙残像", scale);
+                break;
+            }
+            case 89113: // 腐花心核
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_腐花心核");
+                TriggerBloomBurst(player, dummyCooldown, scale);
+                player->ModifyPower(player->getPowerType(), ScaleIntValue(10, scale));
+                break;
+            }
+            case 89114: // 梦沼眼膜
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_梦沼眼膜");
+                TriggerDreamBurst(player, dummyCooldown, scale);
+                break;
+            }
+            case 89115: // 黑炉王印
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_黑炉王印");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 190, 270, SPELL_SCHOOL_MASK_FIRE, scale);
+                break;
+            }
+            case 89116: // 龙骨炽芯
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_龙骨炽芯");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 220, 320, SPELL_SCHOOL_MASK_FIRE, scale);
+                break;
+            }
+            case 89118: // 古树孢祖
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_古树孢祖");
+                TriggerBloomBurst(player, dummyCooldown, scale);
+                break;
+            }
+            case 89119: // 圣疫火烙
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_圣疫火烙");
+                TriggerBloodFlameBurst(player, dummyCooldown, scale);
+                break;
+            }
+            case 89120: // 通灵逆契
+            {
+                float scale = GetActiveScriptGroupScale(player, { "遗物_通灵逆契", "祝福_灵魂沸涌", "特效_魂火追击" });
+                TriggerSoulBurst(player, dummyCooldown, scale);
+                break;
+            }
+            case 89117: // 将军狱旗
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_将军狱旗");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 140, 220, SPELL_SCHOOL_MASK_NORMAL, scale);
+                break;
+            }
+            case 89121: // 残垒战契
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_残垒战契");
+                if (scale > 0.0f)
+                {
+                    player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(4)), scale));
+                    if (Unit* target = GetPrimaryCombatTarget(player))
+                        DealConfiguredBurst(player, target, 160, 240, SPELL_SCHOOL_MASK_NORMAL, scale);
+                }
+                break;
+            }
+            case 89122: // 邪血蒸馏器
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_邪血蒸馏器");
+                if (scale > 0.0f)
+                {
+                    player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(3)), scale));
+                    if (Unit* target = GetPrimaryCombatTarget(player))
+                        DealConfiguredBurst(player, target, 150, 230, SPELL_SCHOOL_MASK_SHADOW, scale);
+                }
+                break;
+            }
+            case 89123: // 破军碎牌
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_破军碎牌");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 180, 260, SPELL_SCHOOL_MASK_NORMAL, scale);
+                break;
+            }
+            case 89124: // 潮牢鳞灯
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_潮牢鳞灯");
+                TriggerTideBurst(player, dummyCooldown, scale);
+                break;
+            }
+            case 89125: // 孢毒母囊
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_孢毒母囊");
+                TriggerSwarmBurst(player, dummyCooldown, scale);
+                break;
+            }
+            case 89126: // 压阀导芯
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_压阀导芯");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 180, 260, SPELL_SCHOOL_MASK_FIRE, scale);
+
+                PlayerAbyssProcState& procState = const_cast<AbyssCultivationMgr*>(this)->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+                procState.lastChainLightningTime = (procState.lastChainLightningTime > 2 ? procState.lastChainLightningTime - 2 : 0);
+                procState.lastPoisonBurstTime = (procState.lastPoisonBurstTime > 2 ? procState.lastPoisonBurstTime - 2 : 0);
+                procState.lastTideBurstTime = (procState.lastTideBurstTime > 2 ? procState.lastTideBurstTime - 2 : 0);
+                procState.lastArcaneAshTime = (procState.lastArcaneAshTime > 2 ? procState.lastArcaneAshTime - 2 : 0);
+                break;
+            }
+            case 89127: // 法陵星匣
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_法陵星匣");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 200, 280, SPELL_SCHOOL_MASK_ARCANE, scale);
+                break;
+            }
+            case 89128: // 祭魂引灯
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_祭魂引灯");
+                TriggerSoulBurst(player, dummyCooldown, scale);
+                break;
+            }
+            case 89129: // 鸦神命羽 / 王陨号角
+            {
+                float scale = GetActiveScriptGroupScale(player, { "遗物_鸦神命羽", "遗物_王陨号角" });
+                TriggerFeatherVolley(player, dummyCooldown, scale);
+                break;
+            }
+            case 89148: // 王陨号角
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_王陨号角");
+                TriggerFeatherVolley(player, dummyCooldown, scale);
+                break;
+            }
+            case 89149: // 冠军封缄
+            {
+                static uint32 const kBlessingPool[] = { 89007, 89010, 89028 };
+                player->CastSpell(player, kBlessingPool[RollWeight(3)], true);
+                break;
+            }
+            case 89130: // 惧影迷盘
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_惧影迷盘");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 260, 380, SPELL_SCHOOL_MASK_SHADOW, scale);
+                break;
+            }
+            case 89131: // 时痕怀表
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_时痕怀表");
+                PlayerAbyssProcState& procState = const_cast<AbyssCultivationMgr*>(this)->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+                TriggerMirrorEcho(player, procState.lastSpellId, dummyCooldown, "时痕回声", scale);
+                break;
+            }
+            case 89132: // 裂隙砂轮
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_裂隙砂轮");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 220, 320, SPELL_SCHOOL_MASK_ARCANE, scale);
+                break;
+            }
+            case 89133: // 相位动轮
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_相位动轮");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 160, 240, SPELL_SCHOOL_MASK_ARCANE, scale);
+                break;
+            }
+            case 89134: // 星植胚囊
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_星植胚囊");
+                TriggerBloomBurst(player, dummyCooldown, scale);
+                break;
+            }
+            case 89136: // 逐日余晖
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_逐日余晖");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 210, 300, SPELL_SCHOOL_MASK_FIRE, scale);
+                break;
+            }
+            case 89137: // 维库战祷
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_维库战祷");
+                if (scale > 0.0f)
+                {
+                    player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(2)), scale));
+                    if (Unit* target = GetPrimaryCombatTarget(player))
+                        DealConfiguredBurst(player, target, 60, 100, SPELL_SCHOOL_MASK_NORMAL, scale);
+
+                    if (player->GetSession())
+                        ChatHandler(player->GetSession()).PSendSysMessage("[AbyssEffect] 维库战祷触发。");
+                }
+                break;
+            }
+            case 89138: // 聚魔棱晶
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_聚魔棱晶");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 180, 260, SPELL_SCHOOL_MASK_ARCANE, scale);
+                break;
+            }
+            case 89139: // 蛛网夜卵
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_蛛网夜卵");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 170, 250, SPELL_SCHOOL_MASK_NATURE, scale);
+                break;
+            }
+            case 89140: // 无面触冠
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_无面触冠");
+                PlayerAbyssProcState& procState = const_cast<AbyssCultivationMgr*>(this)->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+                TriggerMirrorEcho(player, procState.lastSpellId, dummyCooldown, "无面复读", scale);
+                break;
+            }
+            case 89141: // 尸霜獠牙
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_尸霜獠牙");
+                TriggerDominionBurst(player, dummyCooldown, scale);
+                break;
+            }
+            case 89143: // 神噬断爪
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_神噬断爪");
+                if (scale > 0.0f)
+                {
+                    PlayerAbyssProcState& procState = const_cast<AbyssCultivationMgr*>(this)->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+                    procState.beastMode = static_cast<uint8>((procState.beastMode + 1) % 3);
+                    if (Unit* target = GetPrimaryCombatTarget(player))
+                    {
+                        uint32 minDamage = procState.beastMode == 0 ? 90u : (procState.beastMode == 1 ? 110u : 130u);
+                        uint32 maxDamage = procState.beastMode == 0 ? 140u : (procState.beastMode == 1 ? 170u : 200u);
+                        DealConfiguredBurst(player, target, minDamage, maxDamage, SPELL_SCHOOL_MASK_NORMAL, scale);
+                    }
+
+                    if (player->GetSession())
+                        ChatHandler(player->GetSession()).PSendSysMessage("[AbyssEffect] 兽神姿态触发。");
+                }
+                break;
+            }
+            case 89144: // 泰坦记忆核
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_泰坦记忆核");
+                PlayerAbyssProcState& procState = const_cast<AbyssCultivationMgr*>(this)->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+                TriggerMirrorEcho(player, procState.lastSpellId, dummyCooldown, "泰坦记忆回放", scale);
+                break;
+            }
+            case 89145: // 雷祖导体
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_雷祖导体");
+                TriggerChainLightning(player, dummyCooldown, scale);
+                break;
+            }
+            case 89146: // 时审钟摆
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_时审钟摆");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 220, 320, SPELL_SCHOOL_MASK_ARCANE, scale);
+                break;
+            }
+            case 89147: // 星界虹膜
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_星界虹膜");
+                TriggerStarfallBurst(player, dummyCooldown, scale);
+                break;
+            }
+            case 89150: // 魂炉熔渣
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_魂炉熔渣");
+                TriggerSoulBurst(player, dummyCooldown, scale);
+                break;
+            }
+            case 89151: // 萨钢骨钉
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_萨钢骨钉");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 230, 340, SPELL_SCHOOL_MASK_SHADOW, scale);
+                break;
+            }
+            case 89152: // 映像碎镜
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_映像碎镜");
+                PlayerAbyssProcState& procState = const_cast<AbyssCultivationMgr*>(this)->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+                TriggerMirrorEcho(player, procState.lastSpellId, dummyCooldown, "镜像反射", scale);
+                break;
+            }
+            case 89159: // 碎山指节
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_碎山指节");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 260, 360, SPELL_SCHOOL_MASK_NORMAL, scale);
+                break;
+            }
+            case 89160: // 深狱锁冠
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_深狱锁冠");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 200, 300, SPELL_SCHOOL_MASK_FIRE, scale);
+                break;
+            }
+            case 89153: // 熔界核髓
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_熔界核髓");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 190, 280, SPELL_SCHOOL_MASK_FIRE, scale);
+                break;
+            }
+            case 89155: // 畸变龙脊
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_畸变龙脊");
+                PlayerAbyssProcState& procState = const_cast<AbyssCultivationMgr*>(this)->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+                TriggerMirrorEcho(player, procState.lastSpellId, dummyCooldown, "畸变超载", scale);
+                TriggerMirrorEcho(player, procState.lastSpellId, dummyCooldown, "畸变超载", scale);
+                break;
+            }
+            case 89156: // 虫群主脑
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_虫群主脑");
+                TriggerSwarmBurst(player, dummyCooldown, scale);
+                break;
+            }
+            case 89157: // 古神耳蜕
+            {
+                static uint32 const kBlessingPool[] = { 89007, 89010, 89028 };
+                player->CastSpell(player, kBlessingPool[RollWeight(3)], true);
+                player->CastSpell(player, 89025, true);
+                break;
+            }
+            case 89162: // 虚空矩阵
+            {
+                float scale = GetActiveScriptGroupScale(player, { "遗物_虚空矩阵", "祝福_双生元婴" });
+                PlayerAbyssProcState& procState = const_cast<AbyssCultivationMgr*>(this)->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+                TriggerMirrorEcho(player, procState.lastSpellId, dummyCooldown, "虚空矩阵复写", scale);
+                TriggerMirrorEcho(player, procState.lastSpellId, dummyCooldown, "虚空矩阵复写", scale);
+                break;
+            }
+            case 89163: // 守望战旌
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_守望战旌");
+                TriggerBattleBannerBurst(player, dummyCooldown, scale);
+                break;
+            }
+            case 89164: // 伊利影印 / 映像碎镜
+            {
+                float scale = GetActiveScriptGroupScale(player, { "遗物_伊利影印", "遗物_映像碎镜" });
+                PlayerAbyssProcState& procState = const_cast<AbyssCultivationMgr*>(this)->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+                TriggerMirrorEcho(player, procState.lastSpellId, dummyCooldown, "影印残像", scale);
+                break;
+            }
+            case 89167: // 亡缝心炉
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_亡缝心炉");
+                TriggerSwarmBurst(player, dummyCooldown, scale);
+                break;
+            }
+            case 89168: // 暮炎龙瞳
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_暮炎龙瞳");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 230, 320, SpellSchoolMask(SPELL_SCHOOL_MASK_FIRE | SPELL_SCHOOL_MASK_SHADOW), scale);
+                break;
+            }
+            case 89169: // 蓝脉天轮
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_蓝脉天轮");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 210, 300, SPELL_SCHOOL_MASK_ARCANE, scale);
+                break;
+            }
+            case 89165: // 祖灵战鼓
+            {
+                static uint32 const kBlessingPool[] = { 89007, 89010, 89028 };
+                uint32 randomSpell = kBlessingPool[RollWeight(3)];
+                player->CastSpell(player, randomSpell, true);
+                break;
+            }
+            case 89161: // 潮蛇王鳞
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_潮蛇王鳞");
+                TriggerTideBurst(player, dummyCooldown, scale);
+                break;
+            }
+            case 89154: // 逆鳞王冠
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_逆鳞王冠");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 180, 260, SPELL_SCHOOL_MASK_NORMAL, scale);
+                break;
+            }
+            case 89166: // 日蚀残晕
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_日蚀残晕");
+                if (Unit* target = GetPrimaryCombatTarget(player))
+                    DealConfiguredBurst(player, target, 220, 320, SPELL_SCHOOL_MASK_ARCANE, scale);
+                break;
+            }
+            case 89175: // 焚界行契
+            {
+                player->CastSpell(player, 89007, true);
+                break;
+            }
+            case 89176: // 虚空远征印
+            {
+                player->CastSpell(player, 89028, true);
+                break;
+            }
+            case 89177: // 冰脉时匣
+            {
+                player->CastSpell(player, 89019, true);
+                break;
+            }
+            case 89178: // 虫神遗诏
+            {
+                player->CastSpell(player, 89010, true);
+                break;
+            }
+            case 89179: // 日蚀王契
+            {
+                player->CastSpell(player, 89166, true);
+                break;
+            }
+            case 89180: // 天灾断章
+            {
+                player->CastSpell(player, 89028, true);
+                break;
+            }
+            case 89181: // 渊主之印
+            {
+                player->CastSpell(player, 89019, true);
+                break;
+            }
+            case 89171: // 圣陨判词
+            {
+                float scale = std::max(
+                    GetActiveScriptGroupScale(player, "遗物_圣陨判词"),
+                    std::max(
+                        GetActiveScriptGroupScale(player, "祝福_断命法旨"),
+                        GetActiveScriptGroupScale(player, "特效_圣陨终裁")));
+
+                if (player->HealthBelowPct(25))
+                    TriggerHolyVerdict(player, dummyCooldown, scale);
+                else
+                    TriggerLowHealthRetaliation(player, dummyCooldown, scale);
+                break;
+            }
+            case 89173: // 霜王残印
+            {
+                float scale = GetActiveScriptGroupScale(player, { "遗物_霜王残印", "祝福_极霜粉碎", "特效_霜王统御" });
+                TriggerDominionBurst(player, dummyCooldown, scale);
+                break;
+            }
+            case 89174: // 赤玉界针
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_赤玉界针");
+                TriggerRedJadeBurst(player, dummyCooldown, scale);
+                break;
+            }
+            case 89172: // 复燃逆鳞
+            {
+                float scale = GetActiveScriptGroupScale(player, "遗物_复燃逆鳞");
+                TriggerLowHealthRetaliation(player, dummyCooldown, scale);
+                break;
+            }
+            default:
+                break;
+        }
+
+        procState.managedSpellTargetGuid = previousManagedTargetGuid;
+        procState.managedSpellScaleFallbackSpellId = previousManagedSpellScaleFallbackSpellId;
+    }
+
     Unit* GetPrimaryCombatTarget(Player* player) const
     {
         if (!player)
             return nullptr;
+
+        PlayerAbyssProcState& procState = const_cast<AbyssCultivationMgr*>(this)->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+        if (!procState.managedSpellTargetGuid.IsEmpty())
+        {
+            if (Unit* managedTarget = ObjectAccessor::GetUnit(*player, procState.managedSpellTargetGuid))
+            {
+                if (managedTarget->IsAlive() && player->IsValidAttackTarget(managedTarget))
+                    return managedTarget;
+            }
+
+            procState.managedSpellTargetGuid.Clear();
+        }
 
         if (Unit* victim = player->GetVictim())
             return victim;
@@ -2977,6 +4094,52 @@ public:
             damage += RollWeight(scaledMaxDamage - scaledMinDamage + 1);
 
         player->DealDamage(player, target, damage, nullptr, SPELL_DIRECT_DAMAGE, schoolMask);
+    }
+
+    void PlayChainLightningArc(Unit* source, Unit* target) const
+    {
+        if (!source || !target || source == target)
+            return;
+
+        // 这里不要再对 source 播放 321。
+        // 321 会让源单位自己出现放电/缠身表现，看起来像“连自己都电”。
+        // 先只保留命中目标的官方 impact，避免弹射链路产生自电错觉。
+        source->SendPlaySpellImpact(target->GetGUID(), 282);
+    }
+
+    Unit* SelectChainLightningBounceTarget(Player* player, WorldObject* center, Unit* exclude1 = nullptr, Unit* exclude2 = nullptr, float radius = 15.0f) const
+    {
+        if (!player || !center || radius <= 0.0f)
+            return nullptr;
+
+        std::list<Unit*> nearbyTargets;
+        Acore::AnyUnfriendlyUnitInObjectRangeCheck check(center, player, radius);
+        Acore::UnitListSearcher<Acore::AnyUnfriendlyUnitInObjectRangeCheck> searcher(center, nearbyTargets, check);
+        Cell::VisitAllObjects(center, searcher, radius);
+
+        Unit* bestTarget = nullptr;
+        float bestDistanceSq = std::numeric_limits<float>::max();
+
+        for (Unit* candidate : nearbyTargets)
+        {
+            if (!candidate || candidate == player || candidate == exclude1 || candidate == exclude2)
+                continue;
+
+            if (!candidate->IsAlive() || !player->IsValidAttackTarget(candidate))
+                continue;
+
+            if (!center->IsWithinLOSInMap(candidate))
+                continue;
+
+            float distanceSq = center->GetExactDist2dSq(candidate);
+            if (distanceSq < bestDistanceSq)
+            {
+                bestDistanceSq = distanceSq;
+                bestTarget = candidate;
+            }
+        }
+
+        return bestTarget;
     }
 
     void TriggerFireRing(Player* player, uint32& cooldownTime, float scale = 1.0f) const
@@ -3007,11 +4170,17 @@ public:
             return;
 
         DealConfiguredBurst(player, primaryTarget, 140, 220, SPELL_SCHOOL_MASK_NATURE, scale);
-        if (Unit* bounce1 = player->SelectNearbyTarget(primaryTarget, 15.0f))
+        if (Unit* bounce1 = SelectChainLightningBounceTarget(player, primaryTarget, nullptr, nullptr, 15.0f))
+        {
             DealConfiguredBurst(player, bounce1, 100, 160, SPELL_SCHOOL_MASK_NATURE, scale);
-        if (Unit* bounce2 = player->SelectNearbyTarget(nullptr, 15.0f))
-            if (bounce2 != primaryTarget)
+            PlayChainLightningArc(primaryTarget, bounce1);
+
+            if (Unit* bounce2 = SelectChainLightningBounceTarget(player, bounce1, primaryTarget, nullptr, 15.0f))
+            {
                 DealConfiguredBurst(player, bounce2, 80, 120, SPELL_SCHOOL_MASK_NATURE, scale);
+                PlayChainLightningArc(bounce1, bounce2);
+            }
+        }
 
         cooldownTime = GetNow();
         if (player->GetSession())
@@ -3294,34 +4463,218 @@ public:
         return true;
     }
 
+    void ProcessBasicKillRelicTriggers(Player* player, Creature* creature, PlayerAbyssProcState& procState, uint64 trackedMaskBit = 0)
+    {
+        if (!player || !creature)
+            return;
+
+        float fireRingScale = GetActiveScriptGroupScale(player, { "遗物_裂火炭核", "特效_裂火爆环" });
+        if (fireRingScale > 0.0f)
+        {
+            ++procState.killCounter;
+            // 测试期下调为击杀 1 个目标即可触发，便于验证 89101 的视觉表现。
+            if (GetNow() > procState.lastFireRingTime + 3 && procState.killCounter >= 1)
+            {
+                procState.killCounter = 0;
+                if (CastManagedRelicSpell(player, 89101))
+                    procState.lastFireRingTime = GetNow();
+            }
+        }
+
+        float soulScale = GetActiveScriptGroupScale(player, { "遗物_通灵逆契", "祝福_灵魂沸涌", "特效_魂火追击" });
+        if (soulScale > 0.0f)
+        {
+            ++procState.bloodKillCounter;
+            if (GetNow() > procState.lastSoulProcTime + 1 && procState.bloodKillCounter >= 1)
+            {
+                procState.bloodKillCounter = 0;
+                if (CastManagedRelicSpell(player, 89120))
+                    procState.lastSoulProcTime = GetNow();
+            }
+        }
+
+        float sporeScale = GetActiveScriptGroupScale(player, "遗物_枯王孢囊");
+        if (sporeScale > 0.0f)
+        {
+            ++procState.sporeKillCounter;
+            if (GetNow() > procState.lastSporeBurstTime + 6 && procState.sporeKillCounter >= 2)
+            {
+                procState.sporeKillCounter = 0;
+                if (CastManagedRelicSpell(player, 89110))
+                    procState.lastSporeBurstTime = GetNow();
+            }
+        }
+
+        float dragonScale = GetActiveScriptGroupScale(player, "遗物_龙骨炽芯");
+        if (dragonScale > 0.0f)
+        {
+            ++procState.dragonRageKillCounter;
+            if (GetNow() > procState.lastDragonRageTime + 12 && procState.dragonRageKillCounter >= 3)
+            {
+                procState.dragonRageKillCounter = 0;
+                if (CastManagedRelicSpell(player, 89116))
+                    procState.lastDragonRageTime = GetNow();
+            }
+        }
+
+        float mushroomScale = GetActiveScriptGroupScale(player, "遗物_孢毒母囊");
+        if (mushroomScale > 0.0f)
+        {
+            ++procState.mushroomKillCounter;
+            if (GetNow() > procState.lastMushroomBurstTime + 5 && procState.mushroomKillCounter >= 2)
+            {
+                procState.mushroomKillCounter = 0;
+                if (CastManagedRelicSpell(player, 89125))
+                    procState.lastMushroomBurstTime = GetNow();
+            }
+        }
+
+        float soulLampScale = GetActiveScriptGroupScale(player, "遗物_祭魂引灯");
+        if (soulLampScale > 0.0f && GetNow() > procState.lastSoulLampTime + 4)
+        {
+            if (CastManagedRelicSpell(player, 89128))
+                procState.lastSoulLampTime = GetNow();
+        }
+
+        float sandScale = GetActiveScriptGroupScale(player, "遗物_黄沙时漏");
+        if (sandScale > 0.0f && procState.lastSpellId != 0 && GetNow() > procState.lastSandEchoTime + 6)
+        {
+            if (CastManagedRelicSpell(player, 89112))
+                procState.lastSandEchoTime = GetNow();
+        }
+
+        float plagueScale = GetActiveScriptGroupScale(player, "遗物_圣疫火烙");
+        if (plagueScale > 0.0f && GetNow() > procState.lastPlagueSpreadTime + 5)
+        {
+            if (CastManagedRelicSpell(player, 89119))
+                procState.lastPlagueSpreadTime = GetNow();
+        }
+
+        float featherScale = GetActiveScriptGroupScale(player, { "遗物_鸦神命羽", "遗物_王陨号角" });
+        if (featherScale > 0.0f && GetNow() > procState.lastFeatherVolleyTime + 2)
+        {
+            uint32 featherSpellId = GetPreferredManagedRelicSpell(player, { {950029, 89129}, {950048, 89148} });
+            if (CastManagedRelicSpell(player, featherSpellId))
+                procState.lastFeatherVolleyTime = GetNow();
+        }
+
+        float soulFurnaceScale = GetActiveScriptGroupScale(player, "遗物_魂炉熔渣");
+        if (soulFurnaceScale > 0.0f && GetNow() > procState.lastSoulFurnaceTime + 3)
+        {
+            if (CastManagedRelicSpell(player, 89150))
+                procState.lastSoulFurnaceTime = GetNow();
+        }
+
+        float ancestorScale = GetActiveScriptGroupScale(player, "遗物_祖灵战鼓");
+        if (ancestorScale > 0.0f && GetNow() > procState.lastAncestorBlessTime + 4)
+        {
+            if (CastManagedRelicSpell(player, 89165))
+                procState.lastAncestorBlessTime = GetNow();
+        }
+
+        float championScale = GetActiveScriptGroupScale(player, "遗物_冠军封缄");
+        if (championScale > 0.0f && creature->isElite() && GetNow() > procState.lastChampionSealTime + 8)
+        {
+            if (CastManagedRelicSpell(player, 89149))
+                procState.lastChampionSealTime = GetNow();
+        }
+
+        float stitchScale = GetActiveScriptGroupScale(player, "遗物_亡缝心炉");
+        if (stitchScale > 0.0f)
+        {
+            ++procState.stitchKillCounter;
+            if (GetNow() > procState.lastStitchTime + 12 && procState.stitchKillCounter >= 5)
+            {
+                procState.stitchKillCounter = 0;
+                if (CastManagedRelicSpell(player, 89167))
+                    procState.lastStitchTime = GetNow();
+            }
+        }
+
+        float frostScale = GetActiveScriptGroupScale(player, "遗物_尸霜獠牙");
+        if (frostScale > 0.0f && HasCrowdControlAuras(creature) && GetNow() > procState.lastFrostExplodeTime + 6)
+        {
+            if (CastManagedRelicSpell(player, 89141))
+                procState.lastFrostExplodeTime = GetNow();
+        }
+
+        float oldGodScale = GetActiveScriptGroupScale(player, "遗物_古神耳蜕");
+        if (oldGodScale > 0.0f && trackedMaskBit != 0 && GetNow() > procState.lastOldGodGiftTime + 20)
+        {
+            if (CastManagedRelicSpell(player, 89157))
+                procState.lastOldGodGiftTime = GetNow();
+        }
+    }
+
     void HandlePlayerSpellCast(Player* player, Spell* spell)
     {
         if (!player || !spell)
             return;
 
-        uint32 guid = player->GetGUID().GetCounter();
-        if (!GetPlayerRunState(guid))
+        if (IsManagedRelicSpell(spell->GetSpellInfo()->Id))
             return;
+
+        uint32 guid = player->GetGUID().GetCounter();
+        PlayerAbyssRunState const* runState = GetPlayerRunState(guid);
+        PlayerAbyssData const* playerData = GetPlayerData(guid);
+        if (!runState)
+        {
+            if (!HasAnyActiveRelicSlots(playerData))
+            {
+                return;
+            }
+        }
 
         PlayerAbyssProcState& procState = GetOrCreatePlayerProcState(guid);
         if (procState.replayingSpell)
             return;
 
+        if (IsManagedRelicSpell(spell->GetSpellInfo()->Id))
+            return;
+
         procState.lastSpellId = spell->GetSpellInfo()->Id;
         procState.lastSpellCastTime = GetNow();
+        SpellSchoolMask schoolMask = spell->GetSpellInfo()->GetSchoolMask();
+        bool hasHealStyleEffect = false;
+        bool hasDispelInterruptEffect = false;
+        for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
+        {
+            uint32 effect = spell->GetSpellInfo()->Effects[i].Effect;
+            switch (effect)
+            {
+                case SPELL_EFFECT_HEAL:
+                case SPELL_EFFECT_HEAL_MAX_HEALTH:
+                case SPELL_EFFECT_HEAL_MECHANICAL:
+                case SPELL_EFFECT_HEAL_PCT:
+                    hasHealStyleEffect = true;
+                    break;
+                case SPELL_EFFECT_INTERRUPT_CAST:
+                case SPELL_EFFECT_DISPEL:
+                case SPELL_EFFECT_DISPEL_MECHANIC:
+                    hasDispelInterruptEffect = true;
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        if (schoolMask & SPELL_SCHOOL_MASK_FIRE)
+            procState.lastFireSchoolCastTime = GetNow();
 
         float chaseBladeScale = GetActiveScriptGroupScale(player, { "遗物_黑潮齿轮", "祝福_追命飞刃" });
         if (chaseBladeScale > 0.0f)
         {
-            if (Unit* target = GetPrimaryCombatTarget(player))
-                DealConfiguredBurst(player, target, 100, 160, SPELL_SCHOOL_MASK_ARCANE, chaseBladeScale);
+            CastManagedRelicSpell(player, 89103);
         }
 
         float chainLightningScale = GetActiveScriptGroupScale(player, { "遗物_爆线电枢", "祝福_雷暴连极" });
         if (chainLightningScale > 0.0f)
         {
             if (GetNow() > procState.lastChainLightningTime + 2)
-                TriggerChainLightning(player, procState.lastChainLightningTime, chainLightningScale);
+            {
+                if (CastManagedRelicSpell(player, 89107))
+                    procState.lastChainLightningTime = GetNow();
+            }
         }
 
         float poisonScale = GetActiveScriptGroupScale(player, "遗物_蛇蜕古胆");
@@ -3331,7 +4684,8 @@ public:
             if (procState.poisonCastCounter >= 3 && GetNow() > procState.lastPoisonBurstTime + 3)
             {
                 procState.poisonCastCounter = 0;
-                TriggerPoisonBurst(player, procState.lastPoisonBurstTime, poisonScale);
+                if (CastManagedRelicSpell(player, 89102))
+                    procState.lastPoisonBurstTime = GetNow();
             }
         }
 
@@ -3347,16 +4701,15 @@ public:
             if (procState.bloodFlameComboCounter >= 4 && GetNow() > procState.lastBloodFlameTime + 5)
             {
                 procState.bloodFlameComboCounter = 0;
-                TriggerBloodFlameBurst(player, procState.lastBloodFlameTime, bloodFlameScale);
+                if (CastManagedRelicSpell(player, 89109))
+                    procState.lastBloodFlameTime = GetNow();
             }
         }
 
         float battlePrayerScale = GetActiveScriptGroupScale(player, "遗物_维库战祷");
         if (battlePrayerScale > 0.0f)
         {
-            player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(2)), battlePrayerScale));
-            if (Unit* target = GetPrimaryCombatTarget(player))
-                DealConfiguredBurst(player, target, 60, 100, SPELL_SCHOOL_MASK_NORMAL, battlePrayerScale);
+            CastManagedRelicSpell(player, 89137);
         }
 
         float starfallScale = GetActiveScriptGroupScale(player, "遗物_星界虹膜");
@@ -3366,7 +4719,8 @@ public:
             if (procState.starfallCounter >= 5 && GetNow() > procState.lastStarfallTime + 6)
             {
                 procState.starfallCounter = 0;
-                TriggerStarfallBurst(player, procState.lastStarfallTime, starfallScale);
+                if (CastManagedRelicSpell(player, 89147))
+                    procState.lastStarfallTime = GetNow();
             }
         }
 
@@ -3377,7 +4731,9 @@ public:
             if (procState.tideCastCounter >= 5 && GetNow() > procState.lastTideBurstTime + 4)
             {
                 procState.tideCastCounter = 0;
-                TriggerTideBurst(player, procState.lastTideBurstTime, tideScale);
+                uint32 tideSpellId = GetPreferredManagedRelicSpell(player, { {950005, 89105}, {950061, 89161} });
+                if (CastManagedRelicSpell(player, tideSpellId))
+                    procState.lastTideBurstTime = GetNow();
             }
         }
 
@@ -3388,41 +4744,66 @@ public:
             if (procState.bloomCastCounter >= 4 && GetNow() > procState.lastBloomBurstTime + 5)
             {
                 procState.bloomCastCounter = 0;
-                TriggerBloomBurst(player, procState.lastBloomBurstTime, bloomScale);
+                if (CastManagedRelicSpell(player, 89118))
+                    procState.lastBloomBurstTime = GetNow();
             }
+        }
+
+        float corruptBloomScale = GetActiveScriptGroupScale(player, "遗物_腐花心核");
+        if (corruptBloomScale > 0.0f && hasHealStyleEffect && player->GetHealthPct() >= 85.0f && GetNow() > procState.lastCorruptBloomTime + 6)
+        {
+            if (CastManagedRelicSpell(player, 89113))
+                procState.lastCorruptBloomTime = GetNow();
         }
 
         float mirrorScale = GetActiveScriptGroupScale(player, { "遗物_伊利影印", "遗物_映像碎镜" });
         if (mirrorScale > 0.0f)
         {
             if (procState.lastSpellId != 0 && GetNow() > procState.lastMirrorEchoTime + 8)
-                TriggerMirrorEcho(player, procState.lastSpellId, procState.lastMirrorEchoTime, "影印残像", mirrorScale);
+            {
+                uint32 mirrorSpellId = GetPreferredManagedRelicSpell(player, { {950064, 89164}, {950052, 89152} });
+                if (CastManagedRelicSpell(player, mirrorSpellId))
+                    procState.lastMirrorEchoTime = GetNow();
+            }
         }
 
         float swarmScale = GetActiveScriptGroupScale(player, "遗物_虫群主脑");
         if (swarmScale > 0.0f)
         {
             if (GetNow() > procState.lastSwarmBurstTime + 7)
-                TriggerSwarmBurst(player, procState.lastSwarmBurstTime, swarmScale);
+            {
+                if (CastManagedRelicSpell(player, 89156))
+                    procState.lastSwarmBurstTime = GetNow();
+            }
         }
 
         float dreamScale = GetActiveScriptGroupScale(player, "遗物_梦沼眼膜");
         if (dreamScale > 0.0f)
         {
             if (GetNow() > procState.lastDreamBurstTime + 8)
-                TriggerDreamBurst(player, procState.lastDreamBurstTime, dreamScale);
+            {
+                if (CastManagedRelicSpell(player, 89114))
+                    procState.lastDreamBurstTime = GetNow();
+            }
+        }
+
+        float tidePrisonScale = GetActiveScriptGroupScale(player, "遗物_潮牢鳞灯");
+        if (tidePrisonScale > 0.0f)
+        {
+            if (Unit* target = GetPrimaryCombatTarget(player))
+            {
+                if (HasCrowdControlAuras(target) && GetNow() > procState.lastTidePrisonTime + 6)
+                {
+                    if (CastManagedRelicSpell(player, 89124))
+                        procState.lastTidePrisonTime = GetNow();
+                }
+            }
         }
 
         float beastScale = GetActiveScriptGroupScale(player, "遗物_神噬断爪");
         if (beastScale > 0.0f)
         {
-            procState.beastMode = static_cast<uint8>((procState.beastMode + 1) % 3);
-            if (Unit* target = GetPrimaryCombatTarget(player))
-            {
-                uint32 minDamage = procState.beastMode == 0 ? 90u : (procState.beastMode == 1 ? 110u : 130u);
-                uint32 maxDamage = procState.beastMode == 0 ? 140u : (procState.beastMode == 1 ? 170u : 200u);
-                DealConfiguredBurst(player, target, minDamage, maxDamage, SPELL_SCHOOL_MASK_NORMAL, beastScale);
-            }
+            CastManagedRelicSpell(player, 89143);
         }
 
         float matrixScale = GetActiveScriptGroupScale(player, { "遗物_虚空矩阵", "祝福_双生元婴" });
@@ -3432,8 +4813,165 @@ public:
             if (procState.matrixCastCounter >= 4 && procState.lastSpellId != 0 && GetNow() > procState.lastMatrixEchoTime + 10)
             {
                 procState.matrixCastCounter = 0;
-                TriggerMirrorEcho(player, procState.lastSpellId, procState.lastMatrixEchoTime, "虚空矩阵复写", matrixScale);
-                TriggerMirrorEcho(player, procState.lastSpellId, procState.lastMatrixEchoTime, "虚空矩阵复写", matrixScale);
+                if (CastManagedRelicSpell(player, 89162))
+                    procState.lastMatrixEchoTime = GetNow();
+            }
+        }
+
+        float armyScale = GetActiveScriptGroupScale(player, "遗物_破军碎牌");
+        if (armyScale > 0.0f && CountNearbyEnemies(player, 18.0f) >= 4 && GetNow() > procState.lastArmyPressureTime + 5)
+        {
+            if (CastManagedRelicSpell(player, 89123))
+                procState.lastArmyPressureTime = GetNow();
+        }
+
+        float arcaneAshScale = GetActiveScriptGroupScale(player, "遗物_法陵星匣");
+        if (arcaneAshScale > 0.0f)
+        {
+            ++procState.arcaneAshCastCounter;
+            if (procState.arcaneAshCastCounter >= 4 && GetNow() > procState.lastArcaneAshTime + 8)
+            {
+                procState.arcaneAshCastCounter = 0;
+                if (CastManagedRelicSpell(player, 89127))
+                    procState.lastArcaneAshTime = GetNow();
+            }
+        }
+
+        float steamScale = GetActiveScriptGroupScale(player, "遗物_压阀导芯");
+        if (steamScale > 0.0f && hasDispelInterruptEffect && GetNow() > procState.lastSteamCoreTime + 6)
+        {
+            if (CastManagedRelicSpell(player, 89126))
+                procState.lastSteamCoreTime = GetNow();
+        }
+
+        float fearScale = GetActiveScriptGroupScale(player, "遗物_惧影迷盘");
+        if (fearScale > 0.0f)
+        {
+            if (Unit* target = GetPrimaryCombatTarget(player))
+            {
+                if (target->HealthBelowPct(35) && GetNow() > procState.lastFearExecuteTime + 8)
+                {
+                    if (CastManagedRelicSpell(player, 89130))
+                        procState.lastFearExecuteTime = GetNow();
+                }
+            }
+        }
+
+        float phaseScale = GetActiveScriptGroupScale(player, "遗物_相位动轮");
+        if (phaseScale > 0.0f && GetNow() > procState.lastPhaseShotTime + 4)
+        {
+            if (CastManagedRelicSpell(player, 89133))
+                procState.lastPhaseShotTime = GetNow();
+        }
+
+        float vineScale = GetActiveScriptGroupScale(player, "遗物_星植胚囊");
+        if (vineScale > 0.0f)
+        {
+            ++procState.vineCastCounter;
+            if (procState.vineCastCounter >= 5 && GetNow() > procState.lastVineBloomTime + 10)
+            {
+                procState.vineCastCounter = 0;
+                if (CastManagedRelicSpell(player, 89134))
+                    procState.lastVineBloomTime = GetNow();
+            }
+        }
+
+        float sunScale = GetActiveScriptGroupScale(player, "遗物_逐日余晖");
+        if (sunScale > 0.0f)
+        {
+            if (procState.lastComboSpellId != spell->GetSpellInfo()->Id)
+                ++procState.sunBurstComboCounter;
+
+            if (procState.sunBurstComboCounter >= 3 && GetNow() > procState.lastSunBurstTime + 8)
+            {
+                procState.sunBurstComboCounter = 0;
+                if (CastManagedRelicSpell(player, 89136))
+                    procState.lastSunBurstTime = GetNow();
+            }
+        }
+
+        float orbitalScale = GetActiveScriptGroupScale(player, "遗物_聚魔棱晶");
+        if (orbitalScale > 0.0f)
+        {
+            ++procState.orbitalCastCounter;
+            if (procState.orbitalCastCounter >= 3 && GetNow() > procState.lastOrbitalMissileTime + 7)
+            {
+                procState.orbitalCastCounter = 0;
+                if (CastManagedRelicSpell(player, 89138))
+                    procState.lastOrbitalMissileTime = GetNow();
+            }
+        }
+
+        float faceScale = GetActiveScriptGroupScale(player, "遗物_无面触冠");
+        if (faceScale > 0.0f && procState.lastSpellId != 0 && GetNow() > procState.lastNoFaceEchoTime + 8)
+        {
+            if (RollPercentage() < 30.0f * std::max(faceScale, 0.25f))
+            {
+                if (CastManagedRelicSpell(player, 89140))
+                    procState.lastNoFaceEchoTime = GetNow();
+            }
+        }
+
+        float thunderScale = GetActiveScriptGroupScale(player, "遗物_雷祖导体");
+        if (thunderScale > 0.0f && GetNow() > procState.lastThunderAncestorTime + 4)
+        {
+            if (CastManagedRelicSpell(player, 89145))
+                procState.lastThunderAncestorTime = GetNow();
+        }
+
+        float lavaCoreScale = GetActiveScriptGroupScale(player, "遗物_熔界核髓");
+        if (lavaCoreScale > 0.0f && (schoolMask & SPELL_SCHOOL_MASK_FIRE) && GetNow() > procState.lastLavaCoreTime + 6)
+        {
+            if (CastManagedRelicSpell(player, 89153))
+                procState.lastLavaCoreTime = GetNow();
+        }
+
+        float overloadScale = GetActiveScriptGroupScale(player, "遗物_畸变龙脊");
+        if (overloadScale > 0.0f)
+        {
+            ++procState.overloadCastCounter;
+            if (procState.overloadCastCounter >= 4 && procState.lastSpellId != 0 && GetNow() > procState.lastOverloadTime + 10)
+            {
+                procState.overloadCastCounter = 0;
+                if (CastManagedRelicSpell(player, 89155))
+                    procState.lastOverloadTime = GetNow();
+            }
+        }
+
+        float duskScale = GetActiveScriptGroupScale(player, "遗物_暮炎龙瞳");
+        if (duskScale > 0.0f && ((schoolMask & SPELL_SCHOOL_MASK_FIRE) || (schoolMask & SPELL_SCHOOL_MASK_SHADOW)))
+        {
+            ++procState.dragonBreathCastCounter;
+            if (procState.dragonBreathCastCounter >= 3 && GetNow() > procState.lastDragonBreathTime + 8)
+            {
+                procState.dragonBreathCastCounter = 0;
+                if (CastManagedRelicSpell(player, 89168))
+                    procState.lastDragonBreathTime = GetNow();
+            }
+        }
+
+        float hellPrisonScale = GetActiveScriptGroupScale(player, "遗物_深狱锁冠");
+        if (hellPrisonScale > 0.0f)
+        {
+            if (Unit* target = GetPrimaryCombatTarget(player))
+            {
+                if (HasCrowdControlAuras(target) && GetNow() > procState.lastHellPrisonTime + 8)
+                {
+                    if (CastManagedRelicSpell(player, 89160))
+                        procState.lastHellPrisonTime = GetNow();
+                }
+            }
+        }
+
+        float laserScale = GetActiveScriptGroupScale(player, "遗物_蓝脉天轮");
+        if (laserScale > 0.0f)
+        {
+            ++procState.laserOrbitCastCounter;
+            if (procState.laserOrbitCastCounter >= 4 && GetNow() > procState.lastLaserOrbitTime + 9)
+            {
+                procState.laserOrbitCastCounter = 0;
+                if (CastManagedRelicSpell(player, 89169))
+                    procState.lastLaserOrbitTime = GetNow();
             }
         }
     }
@@ -3444,47 +4982,144 @@ public:
             return;
 
         uint32 guid = player->GetGUID().GetCounter();
-        if (!GetPlayerRunState(guid))
+        PlayerAbyssRunState const* runState = GetPlayerRunState(guid);
+        PlayerAbyssData const* playerData = GetPlayerData(guid);
+        if (!runState && !HasAnyActiveRelicSlots(playerData))
             return;
 
         PlayerAbyssProcState& procState = GetOrCreatePlayerProcState(guid);
         uint32 now = GetNow();
+        SyncSystemRelicState(player);
+
+        if (!procState.hasTrackedPosition)
+        {
+            procState.trackedPosX = player->GetPositionX();
+            procState.trackedPosY = player->GetPositionY();
+            procState.trackedPosZ = player->GetPositionZ();
+            procState.lastStillnessTime = now;
+            procState.hasTrackedPosition = true;
+        }
+        else
+        {
+            float dx = player->GetPositionX() - procState.trackedPosX;
+            float dy = player->GetPositionY() - procState.trackedPosY;
+            float dz = player->GetPositionZ() - procState.trackedPosZ;
+            float distSq = dx * dx + dy * dy + dz * dz;
+            if (distSq > 1.0f)
+            {
+                procState.trackedPosX = player->GetPositionX();
+                procState.trackedPosY = player->GetPositionY();
+                procState.trackedPosZ = player->GetPositionZ();
+                procState.lastStillnessTime = now;
+            }
+        }
 
         float lowHealthScale = GetActiveScriptGroupScale(player, { "遗物_断罪枷锁", "特效_锁链爆裂", "遗物_圣陨判词" });
         if (lowHealthScale > 0.0f &&
             player->HealthBelowPct(35) && now > procState.lastLowHealthProcTime + 15)
         {
-            TriggerLowHealthRetaliation(player, procState.lastLowHealthProcTime, lowHealthScale);
+            if (CastManagedRelicSpell(player, 89106))
+                procState.lastLowHealthProcTime = now;
         }
 
         float holyVerdictScale = GetActiveScriptGroupScale(player, { "遗物_圣陨判词", "祝福_断命法旨", "特效_圣陨终裁" });
         if (holyVerdictScale > 0.0f &&
             player->HealthBelowPct(25) && now > procState.lastHolyVerdictTime + 30)
         {
-            TriggerHolyVerdict(player, procState.lastHolyVerdictTime, holyVerdictScale);
+            if (CastManagedRelicSpell(player, 89171))
+                procState.lastHolyVerdictTime = now;
         }
 
         float replayScale = GetActiveScriptGroupScale(player, { "遗物_泰坦偏轴", "祝福_逆时回响", "特效_时痕回放" });
         if (replayScale > 0.0f &&
             procState.lastSpellId != 0 && now > procState.lastSpellCastTime + 10 && now > procState.lastReplayTime + 10)
         {
-            TriggerMirrorEcho(player, procState.lastSpellId, procState.lastReplayTime, "时痕回放", replayScale);
+            if (CastManagedRelicSpell(player, 89111))
+                procState.lastReplayTime = now;
         }
 
         float bannerScale = GetActiveScriptGroupScale(player, "遗物_守望战旌");
         if (bannerScale > 0.0f && now > procState.lastBattleBannerTime + 20)
-            TriggerBattleBannerBurst(player, procState.lastBattleBannerTime, bannerScale);
+            if (CastManagedRelicSpell(player, 89163))
+                procState.lastBattleBannerTime = now;
 
         float redJadeScale = GetActiveScriptGroupScale(player, "遗物_赤玉界针");
         if (redJadeScale > 0.0f && now > procState.lastRedJadeTime + 12)
-            TriggerRedJadeBurst(player, procState.lastRedJadeTime, redJadeScale);
+            if (CastManagedRelicSpell(player, 89174))
+                procState.lastRedJadeTime = now;
+
+        float riftScale = GetActiveScriptGroupScale(player, "遗物_裂隙砂轮");
+        if (riftScale > 0.0f && CountNearbyEnemies(player, 20.0f) >= 5 && now > procState.lastRiftRainTime + 15)
+            if (CastManagedRelicSpell(player, 89132))
+                procState.lastRiftRainTime = now;
+
+        float memoryScale = GetActiveScriptGroupScale(player, "遗物_泰坦记忆核");
+        if (memoryScale > 0.0f &&
+            procState.lastSpellId != 0 &&
+            now > procState.lastSpellCastTime + 5 &&
+            now > procState.lastTitanMeteorTime + 15)
+        {
+            if (CastManagedRelicSpell(player, 89144))
+                procState.lastTitanMeteorTime = now;
+        }
+
+        float rekindleScale = GetActiveScriptGroupScale(player, "遗物_复燃逆鳞");
+        if (rekindleScale > 0.0f &&
+            player->HealthBelowPct(40) &&
+            now > procState.lastRekindleTime + 12)
+        {
+            if (CastManagedRelicSpell(player, 89172))
+                procState.lastRekindleTime = now;
+        }
+
+        if (playerData)
+        {
+            if (playerData->phaseArtifact == ABYSS_PHASE_ARTIFACT_ICE_TIMEBOX_ITEM &&
+                runState && runState->modeType >= 3 &&
+                now > procState.lastPhaseArtifactTime + 20)
+            {
+                if (CastManagedRelicSpell(player, 89177))
+                    procState.lastPhaseArtifactTime = now;
+            }
+
+            if (playerData->phaseArtifact == ABYSS_PHASE_ARTIFACT_ECLIPSE_KING_ITEM &&
+                now > procState.lastPhaseArtifactTime + 25)
+            {
+                if (CastManagedRelicSpell(player, 89179))
+                    procState.lastPhaseArtifactTime = now;
+            }
+
+            if (playerData->phaseArtifact == ABYSS_PHASE_ARTIFACT_SCOURGE_CHAPTER_ITEM &&
+                now > procState.lastPhaseArtifactTime + 18)
+            {
+                if (CastManagedRelicSpell(player, 89180))
+                    procState.lastPhaseArtifactTime = now;
+            }
+
+            if (playerData->ultimateArtifact == ABYSS_ULTIMATE_ARTIFACT_ABYSS_LORD_ITEM &&
+                now > procState.lastUltimateArtifactTime + 45)
+            {
+                if (CastManagedRelicSpell(player, 89181))
+                    procState.lastUltimateArtifactTime = now;
+            }
+        }
+
+        float mountainScale = GetActiveScriptGroupScale(player, "遗物_碎山指节");
+        if (mountainScale > 0.0f &&
+            now > procState.lastStillnessTime + 3 &&
+            now > procState.lastMountainBreakTime + 10)
+        {
+            if (CastManagedRelicSpell(player, 89159))
+                procState.lastMountainBreakTime = now;
+        }
 
         float dominionScale = GetActiveScriptGroupScale(player, { "遗物_霜王残印", "祝福_极霜粉碎", "特效_霜王统御" });
         if (dominionScale > 0.0f &&
             procState.dominionCounter >= 6 && now > procState.lastDominionTime + 18)
         {
             procState.dominionCounter = 0;
-            TriggerDominionBurst(player, procState.lastDominionTime, dominionScale);
+            if (CastManagedRelicSpell(player, 89173))
+                procState.lastDominionTime = now;
         }
 
         (void)diff;
@@ -4994,12 +6629,24 @@ public:
         {
             AbyssChapterConfig const* chapterByMap = mappedChapterByMap;
             if (!chapterByMap)
+            {
+                auto playerItr = _playerData.find(playerGuid);
+                if (playerItr != _playerData.end() && HasAnyActiveRelicSlots(&playerItr->second))
+                {
+                    PlayerAbyssProcState& procState = GetOrCreatePlayerProcState(playerGuid);
+                    ProcessBasicKillRelicTriggers(player, creature, procState, 0);
+                    return true;
+                }
+
                 return false;
+            }
 
             uint64 lazyTrackedMaskBit = GetTrackedBossMaskBit(*chapterByMap, creatureEntry);
             bool isLazyBootstrapKill = lazyTrackedMaskBit == (1ULL << 0) || lazyTrackedMaskBit == (1ULL << 1);
             if (!isLazyBootstrapKill)
+            {
                 return false;
+            }
 
             std::string bootstrapFailureReason;
             if (!BeginPlayerRun(player, chapterByMap->chapterId, 1, 0, &bootstrapFailureReason))
@@ -5088,34 +6735,7 @@ public:
             return changed;
         }
 
-        float fireRingScale = GetActiveScriptGroupScale(player, { "遗物_裂火炭核", "特效_裂火爆环" });
-        if (fireRingScale > 0.0f)
-        {
-            ++procState.killCounter;
-            if (procState.killCounter >= 12 && GetNow() > procState.lastFireRingTime + 3)
-            {
-                procState.killCounter = 0;
-                TriggerFireRing(player, procState.lastFireRingTime, fireRingScale);
-            }
-        }
-
-        float soulScale = GetActiveScriptGroupScale(player, { "遗物_通灵逆契", "祝福_灵魂沸涌", "特效_魂火追击" });
-        if (soulScale > 0.0f)
-        {
-            ++procState.bloodKillCounter;
-            if (procState.bloodKillCounter >= 1 && GetNow() > procState.lastSoulProcTime + 1)
-            {
-                procState.bloodKillCounter = 0;
-                TriggerSoulBurst(player, procState.lastSoulProcTime, soulScale);
-            }
-        }
-
-        float featherScale = GetActiveScriptGroupScale(player, { "遗物_鸦神命羽", "遗物_王陨号角" });
-        if (featherScale > 0.0f &&
-            GetNow() > procState.lastFeatherVolleyTime + 2)
-        {
-            TriggerFeatherVolley(player, procState.lastFeatherVolleyTime, featherScale);
-        }
+        ProcessBasicKillRelicTriggers(player, creature, procState, trackedMaskBit);
 
         if (HasActiveScriptGroup(player, "遗物_霜王残印"))
             ++procState.dominionCounter;
@@ -6086,7 +7706,10 @@ public:
             PLAYERHOOK_ON_AFTER_UPDATE_RATING,
             PLAYERHOOK_ON_DELETE,
             PLAYERHOOK_ON_EQUIP,
-            PLAYERHOOK_ON_AFTER_MOVE_ITEM_FROM_INVENTORY
+            PLAYERHOOK_ON_AFTER_MOVE_ITEM_FROM_INVENTORY,
+            PLAYERHOOK_ON_APPLY_WEAPON_DAMAGE,
+            PLAYERHOOK_ON_PLAYER_ENTER_COMBAT,
+            PLAYERHOOK_ON_PLAYER_LEAVE_COMBAT
         })
     {
     }
@@ -6407,6 +8030,154 @@ public:
         if (IsAutoBeginOnMapEnterEnabled())
             sAbyssCultivationMgr->TryAutoBeginPlayerRun(player);
         sAbyssCultivationMgr->HandlePlayerUpdate(player, diff);
+    }
+
+    void OnPlayerEnterCombat(Player* player, Unit* /*enemy*/) override
+    {
+        if (!player || !IsModuleEnabled())
+            return;
+
+        PlayerAbyssProcState& procState = sAbyssCultivationMgr->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+        procState.lastCombatEnterTime = GetNow();
+        procState.openingAttackCount = 0;
+        procState.artifactCombatEchoUsed = false;
+        procState.artifactSubLinkUsed = false;
+        procState.artifactMainProcCounter = 0;
+
+        PlayerAbyssData const* playerData = sAbyssCultivationMgr->GetPlayerData(player->GetGUID().GetCounter());
+        if (!playerData)
+            return;
+
+        if (playerData->phaseArtifact == ABYSS_PHASE_ARTIFACT_BURNING_PACT_ITEM)
+            sAbyssCultivationMgr->CastManagedRelicSpell(player, 89175);
+
+        if (playerData->phaseArtifact == ABYSS_PHASE_ARTIFACT_VOID_EXPEDITION_ITEM)
+            sAbyssCultivationMgr->CastManagedRelicSpell(player, 89176);
+    }
+
+    void OnPlayerLeaveCombat(Player* player) override
+    {
+        if (!player || !IsModuleEnabled())
+            return;
+
+        PlayerAbyssProcState& procState = sAbyssCultivationMgr->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+        procState.openingAttackCount = 0;
+    }
+
+    void OnPlayerApplyWeaponDamage(Player* player, uint8 /*slot*/, ItemTemplate const* proto, float& /*minDamage*/, float& /*maxDamage*/, uint8 /*damageIndex*/) override
+    {
+        if (!player || !proto || !IsModuleEnabled())
+            return;
+
+        uint32 guid = player->GetGUID().GetCounter();
+        if (!sAbyssCultivationMgr->GetPlayerRunState(guid) && !HasAnyActiveRelicSlots(sAbyssCultivationMgr->GetPlayerData(guid)))
+            return;
+
+        PlayerAbyssProcState& procState = sAbyssCultivationMgr->GetOrCreatePlayerProcState(guid);
+        uint32 now = GetNow();
+
+        float wolfScale = sAbyssCultivationMgr->GetActiveScriptGroupScale(player, "遗物_狼王残月");
+        if (wolfScale > 0.0f && now > procState.lastWolfMoonTime + 6)
+        {
+            if (RollPercentage() < 25.0f * std::max(wolfScale, 0.25f))
+            {
+                if (sAbyssCultivationMgr->CastManagedRelicSpell(player, 89104))
+                    procState.lastWolfMoonTime = now;
+            }
+        }
+
+        float thornScale = sAbyssCultivationMgr->GetActiveScriptGroupScale(player, "遗物_棘魂号角");
+        if (thornScale > 0.0f && now < procState.lastStillnessTime + 2 && now > procState.lastThornChargeTime + 5)
+        {
+            if (sAbyssCultivationMgr->CastManagedRelicSpell(player, 89108))
+                procState.lastThornChargeTime = now;
+        }
+
+        float furnaceScale = sAbyssCultivationMgr->GetActiveScriptGroupScale(player, "遗物_黑炉王印");
+        if (furnaceScale > 0.0f && now < procState.lastFireSchoolCastTime + 8 && now > procState.lastBlackFurnaceTime + 6)
+        {
+            if (sAbyssCultivationMgr->CastManagedRelicSpell(player, 89115))
+                procState.lastBlackFurnaceTime = now;
+        }
+
+        float generalScale = sAbyssCultivationMgr->GetActiveScriptGroupScale(player, "遗物_将军狱旗");
+        if (generalScale > 0.0f && procState.lastCombatEnterTime != 0 && now < procState.lastCombatEnterTime + 30 && now > procState.lastGeneralEchoTime + 5)
+        {
+            if (sAbyssCultivationMgr->CastManagedRelicSpell(player, 89117))
+                procState.lastGeneralEchoTime = now;
+        }
+
+        float bulwarkScale = sAbyssCultivationMgr->GetActiveScriptGroupScale(player, "遗物_残垒战契");
+        if (bulwarkScale > 0.0f && procState.openingAttackCount < 3 && now > procState.lastBulwarkTime + 2)
+        {
+            if (sAbyssCultivationMgr->CastManagedRelicSpell(player, 89121))
+            {
+                procState.lastBulwarkTime = now;
+                ++procState.openingAttackCount;
+            }
+        }
+
+        float bloodOrbScale = sAbyssCultivationMgr->GetActiveScriptGroupScale(player, "遗物_邪血蒸馏器");
+        if (bloodOrbScale > 0.0f && now > procState.lastBloodOrbTime + 4)
+        {
+            if (sAbyssCultivationMgr->CastManagedRelicSpell(player, 89122))
+                procState.lastBloodOrbTime = now;
+        }
+
+        float clockScale = sAbyssCultivationMgr->GetActiveScriptGroupScale(player, "遗物_时痕怀表");
+        if (clockScale > 0.0f && procState.lastSpellId != 0 && now < procState.lastStillnessTime + 2 && now > procState.lastClockMarkTime + 8)
+        {
+            if (sAbyssCultivationMgr->CastManagedRelicSpell(player, 89131))
+                procState.lastClockMarkTime = now;
+        }
+
+        float spiderScale = sAbyssCultivationMgr->GetActiveScriptGroupScale(player, "遗物_蛛网夜卵");
+        if (spiderScale > 0.0f && now > procState.lastSpiderEggTime + 8)
+        {
+            if (RollPercentage() < 20.0f * std::max(spiderScale, 0.25f))
+            {
+                if (sAbyssCultivationMgr->CastManagedRelicSpell(player, 89139))
+                    procState.lastSpiderEggTime = now;
+            }
+        }
+
+        float clockJudgeScale = sAbyssCultivationMgr->GetActiveScriptGroupScale(player, "遗物_时审钟摆");
+        if (clockJudgeScale > 0.0f && procState.lastCombatEnterTime != 0 && now > procState.lastCombatEnterTime + 10 && now > procState.lastExecutionStakeTime + 10)
+        {
+            if (sAbyssCultivationMgr->CastManagedRelicSpell(player, 89146))
+                procState.lastExecutionStakeTime = now;
+        }
+
+        float stakeScale = sAbyssCultivationMgr->GetActiveScriptGroupScale(player, "遗物_萨钢骨钉");
+        if (stakeScale > 0.0f && procState.lastCombatEnterTime != 0 && now > procState.lastCombatEnterTime + 15 && now > procState.lastExecutionStakeTime + 8)
+        {
+            if (sAbyssCultivationMgr->CastManagedRelicSpell(player, 89151))
+                procState.lastExecutionStakeTime = now;
+        }
+
+        float mirrorShardScale = sAbyssCultivationMgr->GetActiveScriptGroupScale(player, "遗物_映像碎镜");
+        if (mirrorShardScale > 0.0f && procState.lastSpellId != 0 && now > procState.lastMirrorShardTime + 10)
+        {
+            if (RollPercentage() < 18.0f * std::max(mirrorShardScale, 0.25f))
+            {
+                if (sAbyssCultivationMgr->CastManagedRelicSpell(player, 89152))
+                    procState.lastMirrorShardTime = now;
+            }
+        }
+
+        float reverseScale = sAbyssCultivationMgr->GetActiveScriptGroupScale(player, "遗物_逆鳞王冠");
+        if (reverseScale > 0.0f && now < procState.lastStillnessTime + 2 && now > procState.lastReverseScaleTime + 6)
+        {
+            if (sAbyssCultivationMgr->CastManagedRelicSpell(player, 89154))
+                procState.lastReverseScaleTime = now;
+        }
+
+        float eclipseScale = sAbyssCultivationMgr->GetActiveScriptGroupScale(player, "遗物_日蚀残晕");
+        if (eclipseScale > 0.0f && player->GetPowerPct(player->getPowerType()) >= 90.0f && now > procState.lastEclipseTime + 12)
+        {
+            if (sAbyssCultivationMgr->CastManagedRelicSpell(player, 89166))
+                procState.lastEclipseTime = now;
+        }
     }
 
     void OnPlayerGiveXP(Player* player, uint32& amount, Unit* /*victim*/, uint8 /*xpSource*/) override
@@ -8833,6 +10604,10 @@ enum AbyssEquipSpells
     SPELL_ABYSS_CHARGE_BUFF          = 89028,
 };
 
+constexpr uint8 ABYSS_POISON_MAX_STACKS = 5;
+constexpr uint8 ABYSS_POISON_SPREAD_STACKS = 3;
+constexpr float ABYSS_POISON_SPREAD_RADIUS = 8.0f;
+
 // ============================================
 // [1] 血爆裂变 - 命中AOE火焰+连锁爆炸
 // ============================================
@@ -8914,20 +10689,18 @@ class spell_abyss_poison_dot : public AuraScript
 
     void AfterApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
-        if (Aura* aura = GetAura())
-        {
-            if (aura->GetStackAmount() >= 5)
-            {
-                Unit* target = GetTarget();
-                Unit* caster = GetCaster();
-                if (caster && target)
-                {
-                    // 满5层引爆
-                    caster->CastSpell(target, SPELL_ABYSS_POISON_DETONATE, true);
-                    aura->Remove();
-                }
-            }
-        }
+        Aura* aura = GetAura();
+        Unit* target = GetTarget();
+        Unit* caster = GetCaster();
+        if (!aura || !target || !caster)
+            return;
+
+        // 只在真正达到满层时引爆，并且先移除 Aura，避免在重入回调里递归自触发。
+        if (aura->GetStackAmount() < ABYSS_POISON_MAX_STACKS)
+            return;
+
+        aura->Remove();
+        caster->CastSpell(target, SPELL_ABYSS_POISON_DETONATE, true);
     }
 
     void Register() override
@@ -8957,14 +10730,31 @@ class spell_abyss_poison_detonate : public SpellScript
 
         caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE);
 
-        // 向周围传播3层毒素
-        if (target != GetExplTargetUnit())
-            return; // 只在主目标上执行传播逻辑一次
+        Unit* explosionTarget = GetExplTargetUnit();
+        if (!explosionTarget)
+            explosionTarget = target;
 
-        // 由于DBC已设定AOE目标，每个被命中的目标自动获得毒层传播
-        caster->CastSpell(target, SPELL_ABYSS_POISON_DOT, true);
-        caster->CastSpell(target, SPELL_ABYSS_POISON_DOT, true);
-        caster->CastSpell(target, SPELL_ABYSS_POISON_DOT, true);
+        // 只在引爆源目标上执行一次传播逻辑，避免 AOE 命中多个目标时重复扩散。
+        if (target != explosionTarget)
+            return;
+
+        std::list<Unit*> nearbyTargets;
+        Acore::AnyUnfriendlyUnitInObjectRangeCheck check(explosionTarget, caster, ABYSS_POISON_SPREAD_RADIUS);
+        Acore::UnitListSearcher<Acore::AnyUnfriendlyUnitInObjectRangeCheck> searcher(explosionTarget, nearbyTargets, check);
+        Cell::VisitAllObjects(explosionTarget, searcher, ABYSS_POISON_SPREAD_RADIUS);
+
+        for (Unit* nearbyTarget : nearbyTargets)
+        {
+            if (!nearbyTarget || nearbyTarget == explosionTarget)
+                continue;
+
+            // 传播只补给“当前没有毒层”的目标，避免多个满层目标互相回种形成连锁递归。
+            if (nearbyTarget->HasAura(SPELL_ABYSS_POISON_DOT))
+                continue;
+
+            for (uint8 i = 0; i < ABYSS_POISON_SPREAD_STACKS; ++i)
+                caster->CastSpell(nearbyTarget, SPELL_ABYSS_POISON_DOT, true);
+        }
     }
 
     void Register() override
@@ -9002,16 +10792,16 @@ class spell_abyss_hellfire_rain : public SpellScript
 };
 
 // ============================================
-// [6] 虚空黑洞 - 暗影AOE+减速60%
+// [6] 虚空黑洞 - 周期性暗影伤害+拖拽
 // ============================================
-class spell_abyss_void_hole : public SpellScript
+class spell_abyss_void_hole : public AuraScript
 {
-    PrepareSpellScript(spell_abyss_void_hole);
+    PrepareAuraScript(spell_abyss_void_hole);
 
-    void HandleScript(SpellEffIndex /*effIndex*/)
+    void HandlePeriodic(AuraEffect const* /*aurEff*/)
     {
         Unit* caster = GetCaster();
-        Unit* target = GetHitUnit();
+        Unit* target = GetTarget();
         if (!caster || !target)
             return;
 
@@ -9034,7 +10824,7 @@ class spell_abyss_void_hole : public SpellScript
 
     void Register() override
     {
-        OnEffectHitTarget += SpellEffectFn(spell_abyss_void_hole::HandleScript, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+        OnEffectPeriodic += AuraEffectPeriodicFn(spell_abyss_void_hole::HandlePeriodic, EFFECT_0, SPELL_AURA_PERIODIC_DUMMY);
     }
 };
 
@@ -9111,19 +10901,36 @@ class spell_abyss_lava_rift : public SpellScript
 {
     PrepareSpellScript(spell_abyss_lava_rift);
 
+    bool _processed = false;
+
     void HandleScript(SpellEffIndex /*effIndex*/)
     {
+        if (_processed)
+            return;
+
         Unit* caster = GetCaster();
         Unit* target = GetHitUnit();
         if (!caster || !target)
             return;
 
+        _processed = true;
+
+        std::list<Unit*> nearbyTargets;
+        Acore::AnyUnfriendlyUnitInObjectRangeCheck check(target, caster, 8.0f);
+        Acore::UnitListSearcher<Acore::AnyUnfriendlyUnitInObjectRangeCheck> searcher(target, nearbyTargets, check);
+        Cell::VisitAllObjects(target, searcher, 8.0f);
+
         float sp = caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_FIRE);
         int32 damage = int32(sp * 1.5f);
-        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_FIRE);
 
-        // 施加减速
-        caster->CastSpell(target, SPELL_ABYSS_LAVA_SLOW, true);
+        for (Unit* nearbyTarget : nearbyTargets)
+        {
+            if (!nearbyTarget)
+                continue;
+
+            caster->DealDamage(caster, nearbyTarget, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_FIRE);
+            caster->CastSpell(nearbyTarget, SPELL_ABYSS_LAVA_SLOW, true);
+        }
     }
 
     void Register() override
@@ -9147,7 +10954,9 @@ class spell_abyss_destroy_pulse : public SpellScript
             return;
 
         float sp = caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_ARCANE);
-        int32 damage = int32(sp * 4.0f);
+        float ap = caster->GetTotalAttackPowerValue(BASE_ATTACK);
+        float power = std::max(sp, ap);
+        int32 damage = int32(power * 4.0f);
         caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_ARCANE);
 
         // 击退
@@ -9172,19 +10981,47 @@ class spell_abyss_soul_reap : public SpellScript
     PrepareSpellScript(spell_abyss_soul_reap);
 
     uint32 _hitCount = 0;
+    bool _processed = false;
 
     void HandleScript(SpellEffIndex /*effIndex*/)
     {
+        if (_processed)
+            return;
+
         Unit* caster = GetCaster();
         Unit* target = GetHitUnit();
         if (!caster || !target)
             return;
 
-        float sp = caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_SHADOW);
-        int32 damage = int32(sp * 2.6f);
-        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW);
+        _processed = true;
 
-        ++_hitCount;
+        std::list<Unit*> nearbyTargets;
+        Acore::AnyUnfriendlyUnitInObjectRangeCheck check(caster, caster, 12.0f);
+        Acore::UnitListSearcher<Acore::AnyUnfriendlyUnitInObjectRangeCheck> searcher(caster, nearbyTargets, check);
+        Cell::VisitAllObjects(caster, searcher, 12.0f);
+
+        float sp = caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_SHADOW);
+        float ap = caster->GetTotalAttackPowerValue(BASE_ATTACK);
+        float power = std::max(sp, ap);
+        int32 damage = int32(power * 2.6f);
+
+        for (Unit* nearbyTarget : nearbyTargets)
+        {
+            if (!nearbyTarget)
+                continue;
+
+            if (!caster->HasInArc(float(M_PI), nearbyTarget))
+                continue;
+
+            caster->DealDamage(caster, nearbyTarget, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW);
+            ++_hitCount;
+        }
+
+        if (_hitCount == 0)
+        {
+            caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW);
+            _hitCount = 1;
+        }
     }
 
     void AfterCastHandler()
@@ -9246,6 +11083,37 @@ class spell_abyss_charge_destroy : public SpellScript
     }
 };
 
+// ============================================
+// [13] 深渊遗物托管法术 - 891xx
+// 触发时机由深渊模块负责，具体效果由 spell.dbc + 本脚本统一接管
+// ============================================
+class spell_abyss_managed_relic : public SpellScript
+{
+    PrepareSpellScript(spell_abyss_managed_relic);
+
+    void HandleScript(SpellEffIndex /*effIndex*/)
+    {
+        Player* player = GetCaster() ? GetCaster()->ToPlayer() : nullptr;
+        if (!player)
+            return;
+
+        uint32 spellId = GetSpellInfo()->Id;
+        if (!IsManagedRelicSpell(spellId))
+            return;
+
+        Unit* explicitTarget = GetHitUnit();
+        if (!explicitTarget)
+            explicitTarget = GetExplTargetUnit();
+
+        sAbyssCultivationMgr->ExecuteManagedRelicSpell(player, spellId, explicitTarget);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_abyss_managed_relic::HandleScript, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+};
+
 void AddSC_mod_abyss_cultivation()
 {
     new AbyssCultivationWorldScript();
@@ -9266,4 +11134,5 @@ void AddSC_mod_abyss_cultivation()
     RegisterSpellScript(spell_abyss_destroy_pulse);     // 89024 毁灭脉冲
     RegisterSpellScript(spell_abyss_soul_reap);         // 89026 噬魂收割
     RegisterSpellScript(spell_abyss_charge_destroy);    // 89027 冲锋毁灭
+    RegisterSpellScript(spell_abyss_managed_relic);     // 891xx 遗物 / 神器托管技能
 }

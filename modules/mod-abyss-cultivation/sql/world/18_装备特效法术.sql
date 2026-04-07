@@ -163,6 +163,374 @@ INSERT INTO `spell_script_names` (`spell_id`, `ScriptName`) VALUES
 (89027, 'spell_abyss_charge_destroy');
 
 -- ============================================
+-- 目标修复：
+-- 1. 敌方debuff子法术原先大量错误指向施法者(1)，改为当前敌对目标(6)
+-- 2. 目标区域AOE统一改为“以当前目标为落点的敌方范围”(63 + 16)
+-- 3. 自身中心AOE统一改为“以施法者为中心的敌方范围”(15)
+-- 4. 89007/89010 的第三效果为未实现的 DUMMY，先关闭以规避异常
+-- ============================================
+UPDATE `_wydbc_spell`
+SET
+    `ImplicitTargetA_1` = CASE `ID`
+        WHEN 89001 THEN 63 -- 血爆裂变：目标区域8码
+        WHEN 89002 THEN 24 -- 碎魂连斩：前方穿透/锥形敌人
+        WHEN 89003 THEN 63 -- 雷霆碾压：目标区域10码
+        WHEN 89004 THEN 6  -- 雷霆碾压·易伤：命中目标
+        WHEN 89005 THEN 6  -- 淬毒裂伤：命中目标
+        WHEN 89006 THEN 63 -- 淬毒裂伤·引爆：目标区域8码
+        WHEN 89007 THEN 1  -- 暴击风暴：自身buff
+        WHEN 89008 THEN 63 -- 地狱火雨：目标区域12码
+        WHEN 89009 THEN 6  -- 地狱火雨·点燃：命中目标
+        WHEN 89010 THEN 1  -- 嗜血狂化：自身buff
+        WHEN 89011 THEN 63 -- 虚空黑洞：目标区域10码
+        WHEN 89012 THEN 6  -- 碎甲轰击：单体目标
+        WHEN 89013 THEN 6  -- 碎甲轰击·破甲：命中目标
+        WHEN 89014 THEN 63 -- 尸爆连锁：目标区域10码
+        WHEN 89015 THEN 63 -- 深渊之触：目标区域12码
+        WHEN 89016 THEN 6  -- 深渊之触·定身：命中目标
+        WHEN 89017 THEN 6  -- 灭世重击：单体目标
+        WHEN 89018 THEN 6  -- 灭世重击·震倒：命中目标
+        WHEN 89019 THEN 1  -- 绝境狂暴：自身buff
+        WHEN 89020 THEN 6  -- 岩浆裂地：以命中目标为中心，脚本扩散8码
+        WHEN 89021 THEN 6  -- 岩浆裂地·减速：命中目标
+        WHEN 89022 THEN 63 -- 断罪天降：目标区域8码
+        WHEN 89023 THEN 6  -- 断罪天降·灼烧：命中目标
+        WHEN 89024 THEN 15 -- 毁灭脉冲：自身周围15码
+        WHEN 89025 THEN 6  -- 毁灭脉冲·易伤：命中目标
+        WHEN 89026 THEN 6  -- 噬魂收割：以命中目标触发，脚本判定前方180°扇形
+        WHEN 89027 THEN 15 -- 冲锋毁灭：自身周围10码
+        WHEN 89028 THEN 1  -- 冲锋毁灭·爆发：自身buff
+        ELSE `ImplicitTargetA_1`
+    END,
+    `ImplicitTargetB_1` = CASE `ID`
+        WHEN 89001 THEN 16
+        WHEN 89002 THEN 0
+        WHEN 89003 THEN 16
+        WHEN 89004 THEN 0
+        WHEN 89005 THEN 0
+        WHEN 89006 THEN 16
+        WHEN 89007 THEN 0
+        WHEN 89008 THEN 16
+        WHEN 89009 THEN 0
+        WHEN 89010 THEN 0
+        WHEN 89011 THEN 16
+        WHEN 89012 THEN 0
+        WHEN 89013 THEN 0
+        WHEN 89014 THEN 16
+        WHEN 89015 THEN 16
+        WHEN 89016 THEN 0
+        WHEN 89017 THEN 0
+        WHEN 89018 THEN 0
+        WHEN 89019 THEN 0
+        WHEN 89020 THEN 0
+        WHEN 89021 THEN 0
+        WHEN 89022 THEN 16
+        WHEN 89023 THEN 0
+        WHEN 89024 THEN 0
+        WHEN 89025 THEN 0
+        WHEN 89026 THEN 0
+        WHEN 89027 THEN 0
+        WHEN 89028 THEN 0
+        ELSE `ImplicitTargetB_1`
+    END,
+    `ImplicitTargetA_2` = CASE `ID`
+        WHEN 89003 THEN 63 -- 雷霆碾压的眩晕也落在目标区域
+        WHEN 89007 THEN 1  -- 暴击风暴第二效果自身
+        WHEN 89010 THEN 1  -- 嗜血狂化第二效果自身
+        WHEN 89019 THEN 1  -- 绝境狂暴第二效果自身
+        ELSE `ImplicitTargetA_2`
+    END,
+    `ImplicitTargetB_2` = CASE `ID`
+        WHEN 89003 THEN 16
+        WHEN 89007 THEN 0
+        WHEN 89010 THEN 0
+        WHEN 89019 THEN 0
+        ELSE `ImplicitTargetB_2`
+    END,
+    `ImplicitTargetA_3` = CASE `ID`
+        WHEN 89007 THEN 0  -- 关闭未实现的DUMMY第三槽
+        WHEN 89010 THEN 0  -- 关闭未实现的DUMMY第三槽
+        WHEN 89019 THEN 1  -- 绝境狂暴第三效果自身
+        ELSE `ImplicitTargetA_3`
+    END,
+    `ImplicitTargetB_3` = CASE `ID`
+        WHEN 89007 THEN 0
+        WHEN 89010 THEN 0
+        WHEN 89019 THEN 0
+        ELSE `ImplicitTargetB_3`
+    END,
+    `EffectRadiusIndex_1` = CASE `ID`
+        WHEN 89008 THEN 32 -- 地狱火雨补齐12码范围
+        WHEN 89026 THEN 32 -- 噬魂收割补齐12码扇形长度
+        ELSE `EffectRadiusIndex_1`
+    END,
+    `EffectRadiusIndex_2` = CASE `ID`
+        WHEN 89003 THEN 45
+        ELSE `EffectRadiusIndex_2`
+    END,
+    `Effect_3` = CASE `ID`
+        WHEN 89007 THEN 0
+        WHEN 89010 THEN 0
+        ELSE `Effect_3`
+    END,
+    `EffectBasePoints_3` = CASE `ID`
+        WHEN 89007 THEN 0
+        WHEN 89010 THEN 0
+        ELSE `EffectBasePoints_3`
+    END
+WHERE `ID` BETWEEN 89001 AND 89028;
+
+-- ============================================
+-- Aura / 持续时间 / 描述修复
+-- ============================================
+UPDATE `_wydbc_spell`
+SET
+    `EffectAura_1` = CASE `ID`
+        WHEN 89007 THEN 290 -- 通用暴击率%
+        WHEN 89010 THEN 138 -- 近战攻速%
+        WHEN 89011 THEN 226 -- 周期性Dummy
+        WHEN 89016 THEN 26  -- 定身
+        ELSE `EffectAura_1`
+    END,
+    `EffectAura_2` = CASE `ID`
+        WHEN 89007 THEN 138 -- 攻速%
+        WHEN 89019 THEN 290 -- 通用暴击率%
+        ELSE `EffectAura_2`
+    END,
+    `EffectAura_3` = CASE `ID`
+        WHEN 89007 THEN 163 -- 暴击伤害加成
+        ELSE `EffectAura_3`
+    END,
+    `Effect_1` = CASE `ID`
+        WHEN 89011 THEN 6
+        ELSE `Effect_1`
+    END,
+    `Effect_3` = CASE `ID`
+        WHEN 89007 THEN 6
+        ELSE `Effect_3`
+    END,
+    `EffectBasePoints_1` = CASE `ID`
+        WHEN 89011 THEN 0
+        ELSE `EffectBasePoints_1`
+    END,
+    `EffectBasePoints_3` = CASE `ID`
+        WHEN 89007 THEN 49
+        ELSE `EffectBasePoints_3`
+    END,
+    `EffectMiscValue_1` = CASE `ID`
+        WHEN 89019 THEN -1 -- 全属性
+        WHEN 89028 THEN -1 -- 全属性
+        ELSE `EffectMiscValue_1`
+    END,
+    `EffectMiscValue_3` = CASE `ID`
+        WHEN 89007 THEN 127 -- 全学校暴击伤害
+        ELSE `EffectMiscValue_3`
+    END,
+    `EffectAuraPeriod_1` = CASE `ID`
+        WHEN 89011 THEN 1000
+        ELSE `EffectAuraPeriod_1`
+    END,
+    `DurationIndex` = CASE `ID`
+        WHEN 89008 THEN 35 -- 4秒
+        WHEN 89011 THEN 9  -- 30秒
+        WHEN 89021 THEN 32 -- 6秒
+        ELSE `DurationIndex`
+    END,
+    `Description_Lang_zhCN` = CASE `ID`
+        WHEN 89011 THEN '撕开虚空黑洞，持续30秒吸扯10码内敌人，每秒造成180%法强暗影伤害。'
+        WHEN 89025 THEN '被毁灭脉冲命中后进入易伤状态，受到的所有伤害提高20%，持续6秒。'
+        ELSE `Description_Lang_zhCN`
+    END,
+    `AuraDescription_Lang_zhCN` = CASE `ID`
+        WHEN 89004 THEN '受到的所有伤害提高25%。'
+        WHEN 89013 THEN '受到的所有伤害提高15%。'
+        WHEN 89025 THEN '受到的所有伤害提高20%。'
+        ELSE `AuraDescription_Lang_zhCN`
+    END
+WHERE `ID` BETWEEN 89001 AND 89028;
+
+-- ============================================
+-- 语言字段统一：
+-- 参照 _wydbc_spell 中 116 的落位风格，中文内容写入 deDE，zhCN 留空
+-- ============================================
+UPDATE `_wydbc_spell`
+SET
+    `Name_Lang_deDE` = IFNULL(NULLIF(`Name_Lang_deDE`, ''), `Name_Lang_zhCN`),
+    `Description_Lang_deDE` = IFNULL(NULLIF(`Description_Lang_deDE`, ''), `Description_Lang_zhCN`),
+    `AuraDescription_Lang_deDE` = IFNULL(NULLIF(`AuraDescription_Lang_deDE`, ''), `AuraDescription_Lang_zhCN`)
+WHERE `ID` BETWEEN 89001 AND 89028;
+
+UPDATE `_wydbc_spell`
+SET
+    `Name_Lang_zhCN` = '',
+    `Description_Lang_zhCN` = '',
+    `AuraDescription_Lang_zhCN` = ''
+WHERE `ID` BETWEEN 89001 AND 89028;
+
+-- ============================================
+-- 施法距离 / 半径修复：
+-- 1. 目标型技能统一拉到可正常选中目标的距离，避免必须贴脸才能释放
+-- 2. 自身buff统一改为自施范围档(1)，规避 RangeIndex=0 的异常风险
+-- 3. 按技能描述修正半径：8码=14, 10码=45, 12码=32, 15码=18
+-- ============================================
+UPDATE `_wydbc_spell`
+SET
+    `RangeIndex` = CASE `ID`
+        WHEN 89001 THEN 35 -- 35码目标区域
+        WHEN 89002 THEN 35 -- 35码斩击波
+        WHEN 89003 THEN 35 -- 35码目标区域
+        WHEN 89004 THEN 35 -- 35码单体debuff
+        WHEN 89005 THEN 35 -- 35码单体毒伤
+        WHEN 89006 THEN 35 -- 35码目标区域
+        WHEN 89007 THEN 1  -- 自身buff
+        WHEN 89008 THEN 35 -- 35码目标区域
+        WHEN 89009 THEN 35 -- 35码点燃debuff
+        WHEN 89010 THEN 1  -- 自身buff
+        WHEN 89011 THEN 35 -- 35码目标区域
+        WHEN 89012 THEN 35 -- 35码单体攻击
+        WHEN 89013 THEN 35 -- 35码单体debuff
+        WHEN 89014 THEN 35 -- 35码目标区域
+        WHEN 89015 THEN 35 -- 35码目标区域
+        WHEN 89016 THEN 35 -- 35码单体定身
+        WHEN 89017 THEN 35 -- 35码单体攻击
+        WHEN 89018 THEN 35 -- 35码单体眩晕
+        WHEN 89019 THEN 1  -- 自身buff
+        WHEN 89020 THEN 35 -- 35码目标区域
+        WHEN 89021 THEN 35 -- 35码减速debuff
+        WHEN 89022 THEN 35 -- 35码目标区域
+        WHEN 89023 THEN 35 -- 35码单体灼烧
+        WHEN 89024 THEN 1  -- 自身周围AOE
+        WHEN 89025 THEN 35 -- 35码单体易伤
+        WHEN 89026 THEN 35 -- 35码前方扇形
+        WHEN 89027 THEN 1  -- 自身周围AOE
+        WHEN 89028 THEN 1  -- 自身buff
+        ELSE `RangeIndex`
+    END,
+    `EffectRadiusIndex_1` = CASE `ID`
+        WHEN 89001 THEN 14 -- 8码
+        WHEN 89003 THEN 45 -- 10码
+        WHEN 89006 THEN 14 -- 8码
+        WHEN 89008 THEN 32 -- 12码
+        WHEN 89011 THEN 45 -- 10码
+        WHEN 89014 THEN 45 -- 10码
+        WHEN 89015 THEN 32 -- 12码
+        WHEN 89020 THEN 14 -- 8码
+        WHEN 89022 THEN 14 -- 8码
+        WHEN 89024 THEN 18 -- 15码
+        WHEN 89026 THEN 32 -- 12码
+        WHEN 89027 THEN 45 -- 10码
+        ELSE `EffectRadiusIndex_1`
+    END,
+    `EffectRadiusIndex_2` = CASE `ID`
+        WHEN 89003 THEN 45 -- 10码眩晕
+        ELSE `EffectRadiusIndex_2`
+    END
+WHERE `ID` BETWEEN 89001 AND 89028;
+
+-- ============================================
+-- 图标 / 主视觉适配：按技能名称与描述重配
+-- 说明：
+-- 1. SpellIconID / ActiveIconID 统一同步，避免 Buff/Debuff 图标继续循环复用
+-- 2. SpellVisualID_1 选用本地 Spell.dbc 中已存在的官方视觉或当前模块已验证可用的视觉ID
+-- ============================================
+UPDATE `_wydbc_spell`
+SET
+    `SpellIconID` = CASE `ID`
+        WHEN 89001 THEN 2725 -- 血爆裂变
+        WHEN 89002 THEN 1986 -- 碎魂连斩
+        WHEN 89003 THEN 220  -- 雷霆碾压
+        WHEN 89004 THEN 220  -- 雷霆碾压·易伤
+        WHEN 89005 THEN 152  -- 淬毒裂伤
+        WHEN 89006 THEN 1541 -- 淬毒裂伤·引爆
+        WHEN 89007 THEN 123  -- 暴击风暴
+        WHEN 89008 THEN 937  -- 地狱火雨
+        WHEN 89009 THEN 937  -- 地狱火雨·点燃
+        WHEN 89010 THEN 2959 -- 嗜血狂化
+        WHEN 89011 THEN 173  -- 虚空黑洞
+        WHEN 89012 THEN 565  -- 碎甲轰击
+        WHEN 89013 THEN 1694 -- 碎甲轰击·破甲
+        WHEN 89014 THEN 876  -- 尸爆连锁
+        WHEN 89015 THEN 217  -- 深渊之触
+        WHEN 89016 THEN 74   -- 深渊之触·定身
+        WHEN 89017 THEN 2522 -- 灭世重击
+        WHEN 89018 THEN 148  -- 灭世重击·震倒
+        WHEN 89019 THEN 11   -- 绝境狂暴
+        WHEN 89020 THEN 37   -- 岩浆裂地
+        WHEN 89021 THEN 37   -- 岩浆裂地·减速
+        WHEN 89022 THEN 3027 -- 断罪天降
+        WHEN 89023 THEN 2560 -- 断罪天降·灼烧
+        WHEN 89024 THEN 122  -- 毁灭脉冲
+        WHEN 89025 THEN 212  -- 毁灭脉冲·易伤
+        WHEN 89026 THEN 143  -- 噬魂收割
+        WHEN 89027 THEN 457  -- 冲锋毁灭
+        WHEN 89028 THEN 457  -- 冲锋毁灭·爆发
+        ELSE `SpellIconID`
+    END,
+    `ActiveIconID` = CASE `ID`
+        WHEN 89001 THEN 2725
+        WHEN 89002 THEN 1986
+        WHEN 89003 THEN 220
+        WHEN 89004 THEN 220
+        WHEN 89005 THEN 152
+        WHEN 89006 THEN 1541
+        WHEN 89007 THEN 123
+        WHEN 89008 THEN 937
+        WHEN 89009 THEN 937
+        WHEN 89010 THEN 2959
+        WHEN 89011 THEN 173
+        WHEN 89012 THEN 565
+        WHEN 89013 THEN 1694
+        WHEN 89014 THEN 876
+        WHEN 89015 THEN 217
+        WHEN 89016 THEN 74
+        WHEN 89017 THEN 2522
+        WHEN 89018 THEN 148
+        WHEN 89019 THEN 11
+        WHEN 89020 THEN 37
+        WHEN 89021 THEN 37
+        WHEN 89022 THEN 3027
+        WHEN 89023 THEN 2560
+        WHEN 89024 THEN 122
+        WHEN 89025 THEN 212
+        WHEN 89026 THEN 143
+        WHEN 89027 THEN 457
+        WHEN 89028 THEN 457
+        ELSE `ActiveIconID`
+    END,
+    `SpellVisualID_1` = CASE `ID`
+        WHEN 89001 THEN 15045 -- 血系爆裂/鲜血冲击
+        WHEN 89002 THEN 13222 -- 穿透斩击波
+        WHEN 89003 THEN 11653 -- 雷柱轰击
+        WHEN 89004 THEN 33    -- 雷霆标记
+        WHEN 89005 THEN 15193 -- 剧毒附着
+        WHEN 89006 THEN 15194 -- 毒素引爆
+        WHEN 89007 THEN 6640  -- 暴击风暴爆发
+        WHEN 89008 THEN 781   -- 地狱火持续轰落
+        WHEN 89009 THEN 5442  -- 点燃灼烧
+        WHEN 89010 THEN 15337 -- 嗜血狂化
+        WHEN 89011 THEN 10335 -- 虚空黑洞
+        WHEN 89012 THEN 406   -- 碎甲冲击
+        WHEN 89013 THEN 406   -- 破甲标记
+        WHEN 89014 THEN 8216  -- 尸爆
+        WHEN 89015 THEN 10769 -- 深渊触手/暗影抓取
+        WHEN 89016 THEN 149   -- 定身束缚
+        WHEN 89017 THEN 3783  -- 毁灭重击
+        WHEN 89018 THEN 208   -- 震倒
+        WHEN 89019 THEN 9544  -- 绝境狂暴
+        WHEN 89020 THEN 2107  -- 岩浆裂地
+        WHEN 89021 THEN 2107  -- 熔岩减速灼地
+        WHEN 89022 THEN 12656 -- 神圣巨剑天降
+        WHEN 89023 THEN 14995 -- 神圣灼烧
+        WHEN 89024 THEN 13463 -- 巨型奥术脉冲
+        WHEN 89025 THEN 12572 -- 脉冲后残留奥能
+        WHEN 89026 THEN 8708  -- 灵魂收割/抽离
+        WHEN 89027 THEN 3783  -- 冲锋毁灭
+        WHEN 89028 THEN 867   -- 冲锋后爆发
+        ELSE `SpellVisualID_1`
+    END
+WHERE `ID` BETWEEN 89001 AND 89028;
+
+-- ============================================
 -- 装备特效绑定：写入 item_template.spellid_2
 -- spelltrigger: 1=装备被动 2=命中概率触发
 -- ============================================
