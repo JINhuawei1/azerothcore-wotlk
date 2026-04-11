@@ -119,7 +119,7 @@ CREATE TABLE `_深渊装备模板` (
   `装备名称` varchar(64) NOT NULL DEFAULT '' COMMENT '装备名称',
   `装备类型` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '1=普通底材 2=唯一装备',
   `来源章节` smallint unsigned NOT NULL DEFAULT 0 COMMENT '来源章节',
-  `来源模式` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '1=通用 2=深渊 3=腐化 4=轮回',
+  `来源模式` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '1=正传 2=深渊 3=腐化 4=轮回 5=神器套装',
   `部位掩码` int unsigned NOT NULL DEFAULT 0 COMMENT '部位mask',
   `幕ID` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '所属幕',
   `基础装等` smallint unsigned NOT NULL DEFAULT 0 COMMENT '基础装等',

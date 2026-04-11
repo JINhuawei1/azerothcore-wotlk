@@ -10957,6 +10957,7 @@ void Player::AddSpellAndCategoryCooldowns(SpellInfo const* spellInfo, uint32 ite
                     break;
                 }
             }
+
         }
     }
 

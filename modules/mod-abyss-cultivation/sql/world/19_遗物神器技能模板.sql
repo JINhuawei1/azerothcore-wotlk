@@ -676,6 +676,32 @@ UPDATE _wydbc_spell SET
   `SpellDifficultyID` = IFNULL(`SpellDifficultyID`, 0)
 WHERE ID BETWEEN 89101 AND 89181;
 
+-- 遗物 / 神器槽位加成展示 spell：只用于物品 tooltip 展示，不参与真实触发
+DELETE FROM `_wydbc_spell` WHERE `ID` BETWEEN 89601 AND 89604;
+DELETE FROM `spell_dbc` WHERE `ID` BETWEEN 89601 AND 89604;
+
+INSERT INTO `_wydbc_spell`
+(
+  `ID`, `Attributes`, `RangeIndex`, `DurationIndex`, `Effect_1`, `ImplicitTargetA_1`, `EffectAura_1`,
+  `SpellVisualID_1`, `SpellIconID`, `ActiveIconID`,
+  `Name_Lang_deDE`,
+  `Description_Lang_deDE`,
+  `AuraDescription_Lang_deDE`,
+  `SchoolMask`
+)
+VALUES
+(89601, 64, 1, 21, 6, 1, 4, 0, 0, 0, '章节遗物主槽加成', '章节遗物主槽加成：全属性+2.0%，生命+2.0%，护甲+1.5%，攻击+1.6%，法术+1.8%。', '章节遗物主槽加成：全属性+2.0%，生命+2.0%，护甲+1.5%，攻击+1.6%，法术+1.8%。', 1),
+(89602, 64, 1, 21, 6, 1, 4, 0, 0, 0, '章节遗物副槽加成', '章节遗物副槽加成：全属性+1.0%，生命+1.0%，护甲+0.8%，攻击+0.8%，法术+0.9%。', '章节遗物副槽加成：全属性+1.0%，生命+1.0%，护甲+0.8%，攻击+0.8%，法术+0.9%。', 1),
+(89603, 64, 1, 21, 6, 1, 4, 0, 0, 0, '阶段神器槽加成', '阶段神器槽加成：全属性+5.0%，生命+5.0%，护甲+3.8%，攻击+4.0%，法术+4.5%。', '阶段神器槽加成：全属性+5.0%，生命+5.0%，护甲+3.8%，攻击+4.0%，法术+4.5%。', 1),
+(89604, 64, 1, 21, 6, 1, 4, 0, 0, 0, '终极神器槽加成', '终极神器槽加成：全属性+10.0%，生命+10.0%，护甲+7.5%，攻击+8.0%，法术+9.0%。', '终极神器槽加成：全属性+10.0%，生命+10.0%，护甲+7.5%，攻击+8.0%，法术+9.0%。', 1);
+
+REPLACE INTO `spell_dbc`
+(`ID`, `Attributes`, `RangeIndex`, `DurationIndex`, `Effect_1`, `ImplicitTargetA_1`, `EffectAura_1`, `SpellVisualID_1`, `SpellIconID`, `ActiveIconID`, `Name_Lang_deDE`, `Description_Lang_deDE`, `AuraDescription_Lang_deDE`, `SchoolMask`)
+SELECT
+  `ID`, `Attributes`, `RangeIndex`, `DurationIndex`, `Effect_1`, `ImplicitTargetA_1`, `EffectAura_1`, `SpellVisualID_1`, `SpellIconID`, `ActiveIconID`, `Name_Lang_deDE`, `Description_Lang_deDE`, `AuraDescription_Lang_deDE`, `SchoolMask`
+FROM `_wydbc_spell`
+WHERE `ID` BETWEEN 89601 AND 89604;
+
 
 -- 注意：
 -- 深渊遗物 / 神器的真实触发时机由 mod-abyss-cultivation 运行时逻辑负责，
@@ -684,12 +710,94 @@ UPDATE `item_template`
 SET
   `spellid_1` = 0,
   `spelltrigger_1` = 0,
+  `spellid_2` = 0,
+  `spelltrigger_2` = 0,
+  `spellid_3` = 0,
+  `spelltrigger_3` = 0,
+  `spellcharges_1` = 0,
+  `spellcharges_2` = 0,
+  `spellcharges_3` = 0,
+  `spellppmRate_1` = 0,
+  `spellppmRate_2` = 0,
+  `spellppmRate_3` = 0,
+  `spellcooldown_1` = -1,
+  `spellcooldown_2` = -1,
+  `spellcooldown_3` = -1,
+  `spellcategory_1` = 0,
+  `spellcategory_2` = 0,
+  `spellcategory_3` = 0,
+  `spellcategorycooldown_1` = -1,
+  `spellcategorycooldown_2` = -1,
+  `spellcategorycooldown_3` = -1
+WHERE (`entry` BETWEEN 950001 AND 950074)
+   OR (`entry` BETWEEN 960001 AND 960006)
+   OR `entry` = 970001;
+
+-- 遗物 / 神器 tooltip：直接显示 Spell.dbc 描述，插件顶部面板不再重复拼接
+UPDATE `item_template`
+SET `description` = ''
+WHERE (`entry` BETWEEN 950001 AND 950074)
+   OR (`entry` BETWEEN 960001 AND 960006)
+   OR `entry` = 970001;
+
+UPDATE `item_template`
+SET
+  `spellid_1` = 89601,
+  `spelltrigger_1` = 1,
   `spellcharges_1` = 0,
   `spellppmRate_1` = 0,
   `spellcooldown_1` = -1,
   `spellcategory_1` = 0,
-  `spellcategorycooldown_1` = -1
-WHERE (`entry` BETWEEN 950001 AND 950074)
-   OR (`entry` BETWEEN 960001 AND 960006)
-   OR `entry` = 970001;
+  `spellcategorycooldown_1` = -1,
+  `spellid_2` = 89602,
+  `spelltrigger_2` = 1,
+  `spellcharges_2` = 0,
+  `spellppmRate_2` = 0,
+  `spellcooldown_2` = -1,
+  `spellcategory_2` = 0,
+  `spellcategorycooldown_2` = -1,
+  `spellid_3` = 89100 + (`entry` - 950000),
+  `spelltrigger_3` = 1,
+  `spellcharges_3` = 0,
+  `spellppmRate_3` = 0,
+  `spellcooldown_3` = -1,
+  `spellcategory_3` = 0,
+  `spellcategorycooldown_3` = -1
+WHERE `entry` BETWEEN 950001 AND 950074;
+
+UPDATE `item_template`
+SET
+  `spellid_1` = 89603,
+  `spelltrigger_1` = 1,
+  `spellcharges_1` = 0,
+  `spellppmRate_1` = 0,
+  `spellcooldown_1` = -1,
+  `spellcategory_1` = 0,
+  `spellcategorycooldown_1` = -1,
+  `spellid_2` = 89174 + (`entry` - 960000),
+  `spelltrigger_2` = 1,
+  `spellcharges_2` = 0,
+  `spellppmRate_2` = 0,
+  `spellcooldown_2` = -1,
+  `spellcategory_2` = 0,
+  `spellcategorycooldown_2` = -1
+WHERE `entry` BETWEEN 960001 AND 960006;
+
+UPDATE `item_template`
+SET
+  `spellid_1` = 89604,
+  `spelltrigger_1` = 1,
+  `spellcharges_1` = 0,
+  `spellppmRate_1` = 0,
+  `spellcooldown_1` = -1,
+  `spellcategory_1` = 0,
+  `spellcategorycooldown_1` = -1,
+  `spellid_2` = 89181,
+  `spelltrigger_2` = 1,
+  `spellcharges_2` = 0,
+  `spellppmRate_2` = 0,
+  `spellcooldown_2` = -1,
+  `spellcategory_2` = 0,
+  `spellcategorycooldown_2` = -1
+WHERE `entry` = 970001;
 

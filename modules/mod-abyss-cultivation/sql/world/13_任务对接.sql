@@ -151,6 +151,14 @@ FROM `_深渊任务模板对接` q
 JOIN `_深渊章节配置` c ON c.`章节ID` = q.`章节ID`
 WHERE q.`任务ID` BETWEEN 700001 AND 740074;
 
+-- 官方锚点首领名称直接同步世界库，避免手填名称与 creature_template 不一致
+UPDATE `_深渊首领配置` ab
+JOIN `creature_template` ct ON ct.`entry` = ab.`首领入口`
+SET ab.`首领名称` = ct.`name`
+WHERE ab.`首领类型` = 1
+  AND ct.`name` IS NOT NULL
+  AND ct.`name` <> '';
+
 -- 起始任务：要求击败章节锚点/关键首领，不再自动完成
 UPDATE `quest_template` qt
 JOIN `_深渊任务模板对接` q ON q.`任务ID` = qt.`ID`

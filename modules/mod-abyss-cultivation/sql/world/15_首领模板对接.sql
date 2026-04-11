@@ -4,13 +4,13 @@
 -- ============================================
 
 DELETE FROM `creature_template_addon`
-WHERE `entry` BETWEEN 910001 AND 910074 OR `entry` BETWEEN 919001 AND 919012;
+WHERE `entry` BETWEEN 910001 AND 910074 OR `entry` BETWEEN 919001 AND 919074;
 
 DELETE FROM `creature_template_model`
-WHERE `CreatureID` BETWEEN 910001 AND 910074 OR `CreatureID` BETWEEN 919001 AND 919012;
+WHERE `CreatureID` BETWEEN 910001 AND 910074 OR `CreatureID` BETWEEN 919001 AND 919074;
 
 DELETE FROM `creature_template`
-WHERE `entry` BETWEEN 910001 AND 910074 OR `entry` BETWEEN 919001 AND 919012;
+WHERE `entry` BETWEEN 910001 AND 910074 OR `entry` BETWEEN 919001 AND 919074;
 
 REPLACE INTO `creature_template`
 (`entry`, `difficulty_entry_1`, `difficulty_entry_2`, `difficulty_entry_3`, `KillCredit1`, `KillCredit2`, `name`, `subname`, `IconName`, `gossip_menu_id`,
@@ -88,7 +88,7 @@ JOIN `creature_template` s
     WHEN c.`最终首领入口` <> 0 THEN c.`最终首领入口`
     ELSE c.`锚点首领入口`
   END
-WHERE d.`首领入口` BETWEEN 910001 AND 910074 OR d.`首领入口` BETWEEN 919001 AND 919012;
+WHERE d.`首领入口` BETWEEN 910001 AND 910074 OR d.`首领入口` BETWEEN 919001 AND 919074;
 
 -- 兜底：处理章节骨架不存在或秘藏首领章节ID=0时的 creature_template 生成
 REPLACE INTO `creature_template`
@@ -172,8 +172,7 @@ JOIN `creature_template` s
     WHEN d.`首领类型` = 3 AND d.`幕ID` = 6 THEN 15990
     ELSE 0
   END
-WHERE d.`首领入口` = 910046
-   OR d.`首领入口` BETWEEN 919001 AND 919012;
+WHERE d.`首领入口` = 910046;
 
 REPLACE INTO `creature_template_model`
 (`CreatureID`, `Idx`, `CreatureDisplayID`, `DisplayScale`, `Probability`, `VerifiedBuild`)
@@ -191,7 +190,7 @@ JOIN `creature_template_model` m
     WHEN c.`最终首领入口` <> 0 THEN c.`最终首领入口`
     ELSE c.`锚点首领入口`
   END
-WHERE d.`首领入口` BETWEEN 910001 AND 910074 OR d.`首领入口` BETWEEN 919001 AND 919012;
+WHERE d.`首领入口` BETWEEN 910001 AND 910074 OR d.`首领入口` BETWEEN 919001 AND 919074;
 
 -- 兜底：处理章节骨架不存在或秘藏首领章节ID=0时的模型复制
 REPLACE INTO `creature_template_model`
@@ -215,8 +214,7 @@ JOIN `creature_template_model` m
     WHEN d.`首领类型` = 3 AND d.`幕ID` = 6 THEN 15990
     ELSE 0
   END
-WHERE d.`首领入口` = 910046
-   OR d.`首领入口` BETWEEN 919001 AND 919012;
+WHERE d.`首领入口` = 910046;
 
 REPLACE INTO `creature_template_addon`
 (`entry`, `path_id`, `mount`, `bytes1`, `bytes2`, `emote`, `visibilityDistanceType`, `auras`)
@@ -231,9 +229,9 @@ SELECT
   NULL
 FROM `_深渊自定义首领对接` d
 JOIN `creature_template` ct ON ct.`entry` = d.`首领入口`
-WHERE d.`首领入口` BETWEEN 910001 AND 910074 OR d.`首领入口` BETWEEN 919001 AND 919012;
+WHERE d.`首领入口` BETWEEN 910001 AND 910074 OR d.`首领入口` BETWEEN 919001 AND 919074;
 
 UPDATE `_深渊自定义首领对接`
 SET `对接状态` = 1
-WHERE `首领入口` BETWEEN 910001 AND 910074 OR `首领入口` BETWEEN 919001 AND 919012;
+WHERE `首领入口` BETWEEN 910001 AND 910074 OR `首领入口` BETWEEN 919001 AND 919074;
 

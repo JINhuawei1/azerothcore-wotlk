@@ -4,7 +4,7 @@
 -- ============================================
 
 DELETE FROM `item_template`
-WHERE (`entry` BETWEEN 950001 AND 992054)
+WHERE (`entry` BETWEEN 950001 AND 993666)
    OR (`entry` BETWEEN 960001 AND 960006)
    OR `entry` = 970001;
 
@@ -157,7 +157,7 @@ SELECT
   0
 FROM `_深渊物品模板对接` d
 LEFT JOIN `_深渊章节配置` c ON c.`章节ID` = d.`章节ID`
-WHERE (d.`物品ID` BETWEEN 950001 AND 992054)
+WHERE (d.`物品ID` BETWEEN 950001 AND 993666)
    OR (d.`物品ID` BETWEEN 960001 AND 960006)
    OR d.`物品ID` = 970001;
 */
@@ -237,7 +237,7 @@ SELECT
   0
 FROM `_深渊物品模板对接` d
 LEFT JOIN `_深渊章节配置` c ON c.`章节ID` = d.`章节ID`
-WHERE (d.`物品ID` BETWEEN 950001 AND 992054)
+WHERE (d.`物品ID` BETWEEN 950001 AND 993666)
    OR (d.`物品ID` BETWEEN 960001 AND 960006)
    OR d.`物品ID` = 970001;
 
@@ -301,7 +301,7 @@ LEFT JOIN `_深渊章节配置` c ON c.`章节ID` = d.`章节ID`
 LEFT JOIN `item_template` it ON it.`entry` = d.`物品ID`
 WHERE it.`entry` IS NULL
   AND (
-    (d.`物品ID` BETWEEN 950001 AND 992054)
+    (d.`物品ID` BETWEEN 950001 AND 993666)
     OR (d.`物品ID` BETWEEN 960001 AND 960006)
     OR d.`物品ID` = 970001
   );
@@ -337,7 +337,7 @@ SET
     WHEN `Quality` = 4 THEN GREATEST(`ItemLevel` * 150, 1)
     ELSE GREATEST(`ItemLevel` * 100, 1)
   END
-WHERE (`entry` BETWEEN 950001 AND 992054)
+WHERE (`entry` BETWEEN 950001 AND 993666)
    OR (`entry` BETWEEN 960001 AND 960006)
    OR `entry` = 970001;
 
@@ -352,6 +352,19 @@ SET
   END,
   it.`subclass` = CASE
     WHEN e.`部位掩码` = 1 THEN CASE
+      WHEN e.`伤害类型` = 5 THEN 0
+      WHEN e.`伤害类型` = 6 THEN 4
+      WHEN e.`伤害类型` = 7 THEN 15
+      WHEN e.`伤害类型` = 8 THEN 13
+      WHEN e.`伤害类型` = 9 THEN 8
+      WHEN e.`伤害类型` = 10 THEN 1
+      WHEN e.`伤害类型` = 11 THEN 5
+      WHEN e.`伤害类型` = 12 THEN 6
+      WHEN e.`伤害类型` = 13 THEN 10
+      WHEN e.`伤害类型` = 14 THEN 2
+      WHEN e.`伤害类型` = 15 THEN 3
+      WHEN e.`伤害类型` = 16 THEN 18
+      WHEN e.`伤害类型` = 17 THEN 19
       WHEN e.`伤害类型` = 2 THEN 10
       WHEN e.`伤害类型` = 3 THEN 4
       WHEN e.`伤害类型` = 4 THEN 10
@@ -366,16 +379,21 @@ SET
       ELSE 0
     END
   END,
-  it.`InventoryType` = CASE e.`部位掩码`
-    WHEN 1 THEN 13
-    WHEN 2 THEN 1
-    WHEN 4 THEN 5
-    WHEN 16 THEN 6
-    WHEN 32 THEN 8
-    WHEN 64 THEN 11
-    WHEN 128 THEN 12
-    WHEN 256 THEN 16
-    WHEN 512 THEN 23
+  it.`InventoryType` = CASE
+    WHEN e.`部位掩码` = 1 THEN CASE
+      WHEN e.`伤害类型` IN (9, 10, 11, 12, 13) THEN 17
+      WHEN e.`伤害类型` = 14 THEN 15
+      WHEN e.`伤害类型` IN (15, 16, 17) THEN 26
+      ELSE 13
+    END
+    WHEN e.`部位掩码` = 2 THEN 1
+    WHEN e.`部位掩码` = 4 THEN 5
+    WHEN e.`部位掩码` = 16 THEN 6
+    WHEN e.`部位掩码` = 32 THEN 8
+    WHEN e.`部位掩码` = 64 THEN 11
+    WHEN e.`部位掩码` = 128 THEN 12
+    WHEN e.`部位掩码` = 256 THEN 16
+    WHEN e.`部位掩码` = 512 THEN 23
     ELSE 0
   END,
   it.`ItemLevel` = e.`基础装等`,
@@ -392,8 +410,24 @@ SET
     ELSE 0
   END,
   it.`stackable` = 1,
+  it.`itemset` = CASE
+    WHEN e.`套装ID` <> 0 AND e.`来源模式` BETWEEN 1 AND 4
+      THEN 1001 + ((e.`来源章节` - 1) * 4) + (e.`来源模式` - 1)
+    WHEN e.`套装ID` <> 0 AND e.`来源模式` = 5
+      THEN 1297 + (e.`来源章节` - 1)
+    ELSE 0
+  END,
   it.`description` = e.`风味文本`
-WHERE it.`entry` BETWEEN 980001 AND 992054;
+WHERE it.`entry` BETWEEN 980001 AND 993666;
+
+-- 秘藏神器 / 神器套装部件：tooltip 统一走装备法术说明，不保留底部黄色风味描述
+UPDATE `item_template` it
+JOIN `_深渊装备模板` e ON e.`物品模板ID` = it.`entry`
+SET
+  it.`description` = ''
+WHERE e.`装备类型` = 2
+  AND e.`是否启用` = 1
+  AND it.`entry` BETWEEN 980001 AND 981628;
 
 -- 章节遗物：作为关键奖励物品，统一设为任务类佩戴/背包触发物
 UPDATE `item_template` it
@@ -436,6 +470,8 @@ WHERE it.`entry` = r.`物品ID`
 -- 遗物 / 神器：像普通装备一样附加 10 条属性，便于在物品 tooltip 中直接展示
 -- 属性顺序：
 -- 1敏捷 2力量 3智力 4精神 5耐力 6命中等级 7暴击等级 8急速等级 9攻击强度 10法术强度
+-- 调整目标：章节遗物只做阶段强化，阶段神器明显高于遗物但不跨档，终极神器高于阶段神器但不压穿整条装备线
+-- 展示目标：950001-970001 同样统一成“同一件物品内部 10 条属性显示同一个数”，避免 tooltip 数字参差不齐
 UPDATE `item_template` it
 JOIN `_深渊遗物配置` r ON r.`物品ID` = it.`entry`
 SET
@@ -443,93 +479,93 @@ SET
   it.`stat_type1` = 3,
   it.`stat_value1` = GREATEST(1, FLOOR((
     CASE r.`类型`
-      WHEN 1 THEN 120 + r.`幕ID` * 20 + LEAST(GREATEST(r.`关联章节ID`, 1), 74)
-      WHEN 2 THEN 220 + r.`幕ID` * 30
-      WHEN 3 THEN 360 + r.`幕ID` * 40
-      ELSE 120
+      WHEN 1 THEN (70 + r.`幕ID` * 12 + LEAST(GREATEST(r.`关联章节ID`, 1), 74)) * 0.09
+      WHEN 2 THEN (118 + r.`幕ID` * 18) * 0.12
+      WHEN 3 THEN (220 + r.`幕ID` * 24) * 0.14
+      ELSE 7
     END
-  ) * GREATEST(r.`权重_敏捷`, 6) / 100)),
+  ))),
   it.`stat_type2` = 4,
   it.`stat_value2` = GREATEST(1, FLOOR((
     CASE r.`类型`
-      WHEN 1 THEN 120 + r.`幕ID` * 20 + LEAST(GREATEST(r.`关联章节ID`, 1), 74)
-      WHEN 2 THEN 220 + r.`幕ID` * 30
-      WHEN 3 THEN 360 + r.`幕ID` * 40
-      ELSE 120
+      WHEN 1 THEN (70 + r.`幕ID` * 12 + LEAST(GREATEST(r.`关联章节ID`, 1), 74)) * 0.09
+      WHEN 2 THEN (118 + r.`幕ID` * 18) * 0.12
+      WHEN 3 THEN (220 + r.`幕ID` * 24) * 0.14
+      ELSE 7
     END
-  ) * GREATEST(r.`权重_力量`, 6) / 100)),
+  ))),
   it.`stat_type3` = 5,
   it.`stat_value3` = GREATEST(1, FLOOR((
     CASE r.`类型`
-      WHEN 1 THEN 120 + r.`幕ID` * 20 + LEAST(GREATEST(r.`关联章节ID`, 1), 74)
-      WHEN 2 THEN 220 + r.`幕ID` * 30
-      WHEN 3 THEN 360 + r.`幕ID` * 40
-      ELSE 120
+      WHEN 1 THEN (70 + r.`幕ID` * 12 + LEAST(GREATEST(r.`关联章节ID`, 1), 74)) * 0.09
+      WHEN 2 THEN (118 + r.`幕ID` * 18) * 0.12
+      WHEN 3 THEN (220 + r.`幕ID` * 24) * 0.14
+      ELSE 7
     END
-  ) * GREATEST(r.`权重_智力`, 6) / 100)),
+  ))),
   it.`stat_type4` = 6,
   it.`stat_value4` = GREATEST(1, FLOOR((
     CASE r.`类型`
-      WHEN 1 THEN 120 + r.`幕ID` * 20 + LEAST(GREATEST(r.`关联章节ID`, 1), 74)
-      WHEN 2 THEN 220 + r.`幕ID` * 30
-      WHEN 3 THEN 360 + r.`幕ID` * 40
-      ELSE 120
+      WHEN 1 THEN (70 + r.`幕ID` * 12 + LEAST(GREATEST(r.`关联章节ID`, 1), 74)) * 0.09
+      WHEN 2 THEN (118 + r.`幕ID` * 18) * 0.12
+      WHEN 3 THEN (220 + r.`幕ID` * 24) * 0.14
+      ELSE 7
     END
-  ) * GREATEST(r.`权重_精神`, 6) / 100)),
+  ))),
   it.`stat_type5` = 7,
   it.`stat_value5` = GREATEST(1, FLOOR((
     CASE r.`类型`
-      WHEN 1 THEN 120 + r.`幕ID` * 20 + LEAST(GREATEST(r.`关联章节ID`, 1), 74)
-      WHEN 2 THEN 220 + r.`幕ID` * 30
-      WHEN 3 THEN 360 + r.`幕ID` * 40
-      ELSE 120
+      WHEN 1 THEN (70 + r.`幕ID` * 12 + LEAST(GREATEST(r.`关联章节ID`, 1), 74)) * 0.09
+      WHEN 2 THEN (118 + r.`幕ID` * 18) * 0.12
+      WHEN 3 THEN (220 + r.`幕ID` * 24) * 0.14
+      ELSE 7
     END
-  ) * GREATEST(r.`权重_耐力`, 8) / 100)),
+  ))),
   it.`stat_type6` = 31,
   it.`stat_value6` = GREATEST(1, FLOOR((
     CASE r.`类型`
-      WHEN 1 THEN 120 + r.`幕ID` * 20 + LEAST(GREATEST(r.`关联章节ID`, 1), 74)
-      WHEN 2 THEN 220 + r.`幕ID` * 30
-      WHEN 3 THEN 360 + r.`幕ID` * 40
-      ELSE 120
+      WHEN 1 THEN (70 + r.`幕ID` * 12 + LEAST(GREATEST(r.`关联章节ID`, 1), 74)) * 0.09
+      WHEN 2 THEN (118 + r.`幕ID` * 18) * 0.12
+      WHEN 3 THEN (220 + r.`幕ID` * 24) * 0.14
+      ELSE 7
     END
-  ) * GREATEST(r.`权重_命中等级`, 6) / 100)),
+  ))),
   it.`stat_type7` = 32,
   it.`stat_value7` = GREATEST(1, FLOOR((
     CASE r.`类型`
-      WHEN 1 THEN 120 + r.`幕ID` * 20 + LEAST(GREATEST(r.`关联章节ID`, 1), 74)
-      WHEN 2 THEN 220 + r.`幕ID` * 30
-      WHEN 3 THEN 360 + r.`幕ID` * 40
-      ELSE 120
+      WHEN 1 THEN (70 + r.`幕ID` * 12 + LEAST(GREATEST(r.`关联章节ID`, 1), 74)) * 0.09
+      WHEN 2 THEN (118 + r.`幕ID` * 18) * 0.12
+      WHEN 3 THEN (220 + r.`幕ID` * 24) * 0.14
+      ELSE 7
     END
-  ) * GREATEST(r.`权重_暴击等级`, 6) / 100)),
+  ))),
   it.`stat_type8` = 36,
   it.`stat_value8` = GREATEST(1, FLOOR((
     CASE r.`类型`
-      WHEN 1 THEN 120 + r.`幕ID` * 20 + LEAST(GREATEST(r.`关联章节ID`, 1), 74)
-      WHEN 2 THEN 220 + r.`幕ID` * 30
-      WHEN 3 THEN 360 + r.`幕ID` * 40
-      ELSE 120
+      WHEN 1 THEN (70 + r.`幕ID` * 12 + LEAST(GREATEST(r.`关联章节ID`, 1), 74)) * 0.09
+      WHEN 2 THEN (118 + r.`幕ID` * 18) * 0.12
+      WHEN 3 THEN (220 + r.`幕ID` * 24) * 0.14
+      ELSE 7
     END
-  ) * GREATEST(r.`权重_急速等级`, 6) / 100)),
+  ))),
   it.`stat_type9` = 38,
   it.`stat_value9` = GREATEST(1, FLOOR((
     CASE r.`类型`
-      WHEN 1 THEN 120 + r.`幕ID` * 20 + LEAST(GREATEST(r.`关联章节ID`, 1), 74)
-      WHEN 2 THEN 220 + r.`幕ID` * 30
-      WHEN 3 THEN 360 + r.`幕ID` * 40
-      ELSE 120
+      WHEN 1 THEN (70 + r.`幕ID` * 12 + LEAST(GREATEST(r.`关联章节ID`, 1), 74)) * 0.09
+      WHEN 2 THEN (118 + r.`幕ID` * 18) * 0.12
+      WHEN 3 THEN (220 + r.`幕ID` * 24) * 0.14
+      ELSE 7
     END
-  ) * GREATEST(r.`权重_攻击强度`, 6) / 100)),
+  ))),
   it.`stat_type10` = 45,
   it.`stat_value10` = GREATEST(1, FLOOR((
     CASE r.`类型`
-      WHEN 1 THEN 120 + r.`幕ID` * 20 + LEAST(GREATEST(r.`关联章节ID`, 1), 74)
-      WHEN 2 THEN 220 + r.`幕ID` * 30
-      WHEN 3 THEN 360 + r.`幕ID` * 40
-      ELSE 120
+      WHEN 1 THEN (70 + r.`幕ID` * 12 + LEAST(GREATEST(r.`关联章节ID`, 1), 74)) * 0.09
+      WHEN 2 THEN (118 + r.`幕ID` * 18) * 0.12
+      WHEN 3 THEN (220 + r.`幕ID` * 24) * 0.14
+      ELSE 7
     END
-  ) * GREATEST(r.`权重_法术强度`, 6) / 100))
+  )))
 WHERE it.`entry` = r.`物品ID`
   AND it.`entry` BETWEEN 950001 AND 970001;
 
@@ -592,21 +628,21 @@ SET
   it.`stat_type10` = 0,
   it.`stat_value10` = 0,
   it.`delay` = CASE
-    WHEN it.`class` = 2 AND it.`InventoryType` IN (13, 17, 21, 22) THEN 2200
+    WHEN it.`class` = 2 AND it.`InventoryType` IN (13, 15, 17, 21, 22, 26) THEN 2200
     ELSE it.`delay`
   END,
   it.`dmg_min1` = CASE
-    WHEN it.`class` = 2 AND it.`InventoryType` IN (13, 17, 21, 22)
+    WHEN it.`class` = 2 AND it.`InventoryType` IN (13, 15, 17, 21, 22, 26)
       THEN GREATEST(1, FLOOR(e.`基础装等` * 1.6))
     ELSE 0
   END,
   it.`dmg_max1` = CASE
-    WHEN it.`class` = 2 AND it.`InventoryType` IN (13, 17, 21, 22)
+    WHEN it.`class` = 2 AND it.`InventoryType` IN (13, 15, 17, 21, 22, 26)
       THEN GREATEST(2, FLOOR(e.`基础装等` * 2.4))
     ELSE 0
   END,
   it.`dmg_type1` = CASE
-    WHEN it.`class` = 2 AND it.`InventoryType` IN (13, 17, 21, 22) THEN 0
+    WHEN it.`class` = 2 AND it.`InventoryType` IN (13, 15, 17, 21, 22, 26) THEN 0
     ELSE 0
   END,
   it.`armor` = CASE
@@ -621,13 +657,46 @@ SET
     ELSE 0
   END,
   it.`MaxDurability` = CASE
-    WHEN it.`class` = 2 AND it.`InventoryType` IN (13, 17, 21, 22) THEN FLOOR(e.`基础装等` * 1.2)
+    WHEN it.`class` = 2 AND it.`InventoryType` IN (13, 15, 17, 21, 22, 26) THEN FLOOR(e.`基础装等` * 1.2)
     WHEN it.`class` = 4 AND it.`InventoryType` IN (1, 5, 6, 8, 16) THEN FLOOR(e.`基础装等` * 1.8)
     ELSE 0
   END
 WHERE it.`entry` = e.`物品模板ID`;
 
--- 专属装备：重做为 10 条固定属性，并按来源模式成长
+-- 深渊底材：统一改为 10 条全职业属性，避免只出现力量/智力倾向
+-- 属性顺序：
+-- 1敏捷 2力量 3智力 4精神 5耐力 6命中等级 7暴击等级 8急速等级 9攻击强度 10法术强度
+-- 档位目标：正传略高于官方，深渊/腐化/轮回逐档递增
+-- 展示目标：同一件装备内部的 10 条属性统一写成同一个数字，避免 tooltip 看起来参差不齐
+UPDATE `item_template` it
+JOIN `_深渊装备模板` e ON e.`物品模板ID` = it.`entry`
+SET
+  it.`StatsCount` = CASE WHEN e.`装备类型` = 1 THEN 10 ELSE it.`StatsCount` END,
+  it.`stat_type1` = CASE WHEN e.`装备类型` = 1 THEN 3 ELSE it.`stat_type1` END,
+  it.`stat_value1` = CASE WHEN e.`装备类型` = 1 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.10 * CASE e.`来源模式` WHEN 2 THEN 1.08 WHEN 3 THEN 1.16 WHEN 4 THEN 1.24 ELSE 1.00 END)) ELSE it.`stat_value1` END,
+  it.`stat_type2` = CASE WHEN e.`装备类型` = 1 THEN 4 ELSE it.`stat_type2` END,
+  it.`stat_value2` = CASE WHEN e.`装备类型` = 1 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.10 * CASE e.`来源模式` WHEN 2 THEN 1.08 WHEN 3 THEN 1.16 WHEN 4 THEN 1.24 ELSE 1.00 END)) ELSE it.`stat_value2` END,
+  it.`stat_type3` = CASE WHEN e.`装备类型` = 1 THEN 5 ELSE it.`stat_type3` END,
+  it.`stat_value3` = CASE WHEN e.`装备类型` = 1 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.10 * CASE e.`来源模式` WHEN 2 THEN 1.08 WHEN 3 THEN 1.16 WHEN 4 THEN 1.24 ELSE 1.00 END)) ELSE it.`stat_value3` END,
+  it.`stat_type4` = CASE WHEN e.`装备类型` = 1 THEN 6 ELSE it.`stat_type4` END,
+  it.`stat_value4` = CASE WHEN e.`装备类型` = 1 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.10 * CASE e.`来源模式` WHEN 2 THEN 1.08 WHEN 3 THEN 1.16 WHEN 4 THEN 1.24 ELSE 1.00 END)) ELSE it.`stat_value4` END,
+  it.`stat_type5` = CASE WHEN e.`装备类型` = 1 THEN 7 ELSE it.`stat_type5` END,
+  it.`stat_value5` = CASE WHEN e.`装备类型` = 1 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.10 * CASE e.`来源模式` WHEN 2 THEN 1.08 WHEN 3 THEN 1.16 WHEN 4 THEN 1.24 ELSE 1.00 END)) ELSE it.`stat_value5` END,
+  it.`stat_type6` = CASE WHEN e.`装备类型` = 1 THEN 31 ELSE it.`stat_type6` END,
+  it.`stat_value6` = CASE WHEN e.`装备类型` = 1 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.10 * CASE e.`来源模式` WHEN 2 THEN 1.08 WHEN 3 THEN 1.16 WHEN 4 THEN 1.24 ELSE 1.00 END)) ELSE it.`stat_value6` END,
+  it.`stat_type7` = CASE WHEN e.`装备类型` = 1 THEN 32 ELSE it.`stat_type7` END,
+  it.`stat_value7` = CASE WHEN e.`装备类型` = 1 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.10 * CASE e.`来源模式` WHEN 2 THEN 1.08 WHEN 3 THEN 1.16 WHEN 4 THEN 1.24 ELSE 1.00 END)) ELSE it.`stat_value7` END,
+  it.`stat_type8` = CASE WHEN e.`装备类型` = 1 THEN 36 ELSE it.`stat_type8` END,
+  it.`stat_value8` = CASE WHEN e.`装备类型` = 1 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.10 * CASE e.`来源模式` WHEN 2 THEN 1.08 WHEN 3 THEN 1.16 WHEN 4 THEN 1.24 ELSE 1.00 END)) ELSE it.`stat_value8` END,
+  it.`stat_type9` = CASE WHEN e.`装备类型` = 1 THEN 38 ELSE it.`stat_type9` END,
+  it.`stat_value9` = CASE WHEN e.`装备类型` = 1 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.10 * CASE e.`来源模式` WHEN 2 THEN 1.08 WHEN 3 THEN 1.16 WHEN 4 THEN 1.24 ELSE 1.00 END)) ELSE it.`stat_value9` END,
+  it.`stat_type10` = CASE WHEN e.`装备类型` = 1 THEN 45 ELSE it.`stat_type10` END,
+  it.`stat_value10` = CASE WHEN e.`装备类型` = 1 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.10 * CASE e.`来源模式` WHEN 2 THEN 1.08 WHEN 3 THEN 1.16 WHEN 4 THEN 1.24 ELSE 1.00 END)) ELSE it.`stat_value10` END
+WHERE it.`entry` = e.`物品模板ID`
+  AND e.`装备类型` = 1;
+
+-- 专属装备：重做为 10 条固定属性，并按来源层级成长
+-- 展示目标同样改为“同一件装备内部属性值统一”，优先保证观感整齐
 -- 属性顺序：
 -- 1敏捷 2力量 3智力 4精神 5耐力 6命中等级 7暴击等级 8急速等级 9攻击强度 10法术强度
 UPDATE `item_template` it
@@ -635,25 +704,25 @@ JOIN `_深渊装备模板` e ON e.`物品模板ID` = it.`entry`
 SET
   it.`StatsCount` = CASE WHEN e.`装备类型` = 2 THEN 10 ELSE it.`StatsCount` END,
   it.`stat_type1` = CASE WHEN e.`装备类型` = 2 THEN 3 ELSE it.`stat_type1` END,
-  it.`stat_value1` = CASE WHEN e.`装备类型` = 2 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.16 * CASE e.`来源模式` WHEN 2 THEN 1.15 WHEN 3 THEN 1.35 WHEN 4 THEN 1.60 ELSE 1.00 END)) ELSE it.`stat_value1` END,
+  it.`stat_value1` = CASE WHEN e.`装备类型` = 2 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.14 * CASE WHEN e.`是否来自秘藏首领` = 1 THEN 1.24 WHEN e.`来源模式` = 4 THEN 1.16 WHEN e.`来源模式` = 3 THEN 1.08 WHEN e.`来源模式` = 2 THEN 1.04 ELSE 1.00 END)) ELSE it.`stat_value1` END,
   it.`stat_type2` = CASE WHEN e.`装备类型` = 2 THEN 4 ELSE it.`stat_type2` END,
-  it.`stat_value2` = CASE WHEN e.`装备类型` = 2 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.16 * CASE e.`来源模式` WHEN 2 THEN 1.15 WHEN 3 THEN 1.35 WHEN 4 THEN 1.60 ELSE 1.00 END)) ELSE it.`stat_value2` END,
+  it.`stat_value2` = CASE WHEN e.`装备类型` = 2 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.14 * CASE WHEN e.`是否来自秘藏首领` = 1 THEN 1.24 WHEN e.`来源模式` = 4 THEN 1.16 WHEN e.`来源模式` = 3 THEN 1.08 WHEN e.`来源模式` = 2 THEN 1.04 ELSE 1.00 END)) ELSE it.`stat_value2` END,
   it.`stat_type3` = CASE WHEN e.`装备类型` = 2 THEN 5 ELSE it.`stat_type3` END,
-  it.`stat_value3` = CASE WHEN e.`装备类型` = 2 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.16 * CASE e.`来源模式` WHEN 2 THEN 1.15 WHEN 3 THEN 1.35 WHEN 4 THEN 1.60 ELSE 1.00 END)) ELSE it.`stat_value3` END,
+  it.`stat_value3` = CASE WHEN e.`装备类型` = 2 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.14 * CASE WHEN e.`是否来自秘藏首领` = 1 THEN 1.24 WHEN e.`来源模式` = 4 THEN 1.16 WHEN e.`来源模式` = 3 THEN 1.08 WHEN e.`来源模式` = 2 THEN 1.04 ELSE 1.00 END)) ELSE it.`stat_value3` END,
   it.`stat_type4` = CASE WHEN e.`装备类型` = 2 THEN 6 ELSE it.`stat_type4` END,
-  it.`stat_value4` = CASE WHEN e.`装备类型` = 2 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.12 * CASE e.`来源模式` WHEN 2 THEN 1.15 WHEN 3 THEN 1.35 WHEN 4 THEN 1.60 ELSE 1.00 END)) ELSE it.`stat_value4` END,
+  it.`stat_value4` = CASE WHEN e.`装备类型` = 2 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.14 * CASE WHEN e.`是否来自秘藏首领` = 1 THEN 1.24 WHEN e.`来源模式` = 4 THEN 1.16 WHEN e.`来源模式` = 3 THEN 1.08 WHEN e.`来源模式` = 2 THEN 1.04 ELSE 1.00 END)) ELSE it.`stat_value4` END,
   it.`stat_type5` = CASE WHEN e.`装备类型` = 2 THEN 7 ELSE it.`stat_type5` END,
-  it.`stat_value5` = CASE WHEN e.`装备类型` = 2 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.24 * CASE e.`来源模式` WHEN 2 THEN 1.15 WHEN 3 THEN 1.35 WHEN 4 THEN 1.60 ELSE 1.00 END)) ELSE it.`stat_value5` END,
+  it.`stat_value5` = CASE WHEN e.`装备类型` = 2 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.14 * CASE WHEN e.`是否来自秘藏首领` = 1 THEN 1.24 WHEN e.`来源模式` = 4 THEN 1.16 WHEN e.`来源模式` = 3 THEN 1.08 WHEN e.`来源模式` = 2 THEN 1.04 ELSE 1.00 END)) ELSE it.`stat_value5` END,
   it.`stat_type6` = CASE WHEN e.`装备类型` = 2 THEN 31 ELSE it.`stat_type6` END,
-  it.`stat_value6` = CASE WHEN e.`装备类型` = 2 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.11 * CASE e.`来源模式` WHEN 2 THEN 1.15 WHEN 3 THEN 1.35 WHEN 4 THEN 1.60 ELSE 1.00 END)) ELSE it.`stat_value6` END,
+  it.`stat_value6` = CASE WHEN e.`装备类型` = 2 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.14 * CASE WHEN e.`是否来自秘藏首领` = 1 THEN 1.24 WHEN e.`来源模式` = 4 THEN 1.16 WHEN e.`来源模式` = 3 THEN 1.08 WHEN e.`来源模式` = 2 THEN 1.04 ELSE 1.00 END)) ELSE it.`stat_value6` END,
   it.`stat_type7` = CASE WHEN e.`装备类型` = 2 THEN 32 ELSE it.`stat_type7` END,
-  it.`stat_value7` = CASE WHEN e.`装备类型` = 2 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.11 * CASE e.`来源模式` WHEN 2 THEN 1.15 WHEN 3 THEN 1.35 WHEN 4 THEN 1.60 ELSE 1.00 END)) ELSE it.`stat_value7` END,
+  it.`stat_value7` = CASE WHEN e.`装备类型` = 2 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.14 * CASE WHEN e.`是否来自秘藏首领` = 1 THEN 1.24 WHEN e.`来源模式` = 4 THEN 1.16 WHEN e.`来源模式` = 3 THEN 1.08 WHEN e.`来源模式` = 2 THEN 1.04 ELSE 1.00 END)) ELSE it.`stat_value7` END,
   it.`stat_type8` = CASE WHEN e.`装备类型` = 2 THEN 36 ELSE it.`stat_type8` END,
-  it.`stat_value8` = CASE WHEN e.`装备类型` = 2 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.11 * CASE e.`来源模式` WHEN 2 THEN 1.15 WHEN 3 THEN 1.35 WHEN 4 THEN 1.60 ELSE 1.00 END)) ELSE it.`stat_value8` END,
+  it.`stat_value8` = CASE WHEN e.`装备类型` = 2 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.14 * CASE WHEN e.`是否来自秘藏首领` = 1 THEN 1.24 WHEN e.`来源模式` = 4 THEN 1.16 WHEN e.`来源模式` = 3 THEN 1.08 WHEN e.`来源模式` = 2 THEN 1.04 ELSE 1.00 END)) ELSE it.`stat_value8` END,
   it.`stat_type9` = CASE WHEN e.`装备类型` = 2 THEN 38 ELSE it.`stat_type9` END,
-  it.`stat_value9` = CASE WHEN e.`装备类型` = 2 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.34 * CASE e.`来源模式` WHEN 2 THEN 1.15 WHEN 3 THEN 1.35 WHEN 4 THEN 1.60 ELSE 1.00 END)) ELSE it.`stat_value9` END,
+  it.`stat_value9` = CASE WHEN e.`装备类型` = 2 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.14 * CASE WHEN e.`是否来自秘藏首领` = 1 THEN 1.24 WHEN e.`来源模式` = 4 THEN 1.16 WHEN e.`来源模式` = 3 THEN 1.08 WHEN e.`来源模式` = 2 THEN 1.04 ELSE 1.00 END)) ELSE it.`stat_value9` END,
   it.`stat_type10` = CASE WHEN e.`装备类型` = 2 THEN 45 ELSE it.`stat_type10` END,
-  it.`stat_value10` = CASE WHEN e.`装备类型` = 2 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.34 * CASE e.`来源模式` WHEN 2 THEN 1.15 WHEN 3 THEN 1.35 WHEN 4 THEN 1.60 ELSE 1.00 END)) ELSE it.`stat_value10` END
+  it.`stat_value10` = CASE WHEN e.`装备类型` = 2 THEN GREATEST(1, FLOOR(e.`基础装等` * 0.14 * CASE WHEN e.`是否来自秘藏首领` = 1 THEN 1.24 WHEN e.`来源模式` = 4 THEN 1.16 WHEN e.`来源模式` = 3 THEN 1.08 WHEN e.`来源模式` = 2 THEN 1.04 ELSE 1.00 END)) ELSE it.`stat_value10` END
 WHERE it.`entry` = e.`物品模板ID`
   AND e.`装备类型` = 2;
 
@@ -735,6 +804,75 @@ UPDATE `item_template` SET
   `spellcooldown_1` = -1, `spellcategory_1` = 0, `spellcategorycooldown_1` = -1
 WHERE `entry` = 980012;
 
+-- 所有秘藏专属神器统一补首版被动触发骨架，避免只有少量样本才带被动
+UPDATE `item_template` it
+JOIN `_深渊装备模板` e ON e.`物品模板ID` = it.`entry`
+SET
+  it.`spellid_1` = CASE e.`部位掩码`
+    WHEN 1 THEN 75473
+    WHEN 512 THEN 64713
+    WHEN 2 THEN 71519
+    WHEN 4 THEN 71519
+    WHEN 16 THEN 67702
+    WHEN 32 THEN 67702
+    WHEN 64 THEN 60488
+    WHEN 128 THEN 64411
+    WHEN 256 THEN 60066
+    ELSE 60064
+  END,
+  it.`spelltrigger_1` = 1,
+  it.`spellcharges_1` = 0,
+  it.`spellppmRate_1` = 0,
+  it.`spellcooldown_1` = -1,
+  it.`spellcategory_1` = 0,
+  it.`spellcategorycooldown_1` = -1
+WHERE e.`装备类型` = 2
+  AND it.`entry` BETWEEN 980001 AND 981628;
+
+-- 遗物 / 神器 / 专属装备名称：统一粉红色显示
+UPDATE `item_template` it
+JOIN `_深渊物品模板对接` d ON d.`物品ID` = it.`entry`
+SET
+  it.`name` = CONCAT('|cFFFF6699', d.`物品名称`, '|r')
+WHERE (it.`entry` BETWEEN 950001 AND 950074)
+   OR (it.`entry` BETWEEN 960001 AND 960006)
+   OR it.`entry` = 970001;
+
+UPDATE `item_template` it
+JOIN `_深渊装备模板` e ON e.`物品模板ID` = it.`entry`
+SET
+  it.`name` = CONCAT('|cFFFF6699', e.`装备名称`, '|r')
+WHERE e.`装备类型` = 2
+  AND it.`entry` BETWEEN 980001 AND 981628;
+
+-- 深渊装备：品质直接提升为 5（橙色）
+UPDATE `item_template` it
+JOIN `_深渊装备模板` e ON e.`物品模板ID` = it.`entry`
+SET
+  it.`Quality` = 5,
+  it.`name` = e.`装备名称`
+WHERE e.`装备类型` = 1
+  AND e.`来源模式` = 2
+  AND it.`entry` BETWEEN 990001 AND 993666;
+
+-- 腐化装备：名称改为红色
+UPDATE `item_template` it
+JOIN `_深渊装备模板` e ON e.`物品模板ID` = it.`entry`
+SET
+  it.`name` = CONCAT('|cFFFF0000', e.`装备名称`, '|r')
+WHERE e.`装备类型` = 1
+  AND e.`来源模式` = 3
+  AND it.`entry` BETWEEN 990001 AND 993666;
+
+-- 轮回装备：名称改为浅红色
+UPDATE `item_template` it
+JOIN `_深渊装备模板` e ON e.`物品模板ID` = it.`entry`
+SET
+  it.`name` = CONCAT('|cFFFF9999', e.`装备名称`, '|r')
+WHERE e.`装备类型` = 1
+  AND e.`来源模式` = 4
+  AND it.`entry` BETWEEN 990001 AND 993666;
+
 -- 深渊物品：首版一致性修补，避免非装备类模板残留无意义战斗字段
 UPDATE `item_template`
 SET
@@ -752,7 +890,7 @@ UPDATE `item_template`
 SET
   `armor` = 0,
   `MaxDurability` = 0
-WHERE (`entry` BETWEEN 980001 AND 992054)
+WHERE (`entry` BETWEEN 980001 AND 993666)
   AND `InventoryType` IN (11, 12, 16, 23);
 
 -- 武器类模板统一补可见持握样式，装备类统一补基础材质
@@ -769,11 +907,32 @@ SET
     WHEN `class` = 4 THEN 4
     ELSE `Material`
   END
-WHERE (`entry` BETWEEN 980001 AND 992054)
+WHERE (`entry` BETWEEN 980001 AND 993666)
    OR (`entry` BETWEEN 950001 AND 970001);
+
+-- 自定义套装部件：同步镜像到 item_set_names，避免加载时回退到 item_template 并刷错误
+DELETE FROM `item_set_names`
+WHERE `entry` BETWEEN 980001 AND 993666
+  AND `entry` NOT IN (
+    SELECT `entry`
+    FROM `item_template`
+    WHERE `itemset` <> 0
+      AND `entry` BETWEEN 980001 AND 993666
+  );
+
+REPLACE INTO `item_set_names`
+(`entry`, `name`, `InventoryType`, `VerifiedBuild`)
+SELECT
+  `entry`,
+  `name`,
+  `InventoryType`,
+  -1
+FROM `item_template`
+WHERE `itemset` <> 0
+  AND `entry` BETWEEN 980001 AND 993666;
 
 UPDATE `_深渊物品模板对接`
 SET `对接状态` = 1
-WHERE (`物品ID` BETWEEN 950001 AND 992054)
+WHERE (`物品ID` BETWEEN 950001 AND 993666)
    OR (`物品ID` BETWEEN 960001 AND 960006)
    OR `物品ID` = 970001;

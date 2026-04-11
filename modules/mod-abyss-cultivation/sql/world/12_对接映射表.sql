@@ -23,7 +23,7 @@ CREATE TABLE `_深渊物品模板对接` (
   KEY `索引_章节ID` (`章节ID`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='深渊物品模板对接';
 
-DELETE FROM `_深渊物品模板对接` WHERE `物品ID` BETWEEN 950001 AND 992054 OR `物品ID` BETWEEN 960001 AND 960006 OR `物品ID` = 970001;
+DELETE FROM `_深渊物品模板对接` WHERE `物品ID` BETWEEN 950001 AND 993666 OR `物品ID` BETWEEN 960001 AND 960006 OR `物品ID` = 970001;
 INSERT INTO `_深渊物品模板对接`
 (`物品ID`, `物品名称`, `对接类型`, `幕ID`, `章节ID`, `建议物品品质`, `建议物品分类`, `建议物品子类`, `建议装备槽位`, `是否唯一`, `是否背包激活`, `预留显示ID`, `对接状态`, `说明`)
 SELECT
@@ -142,10 +142,52 @@ SELECT
   `幕ID`,
   `来源章节`,
   CASE `装备类型` WHEN 1 THEN 4 ELSE 5 END,
-  2,
-  `护甲类型`,
-  CASE `部位掩码`
-    WHEN 1 THEN 13
+  CASE
+    WHEN `部位掩码` = 1 THEN 2
+    ELSE 4
+  END,
+  CASE
+    WHEN `部位掩码` = 1 THEN CASE `伤害类型`
+      WHEN 5 THEN 0
+      WHEN 6 THEN 4
+      WHEN 7 THEN 15
+      WHEN 8 THEN 13
+      WHEN 9 THEN 8
+      WHEN 10 THEN 1
+      WHEN 11 THEN 5
+      WHEN 12 THEN 6
+      WHEN 13 THEN 10
+      WHEN 14 THEN 2
+      WHEN 15 THEN 3
+      WHEN 16 THEN 18
+      WHEN 17 THEN 19
+      WHEN 2 THEN 10
+      WHEN 3 THEN 4
+      WHEN 4 THEN 10
+      ELSE 7
+    END
+    WHEN `部位掩码` IN (64, 128, 256, 512) THEN 0
+    ELSE CASE `护甲类型`
+      WHEN 1 THEN 1
+      WHEN 2 THEN 2
+      WHEN 3 THEN 3
+      WHEN 4 THEN 4
+      ELSE 0
+    END
+  END,
+  CASE
+    WHEN `部位掩码` = 1 THEN CASE `伤害类型`
+      WHEN 9 THEN 17
+      WHEN 10 THEN 17
+      WHEN 11 THEN 17
+      WHEN 12 THEN 17
+      WHEN 13 THEN 17
+      WHEN 14 THEN 15
+      WHEN 15 THEN 26
+      WHEN 16 THEN 26
+      WHEN 17 THEN 26
+      ELSE 13
+    END
     WHEN 2 THEN 1
     WHEN 4 THEN 5
     WHEN 16 THEN 6
@@ -163,98 +205,145 @@ SELECT
   '来自 _深渊装备模板，后续需转换到 item_template 的 class/subclass/inventoryType'
 FROM `_深渊装备模板`;
 
--- 专属装备：按名称锁定首版显示模型，避免唯一装备共用同一占位外观
-UPDATE `_深渊物品模板对接`
-SET `预留显示ID` = CASE `物品ID`
-  WHEN 980001 THEN 62984
-  WHEN 980002 THEN 61404
-  WHEN 980003 THEN 64225
-  WHEN 980004 THEN 53198
-  WHEN 980005 THEN 43431
-  WHEN 980006 THEN 64441
-  WHEN 980007 THEN 60675
-  WHEN 980008 THEN 64749
-  WHEN 980009 THEN 64247
-  WHEN 980010 THEN 44357
-  WHEN 980011 THEN 64693
-  WHEN 980012 THEN 64256
-  ELSE `预留显示ID`
-END
-WHERE `物品ID` IN (980001, 980002, 980003, 980004, 980005, 980006, 980007, 980008, 980009, 980010, 980011, 980012);
-
--- 普通底材：按幕主题和部位锁定基础外观，避免整批底材共用单一占位模型
-UPDATE `_深渊物品模板对接`
-SET `预留显示ID` = CASE `物品ID`
-  WHEN 990001 THEN 62984
-  WHEN 990002 THEN 58973
-  WHEN 990003 THEN 28143
-  WHEN 990004 THEN 64854
-  WHEN 990005 THEN 31682
-  WHEN 990006 THEN 59094
-  WHEN 990007 THEN 63958
-  WHEN 990008 THEN 26374
-  WHEN 990009 THEN 59553
-  WHEN 990010 THEN 60617
-  WHEN 990011 THEN 60705
-  WHEN 990012 THEN 62035
-  WHEN 990013 THEN 61849
-  WHEN 990014 THEN 62138
-  WHEN 990015 THEN 62108
-  WHEN 990016 THEN 52632
-  WHEN 990017 THEN 48008
-  WHEN 990018 THEN 61260
-  WHEN 990019 THEN 52784
-  WHEN 990020 THEN 59328
-  WHEN 990021 THEN 65040
-  WHEN 990022 THEN 64703
-  WHEN 990023 THEN 62008
-  WHEN 990024 THEN 62110
-  WHEN 990025 THEN 64227
-  WHEN 990026 THEN 64261
-  WHEN 990027 THEN 59040
-  WHEN 990028 THEN 64756
-  WHEN 990029 THEN 53843
-  WHEN 990030 THEN 44683
-  WHEN 990031 THEN 51520
-  WHEN 990032 THEN 43522
-  WHEN 990033 THEN 65259
-  WHEN 990034 THEN 33864
-  WHEN 990035 THEN 61413
-  WHEN 990036 THEN 58999
-  WHEN 990037 THEN 64153
-  WHEN 990038 THEN 61791
-  WHEN 990039 THEN 57531
-  WHEN 990040 THEN 59766
-  WHEN 990041 THEN 59700
-  WHEN 990042 THEN 60568
-  WHEN 990043 THEN 63960
-  WHEN 990044 THEN 64631
-  WHEN 990045 THEN 59034
-  WHEN 990046 THEN 64997
-  WHEN 990047 THEN 48894
-  WHEN 990048 THEN 33822
-  WHEN 990049 THEN 45017
-  WHEN 990050 THEN 61962
-  WHEN 990051 THEN 64789
-  WHEN 990052 THEN 64176
-  WHEN 990053 THEN 59316
-  WHEN 990054 THEN 64648
-  ELSE `预留显示ID`
-END
-WHERE `物品ID` BETWEEN 990001 AND 990054;
-
--- 腐化 / 轮回底材沿用对应正传底材的首版外观映射，确保新增套装可直接显示
+-- 所有装备：按幕主题 + 部位锁定基础外观，秘藏与四模式底材统一复用
 UPDATE `_深渊物品模板对接` d
-JOIN `_深渊物品模板对接` s ON s.`物品ID` = d.`物品ID` - 1000
-SET d.`预留显示ID` = s.`预留显示ID`
-WHERE d.`物品ID` BETWEEN 991001 AND 991054
-  AND s.`物品ID` BETWEEN 990001 AND 990054;
+JOIN `_深渊装备模板` e ON e.`物品模板ID` = d.`物品ID`
+JOIN (
+  SELECT 1 AS `幕ID`, 1 AS `部位掩码`, 62984 AS `显示ID`
+  UNION ALL
+  SELECT 1 AS `幕ID`, 512 AS `部位掩码`, 58973 AS `显示ID`
+  UNION ALL
+  SELECT 1 AS `幕ID`, 2 AS `部位掩码`, 28143 AS `显示ID`
+  UNION ALL
+  SELECT 1 AS `幕ID`, 4 AS `部位掩码`, 64854 AS `显示ID`
+  UNION ALL
+  SELECT 1 AS `幕ID`, 16 AS `部位掩码`, 31682 AS `显示ID`
+  UNION ALL
+  SELECT 1 AS `幕ID`, 32 AS `部位掩码`, 59094 AS `显示ID`
+  UNION ALL
+  SELECT 1 AS `幕ID`, 64 AS `部位掩码`, 63958 AS `显示ID`
+  UNION ALL
+  SELECT 1 AS `幕ID`, 128 AS `部位掩码`, 26374 AS `显示ID`
+  UNION ALL
+  SELECT 1 AS `幕ID`, 256 AS `部位掩码`, 59553 AS `显示ID`
+  UNION ALL
+  SELECT 2 AS `幕ID`, 1 AS `部位掩码`, 60617 AS `显示ID`
+  UNION ALL
+  SELECT 2 AS `幕ID`, 512 AS `部位掩码`, 60705 AS `显示ID`
+  UNION ALL
+  SELECT 2 AS `幕ID`, 2 AS `部位掩码`, 62035 AS `显示ID`
+  UNION ALL
+  SELECT 2 AS `幕ID`, 4 AS `部位掩码`, 61849 AS `显示ID`
+  UNION ALL
+  SELECT 2 AS `幕ID`, 16 AS `部位掩码`, 62138 AS `显示ID`
+  UNION ALL
+  SELECT 2 AS `幕ID`, 32 AS `部位掩码`, 62108 AS `显示ID`
+  UNION ALL
+  SELECT 2 AS `幕ID`, 64 AS `部位掩码`, 52632 AS `显示ID`
+  UNION ALL
+  SELECT 2 AS `幕ID`, 128 AS `部位掩码`, 48008 AS `显示ID`
+  UNION ALL
+  SELECT 2 AS `幕ID`, 256 AS `部位掩码`, 61260 AS `显示ID`
+  UNION ALL
+  SELECT 3 AS `幕ID`, 1 AS `部位掩码`, 52784 AS `显示ID`
+  UNION ALL
+  SELECT 3 AS `幕ID`, 512 AS `部位掩码`, 59328 AS `显示ID`
+  UNION ALL
+  SELECT 3 AS `幕ID`, 2 AS `部位掩码`, 65040 AS `显示ID`
+  UNION ALL
+  SELECT 3 AS `幕ID`, 4 AS `部位掩码`, 64703 AS `显示ID`
+  UNION ALL
+  SELECT 3 AS `幕ID`, 16 AS `部位掩码`, 62008 AS `显示ID`
+  UNION ALL
+  SELECT 3 AS `幕ID`, 32 AS `部位掩码`, 62110 AS `显示ID`
+  UNION ALL
+  SELECT 3 AS `幕ID`, 64 AS `部位掩码`, 64227 AS `显示ID`
+  UNION ALL
+  SELECT 3 AS `幕ID`, 128 AS `部位掩码`, 64261 AS `显示ID`
+  UNION ALL
+  SELECT 3 AS `幕ID`, 256 AS `部位掩码`, 59040 AS `显示ID`
+  UNION ALL
+  SELECT 4 AS `幕ID`, 1 AS `部位掩码`, 64756 AS `显示ID`
+  UNION ALL
+  SELECT 4 AS `幕ID`, 512 AS `部位掩码`, 53843 AS `显示ID`
+  UNION ALL
+  SELECT 4 AS `幕ID`, 2 AS `部位掩码`, 44683 AS `显示ID`
+  UNION ALL
+  SELECT 4 AS `幕ID`, 4 AS `部位掩码`, 51520 AS `显示ID`
+  UNION ALL
+  SELECT 4 AS `幕ID`, 16 AS `部位掩码`, 43522 AS `显示ID`
+  UNION ALL
+  SELECT 4 AS `幕ID`, 32 AS `部位掩码`, 65259 AS `显示ID`
+  UNION ALL
+  SELECT 4 AS `幕ID`, 64 AS `部位掩码`, 33864 AS `显示ID`
+  UNION ALL
+  SELECT 4 AS `幕ID`, 128 AS `部位掩码`, 61413 AS `显示ID`
+  UNION ALL
+  SELECT 4 AS `幕ID`, 256 AS `部位掩码`, 58999 AS `显示ID`
+  UNION ALL
+  SELECT 5 AS `幕ID`, 1 AS `部位掩码`, 64153 AS `显示ID`
+  UNION ALL
+  SELECT 5 AS `幕ID`, 512 AS `部位掩码`, 61791 AS `显示ID`
+  UNION ALL
+  SELECT 5 AS `幕ID`, 2 AS `部位掩码`, 57531 AS `显示ID`
+  UNION ALL
+  SELECT 5 AS `幕ID`, 4 AS `部位掩码`, 59766 AS `显示ID`
+  UNION ALL
+  SELECT 5 AS `幕ID`, 16 AS `部位掩码`, 59700 AS `显示ID`
+  UNION ALL
+  SELECT 5 AS `幕ID`, 32 AS `部位掩码`, 60568 AS `显示ID`
+  UNION ALL
+  SELECT 5 AS `幕ID`, 64 AS `部位掩码`, 63960 AS `显示ID`
+  UNION ALL
+  SELECT 5 AS `幕ID`, 128 AS `部位掩码`, 64631 AS `显示ID`
+  UNION ALL
+  SELECT 5 AS `幕ID`, 256 AS `部位掩码`, 59034 AS `显示ID`
+  UNION ALL
+  SELECT 6 AS `幕ID`, 1 AS `部位掩码`, 64997 AS `显示ID`
+  UNION ALL
+  SELECT 6 AS `幕ID`, 512 AS `部位掩码`, 48894 AS `显示ID`
+  UNION ALL
+  SELECT 6 AS `幕ID`, 2 AS `部位掩码`, 33822 AS `显示ID`
+  UNION ALL
+  SELECT 6 AS `幕ID`, 4 AS `部位掩码`, 45017 AS `显示ID`
+  UNION ALL
+  SELECT 6 AS `幕ID`, 16 AS `部位掩码`, 61962 AS `显示ID`
+  UNION ALL
+  SELECT 6 AS `幕ID`, 32 AS `部位掩码`, 64789 AS `显示ID`
+  UNION ALL
+  SELECT 6 AS `幕ID`, 64 AS `部位掩码`, 64176 AS `显示ID`
+  UNION ALL
+  SELECT 6 AS `幕ID`, 128 AS `部位掩码`, 59316 AS `显示ID`
+  UNION ALL
+  SELECT 6 AS `幕ID`, 256 AS `部位掩码`, 64648 AS `显示ID`
+) m ON m.`幕ID` = e.`幕ID` AND m.`部位掩码` = e.`部位掩码`
+SET d.`预留显示ID` = m.`显示ID`
+WHERE e.`装备类型` IN (1, 2);
 
+-- 秘藏武器 / 法器：按具体武器类型覆盖显示模型，避免所有武器共用同一外观导致错模或问号
 UPDATE `_深渊物品模板对接` d
-JOIN `_深渊物品模板对接` s ON s.`物品ID` = d.`物品ID` - 2000
-SET d.`预留显示ID` = s.`预留显示ID`
-WHERE d.`物品ID` BETWEEN 992001 AND 992054
-  AND s.`物品ID` BETWEEN 990001 AND 990054;
+JOIN `_深渊装备模板` e ON e.`物品模板ID` = d.`物品ID`
+SET d.`预留显示ID` = CASE
+  WHEN e.`部位掩码` = 1 AND e.`伤害类型` = 1 THEN 64536   -- 单手剑
+  WHEN e.`部位掩码` = 1 AND e.`伤害类型` = 5 THEN 64480   -- 单手斧
+  WHEN e.`部位掩码` = 1 AND e.`伤害类型` = 6 THEN 64313   -- 单手锤
+  WHEN e.`部位掩码` = 1 AND e.`伤害类型` = 7 THEN 64997   -- 匕首
+  WHEN e.`部位掩码` = 1 AND e.`伤害类型` = 8 THEN 40181   -- 拳套
+  WHEN e.`部位掩码` = 1 AND e.`伤害类型` = 9 THEN 64397   -- 双手剑
+  WHEN e.`部位掩码` = 1 AND e.`伤害类型` = 10 THEN 64879  -- 双手斧
+  WHEN e.`部位掩码` = 1 AND e.`伤害类型` = 11 THEN 64394  -- 双手锤
+  WHEN e.`部位掩码` = 1 AND e.`伤害类型` = 12 THEN 64554  -- 长柄武器
+  WHEN e.`部位掩码` = 1 AND e.`伤害类型` = 13 THEN 64334  -- 法杖
+  WHEN e.`部位掩码` = 1 AND e.`伤害类型` = 14 THEN 64356  -- 弓
+  WHEN e.`部位掩码` = 1 AND e.`伤害类型` = 15 THEN 64366  -- 枪械
+  WHEN e.`部位掩码` = 1 AND e.`伤害类型` = 16 THEN 64371  -- 弩
+  WHEN e.`部位掩码` = 1 AND e.`伤害类型` = 17 THEN 64995  -- 魔杖
+  WHEN e.`部位掩码` = 512 THEN 64441                      -- 法器/副手
+  ELSE d.`预留显示ID`
+END
+WHERE e.`装备类型` = 2
+  AND e.`是否来自秘藏首领` = 1
+  AND (e.`部位掩码` = 1 OR e.`部位掩码` = 512);
 
 DROP TABLE IF EXISTS `_深渊任务模板对接`;
 CREATE TABLE `_深渊任务模板对接` (

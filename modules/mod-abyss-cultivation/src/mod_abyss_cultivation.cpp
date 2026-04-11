@@ -43,6 +43,29 @@ namespace
 {
 constexpr char ABYSS_ADDON_PREFIX[] = "ABYSS_UI";
 constexpr size_t ABYSS_MAX_ADDON_PAYLOAD = 220;
+constexpr uint32 ABYSS_ADDON_DEFAULT_EQUIPMENT_PAGE_SIZE = 24;
+constexpr uint32 ABYSS_ADDON_MAX_EQUIPMENT_PAGE_SIZE = 48;
+constexpr uint32 ABYSS_ADDON_DEFAULT_SET_OVERVIEW_PAGE_SIZE = 1;
+constexpr uint32 ABYSS_ADDON_MAX_SET_OVERVIEW_PAGE_SIZE = 6;
+
+struct AbyssAddonEquipmentPageQuery
+{
+    uint32 page = 1;
+    uint32 pageSize = ABYSS_ADDON_DEFAULT_EQUIPMENT_PAGE_SIZE;
+    uint8 equipmentType = 0;
+    uint8 sourceMode = 0;
+    uint16 sourceChapter = 0;
+    uint32 slotMask = 0;
+    bool ownedOnly = false;
+};
+
+struct AbyssAddonSetOverviewQuery
+{
+    uint32 page = 1;
+    uint32 pageSize = ABYSS_ADDON_DEFAULT_SET_OVERVIEW_PAGE_SIZE;
+    uint8 modeFilter = 0;
+    bool currentActOnly = false;
+};
 
 bool IsModuleEnabled()
 {
@@ -62,6 +85,11 @@ bool IsAutoBeginOnMapEnterEnabled()
 uint32 GetNow()
 {
     return static_cast<uint32>(std::time(nullptr));
+}
+
+bool IsAbyssCustomBossEntry(uint32 entry)
+{
+    return (entry >= 910001 && entry <= 910074) || (entry >= 919001 && entry <= 919074);
 }
 
 float RollPercentage()
@@ -152,12 +180,266 @@ char const* GetModeTypeName(uint8 modeType)
     }
 }
 
+char const* GetModeBossPrefix(uint8 modeType)
+{
+    switch (modeType)
+    {
+        case 1: return "正传·";
+        case 2: return "深渊·";
+        case 3: return "腐化·";
+        case 4: return "轮回·";
+        default: return "";
+    }
+}
+
 uint32 GetModeTypeMask(uint8 modeType)
 {
     if (modeType == 0 || modeType > 31)
         return 0;
 
     return 1u << (modeType - 1);
+}
+
+constexpr uint64 kTrackedBossMaskOfficialAnchor = 1ULL << 0;
+constexpr uint64 kTrackedBossMaskOfficialFinal = 1ULL << 1;
+constexpr uint64 kTrackedBossMaskStoryBoss = 1ULL << 4;
+constexpr uint64 kTrackedBossMaskAbyssBoss = 1ULL << 5;
+constexpr uint64 kTrackedBossMaskCorruptionBoss = 1ULL << 6;
+constexpr uint64 kTrackedBossMaskReincarnationBoss = 1ULL << 7;
+constexpr uint64 kTrackedBossMaskCacheBoss = 1ULL << 8;
+
+char const* GetEquipmentSourceModeDisplayName(uint8 modeType)
+{
+    switch (modeType)
+    {
+        case 1: return "通用";
+        case 2: return "深渊";
+        case 3: return "腐化";
+        case 4: return "轮回";
+        case 5: return "神器";
+        default: return "未知";
+    }
+}
+
+char const* GetEquipmentSlotMaskLabel(uint32 mask)
+{
+    switch (mask)
+    {
+        case 1: return "武器";
+        case 2: return "头部";
+        case 4: return "胸甲";
+        case 16: return "腰带";
+        case 32: return "靴子";
+        case 64: return "戒指";
+        case 128: return "饰品";
+        case 256: return "披风";
+        case 512: return "法器";
+        default: return "未知部位";
+    }
+}
+
+uint32 NormalizeAddonEquipmentPageSize(uint32 requested)
+{
+    if (requested == 0)
+        return ABYSS_ADDON_DEFAULT_EQUIPMENT_PAGE_SIZE;
+
+    return std::clamp<uint32>(requested, 1u, ABYSS_ADDON_MAX_EQUIPMENT_PAGE_SIZE);
+}
+
+uint32 NormalizeAddonSetOverviewPageSize(uint32 requested)
+{
+    if (requested == 0)
+        return ABYSS_ADDON_DEFAULT_SET_OVERVIEW_PAGE_SIZE;
+
+    return std::clamp<uint32>(requested, 1u, ABYSS_ADDON_MAX_SET_OVERVIEW_PAGE_SIZE);
+}
+
+std::vector<std::string> SplitAddonCommandFields(std::string const& text, char delimiter)
+{
+    std::vector<std::string> fields;
+    std::stringstream stream(text);
+    std::string token;
+    while (std::getline(stream, token, delimiter))
+        fields.push_back(token);
+
+    if (!text.empty() && text.back() == delimiter)
+        fields.emplace_back();
+
+    return fields;
+}
+
+bool ParseAddonEquipmentPageQuery(std::string const& text, AbyssAddonEquipmentPageQuery& query)
+{
+    std::vector<std::string> fields = SplitAddonCommandFields(text, '|');
+    if (!fields.empty() && !fields[0].empty())
+        query.page = static_cast<uint32>(std::strtoul(fields[0].c_str(), nullptr, 10));
+    if (fields.size() > 1 && !fields[1].empty())
+        query.pageSize = static_cast<uint32>(std::strtoul(fields[1].c_str(), nullptr, 10));
+    if (fields.size() > 2 && !fields[2].empty())
+        query.equipmentType = static_cast<uint8>(std::strtoul(fields[2].c_str(), nullptr, 10));
+    if (fields.size() > 3 && !fields[3].empty())
+        query.sourceMode = static_cast<uint8>(std::strtoul(fields[3].c_str(), nullptr, 10));
+    if (fields.size() > 4 && !fields[4].empty())
+        query.sourceChapter = static_cast<uint16>(std::strtoul(fields[4].c_str(), nullptr, 10));
+    if (fields.size() > 5 && !fields[5].empty())
+        query.slotMask = static_cast<uint32>(std::strtoul(fields[5].c_str(), nullptr, 10));
+    if (fields.size() > 6 && !fields[6].empty())
+        query.ownedOnly = std::strtoul(fields[6].c_str(), nullptr, 10) != 0;
+
+    query.page = std::max<uint32>(1u, query.page);
+    query.pageSize = NormalizeAddonEquipmentPageSize(query.pageSize);
+    query.equipmentType = std::min<uint8>(query.equipmentType, static_cast<uint8>(2u));
+    query.sourceMode = std::min<uint8>(query.sourceMode, static_cast<uint8>(5u));
+    return true;
+}
+
+bool ParseAddonSetOverviewQuery(std::string const& text, AbyssAddonSetOverviewQuery& query)
+{
+    std::vector<std::string> fields = SplitAddonCommandFields(text, '|');
+    if (!fields.empty() && !fields[0].empty())
+        query.page = static_cast<uint32>(std::strtoul(fields[0].c_str(), nullptr, 10));
+    if (fields.size() > 1 && !fields[1].empty())
+        query.pageSize = static_cast<uint32>(std::strtoul(fields[1].c_str(), nullptr, 10));
+    if (fields.size() > 2 && !fields[2].empty())
+        query.modeFilter = static_cast<uint8>(std::strtoul(fields[2].c_str(), nullptr, 10));
+    if (fields.size() > 3 && !fields[3].empty())
+        query.currentActOnly = std::strtoul(fields[3].c_str(), nullptr, 10) != 0;
+
+    query.page = std::max<uint32>(1u, query.page);
+    query.pageSize = NormalizeAddonSetOverviewPageSize(query.pageSize);
+    query.modeFilter = std::min<uint8>(query.modeFilter, static_cast<uint8>(5u));
+    return true;
+}
+
+uint8 ParseAddonRewardMode(std::string const& text, uint8 defaultMode = 1)
+{
+    if (text.empty())
+        return defaultMode;
+
+    uint8 modeType = static_cast<uint8>(std::strtoul(text.c_str(), nullptr, 10));
+    if (modeType < 1 || modeType > 4)
+        return defaultMode;
+
+    return modeType;
+}
+
+bool ParseAddonRewardChapterRequest(std::string const& text, uint16& chapterId, uint8& modeType)
+{
+    std::vector<std::string> fields = SplitAddonCommandFields(text, '|');
+    if (!fields.empty() && !fields[0].empty())
+        chapterId = static_cast<uint16>(std::strtoul(fields[0].c_str(), nullptr, 10));
+    if (fields.size() > 1 && !fields[1].empty())
+        modeType = ParseAddonRewardMode(fields[1], modeType);
+
+    return chapterId != 0;
+}
+
+bool StringStartsWith(std::string const& value, std::string const& prefix)
+{
+    if (prefix.size() > value.size())
+        return false;
+
+    return value.compare(0, prefix.size(), prefix) == 0;
+}
+
+bool StringEndsWith(std::string const& value, std::string const& suffix)
+{
+    if (suffix.size() > value.size())
+        return false;
+
+    return value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+std::string ExtractEquipmentSetTheme(std::string name)
+{
+    static std::array<std::string, 9> const suffixes =
+    {
+        "断刃胚", "法轮胚", "头冠胚", "胸铠胚", "战带胚",
+        "战靴胚", "指环胚", "魂坠胚", "披影胚"
+    };
+
+    for (std::string const& suffix : suffixes)
+    {
+        if (StringEndsWith(name, suffix))
+        {
+            name.resize(name.size() - suffix.size());
+            break;
+        }
+    }
+
+    return name.empty() ? "无名" : name;
+}
+
+constexpr uint32 ABYSS_NATIVE_ITEMSET_ID_BASE = 1001;
+constexpr uint32 ABYSS_NATIVE_SET_SPELL_BASE = 89201;
+constexpr uint32 ABYSS_NATIVE_SET_SPELL_BLOCK_SIZE = 7;
+constexpr uint8 ABYSS_STANDARD_SET_SOURCE_MODE_COUNT = 4;
+constexpr uint8 ABYSS_ARTIFACT_SET_SOURCE_MODE = 5;
+constexpr uint32 ABYSS_NATIVE_SET_CHAPTER_COUNT = 74;
+constexpr uint32 ABYSS_NATIVE_SET_ACT_COUNT = 6;
+constexpr uint32 ABYSS_NATIVE_ARTIFACT_ITEMSET_ID_BASE =
+    ABYSS_NATIVE_ITEMSET_ID_BASE + ABYSS_NATIVE_SET_CHAPTER_COUNT * ABYSS_STANDARD_SET_SOURCE_MODE_COUNT;
+constexpr uint32 ABYSS_NATIVE_ARTIFACT_SET_ORDINAL_BASE =
+    ABYSS_NATIVE_SET_ACT_COUNT * ABYSS_STANDARD_SET_SOURCE_MODE_COUNT;
+
+struct AbyssNativeSetSpellIds
+{
+    uint32 twoPieceMain = 0;
+    uint32 fourPieceVisible = 0;
+    uint32 fourPieceHelper = 0;
+    uint32 sixPieceVisible = 0;
+    uint32 sixPieceHelper = 0;
+    uint32 eightPieceVisible = 0;
+    uint32 eightPieceHelper = 0;
+};
+
+uint32 GetAbyssNativeItemSetId(uint16 sourceChapter, uint8 sourceMode)
+{
+    if (sourceChapter == 0 || sourceMode < 1 || sourceMode > ABYSS_ARTIFACT_SET_SOURCE_MODE)
+        return 0;
+
+    if (sourceMode == ABYSS_ARTIFACT_SET_SOURCE_MODE)
+        return ABYSS_NATIVE_ARTIFACT_ITEMSET_ID_BASE + uint32(sourceChapter - 1);
+
+    return ABYSS_NATIVE_ITEMSET_ID_BASE
+        + (uint32(sourceChapter - 1) * ABYSS_STANDARD_SET_SOURCE_MODE_COUNT)
+        + uint32(sourceMode - 1);
+}
+
+AbyssNativeSetSpellIds GetAbyssNativeSetSpellIds(uint8 actId, uint8 sourceMode)
+{
+    if (actId < 1 || actId > ABYSS_NATIVE_SET_ACT_COUNT || sourceMode < 1 || sourceMode > ABYSS_ARTIFACT_SET_SOURCE_MODE)
+        return {};
+
+    uint32 ordinal = 0;
+    if (sourceMode == ABYSS_ARTIFACT_SET_SOURCE_MODE)
+        ordinal = ABYSS_NATIVE_ARTIFACT_SET_ORDINAL_BASE + uint32(actId - 1u);
+    else
+        ordinal = (uint32(actId) - 1u) * ABYSS_STANDARD_SET_SOURCE_MODE_COUNT + uint32(sourceMode - 1u);
+
+    uint32 baseSpellId = ABYSS_NATIVE_SET_SPELL_BASE + ordinal * ABYSS_NATIVE_SET_SPELL_BLOCK_SIZE;
+
+    return {
+        baseSpellId,
+        baseSpellId + 1u,
+        baseSpellId + 2u,
+        baseSpellId + 3u,
+        baseSpellId + 4u,
+        baseSpellId + 5u,
+        baseSpellId + 6u
+    };
+}
+
+uint16 GetAbyssLootModeMask(uint8 modeType)
+{
+    switch (modeType)
+    {
+        case 1: return 0x02;
+        case 2: return 0x04;
+        case 3: return 0x08;
+        case 4: return 0x10;
+        default: return 0;
+    }
 }
 
 bool IsAdvancedModeType(uint8 modeType)
@@ -345,6 +627,7 @@ constexpr uint32 ABYSS_PHASE_ARTIFACT_BUG_DECREE_ITEM = 960004;
 constexpr uint32 ABYSS_PHASE_ARTIFACT_ECLIPSE_KING_ITEM = 960005;
 constexpr uint32 ABYSS_PHASE_ARTIFACT_SCOURGE_CHAPTER_ITEM = 960006;
 constexpr uint32 ABYSS_ULTIMATE_ARTIFACT_ABYSS_LORD_ITEM = 970001;
+constexpr float ABYSS_CACHE_ARTIFACT_DROP_CHANCE = 25.0f;
 
 struct PlayerAbyssData;
 
@@ -753,6 +1036,20 @@ struct AbyssSetBonusConfig
     uint16 fourPieceHaste = 0;
     std::string fourPieceSpecialEffect;
     std::string fourPieceDesc;
+    // 6件效果
+    uint8  sixPieceDmgPct = 0;
+    uint8  sixPieceHpPct = 0;
+    uint16 sixPieceCrit = 0;
+    uint16 sixPieceHaste = 0;
+    std::string sixPieceSpecialEffect;
+    std::string sixPieceDesc;
+    // 8件效果
+    uint8  eightPieceDmgPct = 0;
+    uint8  eightPieceHpPct = 0;
+    uint16 eightPieceCrit = 0;
+    uint16 eightPieceHaste = 0;
+    std::string eightPieceSpecialEffect;
+    std::string eightPieceDesc;
     bool enabled = true;
 };
 
@@ -763,6 +1060,8 @@ struct PlayerSetBonusState
     uint8 pieceCount = 0;
     bool hasTwoPieceBonus = false;
     bool hasFourPieceBonus = false;
+    bool hasSixPieceBonus = false;
+    bool hasEightPieceBonus = false;
 };
 
 struct AbyssTaskDocking
@@ -862,6 +1161,9 @@ struct PlayerAbyssRunState
     bool abyssBossSummoned = false;
     bool cacheBossSummoned = false;
     uint32 startTime = 0;
+    uint32 currentInstanceId = 0;
+    uint8 pendingAbyssModeType = 0;
+    bool pendingCacheSummon = false;
     bool hasDatabaseRow = false;
 };
 
@@ -974,6 +1276,22 @@ struct PlayerAbyssProcState
     uint32 lastMatrixEchoTime = 0;
     uint32 lastHolyVerdictTime = 0;
     uint32 lastDominionTime = 0;
+    uint32 lastSetEchoTime = 0;
+    uint32 lastSetSoulDevourTime = 0;
+    uint32 lastSetDoubleBurstTime = 0;
+    uint32 lastSetFreezeTime = 0;
+    uint32 lastSetAncientPowerTime = 0;
+    uint32 setAncientPowerEndTime = 0;
+    uint32 lastSetAbyssDrainTime = 0;
+    uint32 lastSetJudgmentTime = 0;
+    uint32 lastSetSurgeTime = 0;
+    uint32 lastSetDeathWardTime = 0;
+    uint32 lastSetRebirthTime = 0;
+    uint32 lastSetCombatGrowthTime = 0;
+    uint32 setCombatGrowthStacks = 0;
+    uint32 artifactFistComboCounter = 0;
+    uint32 artifactStaffCadenceCounter = 0;
+    uint32 artifactFalunOrbitCounter = 0;
     uint32 lastSystemRelicStateSyncTime = 0;
     uint32 matrixCastCounter = 0;
     uint32 dominionCounter = 0;
@@ -997,6 +1315,8 @@ struct PlayerAbyssProcState
     bool replayingSpell = false;
     uint32 managedSpellScaleFallbackSpellId = 0;
     ObjectGuid managedSpellTargetGuid;
+    std::unordered_map<uint32, uint8> artifactSwordMarkStacks;
+    std::unordered_map<uint32, uint8> artifactBowMarkStacks;
 };
 
 bool HasAnyActiveRelicSlots(PlayerAbyssData const* data)
@@ -1059,6 +1379,7 @@ struct AbyssChapterAccessState
 };
 
 void SendAbyssModePrompt(Player* player, AbyssChapterConfig const& chapter, PlayerAbyssData const& data, uint32 modeMask);
+void SendAbyssStateToAddon(Player* player);
 
 class AbyssCultivationMgr
 {
@@ -1521,7 +1842,19 @@ public:
             config.fourPieceCrit    = fields[13].Get<uint16>();
             config.fourPieceHaste   = fields[14].Get<uint16>();
             config.fourPieceSpecialEffect = fields[15].Get<std::string>();
-            config.enabled          = fields[16].Get<bool>();
+            config.sixPieceDesc     = fields[16].Get<std::string>();
+            config.sixPieceDmgPct   = fields[17].Get<uint8>();
+            config.sixPieceHpPct    = fields[18].Get<uint8>();
+            config.sixPieceCrit     = fields[19].Get<uint16>();
+            config.sixPieceHaste    = fields[20].Get<uint16>();
+            config.sixPieceSpecialEffect = fields[21].Get<std::string>();
+            config.eightPieceDesc   = fields[22].Get<std::string>();
+            config.eightPieceDmgPct = fields[23].Get<uint8>();
+            config.eightPieceHpPct  = fields[24].Get<uint8>();
+            config.eightPieceCrit   = fields[25].Get<uint16>();
+            config.eightPieceHaste  = fields[26].Get<uint16>();
+            config.eightPieceSpecialEffect = fields[27].Get<std::string>();
+            config.enabled          = fields[28].Get<bool>();
 
             _setBonusConfigs[config.setId] = config;
             ++count;
@@ -1935,6 +2268,11 @@ public:
         _playerRunStates.erase(guid);
     }
 
+    void ClearPlayerSuspendedRunState(uint32 guid)
+    {
+        _suspendedRunStates.erase(guid);
+    }
+
     void ClearPlayerCollections(uint32 guid)
     {
         _playerCollections.erase(guid);
@@ -1956,6 +2294,7 @@ public:
         _playerData.erase(guid);
         ClearPlayerCollections(guid);
         ClearPlayerChapterModeUnlocks(guid);
+        ClearPlayerSuspendedRunState(guid);
     }
 
     void DeletePlayerData(uint32 guid)
@@ -2112,6 +2451,48 @@ public:
             return &itr->second;
 
         return nullptr;
+    }
+
+    PlayerAbyssRunState const* GetDisplayRunState(Player* player) const
+    {
+        if (!player)
+            return nullptr;
+
+        if (PlayerAbyssRunState const* activeRunState = GetPlayerRunState(player->GetGUID().GetCounter()))
+            return activeRunState;
+
+        auto itr = _suspendedRunStates.find(player->GetGUID().GetCounter());
+        if (itr == _suspendedRunStates.end())
+            return nullptr;
+
+        PlayerAbyssRunState const& suspendedState = itr->second;
+        if (suspendedState.currentChapterId == 0)
+            return nullptr;
+
+        AbyssChapterConfig const* chapter = GetChapterConfig(suspendedState.currentChapterId);
+        if (!chapter || player->GetMapId() != chapter->mapId)
+            return nullptr;
+
+        uint32 instanceSignature = GetPlayerInstanceSignature(player, chapter->mapId);
+        if (instanceSignature == 0 || suspendedState.currentInstanceId == 0 || instanceSignature != suspendedState.currentInstanceId)
+            return nullptr;
+
+        return &suspendedState;
+    }
+
+    uint32 GetPlayerInstanceSignature(Player* player, uint16 expectedMapId = 0) const
+    {
+        if (!player || !player->IsInWorld())
+            return 0;
+
+        if (expectedMapId != 0 && player->GetMapId() != expectedMapId)
+            return 0;
+
+        Map* map = player->GetMap();
+        if (!map || (!map->IsDungeon() && !map->IsRaid()))
+            return 0;
+
+        return player->GetInstanceId();
     }
 
     AbyssRelicConfig const* GetRelicConfig(uint32 itemId) const
@@ -2406,7 +2787,7 @@ public:
         return nullptr;
     }
 
-    std::string GetBossDisplayName(uint32 bossEntry) const
+    std::string GetBossBaseName(uint32 bossEntry) const
     {
         if (bossEntry == 0)
             return "";
@@ -2424,6 +2805,24 @@ public:
                 return creatureTemplate->Name;
 
         return "";
+    }
+
+    std::string GetBossDisplayName(uint32 bossEntry) const
+    {
+        return GetBossBaseName(bossEntry);
+    }
+
+    std::string GetBossDisplayNameForMode(uint32 bossEntry, uint8 modeType) const
+    {
+        std::string baseName = GetBossBaseName(bossEntry);
+        if (baseName.empty() || modeType == 0)
+            return baseName;
+
+        AbyssBossConfig const* bossConfig = GetBossConfig(bossEntry);
+        if (!bossConfig || bossConfig->bossType != 1)
+            return baseName;
+
+        return std::string(GetModeBossPrefix(modeType)) + baseName;
     }
 
     std::vector<AbyssTaskDocking const*> GetTaskDockingsForChapter(uint16 chapterId) const
@@ -2518,6 +2917,9 @@ public:
     {
         std::vector<AbyssRewardCandidate> candidates;
 
+        if (bossEntry == 0)
+            return candidates;
+
         auto appendCandidate = [&](uint32 itemId, std::string const& itemName, uint8 dockingType, bool uniqueItem, bool bagActivated, uint8 sourceMode, uint16 baseItemLevel, uint32 slotMask)
         {
             if (itemId == 0)
@@ -2547,10 +2949,60 @@ public:
             candidate.slotMask = slotMask;
             candidates.push_back(candidate);
         };
-
         bool isCacheBoss = bossEntry == chapter.cacheBossEntry;
         bool isAbyssBoss = bossEntry == chapter.abyssBossEntry;
         bool isAnchorOrFinal = bossEntry == chapter.anchorBossEntry || bossEntry == chapter.finalBossEntry;
+
+        // 不同首领类型对应不同的掉落池语义:
+        // - 锚点/最终首领: 基础档 = 正传底材 (sourceMode=1)
+        // - 深渊首领: 基础档 = 深渊底材 (sourceMode=2)
+        // - 秘藏首领: 忽略 sourceMode, 只掉唯一装备 (fromCacheBoss=true, equipmentType=2)
+        // 运行时生效模式 = max(首领基础模式, 玩家当前模式), 从而让腐化/轮回难度下升级到更高品质的底材池。
+        uint8 baseBossMode = 1;
+        if (isAbyssBoss)
+            baseBossMode = 2;
+        uint8 effectiveMode = std::max<uint8>(modeType, baseBossMode);
+        auto doesDockingMatchMode = [&](AbyssItemDocking const& docking) -> bool
+        {
+            if (AbyssEquipmentTemplate const* equipment = GetEquipmentTemplate(docking.itemId))
+            {
+                if (isCacheBoss)
+                    return equipment->fromCacheBoss && equipment->equipmentType == 2;
+
+                return !equipment->fromCacheBoss && equipment->sourceMode == effectiveMode;
+            }
+
+            if (isCacheBoss)
+                return docking.dockingType == 5;
+
+            std::string const& itemName = docking.itemName;
+            switch (effectiveMode)
+            {
+                case 1: return StringStartsWith(itemName, "正传-") || StringStartsWith(itemName, "正传·");
+                case 2: return StringStartsWith(itemName, "深渊-") || StringStartsWith(itemName, "深渊·");
+                case 3: return StringStartsWith(itemName, "腐化-") || StringStartsWith(itemName, "腐化·");
+                case 4: return StringStartsWith(itemName, "轮回-") || StringStartsWith(itemName, "轮回·");
+                default: return false;
+            }
+        };
+        auto getDockingSourceMode = [&](AbyssItemDocking const& docking) -> uint8
+        {
+            if (AbyssEquipmentTemplate const* equipment = GetEquipmentTemplate(docking.itemId))
+                return equipment->sourceMode;
+
+            return isCacheBoss ? 0 : effectiveMode;
+        };
+
+        auto equipmentMatches = [&](AbyssEquipmentTemplate const& equipment) -> bool
+        {
+            if (isCacheBoss)
+                return equipment.fromCacheBoss && equipment.equipmentType == 2;
+            if (isAbyssBoss || isAnchorOrFinal)
+                return !equipment.fromCacheBoss
+                    && equipment.equipmentType == 1
+                    && equipment.sourceMode == effectiveMode;
+            return false;
+        };
 
         uint16 bestSourceChapter = 0;
         for (auto const& pair : _equipmentTemplates)
@@ -2559,15 +3011,7 @@ public:
             if (!equipment.enabled || equipment.actId != chapter.actId || equipment.sourceChapter > chapter.chapterId)
                 continue;
 
-            bool matches = false;
-            if (isCacheBoss)
-                matches = equipment.fromCacheBoss;
-            else if (isAbyssBoss)
-                matches = !equipment.fromCacheBoss;
-            else if (isAnchorOrFinal)
-                matches = equipment.equipmentType == 1 && equipment.sourceMode == 1;
-
-            if (!matches)
+            if (!equipmentMatches(equipment))
                 continue;
 
             if (bestSourceChapter < equipment.sourceChapter)
@@ -2580,21 +3024,7 @@ public:
             if (!equipment.enabled || equipment.actId != chapter.actId || equipment.sourceChapter != bestSourceChapter)
                 continue;
 
-            bool matches = false;
-            if (isCacheBoss)
-            {
-                matches = equipment.fromCacheBoss && (equipment.sourceMode == 1 || equipment.sourceMode <= std::max<uint8>(modeType, 1u));
-            }
-            else if (isAbyssBoss)
-            {
-                matches = !equipment.fromCacheBoss && (equipment.sourceMode == 1 || equipment.sourceMode <= std::max<uint8>(modeType, 1u));
-            }
-            else if (isAnchorOrFinal)
-            {
-                matches = equipment.equipmentType == 1 && equipment.sourceMode == 1;
-            }
-
-            if (!matches)
+            if (!equipmentMatches(equipment))
                 continue;
 
             appendCandidate(
@@ -2619,20 +3049,20 @@ public:
 
             if (isCacheBoss)
             {
-                if (docking->dockingType == 5)
-                    appendCandidate(docking->itemId, docking->itemName, docking->dockingType, docking->uniqueItem, docking->bagActivated, 0, 0, 0);
+                if (docking->dockingType == 5 && doesDockingMatchMode(*docking))
+                    appendCandidate(docking->itemId, docking->itemName, docking->dockingType, docking->uniqueItem, docking->bagActivated, getDockingSourceMode(*docking), 0, 0);
                 continue;
             }
 
             if (isAbyssBoss)
             {
-                if (docking->dockingType == 5 || docking->dockingType == 4)
-                    appendCandidate(docking->itemId, docking->itemName, docking->dockingType, docking->uniqueItem, docking->bagActivated, 0, 0, 0);
+                if ((docking->dockingType == 5 || docking->dockingType == 4) && doesDockingMatchMode(*docking))
+                    appendCandidate(docking->itemId, docking->itemName, docking->dockingType, docking->uniqueItem, docking->bagActivated, getDockingSourceMode(*docking), 0, 0);
                 continue;
             }
 
-            if (isAnchorOrFinal && docking->dockingType == 4)
-                appendCandidate(docking->itemId, docking->itemName, docking->dockingType, docking->uniqueItem, docking->bagActivated, 0, 0, 0);
+            if (isAnchorOrFinal && docking->dockingType == 4 && doesDockingMatchMode(*docking))
+                appendCandidate(docking->itemId, docking->itemName, docking->dockingType, docking->uniqueItem, docking->bagActivated, getDockingSourceMode(*docking), 0, 0);
         }
 
         std::sort(candidates.begin(), candidates.end(), [](AbyssRewardCandidate const& left, AbyssRewardCandidate const& right)
@@ -2701,7 +3131,12 @@ public:
         bool preferUnique = bossEntry == chapter.cacheBossEntry;
         bool preferHighQuality = runState.modeType >= 3;
 
-        if (bossEntry != chapter.cacheBossEntry)
+        if (bossEntry == chapter.cacheBossEntry)
+        {
+            if (RollPercentage() >= ABYSS_CACHE_ARTIFACT_DROP_CHANCE)
+                return result;
+        }
+        else
         {
             float dropChance = GetChapterDropRate(chapter, runState.modeType);
             if (bossEntry == chapter.finalBossEntry)
@@ -3208,13 +3643,13 @@ public:
                 case 89172: if (fallbackMatches({ "遗物_复燃逆鳞" })) return 1.0f; break;
                 case 89173: if (fallbackMatches({ "遗物_霜王残印", "祝福_极霜粉碎", "特效_霜王统御" })) return 1.0f; break;
                 case 89174: if (fallbackMatches({ "遗物_赤玉界针" })) return 1.0f; break;
-                case 89175: if (fallbackMatches({ "神器_焚界行契" })) return 1.0f; break;
-                case 89176: if (fallbackMatches({ "神器_虚空远征印" })) return 1.0f; break;
-                case 89177: if (fallbackMatches({ "神器_冰脉时匣" })) return 1.0f; break;
-                case 89178: if (fallbackMatches({ "神器_虫神遗诏" })) return 1.0f; break;
-                case 89179: if (fallbackMatches({ "神器_日蚀王契" })) return 1.0f; break;
-                case 89180: if (fallbackMatches({ "神器_天灾断章" })) return 1.0f; break;
-                case 89181: if (fallbackMatches({ "神器_渊主之印" })) return 1.0f; break;
+                case 89175: if (fallbackMatches({ "神器_焚界行契" })) return 0.85f; break;
+                case 89176: if (fallbackMatches({ "神器_虚空远征印" })) return 0.85f; break;
+                case 89177: if (fallbackMatches({ "神器_冰脉时匣" })) return 0.85f; break;
+                case 89178: if (fallbackMatches({ "神器_虫神遗诏" })) return 0.85f; break;
+                case 89179: if (fallbackMatches({ "神器_日蚀王契" })) return 0.85f; break;
+                case 89180: if (fallbackMatches({ "神器_天灾断章" })) return 0.85f; break;
+                case 89181: if (fallbackMatches({ "神器_渊主之印" })) return 0.95f; break;
                 default:
                     break;
             }
@@ -4456,10 +4891,15 @@ public:
         if (player->GetMapId() == runState->currentMapId)
             return false;
 
-        uint16 previousMapId = runState->currentMapId;
-        EndPlayerRun(player);
+        std::string previousChapterName;
+        if (AbyssChapterConfig const* chapterConfig = GetChapterConfig(runState->currentChapterId))
+            previousChapterName = chapterConfig->chapterName;
+        else if (AbyssChapterConfig const* mapChapterConfig = GetChapterConfigByMapId(runState->currentMapId))
+            previousChapterName = mapChapterConfig->chapterName;
+
+        SuspendPlayerRun(player);
         if (player->GetSession())
-            ChatHandler(player->GetSession()).PSendSysMessage("Abyss run ended because player left chapter map {}.", previousMapId);
+            ChatHandler(player->GetSession()).PSendSysMessage("你已经离开 {}。", previousChapterName.empty() ? "当前副本" : previousChapterName);
         return true;
     }
 
@@ -4604,6 +5044,16 @@ public:
             if (CastManagedRelicSpell(player, 89157))
                 procState.lastOldGodGiftTime = GetNow();
         }
+
+        float soulDevourScale = GetActiveSetSpecialEffectScale(player, "套装_腐焰噬魂");
+        if (soulDevourScale > 0.0f && GetNow() > procState.lastSetSoulDevourTime + 2)
+        {
+            player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(5)), soulDevourScale));
+            RestorePlayerPrimaryPowerPct(player, 5.0f * soulDevourScale);
+            procState.lastSetSoulDevourTime = GetNow();
+            if (player->GetSession())
+                ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff80[套装] 腐焰噬魂触发，恢复生命与能量。|r");
+        }
     }
 
     void HandlePlayerSpellCast(Player* player, Spell* spell)
@@ -4619,7 +5069,7 @@ public:
         PlayerAbyssData const* playerData = GetPlayerData(guid);
         if (!runState)
         {
-            if (!HasAnyActiveRelicSlots(playerData))
+            if (!HasAnyActiveRelicSlots(playerData) && !HasAnyActiveSetBonuses(player))
             {
                 return;
             }
@@ -4660,6 +5110,119 @@ public:
 
         if (schoolMask & SPELL_SCHOOL_MASK_FIRE)
             procState.lastFireSchoolCastTime = GetNow();
+
+        uint32 now = procState.lastSpellCastTime;
+        if (Unit* target = GetPrimaryCombatTarget(player))
+        {
+            float emberEchoScale = GetActiveSetSpecialEffectScale(player, "套装_灰烬回响");
+            if (emberEchoScale > 0.0f &&
+                now > procState.lastSetEchoTime + 6 &&
+                RollPercentage() < std::min(45.0f, 18.0f * emberEchoScale))
+            {
+                DealConfiguredBurst(player, target, 140, 210, SPELL_SCHOOL_MASK_FIRE, emberEchoScale);
+                procState.lastSetEchoTime = now;
+            }
+
+            float artifactFlameScale = GetActiveSetSpecialEffectScale(player, "套装_焚界天爆");
+            if (artifactFlameScale > 0.0f &&
+                now > procState.lastSetDoubleBurstTime + 6 &&
+                RollPercentage() < std::min(55.0f, 18.0f * artifactFlameScale))
+            {
+                SpellSchoolMask burstSchool = schoolMask != 0 ? schoolMask : SPELL_SCHOOL_MASK_FIRE;
+                DealConfiguredBurst(player, target, 240, 340, burstSchool, artifactFlameScale);
+                RestorePlayerPrimaryPowerPct(player, 3.0f * artifactFlameScale);
+                procState.lastSetDoubleBurstTime = now;
+            }
+
+            float doubleBurstScale = GetActiveSetSpecialEffectScale(player, "套装_轮焰双爆");
+            if (artifactFlameScale <= 0.0f &&
+                doubleBurstScale > 0.0f &&
+                now > procState.lastSetDoubleBurstTime + 8 &&
+                RollPercentage() < std::min(45.0f, 15.0f * doubleBurstScale))
+            {
+                SpellSchoolMask burstSchool = schoolMask != 0 ? schoolMask : SPELL_SCHOOL_MASK_FIRE;
+                DealConfiguredBurst(player, target, 180, 260, burstSchool, doubleBurstScale);
+                procState.lastSetDoubleBurstTime = now;
+            }
+
+            float artifactFreezeScale = GetActiveSetSpecialEffectScale(player, "套装_永冻裁决");
+            if (artifactFreezeScale > 0.0f &&
+                now > procState.lastSetFreezeTime + 6 &&
+                RollPercentage() < std::min(60.0f, 20.0f * artifactFreezeScale))
+            {
+                DealConfiguredBurst(player, target, 230, 330, SPELL_SCHOOL_MASK_FROST, artifactFreezeScale);
+                procState.lastSetFreezeTime = now;
+            }
+
+            float frostSealScale = std::max(
+                GetActiveSetSpecialEffectScale(player, "套装_寒夜冻结"),
+                GetActiveSetSpecialEffectScale(player, "套装_玄霜封印"));
+            if (artifactFreezeScale <= 0.0f &&
+                frostSealScale > 0.0f &&
+                now > procState.lastSetFreezeTime + 8 &&
+                RollPercentage() < std::min(50.0f, 18.0f * frostSealScale))
+            {
+                DealConfiguredBurst(player, target, 150, 230, SPELL_SCHOOL_MASK_FROST, frostSealScale);
+                procState.lastSetFreezeTime = now;
+            }
+
+            float artifactAbyssScale = GetActiveSetSpecialEffectScale(player, "套装_渊神吞界");
+            if (artifactAbyssScale > 0.0f &&
+                now > procState.lastSetAbyssDrainTime + 6 &&
+                RollPercentage() < std::min(50.0f, 18.0f * artifactAbyssScale))
+            {
+                DealConfiguredBurst(player, target, 240, 360, SPELL_SCHOOL_MASK_SHADOW, artifactAbyssScale);
+                player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(6)), artifactAbyssScale));
+                RestorePlayerPrimaryPowerPct(player, 4.0f * artifactAbyssScale);
+                procState.lastSetAbyssDrainTime = now;
+            }
+
+            float abyssDrainScale = GetActiveSetSpecialEffectScale(player, "套装_神蚀吸收");
+            if (artifactAbyssScale <= 0.0f &&
+                abyssDrainScale > 0.0f &&
+                now > procState.lastSetAbyssDrainTime + 8 &&
+                RollPercentage() < std::min(40.0f, 15.0f * abyssDrainScale))
+            {
+                DealConfiguredBurst(player, target, 180, 260, SPELL_SCHOOL_MASK_SHADOW, abyssDrainScale);
+                player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(4)), abyssDrainScale));
+                procState.lastSetAbyssDrainTime = now;
+            }
+
+            float artifactConquestScale = GetActiveSetSpecialEffectScale(player, "套装_征魂统御");
+            if (artifactConquestScale > 0.0f &&
+                now > procState.lastSetSurgeTime + 8)
+            {
+                DealConfiguredBurst(player, target, 300, 430, SPELL_SCHOOL_MASK_ARCANE, artifactConquestScale);
+                RestorePlayerPrimaryPowerPct(player, 5.0f * artifactConquestScale);
+                procState.lastSetSurgeTime = now;
+                if (player->GetSession())
+                    ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff80[套装] 征魂统御触发。|r");
+            }
+
+            float conquestScale = GetActiveSetSpecialEffectScale(player, "套装_征魂爆发");
+            if (artifactConquestScale <= 0.0f &&
+                conquestScale > 0.0f &&
+                now > procState.lastSetSurgeTime + 10)
+            {
+                DealConfiguredBurst(player, target, 220, 320, SPELL_SCHOOL_MASK_ARCANE, conquestScale);
+                procState.lastSetSurgeTime = now;
+                if (player->GetSession())
+                    ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff80[套装] 征魂爆发触发。|r");
+            }
+        }
+
+        float ancientPowerScale = GetActiveSetSpecialEffectScale(player, "套装_古神觉醒");
+        if (ancientPowerScale > 0.0f &&
+            now > procState.lastSetAncientPowerTime + 20 &&
+            RollPercentage() < std::min(40.0f, 12.0f * ancientPowerScale))
+        {
+            procState.lastSetAncientPowerTime = now;
+            procState.setAncientPowerEndTime = now + 10;
+            player->UpdateAllStats();
+            player->UpdateAllRatings();
+            if (player->GetSession())
+                ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff80[套装] 古神觉醒触发，10秒内全属性提升。|r");
+        }
 
         float chaseBladeScale = GetActiveScriptGroupScale(player, { "遗物_黑潮齿轮", "祝福_追命飞刃" });
         if (chaseBladeScale > 0.0f)
@@ -4984,12 +5547,21 @@ public:
         uint32 guid = player->GetGUID().GetCounter();
         PlayerAbyssRunState const* runState = GetPlayerRunState(guid);
         PlayerAbyssData const* playerData = GetPlayerData(guid);
-        if (!runState && !HasAnyActiveRelicSlots(playerData))
+        if (!runState && !HasAnyActiveRelicSlots(playerData) && !HasAnyActiveSetBonuses(player))
             return;
 
         PlayerAbyssProcState& procState = GetOrCreatePlayerProcState(guid);
         uint32 now = GetNow();
         SyncSystemRelicState(player);
+
+        if (procState.setAncientPowerEndTime != 0 && now > procState.setAncientPowerEndTime)
+        {
+            procState.setAncientPowerEndTime = 0;
+            player->UpdateAllStats();
+            player->UpdateAllRatings();
+            if (player->GetSession())
+                ChatHandler(player->GetSession()).PSendSysMessage("|cffff8080[套装] 古神觉醒已结束。|r");
+        }
 
         if (!procState.hasTrackedPosition)
         {
@@ -5012,6 +5584,47 @@ public:
                 procState.trackedPosZ = player->GetPositionZ();
                 procState.lastStillnessTime = now;
             }
+        }
+
+        float artifactEmberScale = GetActiveSetSpecialEffectScale(player, "套装_烬灭永燃");
+        if (artifactEmberScale > 0.0f && player->IsInCombat() && now > procState.lastSetCombatGrowthTime + 4)
+        {
+            uint32 maxStacks = static_cast<uint32>(std::lround(14.0f * artifactEmberScale));
+            if (procState.setCombatGrowthStacks < maxStacks)
+            {
+                ++procState.setCombatGrowthStacks;
+                procState.lastSetCombatGrowthTime = now;
+                player->UpdateAllStats();
+                player->UpdateAllRatings();
+                if (player->GetSession())
+                    ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff80[套装] 烬灭永燃层数提升至 %u。|r", procState.setCombatGrowthStacks);
+            }
+        }
+
+        float emberGrowthScale = GetActiveSetSpecialEffectScale(player, "套装_烬世叠加");
+        if (artifactEmberScale <= 0.0f &&
+            emberGrowthScale > 0.0f &&
+            player->IsInCombat() &&
+            now > procState.lastSetCombatGrowthTime + 5)
+        {
+            uint32 maxStacks = static_cast<uint32>(std::lround(10.0f * emberGrowthScale));
+            if (procState.setCombatGrowthStacks < maxStacks)
+            {
+                ++procState.setCombatGrowthStacks;
+                procState.lastSetCombatGrowthTime = now;
+                player->UpdateAllStats();
+                player->UpdateAllRatings();
+                if (player->GetSession())
+                    ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff80[套装] 烬世叠加层数提升至 %u。|r", procState.setCombatGrowthStacks);
+            }
+        }
+
+        float judgmentScale = GetActiveSetSpecialEffectScale(player, "套装_终焉天罚");
+        if (judgmentScale > 0.0f && player->IsInCombat() && now > procState.lastSetJudgmentTime + 30)
+        {
+            TriggerDominionBurst(player, procState.lastSetJudgmentTime, judgmentScale);
+            if (player->GetSession())
+                ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff80[套装] 终焉天罚触发。|r");
         }
 
         float lowHealthScale = GetActiveScriptGroupScale(player, { "遗物_断罪枷锁", "特效_锁链爆裂", "遗物_圣陨判词" });
@@ -5125,6 +5738,37 @@ public:
         (void)diff;
     }
 
+    void UpdateActiveRunInstanceSignature(Player* player)
+    {
+        if (!player)
+            return;
+
+        auto itr = _playerRunStates.find(player->GetGUID().GetCounter());
+        if (itr == _playerRunStates.end())
+            return;
+
+        uint32 instanceSignature = GetPlayerInstanceSignature(player, itr->second.currentMapId);
+        if (instanceSignature != 0)
+            itr->second.currentInstanceId = instanceSignature;
+    }
+
+    bool SuspendPlayerRun(Player* player)
+    {
+        if (!player)
+            return false;
+
+        uint32 guid = player->GetGUID().GetCounter();
+        auto itr = _playerRunStates.find(guid);
+        if (itr == _playerRunStates.end())
+            return false;
+
+        _suspendedRunStates[guid] = itr->second;
+        DeletePlayerRunState(guid);
+        ClearPlayerProcState(guid);
+        RefreshPlayerRuntimeStats(player);
+        return true;
+    }
+
     bool TryAutoBeginPlayerRun(Player* player)
     {
         if (!player || !player->IsInWorld() || !_worldDataLoaded)
@@ -5149,6 +5793,42 @@ public:
         {
             if (!map->IsDungeon() && !map->IsRaid())
                 return false;
+        }
+
+        auto suspendedItr = _suspendedRunStates.find(guid);
+        if (suspendedItr != _suspendedRunStates.end())
+        {
+            uint32 instanceSignature = GetPlayerInstanceSignature(player, chapter->mapId);
+            PlayerAbyssRunState suspendedState = suspendedItr->second;
+
+            if (suspendedState.currentChapterId == chapter->chapterId &&
+                suspendedState.currentMapId == chapter->mapId &&
+                suspendedState.currentInstanceId != 0 &&
+                suspendedState.currentInstanceId == instanceSignature)
+            {
+                suspendedState.currentInstanceId = instanceSignature;
+                _playerRunStates[guid] = suspendedState;
+                _suspendedRunStates.erase(suspendedItr);
+                SavePlayerRunState(player);
+                RefreshPlayerRuntimeStats(player);
+
+                if (suspendedState.pendingAbyssModeType != 0)
+                    ScheduleDelayedModeBossSummon(player, *chapter, _playerRunStates[guid], suspendedState.pendingAbyssModeType);
+                if (suspendedState.pendingCacheSummon)
+                    ScheduleDelayedCacheBossSummon(player, *chapter, _playerRunStates[guid]);
+
+                if (player->GetSession())
+                {
+                    ChatHandler(player->GetSession()).PSendSysMessage("Abyss run restored for chapter {} ({}) in instance {}.",
+                        chapter->chapterId,
+                        chapter->chapterName,
+                        instanceSignature);
+                }
+
+                return true;
+            }
+
+            _suspendedRunStates.erase(suspendedItr);
         }
 
         std::string failureReason;
@@ -5504,82 +6184,178 @@ public:
         if (!player)
             return;
 
-        uint32 guid = player->GetGUID().GetCounter();
-
-        // 统计每个套装ID穿了几件
-        std::unordered_map<uint32, uint8> setCounts;
-        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
-        {
-            Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
-            if (!item)
-                continue;
-
-            auto itr = _equipmentTemplates.find(item->GetEntry());
-            if (itr == _equipmentTemplates.end())
-                continue;
-
-            if (itr->second.setId == 0)
-                continue;
-
-            setCounts[itr->second.setId]++;
-        }
-
-        auto& oldStates = _playerSetBonusStates[guid];
-
-        // 移除不再满足条件的套装buff
-        for (auto itr = oldStates.begin(); itr != oldStates.end(); )
-        {
-            uint32 setId = itr->first;
-            PlayerSetBonusState& state = itr->second;
-            uint8 newCount = 0;
-            auto countItr = setCounts.find(setId);
-            if (countItr != setCounts.end())
-                newCount = countItr->second;
-
-            bool shouldHaveTwo = newCount >= 2;
-            bool shouldHaveFour = newCount >= 4;
-
-            if (state.hasTwoPieceBonus && !shouldHaveTwo)
-            {
-                RemoveSetBonusAura(player, setId, 2);
-                state.hasTwoPieceBonus = false;
-            }
-            if (state.hasFourPieceBonus && !shouldHaveFour)
-            {
-                RemoveSetBonusAura(player, setId, 4);
-                state.hasFourPieceBonus = false;
-            }
-
-            state.pieceCount = newCount;
-            if (newCount == 0)
-                itr = oldStates.erase(itr);
-            else
-                ++itr;
-        }
-
-        // 添加新满足条件的套装buff
-        for (auto& [setId, count] : setCounts)
-        {
-            auto& state = oldStates[setId];
-            state.setId = setId;
-            state.pieceCount = count;
-
-            if (count >= 2 && !state.hasTwoPieceBonus)
-            {
-                ApplySetBonusAura(player, setId, 2);
-                state.hasTwoPieceBonus = true;
-            }
-            if (count >= 4 && !state.hasFourPieceBonus)
-            {
-                ApplySetBonusAura(player, setId, 4);
-                state.hasFourPieceBonus = true;
-            }
-        }
+        // 套装属性与件数判定已经迁移到 ItemSet.dbc + Spell.dbc。
+        // 这里不再手动改玩家属性，只清理旧的运行时缓存，
+        // 特殊效果统一改为按原生套装 aura 判定。
+        _playerSetBonusStates.erase(player->GetGUID().GetCounter());
     }
 
     void CleanupPlayerSetBonuses(uint32 guid)
     {
         _playerSetBonusStates.erase(guid);
+    }
+
+    bool HasAnyActiveSetBonuses(Player* player) const
+    {
+        if (!player)
+            return false;
+
+        for (auto const& [setId, config] : _setBonusConfigs)
+        {
+            (void)setId;
+            if (!config.enabled)
+                continue;
+
+            AbyssNativeSetSpellIds ids = GetAbyssNativeSetSpellIds(config.actId, config.sourceMode);
+            if ((ids.twoPieceMain && player->HasAura(ids.twoPieceMain))
+                || (ids.fourPieceVisible && player->HasAura(ids.fourPieceVisible))
+                || (ids.fourPieceHelper && player->HasAura(ids.fourPieceHelper))
+                || (ids.sixPieceVisible && player->HasAura(ids.sixPieceVisible))
+                || (ids.sixPieceHelper && player->HasAura(ids.sixPieceHelper))
+                || (ids.eightPieceVisible && player->HasAura(ids.eightPieceVisible))
+                || (ids.eightPieceHelper && player->HasAura(ids.eightPieceHelper)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    float GetActiveSetSpecialEffectScale(Player* player, std::string const& specialEffect) const
+    {
+        if (!player || specialEffect.empty())
+            return 0.0f;
+
+        float bestScale = 0.0f;
+        for (auto const& [setId, config] : _setBonusConfigs)
+        {
+            (void)setId;
+            if (!config.enabled)
+                continue;
+
+            AbyssNativeSetSpellIds ids = GetAbyssNativeSetSpellIds(config.actId, config.sourceMode);
+            float scale = 1.0f;
+            bool matched = false;
+            if (ids.eightPieceHelper != 0 && player->HasAura(ids.eightPieceHelper) && config.eightPieceSpecialEffect == specialEffect)
+            {
+                scale = 1.15f;
+                matched = true;
+            }
+            else if (ids.sixPieceHelper != 0 && player->HasAura(ids.sixPieceHelper) && config.sixPieceSpecialEffect == specialEffect)
+            {
+                scale = 1.00f;
+                matched = true;
+            }
+            else if (ids.fourPieceHelper != 0 && player->HasAura(ids.fourPieceHelper) && config.fourPieceSpecialEffect == specialEffect)
+            {
+                scale = 0.85f;
+                matched = true;
+            }
+
+            if (!matched)
+                continue;
+
+            switch (config.sourceMode)
+            {
+                case 3: scale += 0.05f; break;
+                case 4: scale += 0.10f; break;
+                case 5: scale += 0.18f; break;
+                default: break;
+            }
+
+            bestScale = std::max(bestScale, scale);
+        }
+
+        return bestScale;
+    }
+
+    bool HasActiveSetSpecialEffect(Player* player, std::string const& specialEffect) const
+    {
+        return GetActiveSetSpecialEffectScale(player, specialEffect) > 0.0f;
+    }
+
+    void RestorePlayerPrimaryPowerPct(Player* player, float pct) const
+    {
+        if (!player || pct <= 0.0f)
+            return;
+
+        Powers powerType = player->getPowerType();
+        if (powerType == POWER_HEALTH)
+            return;
+
+        int32 maxPower = player->GetMaxPower(powerType);
+        if (maxPower <= 0)
+            return;
+
+        int32 addPower = static_cast<int32>(std::lround(float(maxPower) * pct / 100.0f));
+        if (addPower <= 0)
+            return;
+
+        uint32 currentPower = player->GetPower(powerType);
+        uint32 maxPowerValue = static_cast<uint32>(maxPower);
+        uint32 addPowerValue = static_cast<uint32>(addPower);
+        uint32 newPower = std::min<uint32>(maxPowerValue, currentPower + addPowerValue);
+        player->SetPower(powerType, newPower);
+    }
+
+    bool HandlePlayerSetDeathProtection(Player* player)
+    {
+        if (!player)
+            return false;
+
+        PlayerAbyssProcState& procState = GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+        uint32 now = GetNow();
+
+        float artifactRebirthScale = GetActiveSetSpecialEffectScale(player, "套装_归墟主宰");
+        if (artifactRebirthScale > 0.0f && now > procState.lastSetRebirthTime + 240)
+        {
+            procState.lastSetRebirthTime = now;
+            player->ResurrectPlayer(1.0f, false);
+            player->SetHealth(player->GetMaxHealth());
+            RestorePlayerPrimaryPowerPct(player, 100.0f);
+            player->UpdateAllStats();
+            player->UpdateAllRatings();
+            if (player->GetSession())
+                ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff80[套装] 归墟主宰触发，已强制复苏。|r");
+            return true;
+        }
+
+        float rebirthScale = GetActiveSetSpecialEffectScale(player, "套装_归墟不灭");
+        if (artifactRebirthScale <= 0.0f &&
+            rebirthScale > 0.0f &&
+            now > procState.lastSetRebirthTime + 300)
+        {
+            procState.lastSetRebirthTime = now;
+            player->ResurrectPlayer(1.0f, false);
+            player->SetHealth(player->GetMaxHealth());
+            RestorePlayerPrimaryPowerPct(player, 100.0f);
+            player->UpdateAllStats();
+            player->UpdateAllRatings();
+            if (player->GetSession())
+                ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff80[套装] 归墟不灭触发，已强制复苏。|r");
+            return true;
+        }
+
+        float bloodOathScale = GetActiveSetSpecialEffectScale(player, "套装_血誓不灭");
+        if (bloodOathScale > 0.0f && now > procState.lastSetDeathWardTime + 60)
+        {
+            float chance = std::min(60.0f, 30.0f * bloodOathScale);
+            if (RollPercentage() < chance)
+            {
+                procState.lastSetDeathWardTime = now;
+                player->ResurrectPlayer(0.0f, false);
+                player->SetHealth(std::max<uint32>(1u, player->CountPctFromMaxHealth(20)));
+                RestorePlayerPrimaryPowerPct(player, 20.0f);
+                player->UpdateAllStats();
+                player->UpdateAllRatings();
+                if (player->GetSession())
+                    ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff80[套装] 血誓不灭触发，已免死并恢复生命。|r");
+                return true;
+            }
+        }
+
+        return false;
     }
 
     AbyssSetBonusConfig const* GetSetBonusConfig(uint32 setId) const
@@ -5589,6 +6365,18 @@ public:
     }
 
 private:
+    void ApplySetDamagePctBonus(Player* player, uint8 damagePct, bool apply)
+    {
+        if (!player || damagePct == 0)
+            return;
+
+        float pctValue = float(damagePct);
+        player->HandleStatModifier(UNIT_MOD_DAMAGE_MAINHAND, TOTAL_PCT, pctValue, apply);
+        player->HandleStatModifier(UNIT_MOD_DAMAGE_OFFHAND, TOTAL_PCT, pctValue, apply);
+        player->HandleStatModifier(UNIT_MOD_DAMAGE_RANGED, TOTAL_PCT, pctValue, apply);
+        player->ApplyPercentModFloatValue(PLAYER_FIELD_MOD_DAMAGE_DONE_PCT, pctValue, apply);
+    }
+
     // 应用套装buff：通过修改玩家属性实现
     void ApplySetBonusAura(Player* player, uint32 setId, uint8 tier)
     {
@@ -5614,7 +6402,7 @@ private:
             if (config->twoPieceAP > 0)
                 player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, float(config->twoPieceAP), true);
             if (config->twoPieceSP > 0)
-                player->HandleStatModifier(UNIT_MOD_DAMAGE_MAINHAND, TOTAL_VALUE, float(config->twoPieceSP), true);
+                player->ApplySpellPowerBonus(config->twoPieceSP, true);
 
             ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff00[套装] 已激活 %s (2件)：%s|r",
                 config->setName.c_str(), config->twoPieceDesc.c_str());
@@ -5622,6 +6410,8 @@ private:
         else if (tier == 4)
         {
             // 4件效果：加属性 + 特殊效果标记
+            if (config->fourPieceDmgPct > 0)
+                ApplySetDamagePctBonus(player, config->fourPieceDmgPct, true);
             if (config->fourPieceCrit > 0)
                 player->ApplyRatingMod(CR_CRIT_MELEE, config->fourPieceCrit, true);
             if (config->fourPieceHaste > 0)
@@ -5634,6 +6424,40 @@ private:
 
             ChatHandler(player->GetSession()).PSendSysMessage("|cffff8000[套装] 已激活 %s (4件)：%s|r",
                 config->setName.c_str(), config->fourPieceDesc.c_str());
+        }
+        else if (tier == 6)
+        {
+            if (config->sixPieceDmgPct > 0)
+                ApplySetDamagePctBonus(player, config->sixPieceDmgPct, true);
+            if (config->sixPieceCrit > 0)
+                player->ApplyRatingMod(CR_CRIT_MELEE, config->sixPieceCrit, true);
+            if (config->sixPieceHaste > 0)
+                player->ApplyRatingMod(CR_HASTE_MELEE, config->sixPieceHaste, true);
+            if (config->sixPieceHpPct > 0)
+            {
+                float bonus = player->GetMaxHealth() * config->sixPieceHpPct / 100.0f;
+                player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, bonus, true);
+            }
+
+            ChatHandler(player->GetSession()).PSendSysMessage("|cff66ccff[套装] 已激活 %s (6件)：%s|r",
+                config->setName.c_str(), config->sixPieceDesc.c_str());
+        }
+        else if (tier == 8)
+        {
+            if (config->eightPieceDmgPct > 0)
+                ApplySetDamagePctBonus(player, config->eightPieceDmgPct, true);
+            if (config->eightPieceCrit > 0)
+                player->ApplyRatingMod(CR_CRIT_MELEE, config->eightPieceCrit, true);
+            if (config->eightPieceHaste > 0)
+                player->ApplyRatingMod(CR_HASTE_MELEE, config->eightPieceHaste, true);
+            if (config->eightPieceHpPct > 0)
+            {
+                float bonus = player->GetMaxHealth() * config->eightPieceHpPct / 100.0f;
+                player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, bonus, true);
+            }
+
+            ChatHandler(player->GetSession()).PSendSysMessage("|cffcc66ff[套装] 已激活 %s (8件)：%s|r",
+                config->setName.c_str(), config->eightPieceDesc.c_str());
         }
 
         player->UpdateAllStats();
@@ -5663,13 +6487,15 @@ private:
             if (config->twoPieceAP > 0)
                 player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, float(config->twoPieceAP), false);
             if (config->twoPieceSP > 0)
-                player->HandleStatModifier(UNIT_MOD_DAMAGE_MAINHAND, TOTAL_VALUE, float(config->twoPieceSP), false);
+                player->ApplySpellPowerBonus(config->twoPieceSP, false);
 
             ChatHandler(player->GetSession()).PSendSysMessage("|cffff0000[套装] 已失去 %s (2件) 效果|r",
                 config->setName.c_str());
         }
         else if (tier == 4)
         {
+            if (config->fourPieceDmgPct > 0)
+                ApplySetDamagePctBonus(player, config->fourPieceDmgPct, false);
             if (config->fourPieceCrit > 0)
                 player->ApplyRatingMod(CR_CRIT_MELEE, config->fourPieceCrit, false);
             if (config->fourPieceHaste > 0)
@@ -5681,6 +6507,40 @@ private:
             }
 
             ChatHandler(player->GetSession()).PSendSysMessage("|cffff0000[套装] 已失去 %s (4件) 效果|r",
+                config->setName.c_str());
+        }
+        else if (tier == 6)
+        {
+            if (config->sixPieceDmgPct > 0)
+                ApplySetDamagePctBonus(player, config->sixPieceDmgPct, false);
+            if (config->sixPieceCrit > 0)
+                player->ApplyRatingMod(CR_CRIT_MELEE, config->sixPieceCrit, false);
+            if (config->sixPieceHaste > 0)
+                player->ApplyRatingMod(CR_HASTE_MELEE, config->sixPieceHaste, false);
+            if (config->sixPieceHpPct > 0)
+            {
+                float bonus = player->GetMaxHealth() * config->sixPieceHpPct / 100.0f;
+                player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, bonus, false);
+            }
+
+            ChatHandler(player->GetSession()).PSendSysMessage("|cffff0000[套装] 已失去 %s (6件) 效果|r",
+                config->setName.c_str());
+        }
+        else if (tier == 8)
+        {
+            if (config->eightPieceDmgPct > 0)
+                ApplySetDamagePctBonus(player, config->eightPieceDmgPct, false);
+            if (config->eightPieceCrit > 0)
+                player->ApplyRatingMod(CR_CRIT_MELEE, config->eightPieceCrit, false);
+            if (config->eightPieceHaste > 0)
+                player->ApplyRatingMod(CR_HASTE_MELEE, config->eightPieceHaste, false);
+            if (config->eightPieceHpPct > 0)
+            {
+                float bonus = player->GetMaxHealth() * config->eightPieceHpPct / 100.0f;
+                player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, bonus, false);
+            }
+
+            ChatHandler(player->GetSession()).PSendSysMessage("|cffff0000[套装] 已失去 %s (8件) 效果|r",
                 config->setName.c_str());
         }
 
@@ -5700,6 +6560,146 @@ public:
         }
     }
 
+    PlayerAbyssRunState const* GetActiveRunStateForBoss(Creature* creature, uint16 chapterId) const
+    {
+        if (!creature || chapterId == 0)
+            return nullptr;
+
+        auto matchesRunState = [&](PlayerAbyssRunState const* runState) -> bool
+        {
+            return runState &&
+                runState->currentChapterId == chapterId &&
+                runState->modeType >= 1 &&
+                runState->currentMapId == creature->GetMapId();
+        };
+
+        if (creature->IsSummon())
+        {
+            if (TempSummon* summon = creature->ToTempSummon())
+            {
+                if (Unit* summoner = summon->GetSummonerUnit())
+                {
+                    if (Player* player = summoner->ToPlayer())
+                    {
+                        if (PlayerAbyssRunState const* runState = GetPlayerRunState(player->GetGUID().GetCounter()))
+                            if (matchesRunState(runState))
+                                return runState;
+                    }
+                }
+            }
+        }
+
+        Map* map = creature->GetMap();
+        if (!map)
+            return nullptr;
+
+        for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+        {
+            Player* player = itr->GetSource();
+            if (!player || !player->IsInWorld() || !player->IsAlive())
+                continue;
+
+            if (player->GetMapId() != creature->GetMapId())
+                continue;
+
+            if (player->GetDistance(creature) > 200.0f)
+                continue;
+
+            if (PlayerAbyssRunState const* runState = GetPlayerRunState(player->GetGUID().GetCounter()))
+                if (matchesRunState(runState))
+                    return runState;
+        }
+
+        return nullptr;
+    }
+
+    PlayerAbyssRunState const* GetActiveRunStateForTrackedBoss(Creature* creature, AbyssChapterConfig const*& chapterConfig) const
+    {
+        chapterConfig = nullptr;
+        if (!creature)
+            return nullptr;
+
+        auto tryMatchRunState = [&](PlayerAbyssRunState const* runState) -> PlayerAbyssRunState const*
+        {
+            if (!runState || runState->currentChapterId == 0 || runState->modeType == 0)
+                return nullptr;
+
+            AbyssChapterConfig const* candidateChapter = GetChapterConfig(runState->currentChapterId);
+            if (!candidateChapter)
+                return nullptr;
+
+            if (runState->currentMapId != creature->GetMapId())
+                return nullptr;
+
+            uint32 creatureEntry = creature->GetEntry();
+            if (creatureEntry != candidateChapter->abyssBossEntry &&
+                creatureEntry != candidateChapter->cacheBossEntry)
+            {
+                return nullptr;
+            }
+
+            chapterConfig = candidateChapter;
+            return runState;
+        };
+
+        if (creature->IsSummon())
+        {
+            if (TempSummon* summon = creature->ToTempSummon())
+            {
+                if (Unit* summoner = summon->GetSummonerUnit())
+                {
+                    if (Player* player = summoner->ToPlayer())
+                    {
+                        if (PlayerAbyssRunState const* runState = tryMatchRunState(GetPlayerRunState(player->GetGUID().GetCounter())))
+                            return runState;
+                    }
+                }
+            }
+        }
+
+        Map* map = creature->GetMap();
+        if (!map)
+            return nullptr;
+
+        for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+        {
+            Player* player = itr->GetSource();
+            if (!player || !player->IsInWorld() || !player->IsAlive())
+                continue;
+
+            if (player->GetMapId() != creature->GetMapId())
+                continue;
+
+            if (player->GetDistance(creature) > 200.0f)
+                continue;
+
+            if (PlayerAbyssRunState const* runState = tryMatchRunState(GetPlayerRunState(player->GetGUID().GetCounter())))
+                return runState;
+        }
+
+        return nullptr;
+    }
+
+    bool SyncTrackedBossLootMode(Creature* creature) const
+    {
+        if (!creature)
+            return false;
+
+        AbyssChapterConfig const* chapterConfig = nullptr;
+        PlayerAbyssRunState const* activeRunState = GetActiveRunStateForTrackedBoss(creature, chapterConfig);
+        if (!activeRunState || !chapterConfig)
+            return false;
+
+        uint16 abyssLootMode = GetAbyssLootModeMask(activeRunState->modeType);
+        if (abyssLootMode == 0)
+            return false;
+
+        if (creature->GetLootMode() != abyssLootMode)
+            creature->SetLootMode(abyssLootMode);
+
+        return true;
+    }
+
     bool ApplyBossRuntimeTuning(Creature* creature) const
     {
         if (!creature)
@@ -5709,44 +6709,19 @@ public:
         if (!bossConfig)
             return false;
 
-        if (!creature->IsSummon())
+        PlayerAbyssRunState const* activeRunState = GetActiveRunStateForBoss(creature, bossConfig->chapterId);
+        if (!activeRunState)
             return false;
 
-        float modeModifier = bossConfig->storyModifier;
-        uint16 corruptionTier = 0;
+        uint8 modeType = activeRunState->modeType;
+        float modeModifier = GetBossModeModifier(*bossConfig, modeType);
+        uint16 corruptionTier = modeType == 3 ? activeRunState->corruptionTier : 0;
 
-        if (TempSummon* summon = creature->ToTempSummon())
+        if (bossConfig->bossType == 1)
         {
-            if (Unit* summoner = summon->GetSummonerUnit())
-            {
-                if (Player* player = summoner->ToPlayer())
-                {
-                    if (PlayerAbyssRunState const* runState = GetPlayerRunState(player->GetGUID().GetCounter()))
-                    {
-                        if (runState->currentChapterId == bossConfig->chapterId && runState->modeType >= 2)
-                        {
-                            modeModifier = GetBossModeModifier(*bossConfig, runState->modeType);
-                            corruptionTier = runState->corruptionTier;
-                        }
-                        else
-                        {
-                            return false;
-                        }
-                    }
-                    else
-                    {
-                        return false;
-                    }
-                }
-                else
-                {
-                    return false;
-                }
-            }
-            else
-            {
-                return false;
-            }
+            std::string displayName = GetBossDisplayNameForMode(creature->GetEntry(), modeType);
+            if (!displayName.empty() && creature->GetName() != displayName)
+                creature->SetName(displayName);
         }
 
         float healthScale = std::max(1.0f, bossConfig->healthModifier * modeModifier * (1.0f + static_cast<float>(corruptionTier) * 0.03f));
@@ -5772,16 +6747,82 @@ public:
             return 0;
 
         if (creatureEntry == chapter.anchorBossEntry)
-            return 1ULL << 0;
+            return kTrackedBossMaskOfficialAnchor;
 
         if (creatureEntry == chapter.finalBossEntry && creatureEntry != chapter.anchorBossEntry)
-            return 1ULL << 1;
+            return kTrackedBossMaskOfficialFinal;
+
+        return 0;
+    }
+
+    uint64 GetStageBossKillMaskBitForMode(uint8 modeType) const
+    {
+        switch (modeType)
+        {
+            case 1: return kTrackedBossMaskStoryBoss;
+            case 2: return kTrackedBossMaskAbyssBoss;
+            case 3: return kTrackedBossMaskCorruptionBoss;
+            case 4: return kTrackedBossMaskReincarnationBoss;
+            default: return 0;
+        }
+    }
+
+    uint64 GetRuntimeBossProgressMaskBit(AbyssChapterConfig const& chapter, PlayerAbyssRunState const& state, uint32 creatureEntry) const
+    {
+        uint64 trackedMaskBit = GetTrackedBossMaskBit(chapter, creatureEntry);
+        if (trackedMaskBit != 0)
+            return trackedMaskBit;
 
         if (creatureEntry == chapter.abyssBossEntry)
-            return 1ULL << 2;
+            return GetStageBossKillMaskBitForMode(state.modeType);
 
         if (creatureEntry == chapter.cacheBossEntry)
-            return 1ULL << 3;
+            return kTrackedBossMaskCacheBoss;
+
+        return 0;
+    }
+
+    bool IsSequentialModeChainActive(PlayerAbyssRunState const& state) const
+    {
+        switch (state.modeType)
+        {
+            case 2: return (state.anchorBossKillMask & kTrackedBossMaskStoryBoss) != 0;
+            case 3: return (state.anchorBossKillMask & kTrackedBossMaskAbyssBoss) != 0;
+            case 4: return (state.anchorBossKillMask & kTrackedBossMaskCorruptionBoss) != 0;
+            default: return false;
+        }
+    }
+
+    bool ShouldUseSequentialModeChain(PlayerAbyssRunState const& state) const
+    {
+        return state.modeType == 1 || IsSequentialModeChainActive(state);
+    }
+
+    uint8 GetNextSequentialModeType(PlayerAbyssRunState const& state) const
+    {
+        if ((state.anchorBossKillMask & (kTrackedBossMaskOfficialAnchor | kTrackedBossMaskOfficialFinal)) != 0 &&
+            (state.anchorBossKillMask & kTrackedBossMaskStoryBoss) == 0)
+        {
+            return 1;
+        }
+
+        if ((state.anchorBossKillMask & kTrackedBossMaskStoryBoss) != 0 &&
+            (state.anchorBossKillMask & kTrackedBossMaskAbyssBoss) == 0)
+        {
+            return 2;
+        }
+
+        if ((state.anchorBossKillMask & kTrackedBossMaskAbyssBoss) != 0 &&
+            (state.anchorBossKillMask & kTrackedBossMaskCorruptionBoss) == 0)
+        {
+            return 3;
+        }
+
+        if ((state.anchorBossKillMask & kTrackedBossMaskCorruptionBoss) != 0 &&
+            (state.anchorBossKillMask & kTrackedBossMaskReincarnationBoss) == 0)
+        {
+            return 4;
+        }
 
         return 0;
     }
@@ -5798,6 +6839,161 @@ public:
             return (state.anchorBossKillMask & chapter.requiredBossKillMask) == chapter.requiredBossKillMask;
 
         return state.anchorBossKillMask != 0;
+    }
+
+    bool ScheduleDelayedModeBossSummon(Player* player, AbyssChapterConfig const& chapter, PlayerAbyssRunState& state, uint8 summonModeType)
+    {
+        if (!player || chapter.abyssBossEntry == 0 || summonModeType == 0)
+            return false;
+
+        UpdateActiveRunInstanceSignature(player);
+        state.pendingAbyssModeType = summonModeType;
+
+        ObjectGuid playerGuid = player->GetGUID();
+        uint16 chapterId = chapter.chapterId;
+        uint32 expectedInstanceId = state.currentInstanceId;
+
+        player->m_Events.AddEventAtOffset([this, playerGuid, chapterId, summonModeType, expectedInstanceId]()
+        {
+            ExecuteDelayedModeBossSummon(playerGuid, chapterId, summonModeType, expectedInstanceId);
+        }, 5s);
+
+        if (player->GetSession())
+            ChatHandler(player->GetSession()).PSendSysMessage("将在 5 秒后自动召唤{}。", GetBossDisplayNameForMode(chapter.abyssBossEntry, summonModeType));
+
+        return true;
+    }
+
+    bool ScheduleDelayedCacheBossSummon(Player* player, AbyssChapterConfig const& chapter, PlayerAbyssRunState& state)
+    {
+        if (!player || chapter.cacheBossEntry == 0)
+            return false;
+
+        UpdateActiveRunInstanceSignature(player);
+        state.pendingCacheSummon = true;
+
+        ObjectGuid playerGuid = player->GetGUID();
+        uint16 chapterId = chapter.chapterId;
+        uint32 expectedInstanceId = state.currentInstanceId;
+
+        player->m_Events.AddEventAtOffset([this, playerGuid, chapterId, expectedInstanceId]()
+        {
+            ExecuteDelayedCacheBossSummon(playerGuid, chapterId, expectedInstanceId);
+        }, 5s);
+
+        if (player->GetSession())
+            ChatHandler(player->GetSession()).PSendSysMessage("将在 5 秒后自动召唤{}。", GetBossDisplayName(chapter.cacheBossEntry));
+        return true;
+    }
+
+    void ExecuteDelayedModeBossSummon(ObjectGuid playerGuid, uint16 chapterId, uint8 summonModeType, uint32 expectedInstanceId)
+    {
+        Player* player = ObjectAccessor::FindPlayer(playerGuid);
+        if (!player || !player->IsInWorld())
+            return;
+
+        uint32 guid = playerGuid.GetCounter();
+        auto runItr = _playerRunStates.find(guid);
+        auto playerItr = _playerData.find(guid);
+        if (runItr == _playerRunStates.end() || playerItr == _playerData.end())
+            return;
+
+        PlayerAbyssRunState& state = runItr->second;
+        if (state.currentChapterId != chapterId || state.pendingAbyssModeType != summonModeType)
+            return;
+
+        if (state.currentMapId != 0 && player->GetMapId() != state.currentMapId)
+            return;
+
+        uint32 instanceSignature = GetPlayerInstanceSignature(player, state.currentMapId);
+        if (expectedInstanceId != 0 && instanceSignature != 0 && expectedInstanceId != instanceSignature)
+            return;
+
+        AbyssChapterConfig const* chapter = GetChapterConfig(chapterId);
+        if (!chapter)
+        {
+            state.pendingAbyssModeType = 0;
+            return;
+        }
+
+        PlayerAbyssData& data = playerItr->second;
+        state.pendingAbyssModeType = 0;
+
+        uint8 previousModeType = state.modeType;
+        uint16 previousCorruptionTier = state.corruptionTier;
+
+        state.modeType = summonModeType;
+        state.corruptionTier = summonModeType == 3 ? std::max<uint16>(state.corruptionTier, data.highestCorruptionTier) : 0;
+        NormalizePlayerRunState(state, &data);
+
+        if (!TrySummonBoss(player, *chapter, chapter->abyssBossEntry, true))
+        {
+            state.modeType = previousModeType;
+            state.corruptionTier = previousCorruptionTier;
+            NormalizePlayerRunState(state, &data);
+            SavePlayerRunState(player);
+            return;
+        }
+
+        state.abyssBossSummoned = true;
+        state.currentInstanceId = instanceSignature != 0 ? instanceSignature : state.currentInstanceId;
+        SavePlayerRunState(player);
+
+        if (player->GetSession())
+            ChatHandler(player->GetSession()).PSendSysMessage("已自动召唤{}。", GetBossDisplayNameForMode(chapter->abyssBossEntry, summonModeType));
+
+        SendAbyssStateToAddon(player);
+    }
+
+    void ExecuteDelayedCacheBossSummon(ObjectGuid playerGuid, uint16 chapterId, uint32 expectedInstanceId)
+    {
+        Player* player = ObjectAccessor::FindPlayer(playerGuid);
+        if (!player || !player->IsInWorld())
+            return;
+
+        uint32 guid = playerGuid.GetCounter();
+        auto runItr = _playerRunStates.find(guid);
+        auto playerItr = _playerData.find(guid);
+        if (runItr == _playerRunStates.end() || playerItr == _playerData.end())
+            return;
+
+        PlayerAbyssRunState& state = runItr->second;
+        if (state.currentChapterId != chapterId || !state.pendingCacheSummon)
+            return;
+
+        if (state.currentMapId != 0 && player->GetMapId() != state.currentMapId)
+            return;
+
+        uint32 instanceSignature = GetPlayerInstanceSignature(player, state.currentMapId);
+        if (expectedInstanceId != 0 && instanceSignature != 0 && expectedInstanceId != instanceSignature)
+            return;
+
+        AbyssChapterConfig const* chapter = GetChapterConfig(chapterId);
+        if (!chapter)
+        {
+            state.pendingCacheSummon = false;
+            return;
+        }
+
+        PlayerAbyssData& data = playerItr->second;
+        state.pendingCacheSummon = false;
+
+        if (!TrySummonBoss(player, *chapter, chapter->cacheBossEntry, false))
+        {
+            SavePlayerRunState(player);
+            return;
+        }
+
+        state.cacheBossSummoned = true;
+        data.cacheBossFailCount = 0;
+        state.currentInstanceId = instanceSignature != 0 ? instanceSignature : state.currentInstanceId;
+        SavePlayerData(player);
+        SavePlayerRunState(player);
+
+        if (player->GetSession())
+            ChatHandler(player->GetSession()).PSendSysMessage("已自动召唤{}。", GetBossDisplayName(chapter->cacheBossEntry));
+
+        SendAbyssStateToAddon(player);
     }
 
     bool TrySummonBoss(Player* player, AbyssChapterConfig const& chapter, uint32 bossEntry, bool useConfiguredPosition) const
@@ -6111,18 +7307,19 @@ public:
         {
             AbyssChapterConfig const& chapter = pair.second;
 
-            if (chapter.startQuestId != 0)
+            AbyssTaskDocking const* officialTask = GetTaskDockingForChapter(chapter.chapterId, 2);
+            if (officialTask)
             {
-                QuestStatus startStatus = player->GetQuestStatus(chapter.startQuestId);
-                bool startRewarded = player->GetQuestRewardStatus(chapter.startQuestId);
-                if (startRewarded || startStatus == QUEST_STATUS_COMPLETE)
+                QuestStatus status = player->GetQuestStatus(officialTask->questId);
+                bool rewarded = player->GetQuestRewardStatus(officialTask->questId);
+                if (rewarded || status == QUEST_STATUS_COMPLETE)
                 {
                     if (UnlockChapterMode(player, chapter.chapterId, 1))
                         changed = true;
                 }
             }
 
-            AbyssTaskDocking const* storyTask = GetTaskDockingForChapter(chapter.chapterId, 2);
+            AbyssTaskDocking const* storyTask = GetTaskDockingForChapter(chapter.chapterId, 3);
             if (storyTask)
             {
                 QuestStatus status = player->GetQuestStatus(storyTask->questId);
@@ -6134,7 +7331,7 @@ public:
                 }
             }
 
-            AbyssTaskDocking const* abyssTask = GetTaskDockingForChapter(chapter.chapterId, 3);
+            AbyssTaskDocking const* abyssTask = GetTaskDockingForChapter(chapter.chapterId, 4);
             if (abyssTask)
             {
                 QuestStatus status = player->GetQuestStatus(abyssTask->questId);
@@ -6261,6 +7458,9 @@ public:
             DeletePlayerRunState(guid);
             ClearPlayerProcState(guid);
         }
+
+        if (chapterId == 0 || (_suspendedRunStates.find(guid) != _suspendedRunStates.end() && _suspendedRunStates[guid].currentChapterId != chapterId))
+            ClearPlayerSuspendedRunState(guid);
 
         SavePlayerData(player);
         RefreshPlayerRuntimeStats(player);
@@ -6424,8 +7624,12 @@ public:
         state.abyssBossSummoned = false;
         state.cacheBossSummoned = false;
         state.startTime = GetNow();
+        state.currentInstanceId = GetPlayerInstanceSignature(player, chapterConfig->mapId);
+        state.pendingAbyssModeType = 0;
+        state.pendingCacheSummon = false;
         state.hasDatabaseRow = true;
 
+        ClearPlayerSuspendedRunState(guid);
         GetOrCreatePlayerProcState(guid).abyssModePromptShown = false;
 
         NormalizePlayerRunState(state, &playerItr->second);
@@ -6445,6 +7649,7 @@ public:
             return false;
 
         DeletePlayerRunState(guid);
+        ClearPlayerSuspendedRunState(guid);
         ClearPlayerProcState(guid);
         RefreshPlayerRuntimeStats(player);
         return true;
@@ -6521,6 +7726,8 @@ public:
 
         state.modeType = modeType;
         state.corruptionTier = modeType == 3 ? corruptionTier : 0;
+        state.pendingAbyssModeType = 0;
+        state.pendingCacheSummon = false;
         NormalizePlayerRunState(state, &data);
 
         if (!TrySummonBoss(player, *chapterConfig, chapterConfig->abyssBossEntry, true))
@@ -6536,6 +7743,7 @@ public:
         }
 
         state.abyssBossSummoned = true;
+        state.currentInstanceId = GetPlayerInstanceSignature(player, chapterConfig->mapId);
         GetOrCreatePlayerProcState(guid).abyssModePromptShown = true;
         SavePlayerRunState(player);
         return true;
@@ -6599,7 +7807,7 @@ public:
             o = procState.lastPromptO;
         }
 
-        Creature* summon = player->SummonCreature(chapterConfig->anchorBossEntry, x, y, z, o, TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, 300000);
+        Creature* summon = player->SummonCreature(chapterConfig->abyssBossEntry, x, y, z, o, TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, 300000);
         if (!summon)
         {
             if (failureReason)
@@ -6607,10 +7815,58 @@ public:
             return false;
         }
 
+        uint16 storyLootMode = GetAbyssLootModeMask(1);
+        if (storyLootMode != 0)
+            summon->SetLootMode(storyLootMode);
+
         summon->SetInCombatWith(player);
         summon->AddThreat(player, 1000.0f);
+        state.pendingAbyssModeType = 0;
+        state.pendingCacheSummon = false;
+        state.abyssBossSummoned = true;
+        state.currentInstanceId = GetPlayerInstanceSignature(player, chapterConfig->mapId);
         procState.abyssModePromptShown = true;
+        SavePlayerRunState(player);
         return true;
+    }
+
+    void GrantModeKillQuestCredit(Player* player, Creature* creature, AbyssChapterConfig const& chapterConfig, PlayerAbyssRunState const& runState) const
+    {
+        if (!player || !creature)
+            return;
+
+        uint8 taskType = 0;
+        uint32 requiredEntry = 0;
+        switch (runState.modeType)
+        {
+            case 1:
+                taskType = 3;
+                requiredEntry = chapterConfig.abyssBossEntry;
+                break;
+            case 2:
+                taskType = 4;
+                requiredEntry = chapterConfig.abyssBossEntry;
+                break;
+            case 3:
+                taskType = 5;
+                requiredEntry = chapterConfig.abyssBossEntry;
+                break;
+            default:
+                return;
+        }
+
+        if (requiredEntry == 0 || creature->GetEntry() != requiredEntry)
+            return;
+
+        AbyssTaskDocking const* docking = GetTaskDockingForChapter(chapterConfig.chapterId, taskType);
+        if (!docking || player->GetQuestRewardStatus(docking->questId))
+            return;
+
+        QuestStatus status = player->GetQuestStatus(docking->questId);
+        if (status == QUEST_STATUS_NONE || status == QUEST_STATUS_COMPLETE)
+            return;
+
+        player->KilledMonsterCredit(requiredEntry, creature->GetGUID());
     }
 
     bool HandleCreatureKill(Player* player, Creature* creature)
@@ -6623,12 +7879,10 @@ public:
 
         AbyssChapterConfig const* mappedChapterByMap = GetChapterConfigByMapId(player->GetMapId());
 
-        bool hadActiveRun = false;
         auto runItr = _playerRunStates.find(playerGuid);
         if (runItr == _playerRunStates.end())
         {
-            AbyssChapterConfig const* chapterByMap = mappedChapterByMap;
-            if (!chapterByMap)
+            if (!mappedChapterByMap)
             {
                 auto playerItr = _playerData.find(playerGuid);
                 if (playerItr != _playerData.end() && HasAnyActiveRelicSlots(&playerItr->second))
@@ -6641,27 +7895,20 @@ public:
                 return false;
             }
 
-            uint64 lazyTrackedMaskBit = GetTrackedBossMaskBit(*chapterByMap, creatureEntry);
+            uint64 lazyTrackedMaskBit = GetTrackedBossMaskBit(*mappedChapterByMap, creatureEntry);
             bool isLazyBootstrapKill = lazyTrackedMaskBit == (1ULL << 0) || lazyTrackedMaskBit == (1ULL << 1);
             if (!isLazyBootstrapKill)
-            {
                 return false;
-            }
 
+            // 允许锚点/最终首领击杀时懒启动正传流程，用于记录击杀状态并弹出模式选择。
+            // 运行时直接发装备逻辑已移除，因此这里只恢复流程，不恢复官方直掉模块装备。
             std::string bootstrapFailureReason;
-            if (!BeginPlayerRun(player, chapterByMap->chapterId, 1, 0, &bootstrapFailureReason))
-            {
+            if (!BeginPlayerRun(player, mappedChapterByMap->chapterId, 1, 0, &bootstrapFailureReason))
                 return false;
-            }
 
             runItr = _playerRunStates.find(playerGuid);
             if (runItr == _playerRunStates.end())
                 return false;
-
-        }
-        else
-        {
-            hadActiveRun = true;
         }
 
         auto playerItr = _playerData.find(playerGuid);
@@ -6684,7 +7931,11 @@ public:
         if (state.currentMapId != 0 && player->GetMapId() != state.currentMapId)
             return false;
 
-        uint64 trackedMaskBit = GetTrackedBossMaskBit(*chapterConfig, creatureEntry);
+        UpdateActiveRunInstanceSignature(player);
+
+        uint8 modeTypeOnKill = state.modeType;
+        uint16 corruptionTierOnKill = state.corruptionTier;
+        uint64 trackedMaskBit = GetRuntimeBossProgressMaskBit(*chapterConfig, state, creatureEntry);
         bool changed = false;
         PlayerAbyssProcState& procState = GetOrCreatePlayerProcState(playerGuid);
 
@@ -6694,7 +7945,27 @@ public:
             changed = true;
         }
 
-        if (trackedMaskBit == (1ULL << 0) || trackedMaskBit == (1ULL << 1))
+        bool isOfficialKill = trackedMaskBit == kTrackedBossMaskOfficialAnchor || trackedMaskBit == kTrackedBossMaskOfficialFinal;
+        bool isModeBossKill = creatureEntry == chapterConfig->abyssBossEntry;
+        bool isCacheBossKill = creatureEntry == chapterConfig->cacheBossEntry;
+
+        if (isModeBossKill)
+        {
+            if (state.abyssBossSummoned || state.pendingAbyssModeType != 0)
+            {
+                state.abyssBossSummoned = false;
+                state.pendingAbyssModeType = 0;
+                changed = true;
+            }
+        }
+
+        if (isCacheBossKill && state.pendingCacheSummon)
+        {
+            state.pendingCacheSummon = false;
+            changed = true;
+        }
+
+        if (isOfficialKill)
         {
             procState.lastPromptX = creature->GetPositionX();
             procState.lastPromptY = creature->GetPositionY();
@@ -6704,33 +7975,34 @@ public:
         }
 
         bool readyForPrompt = IsAbyssSummonReady(*chapterConfig, state);
+        GrantModeKillQuestCredit(player, creature, *chapterConfig, state);
 
         if (state.modeType == 1)
         {
-            uint32 availableModeMask = GetChapterUnlockedModeMask(player, data, *chapterConfig);
-            if (hadActiveRun)
-                availableModeMask &= (GetModeTypeMask(2) | GetModeTypeMask(3) | GetModeTypeMask(4));
-
-            if (availableModeMask != 0 &&
-                readyForPrompt &&
-                !procState.abyssModePromptShown)
+            if (isModeBossKill)
             {
-                SendAbyssModePrompt(player, *chapterConfig, data, availableModeMask);
-                procState.abyssModePromptShown = true;
+                uint8 nextModeType = GetNextSequentialModeType(state);
+                if (nextModeType > 1 && !IsChapterModeUnlocked(player, data, *chapterConfig, nextModeType))
+                {
+                    if (player->GetSession())
+                        ChatHandler(player->GetSession()).PSendSysMessage("{}模式尚未解锁，自动连锁已停止。", GetModeBossPrefix(nextModeType));
+                }
+                else if (nextModeType != 0 && ScheduleDelayedModeBossSummon(player, *chapterConfig, state, nextModeType))
+                {
+                    changed = true;
+                }
             }
-            else if (trackedMaskBit != 0)
+            else if (isOfficialKill && readyForPrompt && state.pendingAbyssModeType == 0)
             {
-                LOG_INFO("module", "mod-abyss-cultivation: mode prompt suppressed player={} ({}) chapter={} reason=modeMask:{} ready:{} shown:{}",
-                    player->GetName(),
-                    playerGuid,
-                    chapterConfig->chapterId,
-                    availableModeMask,
-                    readyForPrompt,
-                    procState.abyssModePromptShown);
+                if (ScheduleDelayedModeBossSummon(player, *chapterConfig, state, 1))
+                    changed = true;
             }
 
             if (changed)
+            {
+                SavePlayerData(player);
                 SavePlayerRunState(player);
+            }
 
             return changed;
         }
@@ -6740,54 +8012,66 @@ public:
         if (HasActiveScriptGroup(player, "遗物_霜王残印"))
             ++procState.dominionCounter;
 
-        if (IsAbyssSummonReady(*chapterConfig, state))
+        if (ShouldUseSequentialModeChain(state))
         {
-            if (TrySummonBoss(player, *chapterConfig, chapterConfig->abyssBossEntry, true))
+            if (isModeBossKill)
             {
-                state.abyssBossSummoned = true;
-                changed = true;
+                uint8 nextModeType = GetNextSequentialModeType(state);
+                if (nextModeType > 1 && !IsChapterModeUnlocked(player, data, *chapterConfig, nextModeType))
+                {
+                    if (player->GetSession())
+                        ChatHandler(player->GetSession()).PSendSysMessage("{}模式尚未解锁，自动连锁已停止。", GetModeBossPrefix(nextModeType));
+                }
+                else if (nextModeType != 0 && ScheduleDelayedModeBossSummon(player, *chapterConfig, state, nextModeType))
+                {
+                    changed = true;
+                }
+                else if ((state.anchorBossKillMask & kTrackedBossMaskReincarnationBoss) != 0 &&
+                    (state.anchorBossKillMask & kTrackedBossMaskCacheBoss) == 0 &&
+                    !state.cacheBossSummoned &&
+                    !state.pendingCacheSummon &&
+                    chapterConfig->cacheBossEntry != 0 &&
+                    ScheduleDelayedCacheBossSummon(player, *chapterConfig, state))
+                {
+                    changed = true;
+                }
+            }
+        }
+        else
+        {
+            if (IsAbyssSummonReady(*chapterConfig, state) && state.pendingAbyssModeType == 0)
+            {
+                if (ScheduleDelayedModeBossSummon(player, *chapterConfig, state, state.modeType))
+                    changed = true;
+            }
+
+            if (isOfficialKill && !state.cacheBossSummoned && !state.pendingCacheSummon && chapterConfig->cacheBossEntry != 0)
+            {
+                bool pityReached = chapterConfig->cacheBossPityCount > 0 &&
+                    static_cast<uint32>(data.cacheBossFailCount + 1) >= chapterConfig->cacheBossPityCount;
+                bool rollSuccess = pityReached || RollPercentage() < chapterConfig->cacheBossBaseChance;
+
+                if (rollSuccess && ScheduleDelayedCacheBossSummon(player, *chapterConfig, state))
+                {
+                    changed = true;
+                }
+                else if (!state.cacheBossSummoned)
+                {
+                    ++data.cacheBossFailCount;
+                    changed = true;
+                }
             }
         }
 
-        bool triggerKill = trackedMaskBit == (1ULL << 0) || trackedMaskBit == (1ULL << 1);
-        if (triggerKill && !state.cacheBossSummoned && chapterConfig->cacheBossEntry != 0)
-        {
-            bool pityReached = chapterConfig->cacheBossPityCount > 0 &&
-                static_cast<uint32>(data.cacheBossFailCount + 1) >= chapterConfig->cacheBossPityCount;
-            bool rollSuccess = pityReached || RollPercentage() < chapterConfig->cacheBossBaseChance;
-
-            if (rollSuccess && TrySummonBoss(player, *chapterConfig, chapterConfig->cacheBossEntry, false))
-            {
-                state.cacheBossSummoned = true;
-                data.cacheBossFailCount = 0;
-                changed = true;
-
-                if (player->GetSession())
-                    ChatHandler(player->GetSession()).PSendSysMessage("Cache boss summoned for chapter {}: entry={} pity={}", chapterConfig->chapterId, chapterConfig->cacheBossEntry, pityReached);
-            }
-            else if (!state.cacheBossSummoned)
-            {
-                ++data.cacheBossFailCount;
-                changed = true;
-            }
-        }
-
-        if (creatureEntry == chapterConfig->cacheBossEntry && data.cacheBossFailCount != 0)
+        if (isCacheBossKill && data.cacheBossFailCount != 0)
         {
             data.cacheBossFailCount = 0;
             changed = true;
         }
 
-        if (creatureEntry == chapterConfig->abyssBossEntry ||
-            creatureEntry == chapterConfig->cacheBossEntry)
+        if (isModeBossKill && modeTypeOnKill == 3 && data.highestCorruptionTier < corruptionTierOnKill)
         {
-            AbyssRewardResult reward = GrantBossReward(player, *chapterConfig, data, state, creatureEntry);
-            changed = reward.awarded || changed;
-        }
-
-        if (creatureEntry == chapterConfig->abyssBossEntry && data.highestCorruptionTier < state.corruptionTier)
-        {
-            data.highestCorruptionTier = state.corruptionTier;
+            data.highestCorruptionTier = corruptionTierOnKill;
             changed = true;
         }
 
@@ -6796,6 +8080,9 @@ public:
             SavePlayerData(player);
             SavePlayerRunState(player);
         }
+
+        if (IsAbyssCustomBossEntry(creatureEntry))
+            EnsureCustomBossLootGenerated(player, creature, chapterConfig->chapterId, state.modeType);
 
         return changed;
     }
@@ -6860,6 +8147,36 @@ public:
         creature->SetDynamicFlag(UNIT_DYNFLAG_LOOTABLE);
 
         return true;
+    }
+
+    bool EnsureCustomBossLootGenerated(Player* player, Creature* creature, uint16 chapterId = 0, uint8 modeType = 0)
+    {
+        if (!player || !creature || !_worldDataLoaded)
+            return false;
+
+        if (!IsAbyssCustomBossEntry(creature->GetEntry()) || !creature->isDead())
+            return false;
+
+        if (creature->HasDynamicFlag(UNIT_DYNFLAG_LOOTABLE) && !creature->loot.isLooted())
+            return false;
+
+        CreatureTemplate const* creatureTemplate = creature->GetCreatureTemplate();
+        if (!creatureTemplate || creatureTemplate->lootid == 0)
+            return false;
+
+        creature->loot.clear();
+        if (!creature->GetLootRecipient())
+            creature->SetLootRecipient(player, player->GetGroup() != nullptr);
+
+        creature->loot.loot_type = LOOT_CORPSE;
+        creature->loot.FillLoot(creatureTemplate->lootid, LootTemplates_Creature, player, false, false, creature->GetLootMode(), creature);
+
+        if (creature->GetLootMode())
+            creature->loot.generateMoneyLoot(creatureTemplate->mingold, creatureTemplate->maxgold);
+
+        if (!creature->loot.isLooted())
+            creature->SetDynamicFlag(UNIT_DYNFLAG_LOOTABLE);
+        return !creature->loot.isLooted();
     }
 
     bool HandleQuestCompletion(Player* player, Quest const* quest)
@@ -7020,10 +8337,7 @@ public:
             }
 
             if (unlockedModeType >= 1)
-            {
-                if (AbyssChapterConfig const* chapterConfig = GetChapterConfig(docking->chapterId))
-                    SendAbyssModePrompt(player, *chapterConfig, data, GetChapterUnlockedModeMask(player, data, *chapterConfig));
-            }
+                SendAbyssStateToAddon(player);
         }
 
         return changed;
@@ -7045,6 +8359,7 @@ private:
     std::unordered_map<uint32, std::vector<PlayerAbyssCollectionEntry>> _playerCollections;
     std::unordered_map<uint32, std::unordered_map<uint16, PlayerAbyssChapterModeUnlock>> _playerChapterModeUnlocks;
     std::unordered_map<uint32, PlayerAbyssRunState> _playerRunStates;
+    std::unordered_map<uint32, PlayerAbyssRunState> _suspendedRunStates;
     std::unordered_map<uint32, PlayerAbyssProcState> _playerProcStates;
     bool _worldDataLoaded = false;
 };
@@ -7129,7 +8444,9 @@ void SendAbyssStateToAddon(Player* player)
 
     AbyssChapterConfig const* currentChapter = sAbyssCultivationMgr->GetChapterConfig(playerData->currentChapter);
     AbyssChapterConfig const* nextChapter = sAbyssCultivationMgr->GetNextChapterConfig(playerData->currentChapter);
-    PlayerAbyssRunState const* runState = sAbyssCultivationMgr->GetPlayerRunState(guid);
+    PlayerAbyssRunState const* activeRunState = sAbyssCultivationMgr->GetPlayerRunState(guid);
+    PlayerAbyssRunState const* runState = sAbyssCultivationMgr->GetDisplayRunState(player);
+    AbyssChapterConfig const* currentMapChapter = sAbyssCultivationMgr->GetChapterConfigByMapId(player->GetMapId());
 
     std::ostringstream payload;
     payload << "STATE:"
@@ -7151,7 +8468,7 @@ void SendAbyssStateToAddon(Player* player)
             << playerData->ultimateArtifact << '|'
             << playerData->highestCorruptionTier << '|'
             << playerData->cacheBossFailCount << '|'
-            << (runState ? 1 : 0) << '|'
+            << (activeRunState ? 1 : 0) << '|'
             << (runState ? runState->currentChapterId : 0) << '|'
             << (runState ? static_cast<uint32>(runState->modeType) : 0) << '|'
             << (runState ? runState->corruptionTier : 0) << '|'
@@ -7160,7 +8477,10 @@ void SendAbyssStateToAddon(Player* player)
             << (runState ? (runState->abyssBossSummoned ? 1 : 0) : 0) << '|'
             << (runState ? (runState->cacheBossSummoned ? 1 : 0) : 0) << '|'
             << (nextChapter ? nextChapter->chapterId : 0) << '|'
-            << SanitizeAddonText(nextChapter ? nextChapter->chapterName : std::string());
+            << SanitizeAddonText(nextChapter ? nextChapter->chapterName : std::string()) << '|'
+            << player->GetMapId() << '|'
+            << (currentMapChapter ? currentMapChapter->chapterId : 0) << '|'
+            << SanitizeAddonText(currentMapChapter ? currentMapChapter->chapterName : std::string());
 
     SendAbyssPayload(player, payload.str());
 }
@@ -7319,6 +8639,268 @@ void SendAbyssEquipmentsToAddon(Player* player)
     SendAbyssPayload(player, payload.str());
 }
 
+bool PlayerOwnsEquipmentForAddon(Player* player, uint32 guid, uint32 itemId)
+{
+    if (!player || itemId == 0)
+        return false;
+
+    return player->HasItemCount(itemId, 1, true) || sAbyssCultivationMgr->PlayerOwnsCollectedRelic(guid, itemId);
+}
+
+void SendAbyssEquipmentPageToAddon(Player* player, AbyssAddonEquipmentPageQuery const& query)
+{
+    if (!player)
+        return;
+
+    sAbyssCultivationMgr->LoadPlayerCollections(player);
+
+    uint32 guid = player->GetGUID().GetCounter();
+    struct EquipmentPageEntry
+    {
+        AbyssEquipmentTemplate const* equipment = nullptr;
+        bool owned = false;
+    };
+
+    std::vector<EquipmentPageEntry> filteredEquipments;
+    filteredEquipments.reserve(sAbyssCultivationMgr->GetAllEquipmentTemplates().size());
+    for (auto const& pair : sAbyssCultivationMgr->GetAllEquipmentTemplates())
+    {
+        AbyssEquipmentTemplate const& equipment = pair.second;
+        if (query.equipmentType != 0 && equipment.equipmentType != query.equipmentType)
+            continue;
+        if (query.sourceMode != 0 && equipment.sourceMode != query.sourceMode)
+            continue;
+        if (query.sourceChapter != 0 && equipment.sourceChapter != query.sourceChapter)
+            continue;
+        if (query.slotMask != 0 && equipment.slotMask != query.slotMask)
+            continue;
+
+        bool owned = PlayerOwnsEquipmentForAddon(player, guid, equipment.itemId);
+        if (query.ownedOnly && !owned)
+            continue;
+
+        filteredEquipments.push_back({ &equipment, owned });
+    }
+
+    std::sort(filteredEquipments.begin(), filteredEquipments.end(), [](EquipmentPageEntry const& left, EquipmentPageEntry const& right)
+    {
+        if (left.equipment->equipmentType != right.equipment->equipmentType)
+            return left.equipment->equipmentType > right.equipment->equipmentType;
+        if (left.equipment->actId != right.equipment->actId)
+            return left.equipment->actId < right.equipment->actId;
+        if (left.equipment->sourceChapter != right.equipment->sourceChapter)
+            return left.equipment->sourceChapter < right.equipment->sourceChapter;
+        if (left.equipment->sourceMode != right.equipment->sourceMode)
+            return left.equipment->sourceMode < right.equipment->sourceMode;
+        if (left.equipment->slotMask != right.equipment->slotMask)
+            return left.equipment->slotMask < right.equipment->slotMask;
+        return left.equipment->itemId < right.equipment->itemId;
+    });
+
+    uint32 totalCount = static_cast<uint32>(filteredEquipments.size());
+    uint32 pageSize = NormalizeAddonEquipmentPageSize(query.pageSize);
+    uint32 pageCount = std::max<uint32>(1u, (totalCount + pageSize - 1) / pageSize);
+    uint32 page = std::min<uint32>(std::max<uint32>(1u, query.page), pageCount);
+
+    size_t pageStart = static_cast<size_t>((page - 1) * pageSize);
+    size_t pageEnd = std::min<size_t>(pageStart + pageSize, filteredEquipments.size());
+
+    std::ostringstream payload;
+    payload << "EQUIPMENT_PAGE:"
+            << page << '|'
+            << pageSize << '|'
+            << totalCount << '|'
+            << pageCount;
+
+    for (size_t index = pageStart; index < pageEnd; ++index)
+    {
+        EquipmentPageEntry const& entry = filteredEquipments[index];
+        AbyssEquipmentTemplate const* equipment = entry.equipment;
+        AbyssChapterConfig const* sourceChapter = sAbyssCultivationMgr->GetChapterConfig(equipment->sourceChapter);
+        std::string iconPath = GetItemIconPathForAddon(equipment->itemId);
+
+        payload << '~'
+                << equipment->itemId << '^'
+                << SanitizeAddonText(equipment->itemName) << '^'
+                << static_cast<uint32>(equipment->equipmentType) << '^'
+                << equipment->sourceChapter << '^'
+                << SanitizeAddonText(sourceChapter ? sourceChapter->chapterName : std::string()) << '^'
+                << static_cast<uint32>(equipment->sourceMode) << '^'
+                << equipment->slotMask << '^'
+                << static_cast<uint32>(equipment->actId) << '^'
+                << equipment->baseItemLevel << '^'
+                << (equipment->fromCacheBoss ? 1 : 0) << '^'
+                << (equipment->requiresFragments ? 1 : 0) << '^'
+                << (entry.owned ? 1 : 0) << '^'
+                << SanitizeAddonText(equipment->flavorText) << '^'
+                << SanitizeAddonText(iconPath);
+    }
+
+    SendAbyssPayload(player, payload.str());
+}
+
+void SendAbyssSetOverviewToAddon(Player* player, AbyssAddonSetOverviewQuery const& query)
+{
+    if (!player)
+        return;
+
+    struct SetOverviewGroup
+    {
+        uint8 sourceMode = 0;
+        uint8 actId = 0;
+        uint16 sourceChapter = 0;
+        std::string sourceChapterName;
+        std::vector<AbyssEquipmentTemplate const*> items;
+    };
+
+    uint8 currentActId = 0;
+    if (query.currentActOnly)
+    {
+        if (PlayerAbyssData const* playerData = sAbyssCultivationMgr->GetPlayerData(player->GetGUID().GetCounter()))
+            if (AbyssChapterConfig const* chapter = sAbyssCultivationMgr->GetChapterConfig(playerData->currentChapter))
+                currentActId = chapter->actId;
+    }
+
+    std::unordered_map<std::string, SetOverviewGroup> groupsByKey;
+    for (auto const& pair : sAbyssCultivationMgr->GetAllEquipmentTemplates())
+    {
+        AbyssEquipmentTemplate const& equipment = pair.second;
+        if (equipment.equipmentType != 1)
+            continue;
+        if (query.modeFilter != 0 && equipment.sourceMode != query.modeFilter)
+            continue;
+        if (query.currentActOnly && (currentActId == 0 || equipment.actId != currentActId))
+            continue;
+
+        std::string key = std::to_string(equipment.sourceMode) + ":" + std::to_string(equipment.actId) + ":" + std::to_string(equipment.sourceChapter);
+        SetOverviewGroup& group = groupsByKey[key];
+        if (group.items.empty())
+        {
+            group.sourceMode = equipment.sourceMode;
+            group.actId = equipment.actId;
+            group.sourceChapter = equipment.sourceChapter;
+            if (AbyssChapterConfig const* chapter = sAbyssCultivationMgr->GetChapterConfig(equipment.sourceChapter))
+                group.sourceChapterName = chapter->chapterName;
+        }
+
+        group.items.push_back(&equipment);
+    }
+
+    std::vector<SetOverviewGroup> groups;
+    groups.reserve(groupsByKey.size());
+    for (auto& pair : groupsByKey)
+        groups.push_back(std::move(pair.second));
+
+    std::sort(groups.begin(), groups.end(), [](SetOverviewGroup const& left, SetOverviewGroup const& right)
+    {
+        if (left.actId != right.actId)
+            return left.actId < right.actId;
+        if (left.sourceMode != right.sourceMode)
+            return left.sourceMode < right.sourceMode;
+        return left.sourceChapter < right.sourceChapter;
+    });
+
+    std::vector<uint8> actIds;
+    actIds.reserve(groups.size());
+    for (SetOverviewGroup const& group : groups)
+    {
+        if (actIds.empty() || actIds.back() != group.actId)
+            actIds.push_back(group.actId);
+    }
+
+    uint32 totalActCount = static_cast<uint32>(actIds.size());
+    uint32 actsPerPage = NormalizeAddonSetOverviewPageSize(query.pageSize);
+    uint32 pageCount = std::max<uint32>(1u, (totalActCount + actsPerPage - 1) / actsPerPage);
+    uint32 page = std::min<uint32>(std::max<uint32>(1u, query.page), pageCount);
+    size_t pageStartActIndex = static_cast<size_t>((page - 1) * actsPerPage);
+    size_t pageEndActIndex = std::min<size_t>(pageStartActIndex + actsPerPage, actIds.size());
+    uint8 pageStartActId = 0;
+    uint8 pageEndActId = 0;
+    if (!actIds.empty() && pageStartActIndex < pageEndActIndex)
+    {
+        pageStartActId = actIds[pageStartActIndex];
+        pageEndActId = actIds[pageEndActIndex - 1];
+    }
+
+    auto findBonusConfig = [](uint8 sourceMode, uint8 actId) -> AbyssSetBonusConfig const*
+    {
+        for (auto const& pair : sAbyssCultivationMgr->GetSetBonusConfigs())
+        {
+            AbyssSetBonusConfig const& config = pair.second;
+            if (!config.enabled)
+                continue;
+            if (config.sourceMode == sourceMode && config.actId == actId)
+                return &config;
+        }
+
+        return nullptr;
+    };
+    auto encodeOptionalAddonText = [](std::string const& value) -> std::string
+    {
+        return value.empty() ? std::string(" ") : value;
+    };
+
+    std::ostringstream payload;
+    payload << "SET_OVERVIEW:"
+            << page << '|'
+            << actsPerPage << '|'
+            << totalActCount << '|'
+            << pageCount << '|'
+            << static_cast<uint32>(currentActId) << '|'
+            << static_cast<uint32>(pageStartActId) << '|'
+            << static_cast<uint32>(pageEndActId);
+
+    for (SetOverviewGroup& group : groups)
+    {
+        if (pageStartActId != 0 && (group.actId < pageStartActId || group.actId > pageEndActId))
+            continue;
+        if (group.items.empty())
+            continue;
+
+        std::sort(group.items.begin(), group.items.end(), [](AbyssEquipmentTemplate const* left, AbyssEquipmentTemplate const* right)
+        {
+            if (left->slotMask != right->slotMask)
+                return left->slotMask < right->slotMask;
+            return left->itemId < right->itemId;
+        });
+
+        AbyssEquipmentTemplate const* representative = group.items.front();
+        std::ostringstream slotSummary;
+        bool firstSlot = true;
+        for (AbyssEquipmentTemplate const* item : group.items)
+        {
+            if (!firstSlot)
+                slotSummary << " / ";
+            firstSlot = false;
+            slotSummary << GetEquipmentSlotMaskLabel(item->slotMask);
+        }
+
+        std::string groupName = std::string(GetEquipmentSourceModeDisplayName(group.sourceMode))
+            + "·第" + std::to_string(group.actId)
+            + "幕·" + ExtractEquipmentSetTheme(representative->itemName)
+            + "套装";
+        AbyssSetBonusConfig const* bonus = findBonusConfig(group.sourceMode, group.actId);
+
+        payload << '~'
+                << static_cast<uint32>(group.sourceMode) << '^'
+                << static_cast<uint32>(group.actId) << '^'
+                << group.sourceChapter << '^'
+                << SanitizeAddonText(group.sourceChapterName) << '^'
+                << static_cast<uint32>(group.items.size()) << '^'
+                << SanitizeAddonText(groupName) << '^'
+                << SanitizeAddonText(slotSummary.str()) << '^'
+                << representative->itemId << '^'
+                << SanitizeAddonText(representative->itemName) << '^'
+                << SanitizeAddonText(GetItemIconPathForAddon(representative->itemId)) << '^'
+                << SanitizeAddonText(encodeOptionalAddonText(bonus ? bonus->twoPieceDesc : std::string())) << '^'
+                << SanitizeAddonText(encodeOptionalAddonText(bonus ? bonus->fourPieceDesc : std::string())) << '^'
+                << SanitizeAddonText(encodeOptionalAddonText(bonus ? bonus->sixPieceDesc : std::string())) << '^'
+                << SanitizeAddonText(encodeOptionalAddonText(bonus ? bonus->eightPieceDesc : std::string()));
+    }
+
+    SendAbyssPayload(player, payload.str());
+}
+
 void SendAbyssSetBonusesToAddon(Player* player)
 {
     if (!player)
@@ -7340,20 +8922,26 @@ void SendAbyssSetBonusesToAddon(Player* player)
                 << static_cast<uint32>(config.actId) << '^'
                 << static_cast<uint32>(config.sourceMode) << '^'
                 << SanitizeAddonText(config.twoPieceDesc) << '^'
-                << SanitizeAddonText(config.fourPieceDesc);
+                << SanitizeAddonText(config.fourPieceDesc) << '^'
+                << SanitizeAddonText(config.sixPieceDesc) << '^'
+                << SanitizeAddonText(config.eightPieceDesc);
     }
 
     SendAbyssPayload(player, payload.str());
 }
 
-void SendAbyssRewardPreviewCategoryToAddon(Player* player, std::string const& header, AbyssChapterConfig const& chapter, uint32 bossEntry)
+void SendAbyssRewardPreviewCategoryToAddon(Player* player, std::string const& header, AbyssChapterConfig const& chapter, uint32 bossEntry, uint8 modeType)
 {
     if (!player)
         return;
 
-    std::vector<AbyssRewardCandidate> candidates = sAbyssCultivationMgr->GetRewardCandidatesForBoss(chapter, bossEntry);
+    // 首领Entry为0表示该章节没有此类首领，不发送数据
+    if (bossEntry == 0)
+        return;
+
+    std::vector<AbyssRewardCandidate> candidates = sAbyssCultivationMgr->GetRewardCandidatesForBoss(chapter, bossEntry, modeType);
     std::ostringstream payload;
-    payload << header << ':' << chapter.chapterId << '^' << SanitizeAddonText(chapter.chapterName);
+    payload << header << ':' << chapter.chapterId << '^' << SanitizeAddonText(chapter.chapterName) << '^' << static_cast<uint32>(modeType);
 
     for (AbyssRewardCandidate const& docking : candidates)
     {
@@ -7370,24 +8958,24 @@ void SendAbyssRewardPreviewCategoryToAddon(Player* player, std::string const& he
     SendAbyssPayload(player, payload.str());
 }
 
-void SendAbyssRewardPreviewToAddon(Player* player, AbyssChapterConfig const* chapter, char const* scope)
+void SendAbyssRewardPreviewToAddon(Player* player, AbyssChapterConfig const* chapter, char const* scope, uint8 modeType = 1)
 {
     if (!player || !chapter || !scope)
         return;
 
     std::string prefix(scope);
-    SendAbyssRewardPreviewCategoryToAddon(player, "REWARD_" + prefix + "_ANCHOR", *chapter, chapter->anchorBossEntry);
-    SendAbyssRewardPreviewCategoryToAddon(player, "REWARD_" + prefix + "_FINAL", *chapter, chapter->finalBossEntry);
-    SendAbyssRewardPreviewCategoryToAddon(player, "REWARD_" + prefix + "_ABYSS", *chapter, chapter->abyssBossEntry);
-    SendAbyssRewardPreviewCategoryToAddon(player, "REWARD_" + prefix + "_CACHE", *chapter, chapter->cacheBossEntry);
+    SendAbyssRewardPreviewCategoryToAddon(player, "REWARD_" + prefix + "_ANCHOR", *chapter, chapter->anchorBossEntry, modeType);
+    SendAbyssRewardPreviewCategoryToAddon(player, "REWARD_" + prefix + "_FINAL", *chapter, chapter->finalBossEntry, modeType);
+    SendAbyssRewardPreviewCategoryToAddon(player, "REWARD_" + prefix + "_ABYSS", *chapter, chapter->abyssBossEntry, modeType);
+    SendAbyssRewardPreviewCategoryToAddon(player, "REWARD_" + prefix + "_CACHE", *chapter, chapter->cacheBossEntry, modeType);
 }
 
-void SendAbyssRewardPreviewForChapterIdToAddon(Player* player, uint16 chapterId)
+void SendAbyssRewardPreviewForChapterIdToAddon(Player* player, uint16 chapterId, uint8 modeType = 1)
 {
     if (!player || chapterId == 0)
         return;
 
-    SendAbyssRewardPreviewToAddon(player, sAbyssCultivationMgr->GetChapterConfig(chapterId), "VIEW");
+    SendAbyssRewardPreviewToAddon(player, sAbyssCultivationMgr->GetChapterConfig(chapterId), "VIEW", modeType);
 }
 
 void SendAbyssAllToAddon(Player* player)
@@ -7395,15 +8983,14 @@ void SendAbyssAllToAddon(Player* player)
     SendAbyssStateToAddon(player);
     SendAbyssChapterListToAddon(player);
     SendAbyssRelicsToAddon(player);
-    SendAbyssEquipmentsToAddon(player);
 
     if (player)
     {
         uint32 guid = player->GetGUID().GetCounter();
         if (PlayerAbyssData const* playerData = sAbyssCultivationMgr->GetPlayerData(guid))
         {
-            SendAbyssRewardPreviewToAddon(player, sAbyssCultivationMgr->GetChapterConfig(playerData->currentChapter), "CURRENT");
-            SendAbyssRewardPreviewToAddon(player, sAbyssCultivationMgr->GetNextChapterConfig(playerData->currentChapter), "NEXT");
+            SendAbyssRewardPreviewToAddon(player, sAbyssCultivationMgr->GetChapterConfig(playerData->currentChapter), "CURRENT", 1);
+            SendAbyssRewardPreviewToAddon(player, sAbyssCultivationMgr->GetNextChapterConfig(playerData->currentChapter), "NEXT", 1);
         }
     }
 }
@@ -7424,9 +9011,6 @@ public:
         {
             if (!bossConfig->introText.empty())
                 me->Yell(bossConfig->introText, LANG_UNIVERSAL);
-
-            if (!bossConfig->areaEffect.empty())
-                events.ScheduleEvent(1, 12000);
         }
     }
 
@@ -7445,19 +9029,6 @@ public:
             return;
 
         events.Update(diff);
-        while (uint32 eventId = events.ExecuteEvent())
-        {
-            if (eventId == 1)
-            {
-                if (AbyssBossConfig const* bossConfig = sAbyssCultivationMgr->GetBossConfig(me->GetEntry()))
-                {
-                    if (!bossConfig->areaEffect.empty())
-                        me->Yell(bossConfig->areaEffect, LANG_UNIVERSAL);
-                }
-
-                events.ScheduleEvent(1, 18000);
-            }
-        }
 
         DoMeleeAttackIfReady();
     }
@@ -7485,6 +9056,8 @@ public:
         if (!IsModuleEnabled() || !creature)
             return;
 
+        sAbyssCultivationMgr->SyncTrackedBossLootMode(creature);
+
         if (sAbyssCultivationMgr->ApplyBossRuntimeTuning(creature))
         {
             _scaledCreatures[creature->GetGUID().GetCounter()] = true;
@@ -7507,11 +9080,14 @@ public:
         if (!IsModuleEnabled() || !creature || !creature->IsAlive())
             return;
 
+        uint32 key = creature->GetGUID().GetCounter();
+
+        sAbyssCultivationMgr->SyncTrackedBossLootMode(creature);
+
         AbyssBossConfig const* bossConfig = sAbyssCultivationMgr->GetBossConfig(creature->GetEntry());
         if (!bossConfig)
             return;
 
-        uint32 key = creature->GetGUID().GetCounter();
         if (!HasActiveAbyssContext(creature, bossConfig->chapterId))
         {
             _scaledCreatures.erase(key);
@@ -7529,23 +9105,16 @@ public:
         }
 
         uint8& phase = _phaseState[key];
-        if (phase == 0 && !bossConfig->phase1SkillGroup.empty())
-        {
-            creature->Yell(bossConfig->phase1SkillGroup, LANG_UNIVERSAL);
+        if (phase == 0)
             phase = 1;
-        }
 
         if (phase < 2 && bossConfig->phase2HealthPct > 0 && creature->HealthBelowPct(bossConfig->phase2HealthPct))
         {
-            if (!bossConfig->phase2SkillGroup.empty())
-                creature->Yell(bossConfig->phase2SkillGroup, LANG_UNIVERSAL);
             phase = 2;
         }
 
         if (phase < 3 && bossConfig->phase3HealthPct > 0 && creature->HealthBelowPct(bossConfig->phase3HealthPct))
         {
-            if (!bossConfig->phase3SkillGroup.empty())
-                creature->Yell(bossConfig->phase3SkillGroup, LANG_UNIVERSAL);
             phase = 3;
         }
     }
@@ -7771,6 +9340,7 @@ public:
         sAbyssCultivationMgr->SavePlayerRunState(player);
         sAbyssCultivationMgr->ClearPlayerData(guid);
         sAbyssCultivationMgr->ClearPlayerRunState(guid);
+        sAbyssCultivationMgr->ClearPlayerSuspendedRunState(guid);
         sAbyssCultivationMgr->ClearPlayerProcState(guid);
         sAbyssCultivationMgr->CleanupPlayerSetBonuses(guid);
     }
@@ -7803,7 +9373,8 @@ public:
             return;
 
         sAbyssCultivationMgr->TryRestoreDefaultLootForNonAbyssKill(player, creature);
-        sAbyssCultivationMgr->HandleCreatureKill(player, creature);
+        if (sAbyssCultivationMgr->HandleCreatureKill(player, creature))
+            SendAbyssStateToAddon(player);
     }
 
     bool OnPlayerPassedQuestKilledMonsterCredit(Player* player, Quest const* qinfo, uint32 entry, uint32 realEntry, ObjectGuid /*guid*/) override
@@ -7823,7 +9394,7 @@ public:
         if (docking->taskType == 2)
             requiredEntry = chapterConfig->anchorBossEntry;
         else if (docking->taskType == 3)
-            requiredEntry = chapterConfig->anchorBossEntry;
+            requiredEntry = chapterConfig->abyssBossEntry;
         else if (docking->taskType == 4)
             requiredEntry = chapterConfig->abyssBossEntry;
         else
@@ -7894,6 +9465,24 @@ public:
             return;
         }
 
+        if (command == "REQ_EQUIPMENT_PAGE" || command.rfind("REQ_EQUIPMENT_PAGE:", 0) == 0)
+        {
+            AbyssAddonEquipmentPageQuery query;
+            if (command.length() > 19)
+                ParseAddonEquipmentPageQuery(command.substr(19), query);
+            SendAbyssEquipmentPageToAddon(player, query);
+            return;
+        }
+
+        if (command == "REQ_SET_OVERVIEW" || command.rfind("REQ_SET_OVERVIEW:", 0) == 0)
+        {
+            AbyssAddonSetOverviewQuery query;
+            if (command.length() > 17)
+                ParseAddonSetOverviewQuery(command.substr(17), query);
+            SendAbyssSetOverviewToAddon(player, query);
+            return;
+        }
+
         if (command == "REQ_EQUIPMENTS")
         {
             SendAbyssEquipmentsToAddon(player);
@@ -7911,24 +9500,32 @@ public:
             return;
         }
 
-        if (command == "REQ_REWARD_CURRENT")
+        if (command == "REQ_REWARD_CURRENT" || command.rfind("REQ_REWARD_CURRENT:", 0) == 0)
         {
+            uint8 modeType = 1;
+            if (command.length() > 19)
+                modeType = ParseAddonRewardMode(command.substr(19), 1);
             if (PlayerAbyssData const* playerData = sAbyssCultivationMgr->GetPlayerData(player->GetGUID().GetCounter()))
-                SendAbyssRewardPreviewToAddon(player, sAbyssCultivationMgr->GetChapterConfig(playerData->currentChapter), "CURRENT");
+                SendAbyssRewardPreviewToAddon(player, sAbyssCultivationMgr->GetChapterConfig(playerData->currentChapter), "CURRENT", modeType);
             return;
         }
 
-        if (command == "REQ_REWARD_NEXT")
+        if (command == "REQ_REWARD_NEXT" || command.rfind("REQ_REWARD_NEXT:", 0) == 0)
         {
+            uint8 modeType = 1;
+            if (command.length() > 16)
+                modeType = ParseAddonRewardMode(command.substr(16), 1);
             if (PlayerAbyssData const* playerData = sAbyssCultivationMgr->GetPlayerData(player->GetGUID().GetCounter()))
-                SendAbyssRewardPreviewToAddon(player, sAbyssCultivationMgr->GetNextChapterConfig(playerData->currentChapter), "NEXT");
+                SendAbyssRewardPreviewToAddon(player, sAbyssCultivationMgr->GetNextChapterConfig(playerData->currentChapter), "NEXT", modeType);
             return;
         }
 
         if (command.rfind("REQ_REWARD_CHAPTER:", 0) == 0)
         {
-            uint16 chapterId = static_cast<uint16>(std::strtoul(command.substr(17).c_str(), nullptr, 10));
-            SendAbyssRewardPreviewForChapterIdToAddon(player, chapterId);
+            uint16 chapterId = 0;
+            uint8 modeType = 1;
+            if (ParseAddonRewardChapterRequest(command.substr(19), chapterId, modeType))
+                SendAbyssRewardPreviewForChapterIdToAddon(player, chapterId, modeType);
             return;
         }
 
@@ -8007,7 +9604,11 @@ public:
         if (!player || !IsModuleEnabled())
             return;
 
-        sAbyssCultivationMgr->EndPlayerRun(player);
+        if (sAbyssCultivationMgr->HandlePlayerSetDeathProtection(player))
+            return;
+
+        if (sAbyssCultivationMgr->EndPlayerRun(player))
+            SendAbyssStateToAddon(player);
     }
 
     void OnPlayerUpdate(Player* player, uint32 diff) override
@@ -8025,10 +9626,18 @@ public:
 
         timer = 3000;
         if (sAbyssCultivationMgr->EnsurePlayerRunLocation(player))
+        {
+            SendAbyssStateToAddon(player);
             return;
+        }
+
+        sAbyssCultivationMgr->UpdateActiveRunInstanceSignature(player);
 
         if (IsAutoBeginOnMapEnterEnabled())
-            sAbyssCultivationMgr->TryAutoBeginPlayerRun(player);
+        {
+            if (sAbyssCultivationMgr->TryAutoBeginPlayerRun(player))
+                SendAbyssStateToAddon(player);
+        }
         sAbyssCultivationMgr->HandlePlayerUpdate(player, diff);
     }
 
@@ -8043,6 +9652,11 @@ public:
         procState.artifactCombatEchoUsed = false;
         procState.artifactSubLinkUsed = false;
         procState.artifactMainProcCounter = 0;
+        procState.artifactFistComboCounter = 0;
+        procState.artifactStaffCadenceCounter = 0;
+        procState.artifactFalunOrbitCounter = 0;
+        procState.artifactSwordMarkStacks.clear();
+        procState.artifactBowMarkStacks.clear();
 
         PlayerAbyssData const* playerData = sAbyssCultivationMgr->GetPlayerData(player->GetGUID().GetCounter());
         if (!playerData)
@@ -8062,6 +9676,26 @@ public:
 
         PlayerAbyssProcState& procState = sAbyssCultivationMgr->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
         procState.openingAttackCount = 0;
+        if (procState.setCombatGrowthStacks != 0)
+        {
+            procState.setCombatGrowthStacks = 0;
+            procState.lastSetCombatGrowthTime = 0;
+            player->UpdateAllStats();
+            player->UpdateAllRatings();
+            if (player->GetSession())
+            {
+                char const* growthLabel = sAbyssCultivationMgr->GetActiveSetSpecialEffectScale(player, "套装_烬灭永燃") > 0.0f
+                    ? "烬灭永燃"
+                    : "烬世叠加";
+                ChatHandler(player->GetSession()).PSendSysMessage("|cffff8080[套装] %s已重置。|r", growthLabel);
+            }
+        }
+
+        procState.artifactFistComboCounter = 0;
+        procState.artifactStaffCadenceCounter = 0;
+        procState.artifactFalunOrbitCounter = 0;
+        procState.artifactSwordMarkStacks.clear();
+        procState.artifactBowMarkStacks.clear();
     }
 
     void OnPlayerApplyWeaponDamage(Player* player, uint8 /*slot*/, ItemTemplate const* proto, float& /*minDamage*/, float& /*maxDamage*/, uint8 /*damageIndex*/) override
@@ -8070,11 +9704,100 @@ public:
             return;
 
         uint32 guid = player->GetGUID().GetCounter();
-        if (!sAbyssCultivationMgr->GetPlayerRunState(guid) && !HasAnyActiveRelicSlots(sAbyssCultivationMgr->GetPlayerData(guid)))
+        if (!sAbyssCultivationMgr->GetPlayerRunState(guid) &&
+            !HasAnyActiveRelicSlots(sAbyssCultivationMgr->GetPlayerData(guid)) &&
+            !sAbyssCultivationMgr->HasAnyActiveSetBonuses(player))
             return;
 
         PlayerAbyssProcState& procState = sAbyssCultivationMgr->GetOrCreatePlayerProcState(guid);
         uint32 now = GetNow();
+        if (Unit* target = sAbyssCultivationMgr->GetPrimaryCombatTarget(player))
+        {
+            float emberEchoScale = sAbyssCultivationMgr->GetActiveSetSpecialEffectScale(player, "套装_灰烬回响");
+            if (emberEchoScale > 0.0f &&
+                now > procState.lastSetEchoTime + 6 &&
+                RollPercentage() < std::min(45.0f, 15.0f * emberEchoScale))
+            {
+                sAbyssCultivationMgr->DealConfiguredBurst(player, target, 120, 180, SPELL_SCHOOL_MASK_FIRE, emberEchoScale);
+                procState.lastSetEchoTime = now;
+            }
+
+            float artifactFlameScale = sAbyssCultivationMgr->GetActiveSetSpecialEffectScale(player, "套装_焚界天爆");
+            if (artifactFlameScale > 0.0f &&
+                now > procState.lastSetDoubleBurstTime + 6 &&
+                RollPercentage() < std::min(55.0f, 15.0f * artifactFlameScale))
+            {
+                sAbyssCultivationMgr->DealConfiguredBurst(player, target, 220, 320, SPELL_SCHOOL_MASK_FIRE, artifactFlameScale);
+                sAbyssCultivationMgr->RestorePlayerPrimaryPowerPct(player, 3.0f * artifactFlameScale);
+                procState.lastSetDoubleBurstTime = now;
+            }
+
+            float doubleBurstScale = sAbyssCultivationMgr->GetActiveSetSpecialEffectScale(player, "套装_轮焰双爆");
+            if (artifactFlameScale <= 0.0f &&
+                doubleBurstScale > 0.0f &&
+                now > procState.lastSetDoubleBurstTime + 8 &&
+                RollPercentage() < std::min(45.0f, 12.0f * doubleBurstScale))
+            {
+                sAbyssCultivationMgr->DealConfiguredBurst(player, target, 170, 240, SPELL_SCHOOL_MASK_NORMAL, doubleBurstScale);
+                procState.lastSetDoubleBurstTime = now;
+            }
+
+            float artifactFreezeScale = sAbyssCultivationMgr->GetActiveSetSpecialEffectScale(player, "套装_永冻裁决");
+            if (artifactFreezeScale > 0.0f &&
+                now > procState.lastSetFreezeTime + 6 &&
+                RollPercentage() < std::min(60.0f, 18.0f * artifactFreezeScale))
+            {
+                sAbyssCultivationMgr->DealConfiguredBurst(player, target, 210, 300, SPELL_SCHOOL_MASK_FROST, artifactFreezeScale);
+                procState.lastSetFreezeTime = now;
+            }
+
+            float frostSealScale = std::max(
+                sAbyssCultivationMgr->GetActiveSetSpecialEffectScale(player, "套装_寒夜冻结"),
+                sAbyssCultivationMgr->GetActiveSetSpecialEffectScale(player, "套装_玄霜封印"));
+            if (artifactFreezeScale <= 0.0f &&
+                frostSealScale > 0.0f &&
+                now > procState.lastSetFreezeTime + 8 &&
+                RollPercentage() < std::min(50.0f, 15.0f * frostSealScale))
+            {
+                sAbyssCultivationMgr->DealConfiguredBurst(player, target, 130, 200, SPELL_SCHOOL_MASK_FROST, frostSealScale);
+                procState.lastSetFreezeTime = now;
+            }
+
+            float artifactAbyssScale = sAbyssCultivationMgr->GetActiveSetSpecialEffectScale(player, "套装_渊神吞界");
+            if (artifactAbyssScale > 0.0f &&
+                now > procState.lastSetAbyssDrainTime + 6 &&
+                RollPercentage() < std::min(50.0f, 15.0f * artifactAbyssScale))
+            {
+                sAbyssCultivationMgr->DealConfiguredBurst(player, target, 220, 320, SPELL_SCHOOL_MASK_SHADOW, artifactAbyssScale);
+                player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(5)), artifactAbyssScale));
+                sAbyssCultivationMgr->RestorePlayerPrimaryPowerPct(player, 4.0f * artifactAbyssScale);
+                procState.lastSetAbyssDrainTime = now;
+            }
+
+            float abyssDrainScale = sAbyssCultivationMgr->GetActiveSetSpecialEffectScale(player, "套装_神蚀吸收");
+            if (artifactAbyssScale <= 0.0f &&
+                abyssDrainScale > 0.0f &&
+                now > procState.lastSetAbyssDrainTime + 8 &&
+                RollPercentage() < std::min(40.0f, 12.0f * abyssDrainScale))
+            {
+                sAbyssCultivationMgr->DealConfiguredBurst(player, target, 150, 220, SPELL_SCHOOL_MASK_SHADOW, abyssDrainScale);
+                player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(3)), abyssDrainScale));
+                procState.lastSetAbyssDrainTime = now;
+            }
+        }
+
+        float ancientPowerScale = sAbyssCultivationMgr->GetActiveSetSpecialEffectScale(player, "套装_古神觉醒");
+        if (ancientPowerScale > 0.0f &&
+            now > procState.lastSetAncientPowerTime + 20 &&
+            RollPercentage() < std::min(40.0f, 10.0f * ancientPowerScale))
+        {
+            procState.lastSetAncientPowerTime = now;
+            procState.setAncientPowerEndTime = now + 10;
+            player->UpdateAllStats();
+            player->UpdateAllRatings();
+            if (player->GetSession())
+                ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff80[套装] 古神觉醒触发，10秒内全属性提升。|r");
+        }
 
         float wolfScale = sAbyssCultivationMgr->GetActiveScriptGroupScale(player, "遗物_狼王残月");
         if (wolfScale > 0.0f && now > procState.lastWolfMoonTime + 6)
@@ -8202,6 +9925,13 @@ public:
         int32 flatBonus = sAbyssCultivationMgr->GetPlayerRuntimeRelicStatFlatBonus(player, stat);
         if (flatBonus != 0)
             value += static_cast<float>(flatBonus);
+
+        PlayerAbyssProcState& procState = sAbyssCultivationMgr->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+        uint32 now = GetNow();
+        if (procState.setAncientPowerEndTime != 0 && now <= procState.setAncientPowerEndTime)
+            value += 50.0f;
+        if (procState.setCombatGrowthStacks != 0)
+            value += static_cast<float>(procState.setCombatGrowthStacks * 2);
     }
 
     void OnPlayerAfterUpdateMaxPower(Player* player, Powers& /*power*/, float& value) override
@@ -9565,6 +11295,7 @@ private:
             chapter.reincarnationDropRate,
             chapter.hiddenRoomBonus,
             chapter.cacheBossRewardBonus);
+        handler->PSendSysMessage("  cacheArtifactDropChance={}", ABYSS_CACHE_ARTIFACT_DROP_CHANCE);
 
         PrintRewardCandidateList(handler, "anchorRewards", sAbyssCultivationMgr->GetRewardCandidatesForBoss(chapter, chapter.anchorBossEntry));
         PrintRewardCandidateList(handler, "finalRewards", sAbyssCultivationMgr->GetRewardCandidatesForBoss(chapter, chapter.finalBossEntry));
@@ -10607,6 +12338,553 @@ enum AbyssEquipSpells
 constexpr uint8 ABYSS_POISON_MAX_STACKS = 5;
 constexpr uint8 ABYSS_POISON_SPREAD_STACKS = 3;
 constexpr float ABYSS_POISON_SPREAD_RADIUS = 8.0f;
+constexpr uint32 SPELL_ABYSS_ARTIFACT_WEAPON_START = 89401;
+constexpr uint32 SPELL_ABYSS_ARTIFACT_WEAPON_END = 89490;
+constexpr uint32 SPELL_ABYSS_ARTIFACT_WEAPON_VISUAL_START = 996401;
+constexpr uint8 ABYSS_ARTIFACT_WEAPON_VARIANTS_PER_ACT = 15;
+
+enum ArtifactWeaponFamilyId : uint8
+{
+    ARTIFACT_WEAPON_SWORD = 1,
+    ARTIFACT_WEAPON_AXE = 2,
+    ARTIFACT_WEAPON_HAMMER = 3,
+    ARTIFACT_WEAPON_DAGGER = 4,
+    ARTIFACT_WEAPON_FIST = 5,
+    ARTIFACT_WEAPON_GREATSWORD = 6,
+    ARTIFACT_WEAPON_GREATAXE = 7,
+    ARTIFACT_WEAPON_GREATHAMMER = 8,
+    ARTIFACT_WEAPON_POLEARM = 9,
+    ARTIFACT_WEAPON_STAFF = 10,
+    ARTIFACT_WEAPON_BOW = 11,
+    ARTIFACT_WEAPON_GUN = 12,
+    ARTIFACT_WEAPON_CROSSBOW = 13,
+    ARTIFACT_WEAPON_WAND = 14,
+    ARTIFACT_WEAPON_FALUN = 15
+};
+
+struct ArtifactWeaponActThemeConfig
+{
+    uint8 actId = 0;
+    char const* label = "";
+    SpellSchoolMask primarySchool = SPELL_SCHOOL_MASK_NORMAL;
+    SpellSchoolMask secondarySchool = SPELL_SCHOOL_MASK_NORMAL;
+    float scalar = 1.0f;
+};
+
+ArtifactWeaponActThemeConfig const& GetArtifactWeaponActThemeConfig(uint8 actId)
+{
+    static std::array<ArtifactWeaponActThemeConfig, 6> const configs =
+    {{
+        { 1, "灰烬", SPELL_SCHOOL_MASK_FIRE,   SPELL_SCHOOL_MASK_NORMAL, 1.00f },
+        { 2, "虚空", SPELL_SCHOOL_MASK_SHADOW, SPELL_SCHOOL_MASK_NORMAL, 1.10f },
+        { 3, "霜雷", SPELL_SCHOOL_MASK_FROST,  SPELL_SCHOOL_MASK_NATURE, 1.18f },
+        { 4, "古神", SPELL_SCHOOL_MASK_SHADOW, SPELL_SCHOOL_MASK_ARCANE, 1.26f },
+        { 5, "日蚀", SPELL_SCHOOL_MASK_HOLY,   SPELL_SCHOOL_MASK_FIRE,   1.36f },
+        { 6, "统御", SPELL_SCHOOL_MASK_ARCANE, SPELL_SCHOOL_MASK_HOLY,   1.48f },
+    }};
+
+    size_t index = std::clamp<size_t>(static_cast<size_t>(actId), 1u, configs.size()) - 1u;
+    return configs[index];
+}
+
+bool DecodeArtifactWeaponSpell(uint32 spellId, uint8& actId, uint8& familyId)
+{
+    if (spellId < SPELL_ABYSS_ARTIFACT_WEAPON_START || spellId > SPELL_ABYSS_ARTIFACT_WEAPON_END)
+        return false;
+
+    uint32 offset = spellId - SPELL_ABYSS_ARTIFACT_WEAPON_START;
+    actId = static_cast<uint8>(offset / ABYSS_ARTIFACT_WEAPON_VARIANTS_PER_ACT) + 1u;
+    familyId = static_cast<uint8>(offset % ABYSS_ARTIFACT_WEAPON_VARIANTS_PER_ACT) + 1u;
+    return true;
+}
+
+SpellSchoolMask GetArtifactWeaponSchoolMask(uint8 actId, ArtifactWeaponFamilyId familyId, bool alternate = false)
+{
+    ArtifactWeaponActThemeConfig const& theme = GetArtifactWeaponActThemeConfig(actId);
+    if (!alternate)
+        return theme.primarySchool;
+
+    switch (familyId)
+    {
+        case ARTIFACT_WEAPON_SWORD:
+        case ARTIFACT_WEAPON_AXE:
+        case ARTIFACT_WEAPON_GREATSWORD:
+        case ARTIFACT_WEAPON_GREATAXE:
+            return theme.secondarySchool != SPELL_SCHOOL_MASK_NORMAL ? theme.secondarySchool : SPELL_SCHOOL_MASK_NORMAL;
+        case ARTIFACT_WEAPON_HAMMER:
+        case ARTIFACT_WEAPON_GREATHAMMER:
+            return actId == 3 ? SPELL_SCHOOL_MASK_NATURE : theme.secondarySchool;
+        case ARTIFACT_WEAPON_DAGGER:
+            return actId <= 2 ? SPELL_SCHOOL_MASK_NATURE : theme.secondarySchool;
+        case ARTIFACT_WEAPON_FIST:
+            return actId >= 5 ? SPELL_SCHOOL_MASK_FIRE : SPELL_SCHOOL_MASK_NORMAL;
+        case ARTIFACT_WEAPON_POLEARM:
+        case ARTIFACT_WEAPON_CROSSBOW:
+            return SPELL_SCHOOL_MASK_NORMAL;
+        case ARTIFACT_WEAPON_STAFF:
+        case ARTIFACT_WEAPON_WAND:
+        case ARTIFACT_WEAPON_FALUN:
+            return theme.secondarySchool;
+        case ARTIFACT_WEAPON_BOW:
+            return actId == 3 ? SPELL_SCHOOL_MASK_FROST : theme.secondarySchool;
+        case ARTIFACT_WEAPON_GUN:
+            return actId == 1 ? SPELL_SCHOOL_MASK_FIRE : SPELL_SCHOOL_MASK_NORMAL;
+        default:
+            return theme.secondarySchool;
+    }
+}
+
+float GetArtifactWeaponPower(Player* player, ArtifactWeaponFamilyId familyId, SpellSchoolMask schoolMask)
+{
+    if (!player)
+        return 0.0f;
+
+    float attackPower = player->GetTotalAttackPowerValue(BASE_ATTACK);
+    float spellPower = player->SpellBaseDamageBonusDone(schoolMask);
+
+    switch (familyId)
+    {
+        case ARTIFACT_WEAPON_STAFF:
+        case ARTIFACT_WEAPON_WAND:
+        case ARTIFACT_WEAPON_FALUN:
+            return std::max(spellPower, attackPower * 0.65f);
+        case ARTIFACT_WEAPON_BOW:
+        case ARTIFACT_WEAPON_GUN:
+        case ARTIFACT_WEAPON_CROSSBOW:
+            return std::max(attackPower, spellPower * 0.45f);
+        default:
+            return std::max(attackPower, spellPower * 0.35f);
+    }
+}
+
+Unit* ResolveArtifactWeaponPrimaryTarget(Player* player, Unit* hitUnit, Unit* explicitTarget)
+{
+    if (hitUnit)
+        return hitUnit;
+    if (explicitTarget)
+        return explicitTarget;
+    return player ? sAbyssCultivationMgr->GetPrimaryCombatTarget(player) : nullptr;
+}
+
+std::list<Unit*> CollectArtifactWeaponTargets(Unit* center, Unit* caster, float radius)
+{
+    std::list<Unit*> targets;
+    if (!center || !caster || radius <= 0.0f)
+        return targets;
+
+    Acore::AnyUnfriendlyUnitInObjectRangeCheck check(center, caster, radius);
+    Acore::UnitListSearcher<Acore::AnyUnfriendlyUnitInObjectRangeCheck> searcher(center, targets, check);
+    Cell::VisitAllObjects(center, searcher, radius);
+    return targets;
+}
+
+void DealArtifactWeaponDamage(Player* player, Unit* target, ArtifactWeaponFamilyId familyId, SpellSchoolMask schoolMask, float scale)
+{
+    if (!player || !target || scale <= 0.0f)
+        return;
+
+    float power = GetArtifactWeaponPower(player, familyId, schoolMask);
+    int32 damage = std::max<int32>(1, static_cast<int32>(std::lround(power * scale)));
+    player->DealDamage(player, target, damage, nullptr, SPELL_DIRECT_DAMAGE, schoolMask);
+}
+
+void DealArtifactWeaponAreaDamage(Player* player, Unit* center, ArtifactWeaponFamilyId familyId, SpellSchoolMask schoolMask, float scale, float radius, bool frontOnly = false)
+{
+    if (!player || !center || scale <= 0.0f || radius <= 0.0f)
+        return;
+
+    std::list<Unit*> targets = CollectArtifactWeaponTargets(center, player, radius);
+    for (Unit* unit : targets)
+    {
+        if (!unit)
+            continue;
+        if (frontOnly && !player->HasInArc(float(M_PI * 0.75f), unit))
+            continue;
+
+        DealArtifactWeaponDamage(player, unit, familyId, schoolMask, scale);
+    }
+}
+
+void PullArtifactWeaponTarget(Player* player, Unit* target, float distance)
+{
+    if (!player || !target || distance <= 0.0f)
+        return;
+
+    float angle = target->GetAngle(player);
+    float newX = target->GetPositionX() + std::cos(angle) * distance;
+    float newY = target->GetPositionY() + std::sin(angle) * distance;
+    target->NearTeleportTo(newX, newY, target->GetPositionZ(), target->GetOrientation());
+}
+
+void ApplyArtifactWeaponActFollowup(Player* player, Unit* target, uint8 actId, ArtifactWeaponFamilyId familyId, float scale)
+{
+    if (!player || !target || scale <= 0.0f)
+        return;
+
+    switch (actId)
+    {
+        case 1:
+            DealArtifactWeaponAreaDamage(player, target, familyId, SPELL_SCHOOL_MASK_FIRE, 0.35f * scale, 4.0f);
+            break;
+        case 2:
+        {
+            int32 healAmount = std::max<int32>(1, static_cast<int32>(std::lround(float(player->GetMaxHealth()) * 0.02f * scale)));
+            player->ModifyHealth(healAmount);
+            break;
+        }
+        case 3:
+            player->CastSpell(target, SPELL_ABYSS_ABYSS_ROOT, true);
+            break;
+        case 4:
+            player->CastSpell(target, familyId == ARTIFACT_WEAPON_HAMMER || familyId == ARTIFACT_WEAPON_GUN
+                ? SPELL_ABYSS_ARMOR_DEBUFF
+                : SPELL_ABYSS_DESTROY_DEBUFF, true);
+            break;
+        case 5:
+            DealArtifactWeaponDamage(player, target, familyId, SPELL_SCHOOL_MASK_FIRE, 0.45f * scale);
+            break;
+        case 6:
+            player->CastSpell(target, SPELL_ABYSS_WORLD_STUN, true);
+            break;
+        default:
+            break;
+    }
+}
+
+void HandleArtifactWeaponSwordProc(uint32 spellId, Player* player, Unit* target)
+{
+    uint8 actId = 0;
+    uint8 familyId = 0;
+    if (!player || !target || !DecodeArtifactWeaponSpell(spellId, actId, familyId))
+        return;
+
+    ArtifactWeaponActThemeConfig const& theme = GetArtifactWeaponActThemeConfig(actId);
+    PlayerAbyssProcState& procState = sAbyssCultivationMgr->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+    uint32 targetGuid = target->GetGUID().GetCounter();
+    uint8& stacks = procState.artifactSwordMarkStacks[targetGuid];
+    stacks = std::min<uint8>(3, stacks + 1);
+
+    DealArtifactWeaponDamage(player, target, ARTIFACT_WEAPON_SWORD, theme.primarySchool, 1.05f * theme.scalar);
+    if (stacks < 3)
+        return;
+
+    stacks = 0;
+    DealArtifactWeaponDamage(player, target, ARTIFACT_WEAPON_SWORD, theme.primarySchool, 2.20f * theme.scalar);
+    DealArtifactWeaponAreaDamage(player, target, ARTIFACT_WEAPON_SWORD, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_SWORD, true), 0.55f * theme.scalar, 10.0f, true);
+    ApplyArtifactWeaponActFollowup(player, target, actId, ARTIFACT_WEAPON_SWORD, theme.scalar);
+}
+
+void HandleArtifactWeaponAxeProc(uint32 spellId, Player* player, Unit* target)
+{
+    uint8 actId = 0;
+    uint8 familyId = 0;
+    if (!player || !target || !DecodeArtifactWeaponSpell(spellId, actId, familyId))
+        return;
+
+    ArtifactWeaponActThemeConfig const& theme = GetArtifactWeaponActThemeConfig(actId);
+    DealArtifactWeaponDamage(player, target, ARTIFACT_WEAPON_AXE, theme.primarySchool, 1.40f * theme.scalar);
+
+    if (target->HealthBelowPct(35))
+    {
+        DealArtifactWeaponDamage(player, target, ARTIFACT_WEAPON_AXE, theme.primarySchool, 2.40f * theme.scalar);
+        DealArtifactWeaponAreaDamage(player, target, ARTIFACT_WEAPON_AXE, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_AXE, true), 0.80f * theme.scalar, 6.0f);
+        int32 healAmount = std::max<int32>(1, static_cast<int32>(std::lround(float(player->GetMaxHealth()) * 0.04f * theme.scalar)));
+        player->ModifyHealth(healAmount);
+        return;
+    }
+
+    ApplyArtifactWeaponActFollowup(player, target, actId, ARTIFACT_WEAPON_AXE, theme.scalar * 0.75f);
+}
+
+void HandleArtifactWeaponHammerProc(uint32 spellId, Player* player, Unit* target)
+{
+    uint8 actId = 0;
+    uint8 familyId = 0;
+    if (!player || !target || !DecodeArtifactWeaponSpell(spellId, actId, familyId))
+        return;
+
+    ArtifactWeaponActThemeConfig const& theme = GetArtifactWeaponActThemeConfig(actId);
+    DealArtifactWeaponAreaDamage(player, target, ARTIFACT_WEAPON_HAMMER, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_HAMMER), 2.10f * theme.scalar, 8.0f);
+    player->CastSpell(target, SPELL_ABYSS_ARMOR_DEBUFF, true);
+    if (actId == 3 || actId == 6)
+        player->CastSpell(target, SPELL_ABYSS_WORLD_STUN, true);
+    else if (actId == 1)
+        player->CastSpell(target, SPELL_ABYSS_LAVA_SLOW, true);
+}
+
+void HandleArtifactWeaponDaggerProc(uint32 spellId, Player* player, Unit* target)
+{
+    uint8 actId = 0;
+    uint8 familyId = 0;
+    if (!player || !target || !DecodeArtifactWeaponSpell(spellId, actId, familyId))
+        return;
+
+    ArtifactWeaponActThemeConfig const& theme = GetArtifactWeaponActThemeConfig(actId);
+    DealArtifactWeaponDamage(player, target, ARTIFACT_WEAPON_DAGGER, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_DAGGER), 1.50f * theme.scalar);
+    player->CastSpell(target, SPELL_ABYSS_POISON_DOT, true);
+
+    if (Aura* poisonAura = target->GetAura(SPELL_ABYSS_POISON_DOT))
+        if (poisonAura->GetStackAmount() >= 4)
+            player->CastSpell(target, SPELL_ABYSS_POISON_DETONATE, true);
+}
+
+void HandleArtifactWeaponFistProc(uint32 spellId, Player* player, Unit* target)
+{
+    uint8 actId = 0;
+    uint8 familyId = 0;
+    if (!player || !target || !DecodeArtifactWeaponSpell(spellId, actId, familyId))
+        return;
+
+    ArtifactWeaponActThemeConfig const& theme = GetArtifactWeaponActThemeConfig(actId);
+    PlayerAbyssProcState& procState = sAbyssCultivationMgr->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+    ++procState.artifactFistComboCounter;
+
+    DealArtifactWeaponDamage(player, target, ARTIFACT_WEAPON_FIST, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_FIST), 1.00f * theme.scalar);
+    if (procState.artifactFistComboCounter < 3)
+        return;
+
+    procState.artifactFistComboCounter = 0;
+    DealArtifactWeaponAreaDamage(player, target, ARTIFACT_WEAPON_FIST, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_FIST, true), 1.80f * theme.scalar, 8.0f);
+    player->CastSpell(player, SPELL_ABYSS_CHARGE_BUFF, true);
+}
+
+void HandleArtifactWeaponGreatswordProc(uint32 spellId, Player* player, Unit* target)
+{
+    uint8 actId = 0;
+    uint8 familyId = 0;
+    if (!player || !target || !DecodeArtifactWeaponSpell(spellId, actId, familyId))
+        return;
+
+    ArtifactWeaponActThemeConfig const& theme = GetArtifactWeaponActThemeConfig(actId);
+    DealArtifactWeaponDamage(player, target, ARTIFACT_WEAPON_GREATSWORD, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_GREATSWORD), 2.80f * theme.scalar);
+    DealArtifactWeaponAreaDamage(player, target, ARTIFACT_WEAPON_GREATSWORD, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_GREATSWORD, true), 0.70f * theme.scalar, 12.0f, true);
+    ApplyArtifactWeaponActFollowup(player, target, actId, ARTIFACT_WEAPON_GREATSWORD, theme.scalar);
+}
+
+void HandleArtifactWeaponGreataxeProc(uint32 spellId, Player* player, Unit* target)
+{
+    uint8 actId = 0;
+    uint8 familyId = 0;
+    if (!player || !target || !DecodeArtifactWeaponSpell(spellId, actId, familyId))
+        return;
+
+    ArtifactWeaponActThemeConfig const& theme = GetArtifactWeaponActThemeConfig(actId);
+    DealArtifactWeaponDamage(player, target, ARTIFACT_WEAPON_GREATAXE, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_GREATAXE), 1.65f * theme.scalar);
+
+    if (target->HealthBelowPct(30))
+    {
+        DealArtifactWeaponDamage(player, target, ARTIFACT_WEAPON_GREATAXE, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_GREATAXE), 3.20f * theme.scalar);
+        DealArtifactWeaponAreaDamage(player, target, ARTIFACT_WEAPON_GREATAXE, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_GREATAXE, true), 0.90f * theme.scalar, 8.0f);
+        int32 healAmount = std::max<int32>(1, static_cast<int32>(std::lround(float(player->GetMaxHealth()) * 0.06f * theme.scalar)));
+        player->ModifyHealth(healAmount);
+    }
+}
+
+void HandleArtifactWeaponGreathammerProc(uint32 spellId, Player* player, Unit* target)
+{
+    uint8 actId = 0;
+    uint8 familyId = 0;
+    if (!player || !target || !DecodeArtifactWeaponSpell(spellId, actId, familyId))
+        return;
+
+    ArtifactWeaponActThemeConfig const& theme = GetArtifactWeaponActThemeConfig(actId);
+    DealArtifactWeaponDamage(player, target, ARTIFACT_WEAPON_GREATHAMMER, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_GREATHAMMER), 3.40f * theme.scalar);
+    DealArtifactWeaponAreaDamage(player, target, ARTIFACT_WEAPON_GREATHAMMER, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_GREATHAMMER, true), 1.40f * theme.scalar, 10.0f);
+    target->KnockbackFrom(player->GetPositionX(), player->GetPositionY(), 6.0f, 5.0f);
+    player->CastSpell(target, SPELL_ABYSS_WORLD_STUN, true);
+}
+
+void HandleArtifactWeaponPolearmProc(uint32 spellId, Player* player, Unit* target)
+{
+    uint8 actId = 0;
+    uint8 familyId = 0;
+    if (!player || !target || !DecodeArtifactWeaponSpell(spellId, actId, familyId))
+        return;
+
+    ArtifactWeaponActThemeConfig const& theme = GetArtifactWeaponActThemeConfig(actId);
+    DealArtifactWeaponDamage(player, target, ARTIFACT_WEAPON_POLEARM, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_POLEARM), 2.10f * theme.scalar);
+    PullArtifactWeaponTarget(player, target, 4.0f);
+    if (actId == 3)
+        player->CastSpell(target, SPELL_ABYSS_ABYSS_ROOT, true);
+    else
+        ApplyArtifactWeaponActFollowup(player, target, actId, ARTIFACT_WEAPON_POLEARM, theme.scalar * 0.8f);
+}
+
+void HandleArtifactWeaponStaffProc(uint32 spellId, Player* player, Unit* target)
+{
+    uint8 actId = 0;
+    uint8 familyId = 0;
+    if (!player || !target || !DecodeArtifactWeaponSpell(spellId, actId, familyId))
+        return;
+
+    ArtifactWeaponActThemeConfig const& theme = GetArtifactWeaponActThemeConfig(actId);
+    PlayerAbyssProcState& procState = sAbyssCultivationMgr->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+    ++procState.artifactStaffCadenceCounter;
+
+    DealArtifactWeaponDamage(player, target, ARTIFACT_WEAPON_STAFF, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_STAFF), 1.20f * theme.scalar);
+    if (procState.artifactStaffCadenceCounter < 3)
+        return;
+
+    procState.artifactStaffCadenceCounter = 0;
+    DealArtifactWeaponAreaDamage(player, target, ARTIFACT_WEAPON_STAFF, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_STAFF), 2.40f * theme.scalar, 10.0f);
+    DealArtifactWeaponAreaDamage(player, target, ARTIFACT_WEAPON_STAFF, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_STAFF, true), 0.60f * theme.scalar, 10.0f);
+}
+
+void HandleArtifactWeaponBowProc(uint32 spellId, Player* player, Unit* target)
+{
+    uint8 actId = 0;
+    uint8 familyId = 0;
+    if (!player || !target || !DecodeArtifactWeaponSpell(spellId, actId, familyId))
+        return;
+
+    ArtifactWeaponActThemeConfig const& theme = GetArtifactWeaponActThemeConfig(actId);
+    PlayerAbyssProcState& procState = sAbyssCultivationMgr->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+    uint32 targetGuid = target->GetGUID().GetCounter();
+    uint8& stacks = procState.artifactBowMarkStacks[targetGuid];
+    stacks = std::min<uint8>(3, stacks + 1);
+
+    DealArtifactWeaponDamage(player, target, ARTIFACT_WEAPON_BOW, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_BOW), 1.05f * theme.scalar);
+    if (stacks < 3)
+        return;
+
+    stacks = 0;
+    DealArtifactWeaponAreaDamage(player, target, ARTIFACT_WEAPON_BOW, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_BOW), 2.00f * theme.scalar, 10.0f);
+    player->CastSpell(target, SPELL_ABYSS_DESTROY_DEBUFF, true);
+}
+
+void HandleArtifactWeaponGunProc(uint32 spellId, Player* player, Unit* target)
+{
+    uint8 actId = 0;
+    uint8 familyId = 0;
+    if (!player || !target || !DecodeArtifactWeaponSpell(spellId, actId, familyId))
+        return;
+
+    ArtifactWeaponActThemeConfig const& theme = GetArtifactWeaponActThemeConfig(actId);
+    DealArtifactWeaponDamage(player, target, ARTIFACT_WEAPON_GUN, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_GUN), 2.30f * theme.scalar);
+
+    std::list<Unit*> targets = CollectArtifactWeaponTargets(target, player, 14.0f);
+    for (Unit* unit : targets)
+    {
+        if (!unit || unit == target)
+            continue;
+        if (!player->HasInArc(float(M_PI / 3.0f), unit))
+            continue;
+
+        DealArtifactWeaponDamage(player, unit, ARTIFACT_WEAPON_GUN, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_GUN, true), 0.75f * theme.scalar);
+    }
+
+    player->CastSpell(target, SPELL_ABYSS_ARMOR_DEBUFF, true);
+}
+
+void HandleArtifactWeaponCrossbowProc(uint32 spellId, Player* player, Unit* target)
+{
+    uint8 actId = 0;
+    uint8 familyId = 0;
+    if (!player || !target || !DecodeArtifactWeaponSpell(spellId, actId, familyId))
+        return;
+
+    ArtifactWeaponActThemeConfig const& theme = GetArtifactWeaponActThemeConfig(actId);
+    DealArtifactWeaponDamage(player, target, ARTIFACT_WEAPON_CROSSBOW, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_CROSSBOW), 2.80f * theme.scalar);
+    player->CastSpell(target, SPELL_ABYSS_ABYSS_ROOT, true);
+    if (target->HasAura(SPELL_ABYSS_ABYSS_ROOT) || target->HasAura(SPELL_ABYSS_WORLD_STUN))
+        DealArtifactWeaponDamage(player, target, ARTIFACT_WEAPON_CROSSBOW, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_CROSSBOW, true), 0.75f * theme.scalar);
+}
+
+void HandleArtifactWeaponWandProc(uint32 spellId, Player* player, Unit* target)
+{
+    uint8 actId = 0;
+    uint8 familyId = 0;
+    if (!player || !target || !DecodeArtifactWeaponSpell(spellId, actId, familyId))
+        return;
+
+    ArtifactWeaponActThemeConfig const& theme = GetArtifactWeaponActThemeConfig(actId);
+    DealArtifactWeaponDamage(player, target, ARTIFACT_WEAPON_WAND, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_WAND), 1.15f * theme.scalar);
+
+    Powers powerType = player->getPowerType();
+    bool highPower = false;
+    if (powerType != POWER_HEALTH && player->GetMaxPower(powerType) > 0)
+        highPower = player->GetPowerPct(powerType) >= 80.0f;
+
+    PlayerAbyssProcState& procState = sAbyssCultivationMgr->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+    if (!highPower && GetNow() > procState.lastSpellCastTime + 5)
+        return;
+
+    std::list<Unit*> targets = CollectArtifactWeaponTargets(target, player, 12.0f);
+    uint8 bounced = 0;
+    for (Unit* unit : targets)
+    {
+        if (!unit || unit == target)
+            continue;
+
+        float decay = 1.0f - (float(bounced) * 0.15f);
+        if (decay < 0.55f)
+            decay = 0.55f;
+
+        DealArtifactWeaponDamage(player, unit, ARTIFACT_WEAPON_WAND, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_WAND, bounced > 0), 1.70f * theme.scalar * decay);
+        if (++bounced >= 3)
+            break;
+    }
+}
+
+void HandleArtifactWeaponFalunProc(uint32 spellId, Player* player, Unit* target)
+{
+    uint8 actId = 0;
+    uint8 familyId = 0;
+    if (!player || !DecodeArtifactWeaponSpell(spellId, actId, familyId))
+        return;
+
+    ArtifactWeaponActThemeConfig const& theme = GetArtifactWeaponActThemeConfig(actId);
+    PlayerAbyssProcState& procState = sAbyssCultivationMgr->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
+    ++procState.artifactFalunOrbitCounter;
+
+    DealArtifactWeaponAreaDamage(player, player, ARTIFACT_WEAPON_FALUN, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_FALUN), 1.10f * theme.scalar, 9.0f);
+    if (procState.artifactFalunOrbitCounter < 2)
+        return;
+
+    procState.artifactFalunOrbitCounter = 0;
+    std::list<Unit*> targets = CollectArtifactWeaponTargets(player, player, 12.0f);
+    uint8 hitCount = 0;
+    for (Unit* unit : targets)
+    {
+        if (!unit)
+            continue;
+
+        DealArtifactWeaponDamage(player, unit, ARTIFACT_WEAPON_FALUN, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_FALUN, hitCount > 0), 1.90f * theme.scalar);
+        if (++hitCount >= 3)
+            break;
+    }
+
+    int32 healAmount = std::max<int32>(1, static_cast<int32>(std::lround(float(player->GetMaxHealth()) * 0.06f * theme.scalar)));
+    player->ModifyHealth(healAmount);
+}
+
+void HandleArtifactWeaponProc(uint32 spellId, ArtifactWeaponFamilyId familyId, Unit* casterUnit, Unit* hitUnit, Unit* explicitTarget)
+{
+    Player* player = casterUnit ? casterUnit->ToPlayer() : nullptr;
+    if (!player)
+        return;
+
+    Unit* target = ResolveArtifactWeaponPrimaryTarget(player, hitUnit, explicitTarget);
+    switch (familyId)
+    {
+        case ARTIFACT_WEAPON_SWORD: HandleArtifactWeaponSwordProc(spellId, player, target); break;
+        case ARTIFACT_WEAPON_AXE: HandleArtifactWeaponAxeProc(spellId, player, target); break;
+        case ARTIFACT_WEAPON_HAMMER: HandleArtifactWeaponHammerProc(spellId, player, target); break;
+        case ARTIFACT_WEAPON_DAGGER: HandleArtifactWeaponDaggerProc(spellId, player, target); break;
+        case ARTIFACT_WEAPON_FIST: HandleArtifactWeaponFistProc(spellId, player, target); break;
+        case ARTIFACT_WEAPON_GREATSWORD: HandleArtifactWeaponGreatswordProc(spellId, player, target); break;
+        case ARTIFACT_WEAPON_GREATAXE: HandleArtifactWeaponGreataxeProc(spellId, player, target); break;
+        case ARTIFACT_WEAPON_GREATHAMMER: HandleArtifactWeaponGreathammerProc(spellId, player, target); break;
+        case ARTIFACT_WEAPON_POLEARM: HandleArtifactWeaponPolearmProc(spellId, player, target); break;
+        case ARTIFACT_WEAPON_STAFF: HandleArtifactWeaponStaffProc(spellId, player, target); break;
+        case ARTIFACT_WEAPON_BOW: HandleArtifactWeaponBowProc(spellId, player, target); break;
+        case ARTIFACT_WEAPON_GUN: HandleArtifactWeaponGunProc(spellId, player, target); break;
+        case ARTIFACT_WEAPON_CROSSBOW: HandleArtifactWeaponCrossbowProc(spellId, player, target); break;
+        case ARTIFACT_WEAPON_WAND: HandleArtifactWeaponWandProc(spellId, player, target); break;
+        case ARTIFACT_WEAPON_FALUN: HandleArtifactWeaponFalunProc(spellId, player, target); break;
+        default: break;
+    }
+}
 
 // ============================================
 // [1] 血爆裂变 - 命中AOE火焰+连锁爆炸
@@ -11083,6 +13361,42 @@ class spell_abyss_charge_destroy : public SpellScript
     }
 };
 
+#define DEFINE_ARTIFACT_WEAPON_SCRIPT(className, familyConst) \
+class className : public SpellScript \
+{ \
+    PrepareSpellScript(className); \
+    bool _processed = false; \
+    void HandleScript(SpellEffIndex /*effIndex*/) \
+    { \
+        if (_processed) \
+            return; \
+        _processed = true; \
+        HandleArtifactWeaponProc(GetSpellInfo()->Id, familyConst, GetCaster(), GetHitUnit(), GetExplTargetUnit()); \
+    } \
+    void Register() override \
+    { \
+        OnEffectHitTarget += SpellEffectFn(className::HandleScript, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT); \
+    } \
+};
+
+DEFINE_ARTIFACT_WEAPON_SCRIPT(spell_abyss_weapon_sword, ARTIFACT_WEAPON_SWORD)
+DEFINE_ARTIFACT_WEAPON_SCRIPT(spell_abyss_weapon_axe, ARTIFACT_WEAPON_AXE)
+DEFINE_ARTIFACT_WEAPON_SCRIPT(spell_abyss_weapon_hammer, ARTIFACT_WEAPON_HAMMER)
+DEFINE_ARTIFACT_WEAPON_SCRIPT(spell_abyss_weapon_dagger, ARTIFACT_WEAPON_DAGGER)
+DEFINE_ARTIFACT_WEAPON_SCRIPT(spell_abyss_weapon_fist, ARTIFACT_WEAPON_FIST)
+DEFINE_ARTIFACT_WEAPON_SCRIPT(spell_abyss_weapon_greatsword, ARTIFACT_WEAPON_GREATSWORD)
+DEFINE_ARTIFACT_WEAPON_SCRIPT(spell_abyss_weapon_greataxe, ARTIFACT_WEAPON_GREATAXE)
+DEFINE_ARTIFACT_WEAPON_SCRIPT(spell_abyss_weapon_greathammer, ARTIFACT_WEAPON_GREATHAMMER)
+DEFINE_ARTIFACT_WEAPON_SCRIPT(spell_abyss_weapon_polearm, ARTIFACT_WEAPON_POLEARM)
+DEFINE_ARTIFACT_WEAPON_SCRIPT(spell_abyss_weapon_staff, ARTIFACT_WEAPON_STAFF)
+DEFINE_ARTIFACT_WEAPON_SCRIPT(spell_abyss_weapon_bow, ARTIFACT_WEAPON_BOW)
+DEFINE_ARTIFACT_WEAPON_SCRIPT(spell_abyss_weapon_gun, ARTIFACT_WEAPON_GUN)
+DEFINE_ARTIFACT_WEAPON_SCRIPT(spell_abyss_weapon_crossbow, ARTIFACT_WEAPON_CROSSBOW)
+DEFINE_ARTIFACT_WEAPON_SCRIPT(spell_abyss_weapon_wand, ARTIFACT_WEAPON_WAND)
+DEFINE_ARTIFACT_WEAPON_SCRIPT(spell_abyss_weapon_falun, ARTIFACT_WEAPON_FALUN)
+
+#undef DEFINE_ARTIFACT_WEAPON_SCRIPT
+
 // ============================================
 // [13] 深渊遗物托管法术 - 891xx
 // 触发时机由深渊模块负责，具体效果由 spell.dbc + 本脚本统一接管
@@ -11134,5 +13448,20 @@ void AddSC_mod_abyss_cultivation()
     RegisterSpellScript(spell_abyss_destroy_pulse);     // 89024 毁灭脉冲
     RegisterSpellScript(spell_abyss_soul_reap);         // 89026 噬魂收割
     RegisterSpellScript(spell_abyss_charge_destroy);    // 89027 冲锋毁灭
+    RegisterSpellScript(spell_abyss_weapon_sword);      // 89401-89476 剑系神器武器
+    RegisterSpellScript(spell_abyss_weapon_axe);        // 89402-89477 斧系神器武器
+    RegisterSpellScript(spell_abyss_weapon_hammer);     // 89403-89478 锤系神器武器
+    RegisterSpellScript(spell_abyss_weapon_dagger);     // 89404-89479 匕首系神器武器
+    RegisterSpellScript(spell_abyss_weapon_fist);       // 89405-89480 拳套系神器武器
+    RegisterSpellScript(spell_abyss_weapon_greatsword); // 89406-89481 双手剑神器武器
+    RegisterSpellScript(spell_abyss_weapon_greataxe);   // 89407-89482 双手斧神器武器
+    RegisterSpellScript(spell_abyss_weapon_greathammer);// 89408-89483 双手锤神器武器
+    RegisterSpellScript(spell_abyss_weapon_polearm);    // 89409-89484 长柄神器武器
+    RegisterSpellScript(spell_abyss_weapon_staff);      // 89410-89485 法杖神器武器
+    RegisterSpellScript(spell_abyss_weapon_bow);        // 89411-89486 弓系神器武器
+    RegisterSpellScript(spell_abyss_weapon_gun);        // 89412-89487 枪系神器武器
+    RegisterSpellScript(spell_abyss_weapon_crossbow);   // 89413-89488 弩系神器武器
+    RegisterSpellScript(spell_abyss_weapon_wand);       // 89414-89489 魔杖神器武器
+    RegisterSpellScript(spell_abyss_weapon_falun);      // 89415-89490 法轮神器武器
     RegisterSpellScript(spell_abyss_managed_relic);     // 891xx 遗物 / 神器托管技能
 }

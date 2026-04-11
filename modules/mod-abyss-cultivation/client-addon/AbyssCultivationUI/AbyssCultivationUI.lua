@@ -21,6 +21,8 @@ App.itemPrefetchIndex = App.itemPrefetchIndex or 1
 
 local ITEM_PREFETCH_BATCH = 12
 local ITEM_PREFETCH_INTERVAL = 0.03
+local EQUIPMENT_PAGE_SIZE = 24
+local SET_OVERVIEW_PAGE_SIZE = 1
 local ICON_TEX_COORD_MIN = 0.08
 local ICON_TEX_COORD_MAX = 0.92
 
@@ -53,20 +55,20 @@ App.state = {
     cacheBossSummoned = false,
     nextChapter = 0,
     nextChapterName = "",
+    playerMapId = 0,
+    currentMapChapterId = 0,
+    currentMapChapterName = "",
 }
 App.relicList = {}  -- 有序列表 { { id, name, relicType, activeSlot, actId, desc }, ... }
 App.relicMap = {}   -- { [itemId] = relicData }
 App.equipmentList = {}
 App.equipmentMap = {}
-App.setBonusMap = {}  -- { [setKey] = { setId, setName, actId, sourceMode, twoPieceDesc, fourPieceDesc } }
+App.setBonusMap = {}  -- { [setKey] = { setId, setName, actId, sourceMode, twoPieceDesc, fourPieceDesc, sixPieceDesc, eightPieceDesc } }
 App.chapters = {}
 App.chapterMap = {}
 App.selectedChapterId = 0
-App.rewardPreview = {
-    current = { chapterId = 0, chapterName = "", categories = {} },
-    next = { chapterId = 0, chapterName = "", categories = {} },
-    view = { chapterId = 0, chapterName = "", categories = {} },
-}
+-- 按章节ID缓存掉落预览数据: { [chapterId] = { chapterName="", categories={anchor={}, final={}, abyss={}, cache={}} } }
+App.rewardPreviewCache = {}
 App.activeTab = "equip"
 App.pendingRelicActivation = nil
 App.pendingRelicCollection = nil
@@ -75,13 +77,28 @@ App.equipmentFilterMode = 0
 App.equipmentOwnedOnly = false
 App.equipmentFilterSlot = 0
 App.equipmentFilterChapter = 0
+App.equipmentPage = 1
+App.equipmentPageSize = EQUIPMENT_PAGE_SIZE
+App.equipmentPageCount = 1
+App.equipmentTotalCount = 0
+App.equipmentPagePending = false
 App.setOverviewFilterMode = 0
 App.setOverviewCurrentActOnly = false
+App.setOverviewPage = 1
+App.setOverviewPageSize = SET_OVERVIEW_PAGE_SIZE
+App.setOverviewPageCount = 1
+App.setOverviewList = {}
+App.setOverviewTotalCount = 0
+App.setOverviewCurrentActId = 0
+App.setOverviewPageStartActId = 0
+App.setOverviewPageEndActId = 0
+App.setOverviewPending = false
 App.artifactFilterType = 0
 App.artifactOwnedOnly = false
 App.selectedRelicButtonKey = ""
 App.selectedArtifactButtonKey = ""
 App.chapterEnterMode = 1
+App.rewardPreviewMode = 1
 App.chapterLastActionText = ""
 App.modePrompt = {
     active = false,
@@ -89,6 +106,16 @@ App.modePrompt = {
     chapterName = "",
     modeMask = 0,
     corruptionTier = 0,
+}
+
+local PROGRESS_MASKS = {
+    official = 1,
+    officialFinal = 2,
+    story = 16,
+    abyss = 32,
+    corruption = 64,
+    reincarnation = 128,
+    cache = 256,
 }
 
 -- 主题色 —— 灵渊幽境
@@ -208,6 +235,37 @@ local function HasModeInMask(modeMask, modeType)
         return false
     end
     return bit.band(ToNumber(modeMask), mask) ~= 0
+end
+
+local function HasProgressMask(mask, flag)
+    if not bit then
+        return false
+    end
+    return bit.band(ToNumber(mask), ToNumber(flag)) ~= 0
+end
+
+local function GetActiveProgressChapterId()
+    if App.state.inRun and ToNumber(App.state.runChapterId) > 0 then
+        return ToNumber(App.state.runChapterId)
+    end
+    return ToNumber(App.state.currentMapChapterId)
+end
+
+local function GetProgressStageKilled(key, mask)
+    if key == "official" then
+        return HasProgressMask(mask, PROGRESS_MASKS.official) or HasProgressMask(mask, PROGRESS_MASKS.officialFinal)
+    elseif key == "story" then
+        return HasProgressMask(mask, PROGRESS_MASKS.story)
+    elseif key == "abyss" then
+        return HasProgressMask(mask, PROGRESS_MASKS.abyss)
+    elseif key == "corruption" then
+        return HasProgressMask(mask, PROGRESS_MASKS.corruption)
+    elseif key == "reincarnation" then
+        return HasProgressMask(mask, PROGRESS_MASKS.reincarnation)
+    elseif key == "cache" then
+        return HasProgressMask(mask, PROGRESS_MASKS.cache)
+    end
+    return false
 end
 
 local function Split(text, sep)
@@ -567,59 +625,10 @@ local function SetRelicItemTooltip(self)
         return
     end
 
+    HideTooltipExtra()
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
     GameTooltip:SetHyperlink("item:" .. itemId)
-    local relic = App.relicMap and App.relicMap[itemId]
-    local extraLines = {}
-    if relic then
-        local function AddRelicBonusLine(label, bonusBase)
-            local health = bonusBase
-            local armor = bonusBase * 0.75
-            local attack = bonusBase * 0.8
-            local spell = bonusBase * 0.9
-            table.insert(extraLines, {
-                text = string.format("%s：全属性+%.1f%%  生命+%.1f%%  护甲+%.1f%%  攻击+%.1f%%  法术+%.1f%%",
-                    label, bonusBase, health, armor, attack, spell),
-                r = 0.62, g = 0.92, b = 0.72
-            })
-        end
-
-        table.insert(extraLines, {
-            text = string.format("%s加成", GetRelicTypeName(relic.relicType)),
-            r = relic.relicType == 3 and 1.0 or (relic.relicType == 2 and 1.0 or 0.78),
-            g = relic.relicType == 3 and 0.55 or (relic.relicType == 2 and 0.74 or 0.92),
-            b = relic.relicType == 3 and 0.86 or (relic.relicType == 2 and 0.26 or 1.0),
-            gap = 2
-        })
-
-        if relic.relicType == 1 then
-            AddRelicBonusLine("主槽", 2.0)
-            AddRelicBonusLine("副槽", 2.0 * math.max(relic.subSlotScale or 0.5, 0.1))
-        elseif relic.relicType == 2 then
-            AddRelicBonusLine("阶段神器槽", 5.0)
-        elseif relic.relicType == 3 then
-            AddRelicBonusLine("终极神器槽", 10.0)
-        end
-
-        if relic.activeSlot and relic.activeSlot > 0 then
-            table.insert(extraLines, { text = string.format("当前激活位置：%s", GetSlotName(relic.activeSlot)), r = 0.40, g = 0.95, b = 0.45 })
-        elseif relic.recommendedSlot and relic.recommendedSlot > 0 then
-            table.insert(extraLines, { text = string.format("推荐激活位置：%s", GetSlotName(relic.recommendedSlot)), r = 0.92, g = 0.82, b = 0.40 })
-        end
-
-        if relic.exclusiveGroup and relic.exclusiveGroup > 0 then
-            table.insert(extraLines, { text = string.format("互斥组：%d", relic.exclusiveGroup), r = 0.85, g = 0.60, b = 0.60 })
-        end
-
-        if relic.desc and relic.desc ~= "" then
-            table.insert(extraLines, { text = "核心特效", r = 1.0, g = 0.82, b = 0.28, gap = 2 })
-            table.insert(extraLines, { text = relic.desc, r = 0.82, g = 0.82, b = 0.78 })
-        end
-    end
     GameTooltip:Show()
-    table.insert(extraLines, { text = "双击图标可自动激活到可用槽位", r = THEME.accent[1], g = THEME.accent[2], b = THEME.accent[3], gap = 2 })
-    table.insert(extraLines, { text = "右键图标可选择穿戴或收藏专属", r = THEME.muted[1], g = THEME.muted[2], b = THEME.muted[3] })
-    ShowTooltipExtra(extraLines)
 end
 
 local function SetEquipmentItemTooltip(self)
@@ -638,6 +647,29 @@ local function NotifyMessage(text)
     if DEFAULT_CHAT_FRAME and text and text ~= "" then
         DEFAULT_CHAT_FRAME:AddMessage("|cffDBA64A深渊修仙:|r " .. text)
     end
+end
+
+local function ColorizeExclusiveEquipmentName(name, equipmentType)
+    if not name or name == "" then
+        return name
+    end
+    if equipmentType ~= 2 then
+        return name
+    end
+    if string.find(name, "|c") then
+        return name
+    end
+    return string.format("|cFFFF6699%s|r", name)
+end
+
+local function ColorizeRelicName(name)
+    if not name or name == "" then
+        return name
+    end
+    if string.find(name, "|c") then
+        return name
+    end
+    return string.format("|cFFFF6699%s|r", name)
 end
 
 local function EnsureIconCacheStore()
@@ -1225,6 +1257,38 @@ local function GetModeTypeName(t)
     return names[ToNumber(t)] or "未知"
 end
 
+local function GetActiveRewardPreviewMode()
+    local modeType = ToNumber(App.rewardPreviewMode)
+    if modeType < 1 or modeType > 4 then
+        modeType = ToNumber(App.chapterEnterMode)
+    end
+    if modeType < 1 or modeType > 4 then
+        return 1
+    end
+    return modeType
+end
+
+local function SetActiveRewardPreviewMode(modeType, requestPreview)
+    modeType = ToNumber(modeType)
+    if modeType < 1 or modeType > 4 then
+        modeType = 1
+    end
+
+    App.rewardPreviewMode = modeType
+
+    if requestPreview then
+        SendAddon("REQ_REWARD_CURRENT:" .. modeType)
+        SendAddon("REQ_REWARD_NEXT:" .. modeType)
+        if App.selectedChapterId and App.selectedChapterId > 0 then
+            SendAddon(string.format("REQ_REWARD_CHAPTER:%d|%d", App.selectedChapterId, modeType))
+        end
+    end
+
+    if App.activeTab == "chapter" and App.frame and App.frame:IsShown() then
+        App:RefreshChapterPage()
+    end
+end
+
 local function GetRewardBossCategoryName(category)
     local names = {
         anchor = "锚点首领",
@@ -1238,14 +1302,11 @@ end
 local function FormatBossDisplay(entry, name)
     entry = ToNumber(entry)
     if name and name ~= "" then
-        if entry > 0 then
-            return string.format("【%s】(%d)", name, entry)
-        end
         return string.format("【%s】", name)
     end
 
     if entry > 0 then
-        return string.format("entry:%d", entry)
+        return "已配置首领"
     end
 
     return "未配置"
@@ -1271,10 +1332,39 @@ local function GetChapterBossCategoryTitle(chapter, category)
         return string.format("%s【%s】", label, bossName)
     end
     if bossEntry > 0 then
-        return string.format("%s(entry:%d)", label, bossEntry)
+        return string.format("%s已配置", label)
     end
 
     return label
+end
+
+local function BuildRewardPreviewSignature(rewards)
+    if not rewards or #rewards == 0 then
+        return nil
+    end
+
+    local parts = {}
+    for index, reward in ipairs(rewards) do
+        parts[index] = string.format("%d:%d:%d",
+            ToNumber(reward.itemId),
+            ToNumber(reward.sourceMode),
+            ToNumber(reward.baseItemLevel))
+    end
+
+    return table.concat(parts, "|")
+end
+
+local function ShouldShowRewardPreviewCategory(category, modeType)
+    modeType = ToNumber(modeType)
+    if modeType < 1 or modeType > 4 then
+        modeType = 1
+    end
+
+    if category == "abyss" and modeType == 1 then
+        return false
+    end
+
+    return true
 end
 
 local function GetRewardDockingTypeName(dockingType)
@@ -1282,7 +1372,7 @@ local function GetRewardDockingTypeName(dockingType)
         [1] = "章节遗物",
         [2] = "阶段神器",
         [3] = "终极神器",
-        [4] = "材料",
+        [4] = "底材",
         [5] = "传奇唯一",
     }
     return names[ToNumber(dockingType)] or ("类型#" .. ToNumber(dockingType))
@@ -1422,11 +1512,62 @@ local function ResetEquipmentFilters()
     App.equipmentOwnedOnly = false
     App.equipmentFilterSlot = 0
     App.equipmentFilterChapter = 0
+    App.equipmentPage = 1
 end
 
 local function ApplyEquipmentChapterFilter(chapterId)
     ResetEquipmentFilters()
     App.equipmentFilterChapter = ToNumber(chapterId)
+end
+
+function App:RequestEquipmentPage(page)
+    self.equipmentPage = math.max(1, ToNumber(page))
+    self.equipmentPagePending = true
+    self.equipmentList = {}
+    self.equipmentMap = {}
+    self.equipmentTotalCount = 0
+    self.equipmentPageCount = 1
+    if self.equipmentScroll then
+        self.equipmentScroll:SetVerticalScroll(0)
+    end
+    SendAddon(string.format(
+        "REQ_EQUIPMENT_PAGE:%d|%d|%d|%d|%d|%d|%d",
+        self.equipmentPage,
+        self.equipmentPageSize or EQUIPMENT_PAGE_SIZE,
+        self.equipmentFilterType or 0,
+        self.equipmentFilterMode or 0,
+        self.equipmentFilterChapter or 0,
+        self.equipmentFilterSlot or 0,
+        self.equipmentOwnedOnly and 1 or 0
+    ))
+    if self.activeTab == "set" then
+        self:RefreshEquipmentPage()
+    end
+end
+
+function App:RequestSetOverviewData(page)
+    self.setOverviewPage = math.max(1, ToNumber(page))
+    self.setOverviewPending = true
+    self.setOverviewList = {}
+    self.setOverviewPageCount = 1
+    self.setOverviewTotalCount = 0
+    self.setOverviewCurrentActId = 0
+    self.setOverviewPageStartActId = 0
+    self.setOverviewPageEndActId = 0
+    self.setBonusMap = {}
+    if self.setOverviewScroll then
+        self.setOverviewScroll:SetVerticalScroll(0)
+    end
+    SendAddon(string.format(
+        "REQ_SET_OVERVIEW:%d|%d|%d|%d",
+        self.setOverviewPage,
+        self.setOverviewPageSize or SET_OVERVIEW_PAGE_SIZE,
+        self.setOverviewFilterMode or 0,
+        self.setOverviewCurrentActOnly and 1 or 0
+    ))
+    if self.activeTab == "suit" then
+        self:RefreshSetOverviewPage()
+    end
 end
 
 local function GetEquipmentFilterSummary()
@@ -1595,6 +1736,17 @@ local function ParseState(payload)
     App.state.cacheBossSummoned  = ToNumber(f[26]) == 1
     App.state.nextChapter        = ToNumber(f[27])
     App.state.nextChapterName    = f[28] or ""
+    App.state.playerMapId        = ToNumber(f[29])
+    App.state.currentMapChapterId = ToNumber(f[30])
+    App.state.currentMapChapterName = f[31] or ""
+
+    if ToNumber(App.rewardPreviewMode) < 1 or ToNumber(App.rewardPreviewMode) > 4 then
+        local defaultPreviewMode = App.state.inRun and ToNumber(App.state.runModeType) or ToNumber(App.chapterEnterMode)
+        if defaultPreviewMode < 1 or defaultPreviewMode > 4 then
+            defaultPreviewMode = 1
+        end
+        App.rewardPreviewMode = defaultPreviewMode
+    end
 
     if App.HideModePrompt and (not App.state.inRun or App.state.runModeType >= 2) then
         App:HideModePrompt()
@@ -1634,7 +1786,7 @@ local function ParseRelics(payload)
         if f[1] and f[1] ~= "" then
             local relic = {
                 id = ToNumber(f[1]),
-                name = f[2] or "",
+                name = ColorizeRelicName(f[2] or ""),
                 relicType = ToNumber(f[3]),
                 chapterId = ToNumber(f[4]),
                 actId = ToNumber(f[5]),
@@ -1671,13 +1823,18 @@ end
 local function ParseEquipments(payload)
     App.equipmentList = {}
     App.equipmentMap = {}
+    App.equipmentPage = 1
+    App.equipmentPageSize = EQUIPMENT_PAGE_SIZE
+    App.equipmentPageCount = 1
+    App.equipmentTotalCount = 0
+    App.equipmentPagePending = false
     if not payload or payload == "" then return end
     for _, raw in ipairs(Split(payload, "~")) do
         local f = Split(raw, "%^")
         if f[1] and f[1] ~= "" then
             local equipment = {
                 id = ToNumber(f[1]),
-                name = f[2] or "",
+                name = ColorizeExclusiveEquipmentName(f[2] or "", ToNumber(f[3])),
                 equipmentType = ToNumber(f[3]),
                 sourceChapter = ToNumber(f[4]),
                 sourceChapterName = f[5] or "",
@@ -1687,6 +1844,7 @@ local function ParseEquipments(payload)
                 baseItemLevel = ToNumber(f[9]),
                 fromCacheBoss = ToNumber(f[10]) == 1,
                 requiresFragments = ToNumber(f[11]) == 1,
+                owned = App.relicMap and App.relicMap[ToNumber(f[1])] and App.relicMap[ToNumber(f[1])].owned or false,
                 desc = f[12] or "",
                 icon = f[13] or "",
             }
@@ -1709,6 +1867,57 @@ local function ParseEquipments(payload)
         return a.id < b.id
     end)
 
+    App.equipmentTotalCount = #App.equipmentList
+    QueueItemPrefetchList(App.equipmentList)
+end
+
+local function ParseEquipmentPage(payload)
+    App.equipmentList = {}
+    App.equipmentMap = {}
+    App.equipmentPagePending = false
+    if not payload or payload == "" then
+        App.equipmentPage = 1
+        App.equipmentPageSize = EQUIPMENT_PAGE_SIZE
+        App.equipmentTotalCount = 0
+        App.equipmentPageCount = 1
+        return
+    end
+
+    local segments = Split(payload, "~")
+    local meta = Split(segments[1] or "", "|")
+    App.equipmentPage = math.max(1, ToNumber(meta[1]))
+    App.equipmentPageSize = math.max(1, ToNumber(meta[2]))
+    App.equipmentTotalCount = math.max(0, ToNumber(meta[3]))
+    App.equipmentPageCount = math.max(1, ToNumber(meta[4]))
+
+    for index = 2, #segments do
+        local raw = segments[index]
+        local f = Split(raw, "%^")
+        if f[1] and f[1] ~= "" then
+            local equipment = {
+                id = ToNumber(f[1]),
+                name = ColorizeExclusiveEquipmentName(f[2] or "", ToNumber(f[3])),
+                equipmentType = ToNumber(f[3]),
+                sourceChapter = ToNumber(f[4]),
+                sourceChapterName = f[5] or "",
+                sourceMode = ToNumber(f[6]),
+                slotMask = ToNumber(f[7]),
+                actId = ToNumber(f[8]),
+                baseItemLevel = ToNumber(f[9]),
+                fromCacheBoss = ToNumber(f[10]) == 1,
+                requiresFragments = ToNumber(f[11]) == 1,
+                owned = ToNumber(f[12]) == 1,
+                desc = f[13] or "",
+                icon = f[14] or "",
+            }
+            if equipment.icon and equipment.icon ~= "" then
+                CacheItemIcon(equipment.id, NormalizeIconPath(equipment.icon))
+            end
+            table.insert(App.equipmentList, equipment)
+            App.equipmentMap[equipment.id] = equipment
+        end
+    end
+
     QueueItemPrefetchList(App.equipmentList)
 end
 
@@ -1725,12 +1934,88 @@ local function ParseSetBonuses(payload)
                 sourceMode = ToNumber(f[4]),
                 twoPieceDesc = f[5] or "",
                 fourPieceDesc = f[6] or "",
+                sixPieceDesc = f[7] or "",
+                eightPieceDesc = f[8] or "",
             }
             -- 用 mode:actId 作为key匹配套装分组
             local key = string.format("%d:%d", bonus.sourceMode, bonus.actId)
             App.setBonusMap[key] = bonus
         end
     end
+end
+
+local function ParseSetOverview(payload)
+    App.setOverviewList = {}
+    App.setOverviewPending = false
+    App.setOverviewPage = 1
+    App.setOverviewPageSize = SET_OVERVIEW_PAGE_SIZE
+    App.setOverviewPageCount = 1
+    App.setOverviewTotalCount = 0
+    App.setOverviewCurrentActId = 0
+    App.setOverviewPageStartActId = 0
+    App.setOverviewPageEndActId = 0
+    App.setBonusMap = {}
+    if not payload or payload == "" then
+        return
+    end
+
+    local segments = Split(payload, "~")
+    local meta = Split(segments[1] or "", "|")
+    App.setOverviewPage = math.max(1, ToNumber(meta[1]))
+    App.setOverviewPageSize = math.max(1, ToNumber(meta[2]))
+    App.setOverviewTotalCount = math.max(0, ToNumber(meta[3]))
+    App.setOverviewPageCount = math.max(1, ToNumber(meta[4]))
+    App.setOverviewCurrentActId = math.max(0, ToNumber(meta[5]))
+    App.setOverviewPageStartActId = math.max(0, ToNumber(meta[6]))
+    App.setOverviewPageEndActId = math.max(0, ToNumber(meta[7]))
+
+    local function NormalizeOptionalField(text)
+        return text == " " and "" or (text or "")
+    end
+
+    for index = 2, #segments do
+        local raw = segments[index]
+        local f = Split(raw, "%^")
+        if f[1] and f[1] ~= "" then
+            local bonus = {
+                setId = 0,
+                setName = f[6] or "",
+                actId = ToNumber(f[2]),
+                sourceMode = ToNumber(f[1]),
+                twoPieceDesc = NormalizeOptionalField(f[11]),
+                fourPieceDesc = NormalizeOptionalField(f[12]),
+                sixPieceDesc = NormalizeOptionalField(f[13]),
+                eightPieceDesc = NormalizeOptionalField(f[14]),
+            }
+            local group = {
+                sourceMode = ToNumber(f[1]),
+                actId = ToNumber(f[2]),
+                sourceChapter = ToNumber(f[3]),
+                sourceChapterName = f[4] or "",
+                pieceCount = ToNumber(f[5]),
+                name = f[6] or "",
+                slotSummary = f[7] or "",
+                representative = {
+                    id = ToNumber(f[8]),
+                    name = f[9] or "",
+                    icon = f[10] or "",
+                },
+                bonusData = bonus,
+            }
+            if group.representative.icon and group.representative.icon ~= "" then
+                CacheItemIcon(group.representative.id, NormalizeIconPath(group.representative.icon))
+            end
+            local key = string.format("%d:%d", group.sourceMode, group.actId)
+            App.setBonusMap[key] = bonus
+            table.insert(App.setOverviewList, group)
+        end
+    end
+
+    local prefetchItems = {}
+    for _, group in ipairs(App.setOverviewList) do
+        table.insert(prefetchItems, group.representative)
+    end
+    QueueItemPrefetchList(prefetchItems)
 end
 
 local function ParseChapters(payload)
@@ -1774,44 +2059,61 @@ local function ParseChapters(payload)
 end
 
 local function ParseRewardPreview(scope, category, payload)
-    if not scope or not category then
+    if not category then
         return
     end
 
-    if not App.rewardPreview[scope] then
-        App.rewardPreview[scope] = { chapterId = 0, chapterName = "", categories = {} }
-    end
-
-    local preview = App.rewardPreview[scope]
-    preview.categories = preview.categories or {}
-
-    if not payload or payload == "" then
-        preview.categories[category] = {}
-        return
-    end
-
-    local rows = Split(payload, "~")
-    local header = Split(rows[1] or "", "%^")
-    preview.chapterId = ToNumber(header[1])
-    preview.chapterName = header[2] or ""
-
+    -- 解析 header 获取 chapterId
+    local chapterId = 0
+    local chapterName = ""
+    local modeType = 1
     local rewards = {}
-    for index = 2, #rows do
-        local fields = Split(rows[index], "%^")
-        if fields[1] and fields[1] ~= "" then
-            table.insert(rewards, {
-                itemId = ToNumber(fields[1]),
-                itemName = fields[2] or "",
-                dockingType = ToNumber(fields[3]),
-                quality = ToNumber(fields[4]),
-                inventoryType = ToNumber(fields[5]),
-                sourceMode = ToNumber(fields[6]),
-                baseItemLevel = ToNumber(fields[7]),
-            })
+
+    if payload and payload ~= "" then
+        local rows = Split(payload, "~")
+        local header = Split(rows[1] or "", "%^")
+        chapterId = ToNumber(header[1])
+        chapterName = header[2] or ""
+        modeType = ToNumber(header[3])
+        if modeType < 1 or modeType > 4 then
+            modeType = 1
+        end
+
+        for index = 2, #rows do
+            local fields = Split(rows[index], "%^")
+            if fields[1] and fields[1] ~= "" then
+                table.insert(rewards, {
+                    itemId = ToNumber(fields[1]),
+                    itemName = fields[2] or "",
+                    dockingType = ToNumber(fields[3]),
+                    quality = ToNumber(fields[4]),
+                    inventoryType = ToNumber(fields[5]),
+                    sourceMode = ToNumber(fields[6]),
+                    baseItemLevel = ToNumber(fields[7]),
+                })
+            end
         end
     end
 
-    preview.categories[category] = rewards
+    if chapterId <= 0 then
+        return
+    end
+
+    -- 按 chapterId + modeType 缓存
+    if not App.rewardPreviewCache[chapterId] then
+        App.rewardPreviewCache[chapterId] = {}
+    end
+
+    local cache = App.rewardPreviewCache[chapterId][modeType]
+    if not cache then
+        cache = { chapterName = chapterName, modeType = modeType, categories = {} }
+        App.rewardPreviewCache[chapterId][modeType] = cache
+    end
+    cache.chapterName = chapterName
+    cache.modeType = modeType
+    cache.categories[category] = rewards
+
+    return chapterId
 end
 
 -------------------------------------------------------
@@ -1875,6 +2177,26 @@ local function CreateSmallButton(parent, text, width, onClick)
     btn:ApplySelectedState(false, false)
 
     return btn
+end
+
+local function SetSmallButtonEnabled(btn, enabled)
+    if not btn then
+        return
+    end
+
+    enabled = enabled and true or false
+    btn.isDisabled = not enabled
+    btn:EnableMouse(enabled)
+
+    if enabled then
+        btn:ApplySelectedState(btn.isSelected, btn.isEquippedChoice)
+        return
+    end
+
+    btn.isHovered = false
+    btn:SetBackdropColor(0.05, 0.05, 0.07, 0.88)
+    btn:SetBackdropBorderColor(0.20, 0.20, 0.24, 0.70)
+    btn.label:SetTextColor(THEME.muted[1], THEME.muted[2], THEME.muted[3], 0.80)
 end
 
 function App:HideModePrompt()
@@ -2007,6 +2329,142 @@ function App:ShowModePrompt(chapterId, chapterName, modeMask, corruptionTier)
     end
 
     self.modePromptFrame:Show()
+end
+
+local function EnsureProgressFrameConfig()
+    local db = AbyssCultivationUIDB
+    if not db.progressFrame then db.progressFrame = {} end
+    local cfg = db.progressFrame
+    cfg.point = cfg.point or "TOPRIGHT"
+    cfg.relativePoint = cfg.relativePoint or "TOPRIGHT"
+    cfg.x = cfg.x or -70
+    cfg.y = cfg.y or -220
+    cfg.width = cfg.width or 248
+    cfg.height = cfg.height or 214
+    if cfg.enabled == nil then cfg.enabled = true end
+    return cfg
+end
+
+local function SaveProgressFramePosition(frame)
+    if not frame then return end
+    local point, _, relativePoint, x, y = frame:GetPoint()
+    local cfg = EnsureProgressFrameConfig()
+    cfg.point = point or "TOPRIGHT"
+    cfg.relativePoint = relativePoint or cfg.point
+    cfg.x = x or -70
+    cfg.y = y or -220
+end
+
+function App:CreateProgressFrame()
+    if self.progressFrame then
+        return
+    end
+
+    local cfg = EnsureProgressFrameConfig()
+    local frame = CreateFrame("Frame", "AbyssCultivationUIProgressFrame", UIParent)
+    frame:SetSize(cfg.width, cfg.height)
+    frame:SetPoint(cfg.point, UIParent, cfg.relativePoint, cfg.x, cfg.y)
+    frame:SetFrameStrata("MEDIUM")
+    frame:SetFrameLevel(12)
+    frame:SetMovable(true)
+    frame:EnableMouse(true)
+    frame:RegisterForDrag("LeftButton")
+    frame:SetClampedToScreen(true)
+    StylePanelPremium(frame)
+    CreateCornerGlow(frame)
+    CreateDivider(frame, "TOP", -36, 12, 12)
+    frame:Hide()
+
+    frame:SetScript("OnDragStart", function(self)
+        self:StartMoving()
+    end)
+
+    frame:SetScript("OnDragStop", function(self)
+        self:StopMovingOrSizing()
+        self:SetUserPlaced(false)
+        SaveProgressFramePosition(self)
+    end)
+
+    local titleMain, titleShadow = CreateGlowTitle(frame, "当前进度")
+    titleShadow:SetPoint("TOP", 0, -14)
+    titleMain:SetPoint("TOPLEFT", titleShadow, "TOPLEFT", 1, -1)
+
+    frame.chapterLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    frame.chapterLabel:SetPoint("TOPLEFT", 18, -42)
+    frame.chapterLabel:SetPoint("TOPRIGHT", -18, -42)
+    frame.chapterLabel:SetJustifyH("LEFT")
+    frame.chapterLabel:SetTextColor(THEME.goldLight[1], THEME.goldLight[2], THEME.goldLight[3], 0.95)
+
+    frame.hintLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    frame.hintLabel:SetPoint("TOPLEFT", 18, -60)
+    frame.hintLabel:SetText("左键拖动面板，可移动到任意位置")
+
+    frame.rows = {}
+    local rowDefs = {
+        { key = "official", label = "官方BOSS" },
+        { key = "story", label = "正传BOSS" },
+        { key = "abyss", label = "深渊BOSS" },
+        { key = "corruption", label = "腐化BOSS" },
+        { key = "reincarnation", label = "轮回BOSS" },
+        { key = "cache", label = "秘藏BOSS" },
+    }
+
+    for index, rowDef in ipairs(rowDefs) do
+        local row = CreateFrame("Frame", nil, frame)
+        row:SetSize(210, 20)
+        row:SetPoint("TOPLEFT", 18, -84 - (index - 1) * 20)
+
+        row.label = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        row.label:SetPoint("LEFT", 0, 0)
+        row.label:SetText(rowDef.label)
+        row.label:SetTextColor(THEME.text[1], THEME.text[2], THEME.text[3], 0.95)
+
+        row.status = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        row.status:SetPoint("RIGHT", 0, 0)
+        row.status:SetJustifyH("RIGHT")
+
+        row.key = rowDef.key
+        frame.rows[index] = row
+    end
+
+    self.progressFrame = frame
+end
+
+function App:RefreshProgressFrame()
+    self:CreateProgressFrame()
+
+    local cfg = EnsureProgressFrameConfig()
+    if cfg.enabled == false then
+        self.progressFrame:Hide()
+        return
+    end
+
+    local chapterId = GetActiveProgressChapterId()
+    local chapter = self.chapterMap and self.chapterMap[chapterId] or nil
+    if not chapter then
+        self.progressFrame:Hide()
+        return
+    end
+
+    local mask = ToNumber(self.state.anchorBossKillMask)
+    local titleText = self.state.inRun and "当前进度" or "副本进度"
+    local chapterName = chapter.name ~= "" and chapter.name or (self.state.currentMapChapterName or "")
+    if titleText == "副本进度" then
+        self.progressFrame.chapterLabel:SetText(string.format("|cffdba64a%s|r  当前尚未开始连锁挑战", chapterName))
+    else
+        self.progressFrame.chapterLabel:SetText(string.format("|cffdba64a%s|r  模式[%s]", chapterName, GetModeTypeName(self.state.runModeType or 1)))
+    end
+
+    for _, row in ipairs(self.progressFrame.rows) do
+        local killed = GetProgressStageKilled(row.key, mask)
+        if killed then
+            row.status:SetText("|cff4fd26f已击杀|r")
+        else
+            row.status:SetText("|cffff6b6b未击杀|r")
+        end
+    end
+
+    self.progressFrame:Show()
 end
 
 -------------------------------------------------------
@@ -2780,19 +3238,19 @@ function App:BuildEquipmentPage(parent)
 
     self.equipmentFilterAllBtn = CreateSmallButton(self.equipmentActionBar, "全部", 52, function()
         App.equipmentFilterType = 0
-        App:RefreshEquipmentPage()
+        App:RequestEquipmentPage(1)
     end)
     self.equipmentFilterAllBtn:SetPoint("LEFT", typeLabel, "RIGHT", 4, 0)
 
     self.equipmentFilterBaseBtn = CreateSmallButton(self.equipmentActionBar, "底材", 52, function()
         App.equipmentFilterType = 1
-        App:RefreshEquipmentPage()
+        App:RequestEquipmentPage(1)
     end)
     self.equipmentFilterBaseBtn:SetPoint("LEFT", self.equipmentFilterAllBtn, "RIGHT", 6, 0)
 
     self.equipmentFilterUniqueBtn = CreateSmallButton(self.equipmentActionBar, "唯一", 52, function()
         App.equipmentFilterType = 2
-        App:RefreshEquipmentPage()
+        App:RequestEquipmentPage(1)
     end)
     self.equipmentFilterUniqueBtn:SetPoint("LEFT", self.equipmentFilterBaseBtn, "RIGHT", 6, 0)
 
@@ -2802,31 +3260,31 @@ function App:BuildEquipmentPage(parent)
 
     self.equipmentModeAllBtn = CreateSmallButton(self.equipmentActionBar, "全模式", 60, function()
         App.equipmentFilterMode = 0
-        App:RefreshEquipmentPage()
+        App:RequestEquipmentPage(1)
     end)
     self.equipmentModeAllBtn:SetPoint("LEFT", modeLabel, "RIGHT", 4, 0)
 
     self.equipmentModeStoryBtn = CreateSmallButton(self.equipmentActionBar, "正传", 52, function()
         App.equipmentFilterMode = 1
-        App:RefreshEquipmentPage()
+        App:RequestEquipmentPage(1)
     end)
     self.equipmentModeStoryBtn:SetPoint("LEFT", self.equipmentModeAllBtn, "RIGHT", 6, 0)
 
     self.equipmentModeAbyssBtn = CreateSmallButton(self.equipmentActionBar, "深渊", 52, function()
         App.equipmentFilterMode = 2
-        App:RefreshEquipmentPage()
+        App:RequestEquipmentPage(1)
     end)
     self.equipmentModeAbyssBtn:SetPoint("LEFT", self.equipmentModeStoryBtn, "RIGHT", 6, 0)
 
     self.equipmentModeCorruptBtn = CreateSmallButton(self.equipmentActionBar, "腐化", 52, function()
         App.equipmentFilterMode = 3
-        App:RefreshEquipmentPage()
+        App:RequestEquipmentPage(1)
     end)
     self.equipmentModeCorruptBtn:SetPoint("LEFT", self.equipmentModeAbyssBtn, "RIGHT", 6, 0)
 
     self.equipmentModeReincarnationBtn = CreateSmallButton(self.equipmentActionBar, "轮回", 52, function()
         App.equipmentFilterMode = 4
-        App:RefreshEquipmentPage()
+        App:RequestEquipmentPage(1)
     end)
     self.equipmentModeReincarnationBtn:SetPoint("LEFT", self.equipmentModeCorruptBtn, "RIGHT", 6, 0)
 
@@ -2835,13 +3293,13 @@ function App:BuildEquipmentPage(parent)
 
     self.equipmentOwnedBtn = CreateSmallButton(self.equipmentActionBar, "仅已持有", 68, function()
         App.equipmentOwnedOnly = not App.equipmentOwnedOnly
-        App:RefreshEquipmentPage()
+        App:RequestEquipmentPage(1)
     end)
     self.equipmentOwnedBtn:SetPoint("LEFT", ownedSep, "RIGHT", 4, 0)
 
     self.equipmentClearFilterBtn = CreateSmallButton(self.equipmentActionBar, "清筛选", 60, function()
         ResetEquipmentFilters()
-        App:RefreshEquipmentPage()
+        App:RequestEquipmentPage(1)
     end)
     self.equipmentClearFilterBtn:SetPoint("LEFT", self.equipmentOwnedBtn, "RIGHT", 8, 0)
 
@@ -2851,7 +3309,7 @@ function App:BuildEquipmentPage(parent)
         else
             App.equipmentFilterChapter = App.state.currentChapter or 0
         end
-        App:RefreshEquipmentPage()
+        App:RequestEquipmentPage(1)
     end)
     self.equipmentFilterCurrentChapterBtn:SetPoint("LEFT", self.equipmentClearFilterBtn, "RIGHT", 12, 0)
 
@@ -2861,42 +3319,80 @@ function App:BuildEquipmentPage(parent)
 
     self.equipmentFilterWeaponBtn = CreateSmallButton(self.equipmentActionBar, "武器", 52, function()
         App.equipmentFilterSlot = App.equipmentFilterSlot == 1 and 0 or 1
-        App:RefreshEquipmentPage()
+        App:RequestEquipmentPage(1)
     end)
     self.equipmentFilterWeaponBtn:SetPoint("LEFT", slotLabel, "RIGHT", 4, 0)
 
     self.equipmentFilterAccessoryBtn = CreateSmallButton(self.equipmentActionBar, "饰品", 52, function()
         App.equipmentFilterSlot = App.equipmentFilterSlot == 128 and 0 or 128
-        App:RefreshEquipmentPage()
+        App:RequestEquipmentPage(1)
     end)
     self.equipmentFilterAccessoryBtn:SetPoint("LEFT", self.equipmentFilterWeaponBtn, "RIGHT", 6, 0)
 
     self.equipmentFilterHeadBtn = CreateSmallButton(self.equipmentActionBar, "头部", 52, function()
         App.equipmentFilterSlot = App.equipmentFilterSlot == 2 and 0 or 2
-        App:RefreshEquipmentPage()
+        App:RequestEquipmentPage(1)
     end)
     self.equipmentFilterHeadBtn:SetPoint("LEFT", self.equipmentFilterAccessoryBtn, "RIGHT", 6, 0)
 
     self.equipmentFilterChestBtn = CreateSmallButton(self.equipmentActionBar, "胸甲", 52, function()
         App.equipmentFilterSlot = App.equipmentFilterSlot == 4 and 0 or 4
-        App:RefreshEquipmentPage()
+        App:RequestEquipmentPage(1)
     end)
     self.equipmentFilterChestBtn:SetPoint("LEFT", self.equipmentFilterHeadBtn, "RIGHT", 6, 0)
 
     self.equipmentFilterRingBtn = CreateSmallButton(self.equipmentActionBar, "戒指", 52, function()
         App.equipmentFilterSlot = App.equipmentFilterSlot == 64 and 0 or 64
-        App:RefreshEquipmentPage()
+        App:RequestEquipmentPage(1)
     end)
     self.equipmentFilterRingBtn:SetPoint("LEFT", self.equipmentFilterChestBtn, "RIGHT", 6, 0)
 
     self.equipmentFilterFocusBtn = CreateSmallButton(self.equipmentActionBar, "法器", 52, function()
         App.equipmentFilterSlot = App.equipmentFilterSlot == 512 and 0 or 512
-        App:RefreshEquipmentPage()
+        App:RequestEquipmentPage(1)
     end)
     self.equipmentFilterFocusBtn:SetPoint("LEFT", self.equipmentFilterRingBtn, "RIGHT", 6, 0)
 
+    self.equipmentPageBar = CreateFrame("Frame", nil, parent)
+    self.equipmentPageBar:SetPoint("TOPLEFT", 8, -56)
+    self.equipmentPageBar:SetPoint("RIGHT", -8, 0)
+    self.equipmentPageBar:SetHeight(24)
+
+    self.equipmentFirstPageBtn = CreateSmallButton(self.equipmentPageBar, "首页", 44, function()
+        if not App.equipmentPagePending and (App.equipmentPage or 1) > 1 then
+            App:RequestEquipmentPage(1)
+        end
+    end)
+    self.equipmentFirstPageBtn:SetPoint("LEFT", 0, 0)
+
+    self.equipmentPrevPageBtn = CreateSmallButton(self.equipmentPageBar, "上一页", 56, function()
+        if not App.equipmentPagePending and (App.equipmentPage or 1) > 1 then
+            App:RequestEquipmentPage((App.equipmentPage or 1) - 1)
+        end
+    end)
+    self.equipmentPrevPageBtn:SetPoint("LEFT", self.equipmentFirstPageBtn, "RIGHT", 6, 0)
+
+    self.equipmentPageInfo = self.equipmentPageBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    self.equipmentPageInfo:SetPoint("LEFT", self.equipmentPrevPageBtn, "RIGHT", 12, 0)
+    self.equipmentPageInfo:SetPoint("RIGHT", -120, 0)
+    self.equipmentPageInfo:SetJustifyH("LEFT")
+
+    self.equipmentNextPageBtn = CreateSmallButton(self.equipmentPageBar, "下一页", 56, function()
+        if not App.equipmentPagePending and (App.equipmentPage or 1) < (App.equipmentPageCount or 1) then
+            App:RequestEquipmentPage((App.equipmentPage or 1) + 1)
+        end
+    end)
+    self.equipmentNextPageBtn:SetPoint("RIGHT", -52, 0)
+
+    self.equipmentLastPageBtn = CreateSmallButton(self.equipmentPageBar, "末页", 44, function()
+        if not App.equipmentPagePending and (App.equipmentPage or 1) < (App.equipmentPageCount or 1) then
+            App:RequestEquipmentPage(App.equipmentPageCount or 1)
+        end
+    end)
+    self.equipmentLastPageBtn:SetPoint("LEFT", self.equipmentNextPageBtn, "RIGHT", 6, 0)
+
     self.equipmentScroll = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
-    self.equipmentScroll:SetPoint("TOPLEFT", 6, -56)
+    self.equipmentScroll:SetPoint("TOPLEFT", 6, -86)
     self.equipmentScroll:SetPoint("BOTTOMRIGHT", -28, 6)
 
     self.equipmentContent = CreateFrame("Frame", nil, self.equipmentScroll)
@@ -2905,6 +3401,13 @@ function App:BuildEquipmentPage(parent)
     self.equipmentScroll:SetScrollChild(self.equipmentContent)
     EnableScrollMouseWheel(self.equipmentScroll, CARD_H)
     StyleScrollBar(self.equipmentScroll)
+
+    self.equipmentEmptyHint = self.equipmentContent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    self.equipmentEmptyHint:SetPoint("TOP", 0, -18)
+    self.equipmentEmptyHint:SetWidth(EQUIP_CONTENT_W - 32)
+    self.equipmentEmptyHint:SetJustifyH("CENTER")
+    self.equipmentEmptyHint:SetTextColor(THEME.muted[1], THEME.muted[2], THEME.muted[3], 1)
+    self.equipmentEmptyHint:Hide()
 
     self.equipmentCards = {}
 end
@@ -3026,11 +3529,39 @@ function App:RefreshEquipmentFilterButtons()
     self.equipmentFilterFocusBtn:ApplySelectedState(App.equipmentFilterSlot == 512)
 end
 
+function App:RefreshEquipmentPaginationButtons()
+    if not self.equipmentPageBar then
+        return
+    end
+
+    local page = math.max(1, ToNumber(self.equipmentPage))
+    local pageCount = math.max(1, ToNumber(self.equipmentPageCount))
+    local totalCount = math.max(0, ToNumber(self.equipmentTotalCount))
+    local canPrev = (not self.equipmentPagePending) and totalCount > 0 and page > 1
+    local canNext = (not self.equipmentPagePending) and totalCount > 0 and page < pageCount
+
+    self.equipmentPageInfo:SetText(string.format(
+        "第 %d / %d 页  |  每页 %d 条  |  匹配总数 %d",
+        page,
+        pageCount,
+        math.max(1, ToNumber(self.equipmentPageSize)),
+        totalCount
+    ))
+
+    SetSmallButtonEnabled(self.equipmentFirstPageBtn, canPrev)
+    SetSmallButtonEnabled(self.equipmentPrevPageBtn, canPrev)
+    SetSmallButtonEnabled(self.equipmentNextPageBtn, canNext)
+    SetSmallButtonEnabled(self.equipmentLastPageBtn, canNext)
+end
+
 function App:RefreshEquipmentPage()
-    local total = #self.equipmentList
+    local total = math.max(0, ToNumber(self.equipmentTotalCount))
+    local page = math.max(1, ToNumber(self.equipmentPage))
+    local pageCount = math.max(1, ToNumber(self.equipmentPageCount))
+    local currentPageEquipments = self.equipmentList or {}
     local uniqueCount = 0
     local baseCount = 0
-    for _, equipment in ipairs(self.equipmentList) do
+    for _, equipment in ipairs(currentPageEquipments) do
         if equipment.equipmentType == 2 then
             uniqueCount = uniqueCount + 1
         else
@@ -3038,37 +3569,55 @@ function App:RefreshEquipmentPage()
         end
     end
 
-    local filteredEquipments = {}
-    for _, equipment in ipairs(self.equipmentList) do
-        local typeMatch = App.equipmentFilterType == 0 or equipment.equipmentType == App.equipmentFilterType
-        local modeMatch = App.equipmentFilterMode == 0 or equipment.sourceMode == App.equipmentFilterMode
-        local chapterMatch = App.equipmentFilterChapter == 0 or equipment.sourceChapter == App.equipmentFilterChapter
-        local slotMatch = App.equipmentFilterSlot == 0 or equipment.slotMask == App.equipmentFilterSlot
-        local ownedMatch = true
-        if App.equipmentOwnedOnly then
-            ownedMatch = App.relicMap[equipment.id] ~= nil and App.relicMap[equipment.id].owned
-        end
-
-        if typeMatch and modeMatch and chapterMatch and slotMatch and ownedMatch then
-            table.insert(filteredEquipments, equipment)
-        end
-    end
-
-    QueueItemPrefetchList(filteredEquipments)
+    QueueItemPrefetchList(currentPageEquipments)
     self:RefreshEquipmentFilterButtons()
+    self:RefreshEquipmentPaginationButtons()
 
-    self.equipmentStatus:SetText(string.format(
-        "当前页为装备图鉴  |  显示: %d / %d  |  传奇唯一: %d  |  底材: %d  |  当前章节: %s  |  当前筛选: %s  |  点击图标跳转章节",
-        #filteredEquipments, total, uniqueCount, baseCount,
-        self.state.currentChapterName ~= "" and self.state.currentChapterName or "无",
-        GetEquipmentFilterSummary()
-    ))
+    if self.equipmentPagePending then
+        self.equipmentStatus:SetText(string.format(
+            "当前页为装备图鉴  |  正在加载第 %d / %d 页  |  当前章节: %s  |  当前筛选: %s",
+            page,
+            pageCount,
+            self.state.currentChapterName ~= "" and self.state.currentChapterName or "无",
+            GetEquipmentFilterSummary()
+        ))
+    else
+        self.equipmentStatus:SetText(string.format(
+            "当前页为装备图鉴  |  页码: %d / %d  |  本页: %d  |  匹配总数: %d  |  传奇唯一: %d  |  底材: %d  |  当前章节: %s  |  当前筛选: %s  |  点击图标跳转章节",
+            page,
+            pageCount,
+            #currentPageEquipments,
+            total,
+            uniqueCount,
+            baseCount,
+            self.state.currentChapterName ~= "" and self.state.currentChapterName or "无",
+            GetEquipmentFilterSummary()
+        ))
+    end
 
     for _, card in ipairs(self.equipmentCards) do
         card:Hide()
     end
 
-    for idx, equipment in ipairs(filteredEquipments) do
+    if self.equipmentPagePending then
+        self.equipmentEmptyHint:SetText("正在从服务器加载当前页装备数据...")
+        self.equipmentEmptyHint:Show()
+        self.equipmentContent:SetHeight(100)
+        self.equipmentScroll:UpdateScrollChildRect()
+        return
+    end
+
+    if #currentPageEquipments == 0 then
+        self.equipmentEmptyHint:SetText(total > 0 and "当前页没有装备数据，试试切换页码。" or "当前筛选下暂无装备数据。")
+        self.equipmentEmptyHint:Show()
+        self.equipmentContent:SetHeight(100)
+        self.equipmentScroll:UpdateScrollChildRect()
+        return
+    end
+
+    self.equipmentEmptyHint:Hide()
+
+    for idx, equipment in ipairs(currentPageEquipments) do
         local card = self:GetOrCreateEquipmentCard(idx)
         local col = (idx - 1) % CARDS_PER_ROW
         local row = math.floor((idx - 1) / CARDS_PER_ROW)
@@ -3078,8 +3627,7 @@ function App:RefreshEquipmentPage()
         local chapterName = equipment.sourceChapterName ~= "" and equipment.sourceChapterName or ("章节#" .. equipment.sourceChapter)
         local typeColor = equipment.fromCacheBoss and THEME.cacheBoss or GetEquipmentTypeColor(equipment.equipmentType)
         local descText = equipment.desc
-        local ownedRelic = App.relicMap[equipment.id]
-        local isOwned = ownedRelic and ownedRelic.owned
+        local isOwned = equipment.owned and true or false
         if descText and #descText > 30 then
             descText = string.sub(descText, 1, 30) .. "..."
         end
@@ -3139,7 +3687,7 @@ function App:RefreshEquipmentPage()
         card:Show()
     end
 
-    local totalRows = math.ceil(#filteredEquipments / CARDS_PER_ROW)
+    local totalRows = math.ceil(#currentPageEquipments / CARDS_PER_ROW)
     self.equipmentContent:SetHeight(math.max(totalRows * (CARD_H + CARD_GAP), 100))
     self.equipmentScroll:UpdateScrollChildRect()
 end
@@ -3164,25 +3712,31 @@ function App:BuildSetOverviewPage(parent)
 
     self.setOverviewAllBtn = CreateSmallButton(self.setOverviewActionBar, "全部", 52, function()
         App.setOverviewFilterMode = 0
-        App:RefreshSetOverviewPage()
+        App:RequestSetOverviewData()
     end)
     self.setOverviewAllBtn:SetPoint("LEFT", setModeLabel, "RIGHT", 4, 0)
 
     self.setOverviewStoryBtn = CreateSmallButton(self.setOverviewActionBar, "正传", 52, function()
         App.setOverviewFilterMode = 1
-        App:RefreshSetOverviewPage()
+        App:RequestSetOverviewData()
     end)
     self.setOverviewStoryBtn:SetPoint("LEFT", self.setOverviewAllBtn, "RIGHT", 6, 0)
 
+    self.setOverviewAbyssBtn = CreateSmallButton(self.setOverviewActionBar, "深渊", 52, function()
+        App.setOverviewFilterMode = 2
+        App:RequestSetOverviewData()
+    end)
+    self.setOverviewAbyssBtn:SetPoint("LEFT", self.setOverviewStoryBtn, "RIGHT", 6, 0)
+
     self.setOverviewCorruptBtn = CreateSmallButton(self.setOverviewActionBar, "腐化", 52, function()
         App.setOverviewFilterMode = 3
-        App:RefreshSetOverviewPage()
+        App:RequestSetOverviewData()
     end)
-    self.setOverviewCorruptBtn:SetPoint("LEFT", self.setOverviewStoryBtn, "RIGHT", 6, 0)
+    self.setOverviewCorruptBtn:SetPoint("LEFT", self.setOverviewAbyssBtn, "RIGHT", 6, 0)
 
     self.setOverviewReincarnationBtn = CreateSmallButton(self.setOverviewActionBar, "轮回", 52, function()
         App.setOverviewFilterMode = 4
-        App:RefreshSetOverviewPage()
+        App:RequestSetOverviewData()
     end)
     self.setOverviewReincarnationBtn:SetPoint("LEFT", self.setOverviewCorruptBtn, "RIGHT", 6, 0)
 
@@ -3191,12 +3745,50 @@ function App:BuildSetOverviewPage(parent)
 
     self.setOverviewCurrentActBtn = CreateSmallButton(self.setOverviewActionBar, "当前幕", 60, function()
         App.setOverviewCurrentActOnly = not App.setOverviewCurrentActOnly
-        App:RefreshSetOverviewPage()
+        App:RequestSetOverviewData()
     end)
     self.setOverviewCurrentActBtn:SetPoint("LEFT", setActSep, "RIGHT", 4, 0)
 
+    self.setOverviewPageBar = CreateFrame("Frame", nil, parent)
+    self.setOverviewPageBar:SetPoint("TOPLEFT", 8, -56)
+    self.setOverviewPageBar:SetPoint("RIGHT", -8, 0)
+    self.setOverviewPageBar:SetHeight(24)
+
+    self.setOverviewFirstPageBtn = CreateSmallButton(self.setOverviewPageBar, "首页", 44, function()
+        if not App.setOverviewPending and (App.setOverviewPage or 1) > 1 then
+            App:RequestSetOverviewData(1)
+        end
+    end)
+    self.setOverviewFirstPageBtn:SetPoint("LEFT", 0, 0)
+
+    self.setOverviewPrevPageBtn = CreateSmallButton(self.setOverviewPageBar, "上一页", 56, function()
+        if not App.setOverviewPending and (App.setOverviewPage or 1) > 1 then
+            App:RequestSetOverviewData((App.setOverviewPage or 1) - 1)
+        end
+    end)
+    self.setOverviewPrevPageBtn:SetPoint("LEFT", self.setOverviewFirstPageBtn, "RIGHT", 6, 0)
+
+    self.setOverviewPageInfo = self.setOverviewPageBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    self.setOverviewPageInfo:SetPoint("LEFT", self.setOverviewPrevPageBtn, "RIGHT", 12, 0)
+    self.setOverviewPageInfo:SetPoint("RIGHT", -120, 0)
+    self.setOverviewPageInfo:SetJustifyH("LEFT")
+
+    self.setOverviewNextPageBtn = CreateSmallButton(self.setOverviewPageBar, "下一页", 56, function()
+        if not App.setOverviewPending and (App.setOverviewPage or 1) < (App.setOverviewPageCount or 1) then
+            App:RequestSetOverviewData((App.setOverviewPage or 1) + 1)
+        end
+    end)
+    self.setOverviewNextPageBtn:SetPoint("RIGHT", -52, 0)
+
+    self.setOverviewLastPageBtn = CreateSmallButton(self.setOverviewPageBar, "末页", 44, function()
+        if not App.setOverviewPending and (App.setOverviewPage or 1) < (App.setOverviewPageCount or 1) then
+            App:RequestSetOverviewData(App.setOverviewPageCount or 1)
+        end
+    end)
+    self.setOverviewLastPageBtn:SetPoint("LEFT", self.setOverviewNextPageBtn, "RIGHT", 6, 0)
+
     self.setOverviewScroll = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
-    self.setOverviewScroll:SetPoint("TOPLEFT", 6, -56)
+    self.setOverviewScroll:SetPoint("TOPLEFT", 6, -86)
     self.setOverviewScroll:SetPoint("BOTTOMRIGHT", -28, 6)
 
     self.setOverviewContent = CreateFrame("Frame", nil, self.setOverviewScroll)
@@ -3205,6 +3797,13 @@ function App:BuildSetOverviewPage(parent)
     self.setOverviewScroll:SetScrollChild(self.setOverviewContent)
     EnableScrollMouseWheel(self.setOverviewScroll, CARD_H)
     StyleScrollBar(self.setOverviewScroll)
+
+    self.setOverviewEmptyHint = self.setOverviewContent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    self.setOverviewEmptyHint:SetPoint("TOP", 0, -18)
+    self.setOverviewEmptyHint:SetWidth(EQUIP_CONTENT_W - 32)
+    self.setOverviewEmptyHint:SetJustifyH("CENTER")
+    self.setOverviewEmptyHint:SetTextColor(THEME.muted[1], THEME.muted[2], THEME.muted[3], 1)
+    self.setOverviewEmptyHint:Hide()
 
     self.setOverviewCards = {}
 end
@@ -3298,37 +3897,95 @@ function App:RefreshSetOverviewButtons()
 
     self.setOverviewAllBtn:ApplySelectedState(App.setOverviewFilterMode == 0)
     self.setOverviewStoryBtn:ApplySelectedState(App.setOverviewFilterMode == 1)
+    self.setOverviewAbyssBtn:ApplySelectedState(App.setOverviewFilterMode == 2)
     self.setOverviewCorruptBtn:ApplySelectedState(App.setOverviewFilterMode == 3)
     self.setOverviewReincarnationBtn:ApplySelectedState(App.setOverviewFilterMode == 4)
     self.setOverviewCurrentActBtn:ApplySelectedState(App.setOverviewCurrentActOnly)
 end
 
-function App:RefreshSetOverviewPage()
-    local currentActId = GetCurrentActId()
-    local allGroups = BuildEquipmentSetGroups()
-    local filteredGroups = {}
-
-    for _, group in ipairs(allGroups) do
-        local modeMatch = App.setOverviewFilterMode == 0 or group.sourceMode == App.setOverviewFilterMode
-        local actMatch = not App.setOverviewCurrentActOnly or (currentActId > 0 and group.actId == currentActId)
-        if modeMatch and actMatch then
-            table.insert(filteredGroups, group)
-        end
+function App:RefreshSetOverviewPaginationButtons()
+    if not self.setOverviewPageBar then
+        return
     end
 
-    self:RefreshSetOverviewButtons()
-    self.setOverviewStatus:SetText(string.format(
-        "当前页为套装图鉴  |  显示: %d / %d  |  当前幕: %s  |  点击图标跳转到对应装备图鉴",
-        #filteredGroups,
-        #allGroups,
-        currentActId > 0 and ("第" .. currentActId .. "幕") or "无"
+    local page = math.max(1, ToNumber(self.setOverviewPage))
+    local pageCount = math.max(1, ToNumber(self.setOverviewPageCount))
+    local totalActCount = math.max(0, ToNumber(self.setOverviewTotalCount))
+    local canPrev = (not self.setOverviewPending) and totalActCount > 0 and page > 1
+    local canNext = (not self.setOverviewPending) and totalActCount > 0 and page < pageCount
+
+    self.setOverviewPageInfo:SetText(string.format(
+        "第 %d / %d 页  |  每页 %d 幕  |  匹配幕数 %d",
+        page,
+        pageCount,
+        math.max(1, ToNumber(self.setOverviewPageSize)),
+        totalActCount
     ))
+
+    SetSmallButtonEnabled(self.setOverviewFirstPageBtn, canPrev)
+    SetSmallButtonEnabled(self.setOverviewPrevPageBtn, canPrev)
+    SetSmallButtonEnabled(self.setOverviewNextPageBtn, canNext)
+    SetSmallButtonEnabled(self.setOverviewLastPageBtn, canNext)
+end
+
+function App:RefreshSetOverviewPage()
+    local currentActId = App.setOverviewCurrentActOnly and (App.setOverviewCurrentActId or GetCurrentActId()) or GetCurrentActId()
+    local groups = self.setOverviewList or {}
+    local pageStartActId = math.max(0, ToNumber(self.setOverviewPageStartActId))
+    local pageEndActId = math.max(0, ToNumber(self.setOverviewPageEndActId))
+    local pageActLabel = "无"
+    if pageStartActId > 0 and pageEndActId > 0 then
+        if pageStartActId == pageEndActId then
+            pageActLabel = "第" .. pageStartActId .. "幕"
+        else
+            pageActLabel = string.format("第%d-%d幕", pageStartActId, pageEndActId)
+        end
+    end
+    self:RefreshSetOverviewButtons()
+    self:RefreshSetOverviewPaginationButtons()
+    if self.setOverviewPending then
+        self.setOverviewStatus:SetText(string.format(
+            "当前页为套装图鉴  |  正在加载第 %d / %d 页  |  本页幕段: %s  |  当前幕: %s  |  点击图标跳转到对应装备图鉴",
+            math.max(1, ToNumber(self.setOverviewPage)),
+            math.max(1, ToNumber(self.setOverviewPageCount)),
+            pageActLabel,
+            currentActId > 0 and ("第" .. currentActId .. "幕") or "无"
+        ))
+    else
+        self.setOverviewStatus:SetText(string.format(
+            "当前页为套装图鉴  |  页码: %d / %d  |  本页幕段: %s  |  本页套装: %d  |  总幕数: %d  |  当前幕: %s  |  点击图标跳转到对应装备图鉴",
+            math.max(1, ToNumber(self.setOverviewPage)),
+            math.max(1, ToNumber(self.setOverviewPageCount)),
+            pageActLabel,
+            #groups,
+            math.max(0, ToNumber(self.setOverviewTotalCount)),
+            currentActId > 0 and ("第" .. currentActId .. "幕") or "无"
+        ))
+    end
 
     for _, card in ipairs(self.setOverviewCards) do
         card:Hide()
     end
 
-    for idx, group in ipairs(filteredGroups) do
+    if self.setOverviewPending then
+        self.setOverviewEmptyHint:SetText("正在从服务器加载套装概览数据...")
+        self.setOverviewEmptyHint:Show()
+        self.setOverviewContent:SetHeight(100)
+        self.setOverviewScroll:UpdateScrollChildRect()
+        return
+    end
+
+    if #groups == 0 then
+        self.setOverviewEmptyHint:SetText("当前筛选下暂无套装概览数据。")
+        self.setOverviewEmptyHint:Show()
+        self.setOverviewContent:SetHeight(100)
+        self.setOverviewScroll:UpdateScrollChildRect()
+        return
+    end
+
+    self.setOverviewEmptyHint:Hide()
+
+    for idx, group in ipairs(groups) do
         local card = self:GetOrCreateSetOverviewCard(idx)
         local col = (idx - 1) % CARDS_PER_ROW
         local row = math.floor((idx - 1) / CARDS_PER_ROW)
@@ -3357,9 +4014,7 @@ function App:RefreshSetOverviewPage()
         card.descLabel:SetTextColor(THEME.muted[1], THEME.muted[2], THEME.muted[3], 1)
 
         -- tooltip显示套装效果（不重复卡片内容）
-        local bonusKey = string.format("%d:%d", group.sourceMode, group.actId)
-        local bonus = App.setBonusMap[bonusKey]
-        card.bonusData = bonus
+        card.bonusData = group.bonusData
         card.groupData = group
         card:EnableMouse(true)
         card:SetScript("OnEnter", function(self)
@@ -3374,6 +4029,12 @@ function App:RefreshSetOverviewPage()
                 end
                 if b.fourPieceDesc ~= "" then
                     GameTooltip:AddLine("|cffff8000(4件) " .. b.fourPieceDesc .. "|r", 1, 0.5, 0, true)
+                end
+                if b.sixPieceDesc ~= "" then
+                    GameTooltip:AddLine("|cff66ccff(6件) " .. b.sixPieceDesc .. "|r", 0.4, 0.8, 1, true)
+                end
+                if b.eightPieceDesc ~= "" then
+                    GameTooltip:AddLine("|cffcc66ff(8件) " .. b.eightPieceDesc .. "|r", 0.8, 0.4, 1, true)
                 end
             else
                 GameTooltip:AddLine(" ")
@@ -3391,7 +4052,7 @@ function App:RefreshSetOverviewPage()
         card:Show()
     end
 
-    local totalRows = math.ceil(#filteredGroups / CARDS_PER_ROW)
+    local totalRows = math.ceil(#groups / CARDS_PER_ROW)
     self.setOverviewContent:SetHeight(math.max(totalRows * (CARD_H + CARD_GAP), 100))
     self.setOverviewScroll:UpdateScrollChildRect()
 end
@@ -3400,6 +4061,13 @@ end
 -- 章节页
 -------------------------------------------------------
 function App:BuildChapterPage(parent)
+    local previewCardW = 132
+    local previewCardH = 62
+    local previewIconSize = 34
+    local previewCols = 5
+    local previewGapX = 8
+    local previewGapY = 8
+
     self.chapterSummary = parent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     self.chapterSummary:SetPoint("TOPLEFT", 10, -8)
     self.chapterSummary:SetPoint("RIGHT", -10, 0)
@@ -3505,8 +4173,37 @@ function App:BuildChapterPage(parent)
     end)
     self.chapterLeaveBtn:SetPoint("RIGHT", -8, 0)
 
+    self.chapterPreviewModePanel = CreateFrame("Frame", nil, self.chapterDetailPanel)
+    self.chapterPreviewModePanel:SetHeight(32)
+    self.chapterPreviewModePanel:SetPoint("TOPLEFT", self.chapterActionPanel, "BOTTOMLEFT", 0, -6)
+    self.chapterPreviewModePanel:SetPoint("RIGHT", self.chapterActionPanel, "RIGHT", 0, 0)
+    StylePanelFlat(self.chapterPreviewModePanel, THEME.panelDark[1], THEME.panelDark[2], THEME.panelDark[3], 0.42)
+
+    local previewModeLabel = CreateFilterGroupLabel(self.chapterPreviewModePanel, "预览:", self.chapterPreviewModePanel, 0)
+    previewModeLabel:SetPoint("LEFT", 8, 0)
+
+    self.chapterPreviewStoryBtn = CreateSmallButton(self.chapterPreviewModePanel, "正传", 64, function()
+        SetActiveRewardPreviewMode(1, true)
+    end)
+    self.chapterPreviewStoryBtn:SetPoint("LEFT", previewModeLabel, "RIGHT", 6, 0)
+
+    self.chapterPreviewAbyssBtn = CreateSmallButton(self.chapterPreviewModePanel, "深渊", 64, function()
+        SetActiveRewardPreviewMode(2, true)
+    end)
+    self.chapterPreviewAbyssBtn:SetPoint("LEFT", self.chapterPreviewStoryBtn, "RIGHT", 6, 0)
+
+    self.chapterPreviewCorruptBtn = CreateSmallButton(self.chapterPreviewModePanel, "腐化", 64, function()
+        SetActiveRewardPreviewMode(3, true)
+    end)
+    self.chapterPreviewCorruptBtn:SetPoint("LEFT", self.chapterPreviewAbyssBtn, "RIGHT", 6, 0)
+
+    self.chapterPreviewReincarnationBtn = CreateSmallButton(self.chapterPreviewModePanel, "轮回", 64, function()
+        SetActiveRewardPreviewMode(4, true)
+    end)
+    self.chapterPreviewReincarnationBtn:SetPoint("LEFT", self.chapterPreviewCorruptBtn, "RIGHT", 6, 0)
+
     self.chapterDetailScroll = CreateFrame("ScrollFrame", nil, self.chapterDetailPanel, "UIPanelScrollFrameTemplate")
-    self.chapterDetailScroll:SetPoint("TOPLEFT", 12, -108)
+    self.chapterDetailScroll:SetPoint("TOPLEFT", 12, -146)
     self.chapterDetailScroll:SetPoint("BOTTOMRIGHT", -30, 12)
     EnableScrollMouseWheel(self.chapterDetailScroll, 56)
     StyleScrollBar(self.chapterDetailScroll)
@@ -3522,7 +4219,19 @@ function App:BuildChapterPage(parent)
     self.chapterDetailText:SetJustifyH("LEFT")
     self.chapterDetailText:SetJustifyV("TOP")
 
+    self.chapterPreviewContainer = CreateFrame("Frame", nil, self.chapterDetailContent)
+    self.chapterPreviewContainer:SetPoint("TOPLEFT", self.chapterDetailText, "BOTTOMLEFT", 0, -12)
+    self.chapterPreviewContainer:SetPoint("RIGHT", -8, 0)
+    self.chapterPreviewContainer:SetHeight(10)
+
     self.chapterRows = {}
+    self.chapterPreviewSections = {}
+    self.chapterPreviewCardW = previewCardW
+    self.chapterPreviewCardH = previewCardH
+    self.chapterPreviewIconSize = previewIconSize
+    self.chapterPreviewCols = previewCols
+    self.chapterPreviewGapX = previewGapX
+    self.chapterPreviewGapY = previewGapY
 end
 
 function App:RefreshChapterPage()
@@ -3696,29 +4405,101 @@ function App:GetOrCreateChapterRow(index)
     return row
 end
 
-function App:GetChapterPreviewForDisplay(chapterId)
+function App:GetOrCreateChapterPreviewSection(index)
+    if self.chapterPreviewSections[index] then
+        return self.chapterPreviewSections[index]
+    end
+
+    local section = CreateFrame("Frame", nil, self.chapterPreviewContainer)
+    section.title = section:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    section.title:SetPoint("TOPLEFT", 0, 0)
+    section.title:SetTextColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 1)
+    section.note = section:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    section.note:SetPoint("TOPLEFT", section.title, "BOTTOMLEFT", 0, -6)
+    section.note:SetTextColor(THEME.muted[1], THEME.muted[2], THEME.muted[3], 1)
+    section.cards = {}
+    self.chapterPreviewSections[index] = section
+    return section
+end
+
+function App:GetOrCreateChapterPreviewCard(section, index)
+    if section.cards[index] then
+        return section.cards[index]
+    end
+
+    local card = CreateFrame("Button", nil, section)
+    card:SetSize(self.chapterPreviewCardW, self.chapterPreviewCardH)
+    card:EnableMouse(true)
+    StylePanelCard(card)
+
+    card.iconButton = CreateFrame("Button", nil, card)
+    card.iconButton:SetSize(self.chapterPreviewIconSize, self.chapterPreviewIconSize)
+    card.iconButton:SetPoint("TOPLEFT", 8, -8)
+    card.iconButton:SetScript("OnEnter", SetEquipmentItemTooltip)
+    card.iconButton:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+        HideTooltipExtra()
+    end)
+
+    card.icon = card.iconButton:CreateTexture(nil, "ARTWORK")
+    card.icon:SetAllPoints()
+    card.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+    ApplyIconTexCoords(card.icon)
+
+    card.iconBorder = CreateFrame("Frame", nil, card)
+    card.iconBorder:SetPoint("TOPLEFT", card.iconButton, "TOPLEFT", -3, 3)
+    card.iconBorder:SetPoint("BOTTOMRIGHT", card.iconButton, "BOTTOMRIGHT", 3, -3)
+    card.iconBorder:SetFrameLevel(math.max(card:GetFrameLevel(), card.iconButton:GetFrameLevel() - 1))
+    StylePanelCard(card.iconBorder, 0.02, 0.02, 0.04, 0.40)
+
+    card.nameLabel = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    card.nameLabel:SetPoint("TOPLEFT", 48, -8)
+    card.nameLabel:SetPoint("RIGHT", -8, 0)
+    card.nameLabel:SetJustifyH("LEFT")
+
+    card.metaLabel = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    card.metaLabel:SetPoint("TOPLEFT", 48, -28)
+    card.metaLabel:SetPoint("RIGHT", -8, 0)
+    card.metaLabel:SetJustifyH("LEFT")
+
+    card.itemId = 0
+    card:SetScript("OnEnter", SetEquipmentItemTooltip)
+    card:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+        HideTooltipExtra()
+    end)
+    card:SetScript("OnClick", function(self)
+        if self.rewardData and self.rewardData.itemId and self.rewardData.itemId > 0 then
+            local chapterId = App.selectedChapterId or 0
+            if chapterId > 0 then
+                ApplyEquipmentChapterFilter(chapterId)
+            end
+            App:ShowTab("set")
+        end
+    end)
+
+    section.cards[index] = card
+    return card
+end
+
+function App:GetChapterPreviewForDisplay(chapterId, modeType)
     if chapterId <= 0 then
         return nil
     end
-
-    if self.rewardPreview.view and self.rewardPreview.view.chapterId == chapterId then
-        return self.rewardPreview.view
+    local chapterCache = self.rewardPreviewCache[chapterId]
+    if not chapterCache then
+        return nil
     end
-
-    if self.rewardPreview.current and self.rewardPreview.current.chapterId == chapterId then
-        return self.rewardPreview.current
+    modeType = ToNumber(modeType)
+    if modeType < 1 or modeType > 4 then
+        modeType = 1
     end
-
-    if self.rewardPreview.next and self.rewardPreview.next.chapterId == chapterId then
-        return self.rewardPreview.next
-    end
-
-    return nil
+    return chapterCache[modeType]
 end
 
 function App:RequestSelectedChapterPreview()
     if self.selectedChapterId and self.selectedChapterId > 0 then
-        SendAddon("REQ_REWARD_CHAPTER:" .. self.selectedChapterId)
+        SendAddon(string.format("REQ_REWARD_CHAPTER:%d|%d", self.selectedChapterId, GetActiveRewardPreviewMode()))
     end
 end
 
@@ -3740,6 +4521,9 @@ function App:RefreshChapterDetail()
         self.chapterDetailTitle:SetText("未选择章节")
         self.chapterDetailMeta:SetText("")
         self.chapterDetailText:SetText("请选择左侧章节查看详情。")
+        if self.chapterPreviewContainer then
+            self.chapterPreviewContainer:Hide()
+        end
         self.chapterDetailContent:SetHeight(100)
         self.chapterDetailScroll:UpdateScrollChildRect()
         return
@@ -3757,22 +4541,36 @@ function App:RefreshChapterDetail()
     local accessSummary, accessReady = GetChapterAccessSummary(chapter)
     local prerequisiteName = chapter.id > 1 and GetChapterNameById(chapter.id - 1) or "无"
 
-    self.chapterDetailTitle:SetText(string.format("第 %d 幕  [%02d] %s", chapter.actId, chapter.id, chapter.name))
+    self.chapterDetailTitle:SetText(string.format("第 %d 幕  %s", chapter.actId, chapter.name))
     self.chapterDetailMeta:SetText(string.format(
-        "状态: %s  |  类型: %s  |  地图ID: %d  |  建议修仙门槛: %d  |  进入判断: %s",
+        "状态: %s  |  类型: %s  |  建议修仙门槛: %d  |  进入判断: %s",
         stateLabel,
         GetChapterTypeName(chapter.chapterType),
-        chapter.mapId,
         chapter.threshold,
         accessReady and ("|cff4dcc4d" .. accessSummary .. "|r") or ("|cffff6b6b" .. accessSummary .. "|r")
     ))
     self.chapterActionStatus:SetText(App.chapterLastActionText ~= "" and App.chapterLastActionText or "最近请求：暂无")
 
     if self.chapterEnterStoryBtn then
+        self.chapterEnterStoryBtn:ApplySelectedState((App.chapterEnterMode or 1) == 1)
+        self.chapterEnterAbyssBtn:ApplySelectedState((App.chapterEnterMode or 1) == 2)
+        self.chapterEnterCorruptBtn:ApplySelectedState((App.chapterEnterMode or 1) == 3)
+        self.chapterEnterReincarnationBtn:ApplySelectedState((App.chapterEnterMode or 1) == 4)
         self.chapterEnterStoryBtn:SetAlpha((self.state.inRun or not accessReady or not HasChapterModeUnlocked(chapter, 1)) and 0.45 or 1.0)
         self.chapterEnterAbyssBtn:SetAlpha((self.state.inRun or not accessReady or not HasChapterModeUnlocked(chapter, 2)) and 0.45 or 1.0)
         self.chapterEnterCorruptBtn:SetAlpha((self.state.inRun or not accessReady or not HasChapterModeUnlocked(chapter, 3)) and 0.45 or 1.0)
         self.chapterEnterReincarnationBtn:SetAlpha((self.state.inRun or not accessReady or not HasChapterModeUnlocked(chapter, 4)) and 0.45 or 1.0)
+    end
+    if self.chapterPreviewStoryBtn then
+        local rewardPreviewMode = GetActiveRewardPreviewMode()
+        self.chapterPreviewStoryBtn:ApplySelectedState(rewardPreviewMode == 1)
+        self.chapterPreviewAbyssBtn:ApplySelectedState(rewardPreviewMode == 2)
+        self.chapterPreviewCorruptBtn:ApplySelectedState(rewardPreviewMode == 3)
+        self.chapterPreviewReincarnationBtn:ApplySelectedState(rewardPreviewMode == 4)
+        self.chapterPreviewStoryBtn:SetAlpha(1.0)
+        self.chapterPreviewAbyssBtn:SetAlpha(1.0)
+        self.chapterPreviewCorruptBtn:SetAlpha(1.0)
+        self.chapterPreviewReincarnationBtn:SetAlpha(1.0)
     end
     if self.chapterLeaveBtn then
         if self.state.inRun then
@@ -3784,7 +4582,11 @@ function App:RefreshChapterDetail()
     end
 
     local lines = {}
-    table.insert(lines, string.format("|cffDBA64A章节任务|r  起始任务: |cffffffff%d|r  完成任务: |cffffffff%d|r", chapter.startQuestId, chapter.completeQuestId))
+    table.insert(lines, string.format(
+        "|cffDBA64A章节任务|r  起始引导: %s  |  通关验收: %s",
+        chapter.startQuestId and chapter.startQuestId > 0 and "|cff4dcc4d已配置|r" or "|cffff6b6b未配置|r",
+        chapter.completeQuestId and chapter.completeQuestId > 0 and "|cff4dcc4d已配置|r" or "|cffff6b6b未配置|r"
+    ))
     table.insert(lines, string.format(
         "|cffDBA64A首领映射|r  锚点: |cffffffff%s|r  |  最终: |cffffffff%s|r",
         FormatBossDisplay(chapter.anchorBossEntry, chapter.anchorBossName),
@@ -3801,6 +4603,10 @@ function App:RefreshChapterDetail()
         HasChapterModeUnlocked(chapter, 2) and "|cff4dcc4d已解锁|r" or "|cffff6b6b未解锁|r",
         HasChapterModeUnlocked(chapter, 3) and "|cff4dcc4d已解锁|r" or "|cffff6b6b未解锁|r",
         HasChapterModeUnlocked(chapter, 4) and "|cff4dcc4d已解锁|r" or "|cffff6b6b未解锁|r"
+    ))
+    table.insert(lines, string.format(
+        "|cffDBA64A预览模式|r  当前掉落预览按 |cffffffff%s|r 显示。",
+        GetModeTypeName(GetActiveRewardPreviewMode())
     ))
     table.insert(lines, string.format(
         "|cffDBA64A进入条件|r  前置章节: |cffffffff%s|r  |  角色等级: |cffffffff%d|r / 需求: |cffffffff%d|r  |  历史最高章节: |cffffffff%d|r  |  推荐状态: %s",
@@ -3830,37 +4636,114 @@ function App:RefreshChapterDetail()
         ))
     end
 
-    local preview = self:GetChapterPreviewForDisplay(chapter.id)
-    local categoryOrder = { "anchor", "final", "abyss", "cache" }
-    for _, category in ipairs(categoryOrder) do
-        table.insert(lines, " ")
-        table.insert(lines, string.format("|cffDBA64A%s掉落预览|r", GetChapterBossCategoryTitle(chapter, category)))
-
-        local rewards = preview and preview.categories and preview.categories[category] or nil
-        if rewards and #rewards > 0 then
-            for index, reward in ipairs(rewards) do
-                if index > 5 then
-                    table.insert(lines, string.format("|cff808080... 还有 %d 项未展示|r", #rewards - 5))
-                    break
-                end
-
-                table.insert(lines, string.format(
-                    "  |cffd8d3c7- %s|r  |cff9f9f9f[%s / %s / ilvl %d / 品质%d]|r",
-                    reward.itemName ~= "" and reward.itemName or ("物品#" .. reward.itemId),
-                    GetRewardDockingTypeName(reward.dockingType),
-                    GetModeTypeName(reward.sourceMode),
-                    reward.baseItemLevel,
-                    reward.quality
-                ))
-            end
-        else
-            table.insert(lines, "  |cff666666暂无预览数据，可点击章节后等待服务端返回。|r")
-        end
-    end
-
     self.chapterDetailText:SetText(table.concat(lines, "\n"))
     local textHeight = self.chapterDetailText:GetStringHeight() or 0
-    self.chapterDetailContent:SetHeight(math.max(textHeight + 20, 100))
+
+    local previewMode = GetActiveRewardPreviewMode()
+    local preview = self:GetChapterPreviewForDisplay(chapter.id, previewMode)
+    local categoryOrder = { "anchor", "final", "abyss", "cache" }
+    local categoryEntryKey = {
+        anchor = "anchorBossEntry",
+        final = "finalBossEntry",
+        abyss = "abyssBossEntry",
+        cache = "cacheBossEntry",
+    }
+    local totalPreviewHeight = 0
+    local anyPreviewShown = false
+
+    if self.chapterPreviewContainer then
+        self.chapterPreviewContainer:Show()
+        self.chapterPreviewContainer:ClearAllPoints()
+        self.chapterPreviewContainer:SetPoint("TOPLEFT", self.chapterDetailText, "BOTTOMLEFT", 0, -14)
+        self.chapterPreviewContainer:SetPoint("RIGHT", -8, 0)
+
+        for _, section in ipairs(self.chapterPreviewSections) do
+            section:Hide()
+            for _, card in ipairs(section.cards) do
+                card:Hide()
+            end
+        end
+
+        local sectionY = 0
+        local sectionIdx = 0
+        local shownBossEntries = {} -- 去重：跳过与已显示类别相同 bossEntry 的类别
+        local shownRewardSignatures = {} -- 去重：跳过共用同一掉落池的类别
+        for _, category in ipairs(categoryOrder) do
+            local entryKey = categoryEntryKey[category]
+            local bossEntry = entryKey and ToNumber(chapter[entryKey]) or 0
+            local rewards = preview and preview.categories and preview.categories[category] or nil
+            local rewardSignature = BuildRewardPreviewSignature(rewards)
+
+            -- 跳过未配置首领的类别 (bossEntry == 0)
+            if not ShouldShowRewardPreviewCategory(category, previewMode) then
+                -- 当前预览模式下不展示该类首领掉落
+            elseif bossEntry <= 0 then
+                -- 不显示，跳过
+            elseif shownBossEntries[bossEntry] then
+                -- 与已显示的类别共用同一个首领，跳过避免重复
+            elseif rewardSignature and shownRewardSignatures[rewardSignature] then
+                -- 腐化/轮回预览下可能共用同一底材池，跳过重复展示
+            else
+                shownBossEntries[bossEntry] = true
+                if rewardSignature then
+                    shownRewardSignatures[rewardSignature] = true
+                end
+                sectionIdx = sectionIdx + 1
+                local section = self:GetOrCreateChapterPreviewSection(sectionIdx)
+                section:ClearAllPoints()
+                section:SetPoint("TOPLEFT", 0, -sectionY)
+                section:SetPoint("RIGHT", 0, 0)
+
+                section.title:SetText(string.format("%s掉落预览", GetChapterBossCategoryTitle(chapter, category)))
+
+                if rewards and #rewards > 0 then
+                    anyPreviewShown = true
+                    QueueItemPrefetchList(rewards)
+                    section.note:SetText(string.format("当前预览模式: %s  |  鼠标悬停图标可直接查看装备详情，共 %d 项。", GetModeTypeName(previewMode), #rewards))
+                    section.note:Show()
+
+                    local maxBottom = 0
+                    for rewardIndex, reward in ipairs(rewards) do
+                        local card = self:GetOrCreateChapterPreviewCard(section, rewardIndex)
+                        local col = (rewardIndex - 1) % self.chapterPreviewCols
+                        local row = math.floor((rewardIndex - 1) / self.chapterPreviewCols)
+                        local x = col * (self.chapterPreviewCardW + self.chapterPreviewGapX)
+                        local y = -28 - 14 - row * (self.chapterPreviewCardH + self.chapterPreviewGapY)
+                        card:ClearAllPoints()
+                        card:SetPoint("TOPLEFT", x, y)
+
+                        local itemName, iconPath = ResolveItemDisplay(reward.itemId, reward.itemName, reward.icon)
+                        card.rewardData = reward
+                        card.itemId = reward.itemId
+                        card.iconButton.itemId = reward.itemId
+                        card.icon:SetTexture(iconPath or "Interface\\Icons\\INV_Misc_QuestionMark")
+                        card.nameLabel:SetText(itemName or reward.itemName or ("物品#" .. ToNumber(reward.itemId)))
+                        card.metaLabel:SetText(string.format("%s  |  ilvl %d",
+                            GetRewardDockingTypeName(reward.dockingType),
+                            ToNumber(reward.baseItemLevel) or 0))
+                        card:Show()
+                        maxBottom = math.max(maxBottom, (-y) + self.chapterPreviewCardH)
+                    end
+
+                    section:SetHeight(maxBottom + 8)
+                    section:Show()
+                    sectionY = sectionY + section:GetHeight() + 14
+                else
+                    section.note:SetText(string.format("当前预览模式: %s  |  暂无掉落预览数据，请稍后刷新。", GetModeTypeName(previewMode)))
+                    section.note:Show()
+                    section:SetHeight(52)
+                    section:Show()
+                    sectionY = sectionY + section:GetHeight() + 14
+                end
+            end
+        end
+
+        totalPreviewHeight = sectionY
+        self.chapterPreviewContainer:SetHeight(math.max(totalPreviewHeight, 10))
+    end
+
+    local bottomPadding = anyPreviewShown and 20 or 12
+    self.chapterDetailContent:SetHeight(math.max(textHeight + totalPreviewHeight + bottomPadding, 180))
     self.chapterDetailScroll:UpdateScrollChildRect()
 end
 
@@ -4052,7 +4935,7 @@ function App:ShowTab(tab)
         self.chapterFrame:Hide()
         self:RefreshArtifactPage()
     elseif tab == "set" then
-        SendAddon("REQ_EQUIPMENTS")
+        self:RequestEquipmentPage(self.equipmentPage or 1)
         self.equipFrame:Hide()
         self.artifactFrame:Hide()
         self.setFrame:Show()
@@ -4060,7 +4943,7 @@ function App:ShowTab(tab)
         self.chapterFrame:Hide()
         self:RefreshEquipmentPage()
     elseif tab == "suit" then
-        SendAddon("REQ_EQUIPMENTS")
+        self:RequestSetOverviewData(self.setOverviewPage or 1)
         self.equipFrame:Hide()
         self.artifactFrame:Hide()
         self.setFrame:Hide()
@@ -4070,10 +4953,10 @@ function App:ShowTab(tab)
     else
         SendAddon("REQ_STATE")
         SendAddon("REQ_CHAPTERS")
-        SendAddon("REQ_REWARD_CURRENT")
-        SendAddon("REQ_REWARD_NEXT")
+        SendAddon("REQ_REWARD_CURRENT:" .. GetActiveRewardPreviewMode())
+        SendAddon("REQ_REWARD_NEXT:" .. GetActiveRewardPreviewMode())
         if self.selectedChapterId and self.selectedChapterId > 0 then
-            SendAddon("REQ_REWARD_CHAPTER:" .. self.selectedChapterId)
+            SendAddon(string.format("REQ_REWARD_CHAPTER:%d|%d", self.selectedChapterId, GetActiveRewardPreviewMode()))
         end
         self.equipFrame:Hide()
         self.artifactFrame:Hide()
@@ -4086,8 +4969,13 @@ end
 
 function App:RequestData()
     SendAddon("REQ_ALL")
+    if self.activeTab == "set" then
+        self:RequestEquipmentPage(self.equipmentPage or 1)
+    elseif self.activeTab == "suit" then
+        self:RequestSetOverviewData(self.setOverviewPage or 1)
+    end
     if self.selectedChapterId and self.selectedChapterId > 0 then
-        SendAddon("REQ_REWARD_CHAPTER:" .. self.selectedChapterId)
+        SendAddon(string.format("REQ_REWARD_CHAPTER:%d|%d", self.selectedChapterId, GetActiveRewardPreviewMode()))
     end
 end
 
@@ -4283,6 +5171,13 @@ local function HandleMessage(message)
         end
     elseif cmd == "EQUIPMENTS" then
         ParseEquipments(payload)
+        if App.activeTab == "chapter" and App.selectedChapterId and App.selectedChapterId > 0 then
+            App:RefreshChapterDetail()
+        end
+    elseif cmd == "EQUIPMENT_PAGE" then
+        ParseEquipmentPage(payload)
+    elseif cmd == "SET_OVERVIEW" then
+        ParseSetOverview(payload)
     elseif cmd == "SET_BONUSES" then
         ParseSetBonuses(payload)
     elseif cmd == "CHAPTERS" then
@@ -4295,7 +5190,13 @@ local function HandleMessage(message)
     elseif string.find(cmd, "^REWARD_") then
         local scope, category = string.match(cmd, "^REWARD_([A-Z]+)_([A-Z]+)$")
         if scope and category then
-            ParseRewardPreview(string.lower(scope), string.lower(category), payload)
+            category = string.lower(category)
+            local parsedChapterId = ParseRewardPreview(scope, category, payload)
+
+            if App.activeTab == "chapter" and App.frame and App.frame:IsShown()
+               and parsedChapterId and parsedChapterId == (App.selectedChapterId or 0) then
+                App:RefreshChapterDetail()
+            end
         else
             return
         end
@@ -4354,6 +5255,7 @@ local function HandleMessage(message)
     end
 
     App:RefreshCurrent()
+    App:RefreshProgressFrame()
 end
 
 -------------------------------------------------------
@@ -4361,6 +5263,8 @@ end
 -------------------------------------------------------
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
+eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+eventFrame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 eventFrame:RegisterEvent("CHAT_MSG_ADDON")
 eventFrame:RegisterEvent("GET_ITEM_INFO_RECEIVED")
 eventFrame:SetScript("OnEvent", function(_, event, ...)
@@ -4371,7 +5275,28 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
             C_ChatInfo.RegisterAddonMessagePrefix(ADDON_PREFIX)
         end
         App:CreateModePromptFrame()
+        App:CreateProgressFrame()
         App:CreateIconButton()
+        if C_Timer and C_Timer.After then
+            C_Timer.After(0.5, function()
+                SendAddon("REQ_CHAPTERS")
+                SendAddon("REQ_STATE")
+            end)
+        else
+            SendAddon("REQ_CHAPTERS")
+            SendAddon("REQ_STATE")
+        end
+        return
+    end
+
+    if event == "PLAYER_ENTERING_WORLD" or event == "ZONE_CHANGED_NEW_AREA" then
+        if App.progressFrame then
+            App.progressFrame:Hide()
+        end
+        SendAddon("REQ_STATE")
+        if not App.chapterMap or not next(App.chapterMap) then
+            SendAddon("REQ_CHAPTERS")
+        end
         return
     end
 
