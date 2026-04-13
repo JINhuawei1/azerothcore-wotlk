@@ -467,6 +467,85 @@ SET
 WHERE it.`entry` = r.`物品ID`
   AND r.`类型` IN (2, 3);
 
+-- 遗物 / 阶段神器 / 终极神器：16 单独重导时也要把 tooltip / 托管技能重新挂回，避免 spellid 字段被模板重建覆盖
+UPDATE `item_template`
+SET
+  `spellid_1` = 89601,
+  `spelltrigger_1` = 1,
+  `spellcharges_1` = 0,
+  `spellppmRate_1` = 0,
+  `spellcooldown_1` = -1,
+  `spellcategory_1` = 0,
+  `spellcategorycooldown_1` = -1,
+  `spellid_2` = 89602,
+  `spelltrigger_2` = 1,
+  `spellcharges_2` = 0,
+  `spellppmRate_2` = 0,
+  `spellcooldown_2` = -1,
+  `spellcategory_2` = 0,
+  `spellcategorycooldown_2` = -1,
+  `spellid_3` = 89100 + (`entry` - 950000),
+  `spelltrigger_3` = 1,
+  `spellcharges_3` = 0,
+  `spellppmRate_3` = 0,
+  `spellcooldown_3` = -1,
+  `spellcategory_3` = 0,
+  `spellcategorycooldown_3` = -1,
+  `description` = ''
+WHERE `entry` BETWEEN 950001 AND 950074;
+
+UPDATE `item_template`
+SET
+  `spellid_1` = 89603,
+  `spelltrigger_1` = 1,
+  `spellcharges_1` = 0,
+  `spellppmRate_1` = 0,
+  `spellcooldown_1` = -1,
+  `spellcategory_1` = 0,
+  `spellcategorycooldown_1` = -1,
+  `spellid_2` = 89174 + (`entry` - 960000),
+  `spelltrigger_2` = 1,
+  `spellcharges_2` = 0,
+  `spellppmRate_2` = 0,
+  `spellcooldown_2` = -1,
+  `spellcategory_2` = 0,
+  `spellcategorycooldown_2` = -1,
+  `spellid_3` = 0,
+  `spelltrigger_3` = 0,
+  `spellcharges_3` = 0,
+  `spellppmRate_3` = 0,
+  `spellcooldown_3` = -1,
+  `spellcategory_3` = 0,
+  `spellcategorycooldown_3` = -1,
+  `description` = ''
+WHERE `entry` BETWEEN 960001 AND 960006;
+
+UPDATE `item_template`
+SET
+  `spellid_1` = 89604,
+  `spelltrigger_1` = 1,
+  `spellcharges_1` = 0,
+  `spellppmRate_1` = 0,
+  `spellcooldown_1` = -1,
+  `spellcategory_1` = 0,
+  `spellcategorycooldown_1` = -1,
+  `spellid_2` = 89181,
+  `spelltrigger_2` = 1,
+  `spellcharges_2` = 0,
+  `spellppmRate_2` = 0,
+  `spellcooldown_2` = -1,
+  `spellcategory_2` = 0,
+  `spellcategorycooldown_2` = -1,
+  `spellid_3` = 0,
+  `spelltrigger_3` = 0,
+  `spellcharges_3` = 0,
+  `spellppmRate_3` = 0,
+  `spellcooldown_3` = -1,
+  `spellcategory_3` = 0,
+  `spellcategorycooldown_3` = -1,
+  `description` = ''
+WHERE `entry` = 970001;
+
 -- 遗物 / 神器：像普通装备一样附加 10 条属性，便于在物品 tooltip 中直接展示
 -- 属性顺序：
 -- 1敏捷 2力量 3智力 4精神 5耐力 6命中等级 7暴击等级 8急速等级 9攻击强度 10法术强度
@@ -827,6 +906,47 @@ SET
   it.`spellcategory_1` = 0,
   it.`spellcategorycooldown_1` = -1
 WHERE e.`装备类型` = 2
+  AND it.`entry` BETWEEN 980001 AND 981628;
+
+-- 专属神器武器/法轮：16 单独重导时也要把主动/触发技能重新挂回，避免 spellid_2 被模板重建覆盖
+UPDATE `item_template` it
+JOIN `_深渊装备模板` e ON e.`物品模板ID` = it.`entry`
+SET
+  it.`spellid_2` = CASE
+    WHEN e.`固定特效ID` BETWEEN 40101 AND 40615 THEN 89401 + ((FLOOR((e.`固定特效ID` - 40000) / 100) - 1) * 15) + (MOD(e.`固定特效ID`, 100) - 1)
+    ELSE it.`spellid_2`
+  END,
+  it.`spelltrigger_2` = CASE
+    WHEN e.`固定特效ID` BETWEEN 40101 AND 40615 THEN 2
+    ELSE it.`spelltrigger_2`
+  END,
+  it.`spellcharges_2` = CASE
+    WHEN e.`固定特效ID` BETWEEN 40101 AND 40615 THEN 0
+    ELSE it.`spellcharges_2`
+  END,
+  it.`spellppmRate_2` = CASE MOD(e.`固定特效ID`, 100)
+    WHEN 1 THEN 2.8 WHEN 2 THEN 2.4 WHEN 3 THEN 2.4 WHEN 4 THEN 4.5 WHEN 5 THEN 3.4
+    WHEN 6 THEN 2.0 WHEN 7 THEN 2.0 WHEN 8 THEN 1.6 WHEN 9 THEN 2.4 WHEN 10 THEN 2.1
+    WHEN 11 THEN 2.8 WHEN 12 THEN 2.4 WHEN 13 THEN 2.2 WHEN 14 THEN 3.0 WHEN 15 THEN 2.6
+    ELSE it.`spellppmRate_2`
+  END,
+  it.`spellcooldown_2` = CASE MOD(e.`固定特效ID`, 100)
+    WHEN 1 THEN 2400 WHEN 2 THEN 3000 WHEN 3 THEN 3000 WHEN 4 THEN 1600 WHEN 5 THEN 2200
+    WHEN 6 THEN 3400 WHEN 7 THEN 3400 WHEN 8 THEN 3800 WHEN 9 THEN 2600 WHEN 10 THEN 3200
+    WHEN 11 THEN 2400 WHEN 12 THEN 2800 WHEN 13 THEN 3000 WHEN 14 THEN 2300 WHEN 15 THEN 2600
+    ELSE it.`spellcooldown_2`
+  END,
+  it.`spellcategory_2` = CASE
+    WHEN e.`固定特效ID` BETWEEN 40101 AND 40615 THEN 0
+    ELSE it.`spellcategory_2`
+  END,
+  it.`spellcategorycooldown_2` = CASE
+    WHEN e.`固定特效ID` BETWEEN 40101 AND 40615 THEN -1
+    ELSE it.`spellcategorycooldown_2`
+  END
+WHERE e.`装备类型` = 2
+  AND e.`是否启用` = 1
+  AND (e.`部位掩码` = 1 OR e.`部位掩码` = 512)
   AND it.`entry` BETWEEN 980001 AND 981628;
 
 -- 遗物 / 神器 / 专属装备名称：统一粉红色显示
