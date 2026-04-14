@@ -58,6 +58,7 @@ struct CutEntry
     uint32 id = 0;
     uint32 cutLevel = 0;
     uint32 requirementTemplateId = 0;
+    std::string requirementText;
     uint8 damageType = CUT_DAMAGE_FIXED;
     float cutDamage = 0.0f;
     float chance = 0.0f;
@@ -88,7 +89,11 @@ public:
     {
         _entries.clear();
 
-        QueryResult result = WorldDatabase.Query("SELECT `id`, `切割等级`, `需求系统id`, `伤害类型`, `切割伤害`, `触发几率` FROM `_切割系统`");
+        QueryResult result = WorldDatabase.Query(
+            "SELECT c.`id`, c.`切割等级`, c.`需求系统id`, c.`伤害类型`, c.`切割伤害`, c.`触发几率`, "
+            "COALESCE(q.`客户端显示`, '') "
+            "FROM `_切割系统` c "
+            "LEFT JOIN `_模板_需求` q ON q.`id` = c.`需求系统id`");
         if (!result)
         {
             LOG_WARN("server.loading", "切割系统未加载到任何配置，请检查表 `_切割系统`。");
@@ -106,6 +111,7 @@ public:
             entry.damageType = fields[3].Get<uint8>();
             entry.cutDamage = fields[4].Get<float>();
             entry.chance = fields[5].Get<float>();
+            entry.requirementText = fields[6].Get<std::string>();
 
             if (!entry.id || !entry.cutLevel)
             {
@@ -522,7 +528,8 @@ void SendCutSystemListToPlayer(Player* player)
                 << entry.requirementTemplateId << '^'
                 << static_cast<uint32>(entry.damageType) << '^'
                 << entry.cutDamage << '^'
-                << entry.chance;
+                << entry.chance << '^'
+                << SanitizeAddonText(entry.requirementText);
     }
 
     SendCutSystemPayload(player, payload.str());

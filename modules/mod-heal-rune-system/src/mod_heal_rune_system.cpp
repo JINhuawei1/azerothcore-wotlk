@@ -45,6 +45,7 @@ struct HealRuneEntry
     uint32 id = 0;
     std::string name;
     std::string description;
+    std::string requirementText;
     uint32 healLevel = 0;
     uint32 requirementTemplateId = 0;
     uint8 healMode = HEAL_RUNE_MODE_VALUE;
@@ -146,7 +147,11 @@ public:
     {
         _entries.clear();
 
-        QueryResult result = WorldDatabase.Query("SELECT `id`, `回血神符名称`, `回血神符描述`, `回血等级`, `需求系统id`, `血蓝设置`, `血蓝值` FROM `_回血神符`");
+        QueryResult result = WorldDatabase.Query(
+            "SELECT r.`id`, r.`回血神符名称`, r.`回血神符描述`, r.`回血等级`, r.`需求系统id`, r.`血蓝设置`, r.`血蓝值`, "
+            "COALESCE(q.`客户端显示`, '') "
+            "FROM `_回血神符` r "
+            "LEFT JOIN `_模板_需求` q ON q.`id` = r.`需求系统id`");
         if (!result)
         {
             LOG_WARN("server.loading", "回血神符系统未加载到任何配置，请检查表 `_回血神符`。");
@@ -165,6 +170,7 @@ public:
             entry.requirementTemplateId = fields[4].Get<uint32>();
             entry.healMode = fields[5].Get<uint8>();
             entry.healValue = fields[6].Get<uint32>();
+            entry.requirementText = fields[7].Get<std::string>();
 
             if (!entry.id || !entry.healLevel || entry.healLevel > 999999)
             {
@@ -675,7 +681,8 @@ void SendHealRuneListToPlayer(Player* player)
                 << entry.healLevel << '^'
                 << entry.requirementTemplateId << '^'
                 << static_cast<uint32>(entry.healMode) << '^'
-                << entry.healValue;
+                << entry.healValue << '^'
+                << SanitizeAddonText(entry.requirementText);
     }
 
     SendHealRunePayload(player, payload.str());
