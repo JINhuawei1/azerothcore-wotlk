@@ -4,9 +4,9 @@
 
 #if __has_include("RequirementSystem.h")
 #include "RequirementSystem.h"
-#define ZDYUI_CHENGHAO_HAS_REQUIREMENT_SYSTEM 1
+#define CHENGHAO_SYSTEM_HAS_REQUIREMENT_SYSTEM 1
 #else
-#define ZDYUI_CHENGHAO_HAS_REQUIREMENT_SYSTEM 0
+#define CHENGHAO_SYSTEM_HAS_REQUIREMENT_SYSTEM 0
 #endif
 
 #include "Chat.h"
@@ -28,9 +28,9 @@
 
 namespace
 {
-constexpr char const* CONF_ENABLE = "ZDYUI.ChengHao.Enable";
-constexpr char const* CONF_NOTIFY_PLAYER = "ZDYUI.ChengHao.NotifyPlayer";
-constexpr char ZDYUI_CHENGHAO_ADDON_PREFIX[] = "ZDYUI_CH";
+constexpr char const* CONF_ENABLE = "ChenghaoSystem.Enable";
+constexpr char const* CONF_NOTIFY_PLAYER = "ChenghaoSystem.NotifyPlayer";
+constexpr char CHENGHAO_SYSTEM_ADDON_PREFIX[] = "ZDYUI_CH";
 constexpr size_t MAX_ADDON_PAYLOAD = 220;
 
 std::string SanitizeAddonText(std::string text)
@@ -44,7 +44,7 @@ std::string SanitizeAddonText(std::string text)
     return text;
 }
 
-struct ZDYUIChengHaoEntry
+struct ChenghaoSystemEntry
 {
     uint32 id = 0;
     uint32 titleLevel = 0;
@@ -53,18 +53,18 @@ struct ZDYUIChengHaoEntry
     std::string description;
 };
 
-struct ZDYUIPlayerChengHaoState
+struct ChenghaoSystemPlayerState
 {
     uint32 titleLevel = 0;
     uint32 auraSpellId = 0;
 };
 
-class ZDYUIChengHaoMgr
+class ChenghaoSystemMgr
 {
 public:
-    static ZDYUIChengHaoMgr* Instance()
+    static ChenghaoSystemMgr* Instance()
     {
-        static ZDYUIChengHaoMgr instance;
+        static ChenghaoSystemMgr instance;
         return &instance;
     }
 
@@ -83,17 +83,17 @@ public:
         _entries.clear();
         _managedAuraIds.clear();
 
-        QueryResult result = WorldDatabase.Query("SELECT id, 称号等级, 需求系统id, 激活光环技能id, 称号描述 FROM _自定义ui_称号系统");
+        QueryResult result = WorldDatabase.Query("SELECT id, 称号等级, 需求系统id, 激活光环技能id, 称号描述 FROM _称号系统");
         if (!result)
         {
-            LOG_WARN("server.loading", "自定义UI称号系统未加载到任何数据，请检查表 _自定义ui_称号系统。");
+            LOG_WARN("server.loading", "自定义UI称号系统未加载到任何数据，请检查表 _称号系统。");
             return;
         }
 
         do
         {
             Field* fields = result->Fetch();
-            ZDYUIChengHaoEntry entry;
+            ChenghaoSystemEntry entry;
             entry.id = fields[0].Get<uint32>();
             entry.titleLevel = fields[1].Get<uint32>();
             entry.requirementTemplateId = fields[2].Get<uint32>();
@@ -118,7 +118,7 @@ public:
         }
         while (result->NextRow());
 
-        std::sort(_entries.begin(), _entries.end(), [](ZDYUIChengHaoEntry const& left, ZDYUIChengHaoEntry const& right)
+        std::sort(_entries.begin(), _entries.end(), [](ChenghaoSystemEntry const& left, ChenghaoSystemEntry const& right)
         {
             if (left.titleLevel != right.titleLevel)
                 return left.titleLevel < right.titleLevel;
@@ -148,7 +148,7 @@ public:
         {
             Field* fields = result->Fetch();
             uint32 titleId = fields[0].Get<uint32>();
-            ZDYUIPlayerChengHaoState state;
+            ChenghaoSystemPlayerState state;
             state.titleLevel = fields[1].Get<uint32>();
             state.auraSpellId = fields[2].Get<uint32>();
 
@@ -178,7 +178,7 @@ public:
 
         RemoveConfiguredAuras(player);
 
-        ZDYUIPlayerChengHaoState const* highestState = GetHighestUnlockedState(player);
+        ChenghaoSystemPlayerState const* highestState = GetHighestUnlockedState(player);
         if (!highestState)
             return;
 
@@ -189,7 +189,7 @@ public:
             player->AddAura(highestState->auraSpellId, player);
     }
 
-    std::vector<ZDYUIChengHaoEntry> const& GetEntries() const
+    std::vector<ChenghaoSystemEntry> const& GetEntries() const
     {
         return _entries;
     }
@@ -204,7 +204,7 @@ public:
             return 0;
 
         uint32 bestTitleId = 0;
-        ZDYUIPlayerChengHaoState const* bestState = nullptr;
+        ChenghaoSystemPlayerState const* bestState = nullptr;
 
         for (auto const& [titleId, state] : playerIt->second)
         {
@@ -219,7 +219,7 @@ public:
         return bestTitleId;
     }
 
-    ZDYUIChengHaoEntry const* GetHighestUnlockedEntry(Player* player) const
+    ChenghaoSystemEntry const* GetHighestUnlockedEntry(Player* player) const
     {
         uint32 titleId = GetHighestUnlockedTitleId(player);
         return titleId ? GetEntryById(titleId) : nullptr;
@@ -256,7 +256,7 @@ public:
         return false;
     }
 
-    bool CanActivateEntry(Player* player, ZDYUIChengHaoEntry const& entry, bool showMessages, bool consumeRequirements,
+    bool CanActivateEntry(Player* player, ChenghaoSystemEntry const& entry, bool showMessages, bool consumeRequirements,
         std::string* failureMessage = nullptr) const
     {
         if (!player)
@@ -285,7 +285,7 @@ public:
         if (entry.requirementTemplateId == 0)
             return true;
 
-#if ZDYUI_CHENGHAO_HAS_REQUIREMENT_SYSTEM
+#if CHENGHAO_SYSTEM_HAS_REQUIREMENT_SYSTEM
         if (!sRequirementSystem)
         {
             if (showMessages)
@@ -345,7 +345,7 @@ public:
             return false;
         }
 
-        ZDYUIChengHaoEntry const* entry = GetEntryById(titleId);
+        ChenghaoSystemEntry const* entry = GetEntryById(titleId);
         if (!entry)
         {
             if (failureMessage)
@@ -365,7 +365,7 @@ public:
         if (!CanActivateEntry(player, *entry, showMessages, true, failureMessage))
             return false;
 
-        ZDYUIPlayerChengHaoState state;
+        ChenghaoSystemPlayerState state;
         state.titleLevel = entry->titleLevel;
         state.auraSpellId = entry->auraSpellId;
 
@@ -400,7 +400,7 @@ public:
             return 0;
 
         uint32 count = 0;
-        for (ZDYUIChengHaoEntry const& entry : _entries)
+        for (ChenghaoSystemEntry const& entry : _entries)
         {
             if (IsPlayerUnlocked(player, entry.id))
                 continue;
@@ -417,7 +417,7 @@ public:
             ChatHandler handler(player->GetSession());
             handler.PSendSysMessage("称号系统：本次共激活 {} 个称号。", count);
 
-            if (ZDYUIChengHaoEntry const* highestEntry = GetHighestUnlockedEntry(player))
+            if (ChenghaoSystemEntry const* highestEntry = GetHighestUnlockedEntry(player))
             {
                 handler.PSendSysMessage("称号系统：当前生效称号 [id:{}] 等级:{} 光环:{} 描述:{}",
                     highestEntry->id,
@@ -446,7 +446,7 @@ public:
     }
 
 private:
-    ZDYUIPlayerChengHaoState const* GetHighestUnlockedState(Player* player) const
+    ChenghaoSystemPlayerState const* GetHighestUnlockedState(Player* player) const
     {
         if (!player)
             return nullptr;
@@ -459,9 +459,9 @@ private:
         return bestTitleId ? &playerIt->second.at(bestTitleId) : nullptr;
     }
 
-    ZDYUIChengHaoEntry const* GetEntryById(uint32 titleId) const
+    ChenghaoSystemEntry const* GetEntryById(uint32 titleId) const
     {
-        for (ZDYUIChengHaoEntry const& entry : _entries)
+        for (ChenghaoSystemEntry const& entry : _entries)
         {
             if (entry.id == titleId)
                 return &entry;
@@ -470,9 +470,9 @@ private:
         return nullptr;
     }
 
-    std::vector<ZDYUIChengHaoEntry> _entries;
+    std::vector<ChenghaoSystemEntry> _entries;
     std::unordered_set<uint32> _managedAuraIds;
-    std::unordered_map<uint32, std::unordered_map<uint32, ZDYUIPlayerChengHaoState>> _playerTitles;
+    std::unordered_map<uint32, std::unordered_map<uint32, ChenghaoSystemPlayerState>> _playerTitles;
 };
 
 void SendAddonPayload(Player* player, std::string const& payload)
@@ -482,7 +482,7 @@ void SendAddonPayload(Player* player, std::string const& payload)
 
     if (payload.length() <= MAX_ADDON_PAYLOAD)
     {
-        std::string fullMessage = std::string(ZDYUI_CHENGHAO_ADDON_PREFIX) + '\t' + payload;
+        std::string fullMessage = std::string(CHENGHAO_SYSTEM_ADDON_PREFIX) + '\t' + payload;
         WorldPacket data;
         ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
         player->SendDirectMessage(&data);
@@ -499,7 +499,7 @@ void SendAddonPayload(Player* player, std::string const& payload)
         std::ostringstream chunkMessage;
         chunkMessage << "CHUNK:" << (i + 1) << ":" << totalChunks << ":" << chunk;
 
-        std::string fullMessage = std::string(ZDYUI_CHENGHAO_ADDON_PREFIX) + '\t' + chunkMessage.str();
+        std::string fullMessage = std::string(CHENGHAO_SYSTEM_ADDON_PREFIX) + '\t' + chunkMessage.str();
         WorldPacket data;
         ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
         player->SendDirectMessage(&data);
@@ -516,8 +516,8 @@ void SendChengHaoListToPlayer(Player* player)
     if (!player)
         return;
 
-    std::vector<ZDYUIChengHaoEntry> entries = ZDYUIChengHaoMgr::Instance()->GetEntries();
-    std::sort(entries.begin(), entries.end(), [](ZDYUIChengHaoEntry const& left, ZDYUIChengHaoEntry const& right)
+    std::vector<ChenghaoSystemEntry> entries = ChenghaoSystemMgr::Instance()->GetEntries();
+    std::sort(entries.begin(), entries.end(), [](ChenghaoSystemEntry const& left, ChenghaoSystemEntry const& right)
     {
         if (left.titleLevel != right.titleLevel)
             return left.titleLevel < right.titleLevel;
@@ -528,7 +528,7 @@ void SendChengHaoListToPlayer(Player* player)
     payload << "CH_LIST:";
 
     bool first = true;
-    for (ZDYUIChengHaoEntry const& entry : entries)
+    for (ChenghaoSystemEntry const& entry : entries)
     {
         if (!first)
             payload << '~';
@@ -549,23 +549,23 @@ void SendChengHaoStateToPlayer(Player* player)
     if (!player)
         return;
 
-    std::vector<ZDYUIChengHaoEntry> const& entries = ZDYUIChengHaoMgr::Instance()->GetEntries();
-    uint32 currentTitleId = ZDYUIChengHaoMgr::Instance()->GetHighestUnlockedTitleId(player);
+    std::vector<ChenghaoSystemEntry> const& entries = ChenghaoSystemMgr::Instance()->GetEntries();
+    uint32 currentTitleId = ChenghaoSystemMgr::Instance()->GetHighestUnlockedTitleId(player);
 
     std::ostringstream payload;
     payload << "CH_STATE:";
 
     bool first = true;
-    for (ZDYUIChengHaoEntry const& entry : entries)
+    for (ChenghaoSystemEntry const& entry : entries)
     {
         if (!first)
             payload << '~';
         first = false;
 
-        bool unlocked = ZDYUIChengHaoMgr::Instance()->IsPlayerUnlocked(player, entry.id);
+        bool unlocked = ChenghaoSystemMgr::Instance()->IsPlayerUnlocked(player, entry.id);
         bool eligible = false;
         if (!unlocked)
-            eligible = ZDYUIChengHaoMgr::Instance()->CanActivateEntry(player, entry, false, false);
+            eligible = ChenghaoSystemMgr::Instance()->CanActivateEntry(player, entry, false, false);
 
         payload << entry.id << '^'
                 << (unlocked ? 1 : 0) << '^'
@@ -581,7 +581,7 @@ void SendChengHaoAllDataToPlayer(Player* player)
     if (!player)
         return;
 
-    ZDYUIChengHaoMgr::Instance()->LoadPlayerData(player);
+    ChenghaoSystemMgr::Instance()->LoadPlayerData(player);
     SendChengHaoListToPlayer(player);
     SendChengHaoStateToPlayer(player);
 }
@@ -601,14 +601,14 @@ void SendChengHaoActionResult(Player* player, char const* action, bool success, 
     SendAddonPayload(player, payload.str());
 }
 
-class ZDYUIChengHaoWorldScript : public WorldScript
+class ChenghaoSystemWorldScript : public WorldScript
 {
 public:
-    ZDYUIChengHaoWorldScript() : WorldScript("ZDYUIChengHaoWorldScript") { }
+    ChenghaoSystemWorldScript() : WorldScript("ChenghaoSystemWorldScript") { }
 
     void OnStartup() override
     {
-        if (!ZDYUIChengHaoMgr::Instance()->IsEnabled())
+        if (!ChenghaoSystemMgr::Instance()->IsEnabled())
             return;
 
         _initialized = false;
@@ -618,7 +618,7 @@ public:
 
     void OnUpdate(uint32 diff) override
     {
-        if (!ZDYUIChengHaoMgr::Instance()->IsEnabled() || _initialized)
+        if (!ChenghaoSystemMgr::Instance()->IsEnabled() || _initialized)
             return;
 
         _loadTime += diff;
@@ -631,7 +631,7 @@ public:
 
         if (_loadTime >= 3000 && _displayedLog)
         {
-            ZDYUIChengHaoMgr::Instance()->Initialize();
+            ChenghaoSystemMgr::Instance()->Initialize();
             _initialized = true;
         }
     }
@@ -642,10 +642,10 @@ private:
     bool _displayedLog = false;
 };
 
-class ZDYUIChengHaoPlayerScript : public PlayerScript
+class ChenghaoSystemPlayerScript : public PlayerScript
 {
 public:
-    ZDYUIChengHaoPlayerScript() : PlayerScript("ZDYUIChengHaoPlayerScript",
+    ChenghaoSystemPlayerScript() : PlayerScript("ChenghaoSystemPlayerScript",
     {
         PLAYERHOOK_ON_LOGIN,
         PLAYERHOOK_ON_LOGOUT,
@@ -658,15 +658,15 @@ public:
         if (!player)
             return;
 
-        if (!ZDYUIChengHaoMgr::Instance()->IsEnabled())
+        if (!ChenghaoSystemMgr::Instance()->IsEnabled())
         {
-            ZDYUIChengHaoMgr::Instance()->RemoveConfiguredAuras(player);
-            ZDYUIChengHaoMgr::Instance()->UnloadPlayerData(player->GetGUID().GetCounter());
+            ChenghaoSystemMgr::Instance()->RemoveConfiguredAuras(player);
+            ChenghaoSystemMgr::Instance()->UnloadPlayerData(player->GetGUID().GetCounter());
             return;
         }
 
-        ZDYUIChengHaoMgr::Instance()->LoadPlayerData(player);
-        ZDYUIChengHaoMgr::Instance()->ReapplyPlayerAuras(player);
+        ChenghaoSystemMgr::Instance()->LoadPlayerData(player);
+        ChenghaoSystemMgr::Instance()->ReapplyPlayerAuras(player);
     }
 
     void OnPlayerLogout(Player* player) override
@@ -674,17 +674,17 @@ public:
         if (!player)
             return;
 
-        ZDYUIChengHaoMgr::Instance()->UnloadPlayerData(player->GetGUID().GetCounter());
+        ChenghaoSystemMgr::Instance()->UnloadPlayerData(player->GetGUID().GetCounter());
     }
 
     void OnPlayerDelete(ObjectGuid guid, uint32 /*accountId*/) override
     {
-        ZDYUIChengHaoMgr::Instance()->DeletePlayerData(guid.GetCounter());
+        ChenghaoSystemMgr::Instance()->DeletePlayerData(guid.GetCounter());
     }
 
     void OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg, Player* /*receiver*/) override
     {
-        if (!ZDYUIChengHaoMgr::Instance()->IsEnabled() || !player || type != CHAT_MSG_WHISPER || lang != LANG_ADDON)
+        if (!ChenghaoSystemMgr::Instance()->IsEnabled() || !player || type != CHAT_MSG_WHISPER || lang != LANG_ADDON)
             return;
 
         size_t tabPos = msg.find('\t');
@@ -692,7 +692,7 @@ public:
             return;
 
         std::string prefix = msg.substr(0, tabPos);
-        if (prefix != ZDYUI_CHENGHAO_ADDON_PREFIX)
+        if (prefix != CHENGHAO_SYSTEM_ADDON_PREFIX)
             return;
 
         std::string command = msg.substr(tabPos + 1);
@@ -710,7 +710,7 @@ public:
 
         if (command == "REQ_STATE")
         {
-            ZDYUIChengHaoMgr::Instance()->LoadPlayerData(player);
+            ChenghaoSystemMgr::Instance()->LoadPlayerData(player);
             SendChengHaoStateToPlayer(player);
             return;
         }
@@ -723,7 +723,7 @@ public:
 
         if (command == "ACT_ALL")
         {
-            uint32 count = ZDYUIChengHaoMgr::Instance()->UnlockAllAvailableTitles(player, false);
+            uint32 count = ChenghaoSystemMgr::Instance()->UnlockAllAvailableTitles(player, false);
             std::ostringstream message;
             message << "本次激活 " << count << " 个称号";
             SendChengHaoActionResult(player, "ACT_ALL", true, 0, message.str());
@@ -752,7 +752,7 @@ public:
                 return;
             }
 
-            if (ZDYUIChengHaoMgr::Instance()->IsPlayerUnlocked(player, titleId))
+            if (ChenghaoSystemMgr::Instance()->IsPlayerUnlocked(player, titleId))
             {
                 SendChengHaoActionResult(player, "ACTIVATE", false, titleId, "该称号已经激活");
                 SendChengHaoStateToPlayer(player);
@@ -760,7 +760,7 @@ public:
             }
 
             std::string failureMessage;
-            bool success = ZDYUIChengHaoMgr::Instance()->UnlockTitle(player, titleId, true, &failureMessage);
+            bool success = ChenghaoSystemMgr::Instance()->UnlockTitle(player, titleId, true, &failureMessage);
             SendChengHaoActionResult(player, "ACTIVATE", success, titleId, success ? "激活成功" : (failureMessage.empty() ? "激活失败" : failureMessage));
             SendChengHaoStateToPlayer(player);
             return;
@@ -768,10 +768,10 @@ public:
     }
 };
 
-class ZDYUIChengHaoCommandScript : public CommandScript
+class ChenghaoSystemCommandScript : public CommandScript
 {
 public:
-    ZDYUIChengHaoCommandScript() : CommandScript("ZDYUIChengHaoCommandScript") { }
+    ChenghaoSystemCommandScript() : CommandScript("ChenghaoSystemCommandScript") { }
 
     Acore::ChatCommands::ChatCommandTable GetCommands() const override
     {
@@ -794,12 +794,12 @@ public:
 
     static bool HandleReloadCommand(ChatHandler* handler, char const* /*args*/)
     {
-        ZDYUIChengHaoMgr::Instance()->Initialize();
+        ChenghaoSystemMgr::Instance()->Initialize();
 
         if (Player* player = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr)
         {
-            ZDYUIChengHaoMgr::Instance()->LoadPlayerData(player);
-            ZDYUIChengHaoMgr::Instance()->ReapplyPlayerAuras(player);
+            ChenghaoSystemMgr::Instance()->LoadPlayerData(player);
+            ChenghaoSystemMgr::Instance()->ReapplyPlayerAuras(player);
         }
 
         handler->SendSysMessage("称号系统数据已重新加载。");
@@ -832,7 +832,7 @@ public:
 
         if (argText == "全部" || argText == "all" || argText == "ALL")
         {
-            ZDYUIChengHaoMgr::Instance()->UnlockAllAvailableTitles(player, true);
+            ChenghaoSystemMgr::Instance()->UnlockAllAvailableTitles(player, true);
             return true;
         }
 
@@ -843,14 +843,14 @@ public:
             return false;
         }
 
-        if (ZDYUIChengHaoMgr::Instance()->IsPlayerUnlocked(player, titleId))
+        if (ChenghaoSystemMgr::Instance()->IsPlayerUnlocked(player, titleId))
         {
             handler->SendSysMessage("称号系统：该称号已经激活过了。");
             return true;
         }
 
         std::string failureMessage;
-        if (!ZDYUIChengHaoMgr::Instance()->UnlockTitle(player, titleId, true, &failureMessage))
+        if (!ChenghaoSystemMgr::Instance()->UnlockTitle(player, titleId, true, &failureMessage))
         {
             handler->PSendSysMessage("称号系统：{}。", failureMessage.empty() ? "激活失败，请检查需求或称号ID" : failureMessage);
             return false;
@@ -865,10 +865,10 @@ public:
         if (!player)
             return false;
 
-        ZDYUIChengHaoMgr::Instance()->LoadPlayerData(player);
-        ZDYUIChengHaoMgr::Instance()->ReapplyPlayerAuras(player);
+        ChenghaoSystemMgr::Instance()->LoadPlayerData(player);
+        ChenghaoSystemMgr::Instance()->ReapplyPlayerAuras(player);
 
-        if (ZDYUIChengHaoEntry const* highestEntry = ZDYUIChengHaoMgr::Instance()->GetHighestUnlockedEntry(player))
+        if (ChenghaoSystemEntry const* highestEntry = ChenghaoSystemMgr::Instance()->GetHighestUnlockedEntry(player))
         {
             handler->PSendSysMessage("称号系统已刷新。当前生效称号 [id:{}] 等级:{} 光环:{} 描述:{}",
                 highestEntry->id,
@@ -890,7 +890,7 @@ public:
         if (!player)
             return false;
 
-        std::vector<ZDYUIChengHaoEntry> const& entries = ZDYUIChengHaoMgr::Instance()->GetEntries();
+        std::vector<ChenghaoSystemEntry> const& entries = ChenghaoSystemMgr::Instance()->GetEntries();
         if (entries.empty())
         {
             handler->SendSysMessage("称号系统当前没有可用配置。");
@@ -898,14 +898,14 @@ public:
         }
 
         handler->PSendSysMessage("称号系统共有 {} 条配置：", static_cast<uint32>(entries.size()));
-        uint32 currentTitleId = ZDYUIChengHaoMgr::Instance()->GetHighestUnlockedTitleId(player);
+        uint32 currentTitleId = ChenghaoSystemMgr::Instance()->GetHighestUnlockedTitleId(player);
 
-        for (ZDYUIChengHaoEntry const& entry : entries)
+        for (ChenghaoSystemEntry const& entry : entries)
         {
             char const* status = "未激活";
             if (currentTitleId == entry.id)
                 status = "当前生效";
-            else if (ZDYUIChengHaoMgr::Instance()->IsPlayerUnlocked(player, entry.id))
+            else if (ChenghaoSystemMgr::Instance()->IsPlayerUnlocked(player, entry.id))
                 status = "已激活";
 
             handler->PSendSysMessage("[id:{}] 等级:{} 需求系统:{} 光环:{} 状态:{} 描述:{}",
@@ -922,9 +922,9 @@ public:
 };
 }
 
-void AddSC_mod_zdyui_chenghao()
+void AddSC_mod_chenghao_system()
 {
-    new ZDYUIChengHaoWorldScript();
-    new ZDYUIChengHaoPlayerScript();
-    new ZDYUIChengHaoCommandScript();
+    new ChenghaoSystemWorldScript();
+    new ChenghaoSystemPlayerScript();
+    new ChenghaoSystemCommandScript();
 }

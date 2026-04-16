@@ -1,5 +1,5 @@
-DROP TABLE IF EXISTS `_自定义ui_称号系统`;
-CREATE TABLE `_自定义ui_称号系统`  (
+DROP TABLE IF EXISTS `_称号系统`;
+CREATE TABLE `_称号系统`  (
   `id` int UNSIGNED NOT NULL DEFAULT 0,
   `称号等级` int UNSIGNED NOT NULL DEFAULT 0,
   `需求系统id` int UNSIGNED NOT NULL DEFAULT 0 COMMENT '关联 mod-requirement-template 的 _模板_需求.id',

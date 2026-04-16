@@ -3,10 +3,10 @@
  */
 
 // From SC
-void AddSC_mod_zdyui_chenghao();
+void AddSC_mod_chenghao_system();
 
 // Add all scripts
-void Addmod_zdyui_chenghaoScripts()
+void Addmod_chenghao_systemScripts()
 {
-    AddSC_mod_zdyui_chenghao();
+    AddSC_mod_chenghao_system();
 }

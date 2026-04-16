@@ -1,204 +1,294 @@
 -- 世界Boss395 野外练级区刷新重排
--- 规则: 40 个任务区/练级区，每区 5 只 Boss，共 200 只
--- 使用现有野外怪物落脚点作为刷新坐标，避免主城与无效坐标
+-- 规则: 40 个区域，每区 5 只 Boss，共 200 只
+-- 回血Boss(395001-395100) 20个区域，切割Boss(395101-395200) 20个区域
+-- 回血与切割区域互不重叠，且不与称号Boss(396001-396100)区域重复
 
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -9616.5, `position_y` = -489.437, `position_z` = 59.21, `orientation` = 6.281, `Comment` = '回血Boss 01-10 ElwynnForest #395001' WHERE `id1` = 395001;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -9519.17, `position_y` = -113.974, `position_z` = 60.871, `orientation` = 2.975, `Comment` = '回血Boss 01-10 ElwynnForest #395002' WHERE `id1` = 395002;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -9473.71, `position_y` = -431.412, `position_z` = 59.859, `orientation` = 4.677, `Comment` = '回血Boss 01-10 ElwynnForest #395003' WHERE `id1` = 395003;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -9415.42, `position_y` = -271.11, `position_z` = 65.961, `orientation` = 2.768, `Comment` = '回血Boss 01-10 ElwynnForest #395004' WHERE `id1` = 395004;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -9758.0, `position_y` = -137.0, `position_z` = 32.806, `orientation` = 0.543, `Comment` = '回血Boss 01-10 ElwynnForest #395005' WHERE `id1` = 395005;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 1208.04, `position_y` = -4450.48, `position_z` = 23.87, `orientation` = 3.68, `Comment` = '回血Boss 01-10 Durotar #395006' WHERE `id1` = 395006;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 1052.25, `position_y` = -4248.49, `position_z` = 18.962, `orientation` = 2.408, `Comment` = '回血Boss 01-10 Durotar #395007' WHERE `id1` = 395007;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 882.518, `position_y` = -4285.03, `position_z` = 26.754, `orientation` = 2.878, `Comment` = '回血Boss 01-10 Durotar #395008' WHERE `id1` = 395008;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 1164.42, `position_y` = -4314.74, `position_z` = 21.23, `orientation` = 0.34, `Comment` = '回血Boss 01-10 Durotar #395009' WHERE `id1` = 395009;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 814.095, `position_y` = -4353.96, `position_z` = 14.116, `orientation` = 0.126, `Comment` = '回血Boss 01-10 Durotar #395010' WHERE `id1` = 395010;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -10246.4, `position_y` = 1022.69, `position_z` = 36.413, `orientation` = 2.972, `Comment` = '回血Boss 11-20 Westfall #395011' WHERE `id1` = 395011;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -10174.8, `position_y` = 1420.15, `position_z` = 40.152, `orientation` = 1.063, `Comment` = '回血Boss 11-20 Westfall #395012' WHERE `id1` = 395012;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -10424.1, `position_y` = 1137.91, `position_z` = 39.13, `orientation` = 4.905, `Comment` = '回血Boss 11-20 Westfall #395013' WHERE `id1` = 395013;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -10040.0, `position_y` = 1293.22, `position_z` = 43.238, `orientation` = 2.62, `Comment` = '回血Boss 11-20 Westfall #395014' WHERE `id1` = 395014;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -10043.1, `position_y` = 1143.52, `position_z` = 41.728, `orientation` = 4.956, `Comment` = '回血Boss 11-20 Westfall #395015' WHERE `id1` = 395015;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 174.884, `position_y` = -2558.57, `position_z` = 91.792, `orientation` = 0.693, `Comment` = '回血Boss 11-20 Barrens #395016' WHERE `id1` = 395016;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -152.504, `position_y` = -2719.85, `position_z` = 91.917, `orientation` = 2.678, `Comment` = '回血Boss 11-20 Barrens #395017' WHERE `id1` = 395017;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 242.299, `position_y` = -2658.31, `position_z` = 93.062, `orientation` = 0.747, `Comment` = '回血Boss 11-20 Barrens #395018' WHERE `id1` = 395018;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -48.974, `position_y` = -2893.44, `position_z` = 91.893, `orientation` = 5.828, `Comment` = '回血Boss 11-20 Barrens #395019' WHERE `id1` = 395019;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 181.584, `position_y` = -2874.58, `position_z` = 92.537, `orientation` = 4.758, `Comment` = '回血Boss 11-20 Barrens #395020' WHERE `id1` = 395020;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -9750.76, `position_y` = -2229.7, `position_z` = 59.026, `orientation` = 1.263, `Comment` = '回血Boss 21-30 RedridgeMountains #395021' WHERE `id1` = 395021;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -9628.67, `position_y` = -2390.41, `position_z` = 60.461, `orientation` = 2.251, `Comment` = '回血Boss 21-30 RedridgeMountains #395022' WHERE `id1` = 395022;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -9349.74, `position_y` = -2184.76, `position_z` = 62.328, `orientation` = 3.089, `Comment` = '回血Boss 21-30 RedridgeMountains #395023' WHERE `id1` = 395023;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -9348.5, `position_y` = -2270.7, `position_z` = 71.725, `orientation` = 0.0, `Comment` = '回血Boss 21-30 RedridgeMountains #395024' WHERE `id1` = 395024;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -9392.52, `position_y` = -2347.7, `position_z` = 53.923, `orientation` = 5.92, `Comment` = '回血Boss 21-30 RedridgeMountains #395025' WHERE `id1` = 395025;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 2088.74, `position_y` = -2285.84, `position_z` = 102.378, `orientation` = 3.334, `Comment` = '回血Boss 21-30 Ashenvale #395026' WHERE `id1` = 395026;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 2115.93, `position_y` = -2094.14, `position_z` = 116.011, `orientation` = 1.206, `Comment` = '回血Boss 21-30 Ashenvale #395027' WHERE `id1` = 395027;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 1783.87, `position_y` = -2024.86, `position_z` = 109.92, `orientation` = 3.56, `Comment` = '回血Boss 21-30 Ashenvale #395028' WHERE `id1` = 395028;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 1721.67, `position_y` = -2162.38, `position_z` = 95.451, `orientation` = 4.979, `Comment` = '回血Boss 21-30 Ashenvale #395029' WHERE `id1` = 395029;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 2080.39, `position_y` = -2020.64, `position_z` = 89.503, `orientation` = 3.511, `Comment` = '回血Boss 21-30 Ashenvale #395030' WHERE `id1` = 395030;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -11001.4, `position_y` = -536.417, `position_z` = 33.437, `orientation` = 0.536, `Comment` = '回血Boss 31-40 Duskwood #395031' WHERE `id1` = 395031;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -11022.9, `position_y` = -205.552, `position_z` = 15.412, `orientation` = 1.47, `Comment` = '回血Boss 31-40 Duskwood #395032' WHERE `id1` = 395032;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -11075.5, `position_y` = -465.822, `position_z` = 31.16, `orientation` = 5.121, `Comment` = '回血Boss 31-40 Duskwood #395033' WHERE `id1` = 395033;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -11109.3, `position_y` = -341.284, `position_z` = 48.294, `orientation` = 5.755, `Comment` = '回血Boss 31-40 Duskwood #395034' WHERE `id1` = 395034;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -10823.0, `position_y` = -564.998, `position_z` = 37.511, `orientation` = 1.716, `Comment` = '回血Boss 31-40 Duskwood #395035' WHERE `id1` = 395035;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -2167.78, `position_y` = -2415.3, `position_z` = 91.961, `orientation` = 0.851, `Comment` = '回血Boss 31-40 SouthernBarrens #395036' WHERE `id1` = 395036;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -2245.53, `position_y` = -2480.88, `position_z` = 93.769, `orientation` = 1.66, `Comment` = '回血Boss 31-40 SouthernBarrens #395037' WHERE `id1` = 395037;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -2536.75, `position_y` = -2256.48, `position_z` = 94.444, `orientation` = 0.107, `Comment` = '回血Boss 31-40 SouthernBarrens #395038' WHERE `id1` = 395038;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -2475.74, `position_y` = -2448.61, `position_z` = 93.095, `orientation` = 5.922, `Comment` = '回血Boss 31-40 SouthernBarrens #395039' WHERE `id1` = 395039;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -2215.38, `position_y` = -2121.73, `position_z` = 92.417, `orientation` = 4.933, `Comment` = '回血Boss 31-40 SouthernBarrens #395040' WHERE `id1` = 395040;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -1405.33, `position_y` = -2550.33, `position_z` = 73.481, `orientation` = 2.596, `Comment` = '回血Boss 41-50 ArathiHighlands #395041' WHERE `id1` = 395041;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -1317.8, `position_y` = -2641.54, `position_z` = 64.874, `orientation` = 1.271, `Comment` = '回血Boss 41-50 ArathiHighlands #395042' WHERE `id1` = 395042;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -1701.9, `position_y` = -2820.94, `position_z` = 39.924, `orientation` = 5.216, `Comment` = '回血Boss 41-50 ArathiHighlands #395043' WHERE `id1` = 395043;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -1620.68, `position_y` = -2916.09, `position_z` = 32.632, `orientation` = 3.378, `Comment` = '回血Boss 41-50 ArathiHighlands #395044' WHERE `id1` = 395044;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -1731.12, `position_y` = -2709.74, `position_z` = 41.309, `orientation` = 1.859, `Comment` = '回血Boss 41-50 ArathiHighlands #395045' WHERE `id1` = 395045;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -3969.57, `position_y` = -3182.07, `position_z` = 29.071, `orientation` = 3.087, `Comment` = '回血Boss 41-50 DustwallowMarsh #395046' WHERE `id1` = 395046;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -3929.25, `position_y` = -2821.05, `position_z` = 40.832, `orientation` = 1.553, `Comment` = '回血Boss 41-50 DustwallowMarsh #395047' WHERE `id1` = 395047;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -3855.54, `position_y` = -3073.61, `position_z` = 31.713, `orientation` = 5.598, `Comment` = '回血Boss 41-50 DustwallowMarsh #395048' WHERE `id1` = 395048;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -3852.65, `position_y` = -2915.09, `position_z` = 35.486, `orientation` = 3.577, `Comment` = '回血Boss 41-50 DustwallowMarsh #395049' WHERE `id1` = 395049;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -3825.86, `position_y` = -2997.55, `position_z` = 37.522, `orientation` = 1.327, `Comment` = '回血Boss 41-50 DustwallowMarsh #395050' WHERE `id1` = 395050;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -12556.7, `position_y` = -194.933, `position_z` = 17.409, `orientation` = 4.735, `Comment` = '回血Boss 51-60 StranglethornVale #395051' WHERE `id1` = 395051;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -12630.8, `position_y` = -581.903, `position_z` = 36.302, `orientation` = 3.308, `Comment` = '回血Boss 51-60 StranglethornVale #395052' WHERE `id1` = 395052;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -12469.2, `position_y` = -269.454, `position_z` = 7.804, `orientation` = 4.273, `Comment` = '回血Boss 51-60 StranglethornVale #395053' WHERE `id1` = 395053;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -12486.9, `position_y` = -510.538, `position_z` = 13.827, `orientation` = 2.011, `Comment` = '回血Boss 51-60 StranglethornVale #395054' WHERE `id1` = 395054;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -12717.1, `position_y` = -179.31, `position_z` = 35.047, `orientation` = 2.3, `Comment` = '回血Boss 51-60 StranglethornVale #395055' WHERE `id1` = 395055;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -4736.14, `position_y` = 1136.21, `position_z` = 98.507, `orientation` = 1.785, `Comment` = '回血Boss 51-60 Feralas #395056' WHERE `id1` = 395056;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -5038.06, `position_y` = 1234.27, `position_z` = 53.687, `orientation` = 5.21, `Comment` = '回血Boss 51-60 Feralas #395057' WHERE `id1` = 395057;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -4689.28, `position_y` = 1465.65, `position_z` = 95.898, `orientation` = 6.269, `Comment` = '回血Boss 51-60 Feralas #395058' WHERE `id1` = 395058;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -5042.79, `position_y` = 1397.56, `position_z` = 43.597, `orientation` = 6.274, `Comment` = '回血Boss 51-60 Feralas #395059' WHERE `id1` = 395059;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -4614.55, `position_y` = 1350.61, `position_z` = 103.298, `orientation` = 3.318, `Comment` = '回血Boss 51-60 Feralas #395060' WHERE `id1` = 395060;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -8056.56, `position_y` = -1830.89, `position_z` = 132.363, `orientation` = 3.805, `Comment` = '回血Boss 61-70 BurningSteppes #395061' WHERE `id1` = 395061;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -8116.27, `position_y` = -1418.61, `position_z` = 131.726, `orientation` = 2.072, `Comment` = '回血Boss 61-70 BurningSteppes #395062' WHERE `id1` = 395062;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -7984.0, `position_y` = -1465.4, `position_z` = 134.545, `orientation` = 5.951, `Comment` = '回血Boss 61-70 BurningSteppes #395063' WHERE `id1` = 395063;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -7879.7, `position_y` = -1610.47, `position_z` = 131.5, `orientation` = 3.178, `Comment` = '回血Boss 61-70 BurningSteppes #395064' WHERE `id1` = 395064;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -7904.64, `position_y` = -1505.75, `position_z` = 140.797, `orientation` = 2.797, `Comment` = '回血Boss 61-70 BurningSteppes #395065' WHERE `id1` = 395065;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 4275.33, `position_y` = -1113.77, `position_z` = 320.914, `orientation` = 1.34, `Comment` = '回血Boss 61-70 Felwood #395066' WHERE `id1` = 395066;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 3917.52, `position_y` = -915.237, `position_z` = 268.665, `orientation` = 3.316, `Comment` = '回血Boss 61-70 Felwood #395067' WHERE `id1` = 395067;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 4019.6, `position_y` = -815.193, `position_z` = 285.439, `orientation` = 1.728, `Comment` = '回血Boss 61-70 Felwood #395068' WHERE `id1` = 395068;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 4058.54, `position_y` = -1217.67, `position_z` = 281.45, `orientation` = 4.822, `Comment` = '回血Boss 61-70 Felwood #395069' WHERE `id1` = 395069;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 4317.11, `position_y` = -985.768, `position_z` = 307.608, `orientation` = 2.331, `Comment` = '回血Boss 61-70 Felwood #395070' WHERE `id1` = 395070;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -318.474, `position_y` = 4453.14, `position_z` = 56.974, `orientation` = 5.285, `Comment` = '回血Boss 71-80 HellfirePeninsula #395071' WHERE `id1` = 395071;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -427.648, `position_y` = 4297.45, `position_z` = 63.942, `orientation` = 2.985, `Comment` = '回血Boss 71-80 HellfirePeninsula #395072' WHERE `id1` = 395072;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -413.604, `position_y` = 4416.91, `position_z` = 49.197, `orientation` = 6.271, `Comment` = '回血Boss 71-80 HellfirePeninsula #395073' WHERE `id1` = 395073;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 15.919, `position_y` = 4122.04, `position_z` = 75.488, `orientation` = 4.714, `Comment` = '回血Boss 71-80 HellfirePeninsula #395074' WHERE `id1` = 395074;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -413.594, `position_y` = 4085.85, `position_z` = 90.065, `orientation` = 4.187, `Comment` = '回血Boss 71-80 HellfirePeninsula #395075' WHERE `id1` = 395075;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -148.288, `position_y` = 5622.23, `position_z` = 22.486, `orientation` = 2.03, `Comment` = '回血Boss 71-80 Zangarmarsh #395076' WHERE `id1` = 395076;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -179.283, `position_y` = 5987.51, `position_z` = 22.634, `orientation` = 3.786, `Comment` = '回血Boss 71-80 Zangarmarsh #395077' WHERE `id1` = 395077;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -256.203, `position_y` = 5898.0, `position_z` = 11.995, `orientation` = 3.696, `Comment` = '回血Boss 71-80 Zangarmarsh #395078' WHERE `id1` = 395078;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -272.895, `position_y` = 5756.49, `position_z` = 4.0, `orientation` = 3.713, `Comment` = '回血Boss 71-80 Zangarmarsh #395079' WHERE `id1` = 395079;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 49.5, `position_y` = 5609.24, `position_z` = 23.311, `orientation` = 5.611, `Comment` = '回血Boss 71-80 Zangarmarsh #395080' WHERE `id1` = 395080;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 3111.82, `position_y` = 6150.17, `position_z` = 136.829, `orientation` = 1.506, `Comment` = '回血Boss 81-90 BladesEdgeMountains #395081' WHERE `id1` = 395081;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 2950.58, `position_y` = 6147.16, `position_z` = 9.16, `orientation` = 0.524, `Comment` = '回血Boss 81-90 BladesEdgeMountains #395082' WHERE `id1` = 395082;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 3229.15, `position_y` = 5890.47, `position_z` = -2.896, `orientation` = 2.659, `Comment` = '回血Boss 81-90 BladesEdgeMountains #395083' WHERE `id1` = 395083;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 3162.78, `position_y` = 5796.71, `position_z` = -7.404, `orientation` = 0.314, `Comment` = '回血Boss 81-90 BladesEdgeMountains #395084' WHERE `id1` = 395084;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 2992.64, `position_y` = 5751.52, `position_z` = 143.907, `orientation` = 4.189, `Comment` = '回血Boss 81-90 BladesEdgeMountains #395085' WHERE `id1` = 395085;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 3976.45, `position_y` = 3281.3, `position_z` = 128.593, `orientation` = 1.862, `Comment` = '回血Boss 81-90 Netherstorm #395086' WHERE `id1` = 395086;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 3650.69, `position_y` = 3531.92, `position_z` = 94.915, `orientation` = 0.074, `Comment` = '回血Boss 81-90 Netherstorm #395087' WHERE `id1` = 395087;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 4029.46, `position_y` = 3365.68, `position_z` = 125.866, `orientation` = 3.145, `Comment` = '回血Boss 81-90 Netherstorm #395088' WHERE `id1` = 395088;
-UPDATE `creature` SET `map` = 530, `zoneId` = 3523, `areaId` = 3852, `position_x` = 4034.83, `position_y` = 3545.65, `position_z` = 121.479, `orientation` = 2.67, `Comment` = '回血Boss 81-90 Netherstorm #395089' WHERE `id1` = 395089;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 4056.5, `position_y` = 3286.04, `position_z` = 145.236, `orientation` = 5.559, `Comment` = '回血Boss 81-90 Netherstorm #395090' WHERE `id1` = 395090;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5542.89, `position_y` = -3012.41, `position_z` = 278.392, `orientation` = 2.391, `Comment` = '回血Boss 91-100 ZulDrak #395091' WHERE `id1` = 395091;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5420.95, `position_y` = -3357.57, `position_z` = 299.633, `orientation` = 0.663, `Comment` = '回血Boss 91-100 ZulDrak #395092' WHERE `id1` = 395092;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5358.1, `position_y` = -3212.6, `position_z` = 288.065, `orientation` = 4.887, `Comment` = '回血Boss 91-100 ZulDrak #395093' WHERE `id1` = 395093;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5640.57, `position_y` = -3020.34, `position_z` = 275.065, `orientation` = 4.796, `Comment` = '回血Boss 91-100 ZulDrak #395094' WHERE `id1` = 395094;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5594.68, `position_y` = -3416.89, `position_z` = 362.043, `orientation` = 0.716, `Comment` = '回血Boss 91-100 ZulDrak #395095' WHERE `id1` = 395095;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 4947.13, `position_y` = 5708.38, `position_z` = -76.771, `orientation` = 4.866, `Comment` = '回血Boss 91-100 SholazarBasin #395096' WHERE `id1` = 395096;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 4944.01, `position_y` = 5343.47, `position_z` = -89.283, `orientation` = 5.604, `Comment` = '回血Boss 91-100 SholazarBasin #395097' WHERE `id1` = 395097;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5063.28, `position_y` = 5515.83, `position_z` = -96.201, `orientation` = 0.07, `Comment` = '回血Boss 91-100 SholazarBasin #395098' WHERE `id1` = 395098;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5075.43, `position_y` = 5611.79, `position_z` = -86.251, `orientation` = 0.646, `Comment` = '回血Boss 91-100 SholazarBasin #395099' WHERE `id1` = 395099;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 4853.81, `position_y` = 5764.27, `position_z` = -58.406, `orientation` = 5.463, `Comment` = '回血Boss 91-100 SholazarBasin #395100' WHERE `id1` = 395100;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 10023.9, `position_y` = 1377.58, `position_z` = 1281.01, `orientation` = 4.179, `Comment` = '切割Boss 01-10 Teldrassil #395101' WHERE `id1` = 395101;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 9910.25, `position_y` = 1572.02, `position_z` = 1334.63, `orientation` = 5.581, `Comment` = '切割Boss 01-10 Teldrassil #395102' WHERE `id1` = 395102;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 10321.7, `position_y` = 1582.07, `position_z` = 1292.84, `orientation` = 5.873, `Comment` = '切割Boss 01-10 Teldrassil #395103' WHERE `id1` = 395103;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 10181.2, `position_y` = 1758.21, `position_z` = 1331.42, `orientation` = 4.25, `Comment` = '切割Boss 01-10 Teldrassil #395104' WHERE `id1` = 395104;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 10135.6, `position_y` = 1345.72, `position_z` = 1325.81, `orientation` = 5.406, `Comment` = '切割Boss 01-10 Teldrassil #395105' WHERE `id1` = 395105;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 2056.84, `position_y` = 360.967, `position_z` = 82.496, `orientation` = 1.852, `Comment` = '切割Boss 01-10 TirisfalGlades #395106' WHERE `id1` = 395106;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 2195.27, `position_y` = 38.154, `position_z` = 36.132, `orientation` = 5.056, `Comment` = '切割Boss 01-10 TirisfalGlades #395107' WHERE `id1` = 395107;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 2140.74, `position_y` = 333.625, `position_z` = 47.038, `orientation` = 5.583, `Comment` = '切割Boss 01-10 TirisfalGlades #395108' WHERE `id1` = 395108;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 1849.7, `position_y` = 238.891, `position_z` = 62.275, `orientation` = 0.25, `Comment` = '切割Boss 01-10 TirisfalGlades #395109' WHERE `id1` = 395109;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 1968.89, `position_y` = 355.661, `position_z` = 39.631, `orientation` = 0.293, `Comment` = '切割Boss 01-10 TirisfalGlades #395110' WHERE `id1` = 395110;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -5400.07, `position_y` = -2890.89, `position_z` = 342.151, `orientation` = 3.828, `Comment` = '切割Boss 11-20 LochModan #395111' WHERE `id1` = 395111;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -5386.92, `position_y` = -2775.22, `position_z` = 366.928, `orientation` = 1.29, `Comment` = '切割Boss 11-20 LochModan #395112' WHERE `id1` = 395112;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -5089.66, `position_y` = -2685.34, `position_z` = 336.444, `orientation` = 3.129, `Comment` = '切割Boss 11-20 LochModan #395113' WHERE `id1` = 395113;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -5060.23, `position_y` = -3002.1, `position_z` = 326.066, `orientation` = 6.095, `Comment` = '切割Boss 11-20 LochModan #395114' WHERE `id1` = 395114;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -5313.02, `position_y` = -3029.74, `position_z` = 324.076, `orientation` = 4.822, `Comment` = '切割Boss 11-20 LochModan #395115' WHERE `id1` = 395115;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 5896.86, `position_y` = 153.815, `position_z` = 33.321, `orientation` = 5.199, `Comment` = '切割Boss 11-20 Darkshore #395116' WHERE `id1` = 395116;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 5959.09, `position_y` = 306.403, `position_z` = 24.489, `orientation` = 0.408, `Comment` = '切割Boss 11-20 Darkshore #395117' WHERE `id1` = 395117;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 5728.76, `position_y` = 97.111, `position_z` = 31.433, `orientation` = 4.111, `Comment` = '切割Boss 11-20 Darkshore #395118' WHERE `id1` = 395118;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 5588.34, `position_y` = 170.264, `position_z` = 27.841, `orientation` = 1.785, `Comment` = '切割Boss 11-20 Darkshore #395119' WHERE `id1` = 395119;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 5597.69, `position_y` = 441.879, `position_z` = 20.556, `orientation` = 1.853, `Comment` = '切割Boss 11-20 Darkshore #395120' WHERE `id1` = 395120;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 1055.58, `position_y` = 1455.59, `position_z` = 42.569, `orientation` = 4.857, `Comment` = '切割Boss 21-30 SilverpineForest #395121' WHERE `id1` = 395121;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 918.659, `position_y` = 1160.17, `position_z` = 47.446, `orientation` = 2.391, `Comment` = '切割Boss 21-30 SilverpineForest #395122' WHERE `id1` = 395122;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 1063.05, `position_y` = 1269.72, `position_z` = 43.743, `orientation` = 3.641, `Comment` = '切割Boss 21-30 SilverpineForest #395123' WHERE `id1` = 395123;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 681.392, `position_y` = 1414.9, `position_z` = 66.968, `orientation` = 4.785, `Comment` = '切割Boss 21-30 SilverpineForest #395124' WHERE `id1` = 395124;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 712.101, `position_y` = 1227.01, `position_z` = 62.541, `orientation` = 4.414, `Comment` = '切割Boss 21-30 SilverpineForest #395125' WHERE `id1` = 395125;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 1373.0, `position_y` = 995.546, `position_z` = 157.103, `orientation` = 0.017, `Comment` = '切割Boss 21-30 StonetalonMountains #395126' WHERE `id1` = 395126;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 1394.53, `position_y` = 914.007, `position_z` = 149.952, `orientation` = 0.699, `Comment` = '切割Boss 21-30 StonetalonMountains #395127' WHERE `id1` = 395127;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 1729.92, `position_y` = 870.364, `position_z` = 126.813, `orientation` = 3.926, `Comment` = '切割Boss 21-30 StonetalonMountains #395128' WHERE `id1` = 395128;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 1509.44, `position_y` = 779.212, `position_z` = 135.238, `orientation` = 3.368, `Comment` = '切割Boss 21-30 StonetalonMountains #395129' WHERE `id1` = 395129;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 1821.7, `position_y` = 936.047, `position_z` = 144.194, `orientation` = 1.328, `Comment` = '切割Boss 21-30 StonetalonMountains #395130' WHERE `id1` = 395130;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -606.018, `position_y` = -473.381, `position_z` = 33.847, `orientation` = 5.16, `Comment` = '切割Boss 31-40 HillsbradFoothills #395131' WHERE `id1` = 395131;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -284.296, `position_y` = -448.096, `position_z` = 64.275, `orientation` = 3.639, `Comment` = '切割Boss 31-40 HillsbradFoothills #395132' WHERE `id1` = 395132;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -487.282, `position_y` = -782.186, `position_z` = 54.0, `orientation` = 4.397, `Comment` = '切割Boss 31-40 HillsbradFoothills #395133' WHERE `id1` = 395133;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -642.456, `position_y` = -625.697, `position_z` = 33.45, `orientation` = 3.938, `Comment` = '切割Boss 31-40 HillsbradFoothills #395134' WHERE `id1` = 395134;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -530.603, `position_y` = -390.108, `position_z` = 45.278, `orientation` = 1.959, `Comment` = '切割Boss 31-40 HillsbradFoothills #395135' WHERE `id1` = 395135;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -745.877, `position_y` = 2355.88, `position_z` = 93.432, `orientation` = 1.46, `Comment` = '切割Boss 31-40 Desolace #395136' WHERE `id1` = 395136;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -399.323, `position_y` = 2206.22, `position_z` = 90.992, `orientation` = 4.605, `Comment` = '切割Boss 31-40 Desolace #395137' WHERE `id1` = 395137;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -669.3, `position_y` = 2412.32, `position_z` = 90.073, `orientation` = 2.136, `Comment` = '切割Boss 31-40 Desolace #395138' WHERE `id1` = 395138;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -532.871, `position_y` = 2013.87, `position_z` = 91.488, `orientation` = 3.14, `Comment` = '切割Boss 31-40 Desolace #395139' WHERE `id1` = 395139;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -778.516, `position_y` = 2084.12, `position_z` = 96.564, `orientation` = 4.253, `Comment` = '切割Boss 31-40 Desolace #395140' WHERE `id1` = 395140;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -6714.25, `position_y` = -3613.57, `position_z` = 241.726, `orientation` = 0.075, `Comment` = '切割Boss 41-50 Badlands #395141' WHERE `id1` = 395141;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -6947.38, `position_y` = -3311.41, `position_z` = 260.875, `orientation` = 4.503, `Comment` = '切割Boss 41-50 Badlands #395142' WHERE `id1` = 395142;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -6983.44, `position_y` = -3384.18, `position_z` = 241.792, `orientation` = 0.173, `Comment` = '切割Boss 41-50 Badlands #395143' WHERE `id1` = 395143;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -6921.95, `position_y` = -3588.56, `position_z` = 242.537, `orientation` = 3.862, `Comment` = '切割Boss 41-50 Badlands #395144' WHERE `id1` = 395144;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -6584.82, `position_y` = -3319.68, `position_z` = 247.527, `orientation` = 4.324, `Comment` = '切割Boss 41-50 Badlands #395145' WHERE `id1` = 395145;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -5084.61, `position_y` = -1894.74, `position_z` = 87.106, `orientation` = 1.718, `Comment` = '切割Boss 41-50 ThousandNeedles #395146' WHERE `id1` = 395146;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -5062.76, `position_y` = -1543.17, `position_z` = -48.379, `orientation` = 2.513, `Comment` = '切割Boss 41-50 ThousandNeedles #395147' WHERE `id1` = 395147;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -4766.59, `position_y` = -1646.83, `position_z` = -33.161, `orientation` = 0.925, `Comment` = '切割Boss 41-50 ThousandNeedles #395148' WHERE `id1` = 395148;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -4950.04, `position_y` = -1951.75, `position_z` = -50.862, `orientation` = 3.388, `Comment` = '切割Boss 41-50 ThousandNeedles #395149' WHERE `id1` = 395149;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -5191.97, `position_y` = -1672.33, `position_z` = -59.075, `orientation` = 0.123, `Comment` = '切割Boss 41-50 ThousandNeedles #395150' WHERE `id1` = 395150;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -13953.3, `position_y` = 140.875, `position_z` = 13.788, `orientation` = 2.582, `Comment` = '切割Boss 51-60 TheCapeOfStranglethorn #395151' WHERE `id1` = 395151;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -14254.5, `position_y` = 175.666, `position_z` = 9.548, `orientation` = 0.173, `Comment` = '切割Boss 51-60 TheCapeOfStranglethorn #395152' WHERE `id1` = 395152;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -14279.8, `position_y` = 386.602, `position_z` = 36.005, `orientation` = 4.502, `Comment` = '切割Boss 51-60 TheCapeOfStranglethorn #395153' WHERE `id1` = 395153;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -14019.8, `position_y` = 80.779, `position_z` = 10.726, `orientation` = 1.438, `Comment` = '切割Boss 51-60 TheCapeOfStranglethorn #395154' WHERE `id1` = 395154;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -13908.8, `position_y` = 420.657, `position_z` = 98.87, `orientation` = 4.566, `Comment` = '切割Boss 51-60 TheCapeOfStranglethorn #395155' WHERE `id1` = 395155;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -7783.31, `position_y` = -3550.74, `position_z` = 50.762, `orientation` = 5.803, `Comment` = '切割Boss 51-60 Tanaris #395156' WHERE `id1` = 395156;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -7780.0, `position_y` = -3280.14, `position_z` = 69.135, `orientation` = 4.977, `Comment` = '切割Boss 51-60 Tanaris #395157' WHERE `id1` = 395157;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -7984.74, `position_y` = -3211.68, `position_z` = 54.498, `orientation` = 1.475, `Comment` = '切割Boss 51-60 Tanaris #395158' WHERE `id1` = 395158;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -7719.86, `position_y` = -3415.48, `position_z` = 40.909, `orientation` = 3.181, `Comment` = '切割Boss 51-60 Tanaris #395159' WHERE `id1` = 395159;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -7855.42, `position_y` = -3212.71, `position_z` = 74.452, `orientation` = 5.293, `Comment` = '切割Boss 51-60 Tanaris #395160' WHERE `id1` = 395160;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -11377.2, `position_y` = -3065.98, `position_z` = -4.394, `orientation` = 5.151, `Comment` = '切割Boss 61-70 BlastedLands #395161' WHERE `id1` = 395161;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -11317.1, `position_y` = -3169.56, `position_z` = 7.805, `orientation` = 0.767, `Comment` = '切割Boss 61-70 BlastedLands #395162' WHERE `id1` = 395162;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -11150.5, `position_y` = -3222.62, `position_z` = 7.77, `orientation` = 5.398, `Comment` = '切割Boss 61-70 BlastedLands #395163' WHERE `id1` = 395163;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -11380.9, `position_y` = -2951.26, `position_z` = 3.054, `orientation` = 5.459, `Comment` = '切割Boss 61-70 BlastedLands #395164' WHERE `id1` = 395164;
-UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -11021.0, `position_y` = -2864.95, `position_z` = 9.081, `orientation` = 1.404, `Comment` = '切割Boss 61-70 BlastedLands #395165' WHERE `id1` = 395165;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 3405.8, `position_y` = -4414.42, `position_z` = 107.552, `orientation` = 4.874, `Comment` = '切割Boss 61-70 Azshara #395166' WHERE `id1` = 395166;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 3294.4, `position_y` = -4798.27, `position_z` = 106.613, `orientation` = 3.387, `Comment` = '切割Boss 61-70 Azshara #395167' WHERE `id1` = 395167;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 3252.36, `position_y` = -4418.83, `position_z` = 101.739, `orientation` = 5.916, `Comment` = '切割Boss 61-70 Azshara #395168' WHERE `id1` = 395168;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 3524.78, `position_y` = -4758.06, `position_z` = 108.296, `orientation` = 5.884, `Comment` = '切割Boss 61-70 Azshara #395169' WHERE `id1` = 395169;
-UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 3581.1, `position_y` = -4561.41, `position_z` = 105.799, `orientation` = 0.312, `Comment` = '切割Boss 61-70 Azshara #395170' WHERE `id1` = 395170;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -1824.03, `position_y` = 4546.9, `position_z` = 9.162, `orientation` = 0.168, `Comment` = '切割Boss 71-80 TerokkarForest #395171' WHERE `id1` = 395171;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -2116.55, `position_y` = 4617.53, `position_z` = -7.118, `orientation` = 2.641, `Comment` = '切割Boss 71-80 TerokkarForest #395172' WHERE `id1` = 395172;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -2046.87, `position_y` = 4246.83, `position_z` = 7.112, `orientation` = 3.143, `Comment` = '切割Boss 71-80 TerokkarForest #395173' WHERE `id1` = 395173;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -1945.87, `position_y` = 4237.73, `position_z` = 2.014, `orientation` = 1.755, `Comment` = '切割Boss 71-80 TerokkarForest #395174' WHERE `id1` = 395174;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -2192.63, `position_y` = 4564.22, `position_z` = -8.097, `orientation` = 2.088, `Comment` = '切割Boss 71-80 TerokkarForest #395175' WHERE `id1` = 395175;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -1095.15, `position_y` = 7980.24, `position_z` = 16.904, `orientation` = 5.062, `Comment` = '切割Boss 71-80 Nagrand #395176' WHERE `id1` = 395176;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -928.495, `position_y` = 8201.05, `position_z` = 17.048, `orientation` = 5.036, `Comment` = '切割Boss 71-80 Nagrand #395177' WHERE `id1` = 395177;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -1374.81, `position_y` = 8108.58, `position_z` = -98.779, `orientation` = 5.954, `Comment` = '切割Boss 71-80 Nagrand #395178' WHERE `id1` = 395178;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -975.031, `position_y` = 8003.27, `position_z` = 24.707, `orientation` = 4.716, `Comment` = '切割Boss 71-80 Nagrand #395179' WHERE `id1` = 395179;
-UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -1312.02, `position_y` = 7993.84, `position_z` = -96.8, `orientation` = 2.398, `Comment` = '切割Boss 71-80 Nagrand #395180' WHERE `id1` = 395180;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 2084.97, `position_y` = -4799.21, `position_z` = 216.236, `orientation` = 5.705, `Comment` = '切割Boss 81-90 HowlingFjord #395181' WHERE `id1` = 395181;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 1917.08, `position_y` = -4681.71, `position_z` = 187.602, `orientation` = 5.238, `Comment` = '切割Boss 81-90 HowlingFjord #395182' WHERE `id1` = 395182;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 1977.62, `position_y` = -5072.91, `position_z` = 216.144, `orientation` = 2.114, `Comment` = '切割Boss 81-90 HowlingFjord #395183' WHERE `id1` = 395183;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 1699.53, `position_y` = -4821.67, `position_z` = 128.052, `orientation` = 5.907, `Comment` = '切割Boss 81-90 HowlingFjord #395184' WHERE `id1` = 395184;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 1696.88, `position_y` = -4947.93, `position_z` = 121.329, `orientation` = 1.047, `Comment` = '切割Boss 81-90 HowlingFjord #395185' WHERE `id1` = 395185;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 3417.46, `position_y` = 5157.91, `position_z` = 13.137, `orientation` = 3.331, `Comment` = '切割Boss 81-90 BoreanTundra #395186' WHERE `id1` = 395186;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 3147.79, `position_y` = 5108.87, `position_z` = 36.17, `orientation` = 5.227, `Comment` = '切割Boss 81-90 BoreanTundra #395187' WHERE `id1` = 395187;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 3053.07, `position_y` = 5280.38, `position_z` = 59.925, `orientation` = 5.633, `Comment` = '切割Boss 81-90 BoreanTundra #395188' WHERE `id1` = 395188;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 3085.04, `position_y` = 5168.71, `position_z` = 50.081, `orientation` = 3.343, `Comment` = '切割Boss 81-90 BoreanTundra #395189' WHERE `id1` = 395189;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 3355.02, `position_y` = 5456.86, `position_z` = 59.707, `orientation` = 2.521, `Comment` = '切割Boss 81-90 BoreanTundra #395190' WHERE `id1` = 395190;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 7413.84, `position_y` = -1092.65, `position_z` = 792.629, `orientation` = 0.118, `Comment` = '切割Boss 91-100 StormPeaks #395191' WHERE `id1` = 395191;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 7399.79, `position_y` = -1420.74, `position_z` = 921.217, `orientation` = 1.423, `Comment` = '切割Boss 91-100 StormPeaks #395192' WHERE `id1` = 395192;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 7590.61, `position_y` = -1058.82, `position_z` = 595.224, `orientation` = 2.812, `Comment` = '切割Boss 91-100 StormPeaks #395193' WHERE `id1` = 395193;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 7325.96, `position_y` = -1333.52, `position_z` = 1030.94, `orientation` = 1.571, `Comment` = '切割Boss 91-100 StormPeaks #395194' WHERE `id1` = 395194;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 7684.88, `position_y` = -1422.17, `position_z` = 1176.52, `orientation` = 2.81, `Comment` = '切割Boss 91-100 StormPeaks #395195' WHERE `id1` = 395195;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 7571.63, `position_y` = 2035.25, `position_z` = 511.152, `orientation` = 4.817, `Comment` = '切割Boss 91-100 Icecrown #395196' WHERE `id1` = 395196;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 7523.09, `position_y` = 1852.78, `position_z` = 491.641, `orientation` = 1.16, `Comment` = '切割Boss 91-100 Icecrown #395197' WHERE `id1` = 395197;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 7532.53, `position_y` = 2119.63, `position_z` = 516.04, `orientation` = 2.094, `Comment` = '切割Boss 91-100 Icecrown #395198' WHERE `id1` = 395198;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 7178.28, `position_y` = 1939.18, `position_z` = 558.933, `orientation` = 4.46, `Comment` = '切割Boss 91-100 Icecrown #395199' WHERE `id1` = 395199;
-UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 7191.14, `position_y` = 2087.61, `position_z` = 579.889, `orientation` = 5.338, `Comment` = '切割Boss 91-100 Icecrown #395200' WHERE `id1` = 395200;
+UPDATE `creature` SET `equipment_id` = 0 WHERE `id1` BETWEEN 395001 AND 395200;
+
+-- ========================================
+-- 回血Boss (395001-395100)
+-- ========================================
+
+-- 等级8 - 提瑞斯法林地 (map 0)
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 1920.1, `position_y` = 643.7, `position_z` = 44.4, `orientation` = 0, `Comment` = '回血Boss Lv8 提瑞斯法林地 #395001' WHERE `id1` = 395001;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 2242.4, `position_y` = 599.4, `position_z` = 33.3, `orientation` = 0, `Comment` = '回血Boss Lv8 提瑞斯法林地 #395002' WHERE `id1` = 395002;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 2053.8, `position_y` = 948.8, `position_z` = 37.3, `orientation` = 0, `Comment` = '回血Boss Lv8 提瑞斯法林地 #395003' WHERE `id1` = 395003;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 2049.1, `position_y` = 647.2, `position_z` = 36.9, `orientation` = 0, `Comment` = '回血Boss Lv8 提瑞斯法林地 #395004' WHERE `id1` = 395004;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 2321.8, `position_y` = 582.7, `position_z` = 24.8, `orientation` = 0, `Comment` = '回血Boss Lv8 提瑞斯法林地 #395005' WHERE `id1` = 395005;
+
+-- 等级8 - 莫高雷 (map 1)
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -2180.9, `position_y` = -120.8, `position_z` = -5.6, `orientation` = 0, `Comment` = '回血Boss Lv8 莫高雷 #395006' WHERE `id1` = 395006;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -2178.9, `position_y` = 13.4, `position_z` = 23.9, `orientation` = 0, `Comment` = '回血Boss Lv8 莫高雷 #395007' WHERE `id1` = 395007;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -1579.2, `position_y` = -295.6, `position_z` = -27.4, `orientation` = 0, `Comment` = '回血Boss Lv8 莫高雷 #395008' WHERE `id1` = 395008;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -1516, `position_y` = -255.5, `position_z` = -11.5, `orientation` = 0, `Comment` = '回血Boss Lv8 莫高雷 #395009' WHERE `id1` = 395009;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -2055.3, `position_y` = -94.6, `position_z` = -7.3, `orientation` = 0, `Comment` = '回血Boss Lv8 莫高雷 #395010' WHERE `id1` = 395010;
+
+-- 等级16 - 洛克莫丹 (map 0)
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -5034.8, `position_y` = -2889, `position_z` = 337.4, `orientation` = 0, `Comment` = '回血Boss Lv16 洛克莫丹 #395011' WHERE `id1` = 395011;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -5420, `position_y` = -2818.2, `position_z` = 356.9, `orientation` = 0, `Comment` = '回血Boss Lv16 洛克莫丹 #395012' WHERE `id1` = 395012;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -5305.8, `position_y` = -2970.6, `position_z` = 346.6, `orientation` = 0, `Comment` = '回血Boss Lv16 洛克莫丹 #395013' WHERE `id1` = 395013;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -5274.5, `position_y` = -2924.1, `position_z` = 349.5, `orientation` = 0, `Comment` = '回血Boss Lv16 洛克莫丹 #395014' WHERE `id1` = 395014;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -5391.7, `position_y` = -2974.9, `position_z` = 325.9, `orientation` = 0, `Comment` = '回血Boss Lv16 洛克莫丹 #395015' WHERE `id1` = 395015;
+
+-- 等级16 - 黑海岸 (map 1)
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 6321, `position_y` = 223.2, `position_z` = 36.8, `orientation` = 0, `Comment` = '回血Boss Lv16 黑海岸 #395016' WHERE `id1` = 395016;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 6384.2, `position_y` = 620.6, `position_z` = -5.5, `orientation` = 0, `Comment` = '回血Boss Lv16 黑海岸 #395017' WHERE `id1` = 395017;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 6394.7, `position_y` = 649.8, `position_z` = -15.8, `orientation` = 0, `Comment` = '回血Boss Lv16 黑海岸 #395018' WHERE `id1` = 395018;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 6508, `position_y` = 528.1, `position_z` = -5.7, `orientation` = 0, `Comment` = '回血Boss Lv16 黑海岸 #395019' WHERE `id1` = 395019;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 6595.4, `position_y` = 578.5, `position_z` = -10.2, `orientation` = 0, `Comment` = '回血Boss Lv16 黑海岸 #395020' WHERE `id1` = 395020;
+
+-- 等级24 - 湿地 (map 0)
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -3113, `position_y` = -2260, `position_z` = 10.7, `orientation` = 0, `Comment` = '回血Boss Lv24 湿地 #395021' WHERE `id1` = 395021;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -3372, `position_y` = -2264.6, `position_z` = 53.6, `orientation` = 0, `Comment` = '回血Boss Lv24 湿地 #395022' WHERE `id1` = 395022;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -3446.1, `position_y` = -2759.4, `position_z` = 6.5, `orientation` = 0, `Comment` = '回血Boss Lv24 湿地 #395023' WHERE `id1` = 395023;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -3450.6, `position_y` = -2350.7, `position_z` = 51.9, `orientation` = 0, `Comment` = '回血Boss Lv24 湿地 #395024' WHERE `id1` = 395024;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -3419.4, `position_y` = -2436.7, `position_z` = 52, `orientation` = 0, `Comment` = '回血Boss Lv24 湿地 #395025' WHERE `id1` = 395025;
+
+-- 等级24 - 石爪山脉 (map 1)
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 989, `position_y` = -4.8, `position_z` = 23.4, `orientation` = 0, `Comment` = '回血Boss Lv24 石爪山脉 #395026' WHERE `id1` = 395026;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 1082.7, `position_y` = -48.7, `position_z` = 4.5, `orientation` = 0, `Comment` = '回血Boss Lv24 石爪山脉 #395027' WHERE `id1` = 395027;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 1118.4, `position_y` = -38, `position_z` = 0.9, `orientation` = 0, `Comment` = '回血Boss Lv24 石爪山脉 #395028' WHERE `id1` = 395028;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 1152.3, `position_y` = -118.3, `position_z` = -0.7, `orientation` = 0, `Comment` = '回血Boss Lv24 石爪山脉 #395029' WHERE `id1` = 395029;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 866.6, `position_y` = 292.5, `position_z` = 22.7, `orientation` = 0, `Comment` = '回血Boss Lv24 石爪山脉 #395030' WHERE `id1` = 395030;
+
+-- 等级32 - 悲伤沼泽 (map 0)
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -10387.6, `position_y` = -2642.3, `position_z` = 22, `orientation` = 0, `Comment` = '回血Boss Lv32 悲伤沼泽 #395031' WHERE `id1` = 395031;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -10127.5, `position_y` = -2839.6, `position_z` = 22.3, `orientation` = 0, `Comment` = '回血Boss Lv32 悲伤沼泽 #395032' WHERE `id1` = 395032;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -10437.7, `position_y` = -2627, `position_z` = 23, `orientation` = 0, `Comment` = '回血Boss Lv32 悲伤沼泽 #395033' WHERE `id1` = 395033;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -10196.1, `position_y` = -3082.6, `position_z` = 23.2, `orientation` = 0, `Comment` = '回血Boss Lv32 悲伤沼泽 #395034' WHERE `id1` = 395034;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -10429.1, `position_y` = -2676.9, `position_z` = 22.4, `orientation` = 0, `Comment` = '回血Boss Lv32 悲伤沼泽 #395035' WHERE `id1` = 395035;
+
+-- 等级32 - 千针石林 (map 1)
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -5183.8, `position_y` = -1170.2, `position_z` = 45.2, `orientation` = 0, `Comment` = '回血Boss Lv32 千针石林 #395036' WHERE `id1` = 395036;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -5075.5, `position_y` = -952.7, `position_z` = -4.9, `orientation` = 0, `Comment` = '回血Boss Lv32 千针石林 #395037' WHERE `id1` = 395037;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -5124.7, `position_y` = -1036.4, `position_z` = -5.5, `orientation` = 0, `Comment` = '回血Boss Lv32 千针石林 #395038' WHERE `id1` = 395038;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -5011.3, `position_y` = -842.1, `position_z` = -5.3, `orientation` = 0, `Comment` = '回血Boss Lv32 千针石林 #395039' WHERE `id1` = 395039;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -5026.7, `position_y` = -949.2, `position_z` = 61.9, `orientation` = 0, `Comment` = '回血Boss Lv32 千针石林 #395040' WHERE `id1` = 395040;
+
+-- 等级40 - 荒芜之地 (map 0)
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -6102, `position_y` = -3038.4, `position_z` = 248.9, `orientation` = 0, `Comment` = '回血Boss Lv40 荒芜之地 #395041' WHERE `id1` = 395041;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -6273.1, `position_y` = -2976.3, `position_z` = 223.7, `orientation` = 0, `Comment` = '回血Boss Lv40 荒芜之地 #395042' WHERE `id1` = 395042;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -6339, `position_y` = -3118.4, `position_z` = 293.1, `orientation` = 0, `Comment` = '回血Boss Lv40 荒芜之地 #395043' WHERE `id1` = 395043;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -6112.9, `position_y` = -2996.5, `position_z` = 399.3, `orientation` = 0, `Comment` = '回血Boss Lv40 荒芜之地 #395044' WHERE `id1` = 395044;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -6121.7, `position_y` = -2941.8, `position_z` = 207.9, `orientation` = 0, `Comment` = '回血Boss Lv40 荒芜之地 #395045' WHERE `id1` = 395045;
+
+-- 等级40 - 塔纳利斯 (map 1)
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -7120.8, `position_y` = -3774.2, `position_z` = 9, `orientation` = 0, `Comment` = '回血Boss Lv40 塔纳利斯 #395046' WHERE `id1` = 395046;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -7116.3, `position_y` = -3788.1, `position_z` = 8.6, `orientation` = 0, `Comment` = '回血Boss Lv40 塔纳利斯 #395047' WHERE `id1` = 395047;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -7384.6, `position_y` = -3254.7, `position_z` = 12.3, `orientation` = 0, `Comment` = '回血Boss Lv40 塔纳利斯 #395048' WHERE `id1` = 395048;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -7122.4, `position_y` = -3770.6, `position_z` = 9.4, `orientation` = 0, `Comment` = '回血Boss Lv40 塔纳利斯 #395049' WHERE `id1` = 395049;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -7121.4, `position_y` = -3479.1, `position_z` = 9.1, `orientation` = 0, `Comment` = '回血Boss Lv40 塔纳利斯 #395050' WHERE `id1` = 395050;
+
+-- 等级48 - 诅咒之地 (map 0)
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -11363.2, `position_y` = -3051.7, `position_z` = -4.2, `orientation` = 0, `Comment` = '回血Boss Lv48 诅咒之地 #395051' WHERE `id1` = 395051;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -11436.9, `position_y` = -2949.2, `position_z` = 4.5, `orientation` = 0, `Comment` = '回血Boss Lv48 诅咒之地 #395052' WHERE `id1` = 395052;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -11137.2, `position_y` = -2713.4, `position_z` = 11.6, `orientation` = 0, `Comment` = '回血Boss Lv48 诅咒之地 #395053' WHERE `id1` = 395053;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -11460.1, `position_y` = -2957.5, `position_z` = 10.3, `orientation` = 0, `Comment` = '回血Boss Lv48 诅咒之地 #395054' WHERE `id1` = 395054;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -11155.3, `position_y` = -2731, `position_z` = 14.1, `orientation` = 0, `Comment` = '回血Boss Lv48 诅咒之地 #395055' WHERE `id1` = 395055;
+
+-- 等级48 - 艾萨拉 (map 1)
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 3188.1, `position_y` = -4311.8, `position_z` = 104.6, `orientation` = 0, `Comment` = '回血Boss Lv48 艾萨拉 #395056' WHERE `id1` = 395056;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 3263, `position_y` = -4437.7, `position_z` = 101.8, `orientation` = 0, `Comment` = '回血Boss Lv48 艾萨拉 #395057' WHERE `id1` = 395057;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 2976.2, `position_y` = -4182.5, `position_z` = 100.5, `orientation` = 0, `Comment` = '回血Boss Lv48 艾萨拉 #395058' WHERE `id1` = 395058;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 3287.7, `position_y` = -4321.4, `position_z` = 131.2, `orientation` = 0, `Comment` = '回血Boss Lv48 艾萨拉 #395059' WHERE `id1` = 395059;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 2950.9, `position_y` = -4152.9, `position_z` = 100.2, `orientation` = 0, `Comment` = '回血Boss Lv48 艾萨拉 #395060' WHERE `id1` = 395060;
+
+-- 等级56 - 西瘟疫之地 (map 0)
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 1922.2, `position_y` = -1548.5, `position_z` = 61, `orientation` = 0, `Comment` = '回血Boss Lv56 西瘟疫之地 #395061' WHERE `id1` = 395061;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 1930.6, `position_y` = -1714.8, `position_z` = 61.7, `orientation` = 0, `Comment` = '回血Boss Lv56 西瘟疫之地 #395062' WHERE `id1` = 395062;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 1788.8, `position_y` = -1361.3, `position_z` = 63.6, `orientation` = 0, `Comment` = '回血Boss Lv56 西瘟疫之地 #395063' WHERE `id1` = 395063;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 2156.5, `position_y` = -1743.1, `position_z` = 59.7, `orientation` = 0, `Comment` = '回血Boss Lv56 西瘟疫之地 #395064' WHERE `id1` = 395064;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 1729.2, `position_y` = -1172.2, `position_z` = 59.4, `orientation` = 0, `Comment` = '回血Boss Lv56 西瘟疫之地 #395065' WHERE `id1` = 395065;
+
+-- 等级56 - 冬泉谷 (map 1)
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 6509.6, `position_y` = -3083.7, `position_z` = 594.2, `orientation` = 0, `Comment` = '回血Boss Lv56 冬泉谷 #395066' WHERE `id1` = 395066;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 6509.1, `position_y` = -3475.4, `position_z` = 630.5, `orientation` = 0, `Comment` = '回血Boss Lv56 冬泉谷 #395067' WHERE `id1` = 395067;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 6415.4, `position_y` = -3116.1, `position_z` = 582.1, `orientation` = 0, `Comment` = '回血Boss Lv56 冬泉谷 #395068' WHERE `id1` = 395068;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 6484.9, `position_y` = -3166, `position_z` = 570.2, `orientation` = 0, `Comment` = '回血Boss Lv56 冬泉谷 #395069' WHERE `id1` = 395069;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 6877.9, `position_y` = -3355.3, `position_z` = 724.2, `orientation` = 0, `Comment` = '回血Boss Lv56 冬泉谷 #395070' WHERE `id1` = 395070;
+
+-- 等级64 - 泰罗卡森林 (map 530)
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -2262.7, `position_y` = 4715.8, `position_z` = -1.2, `orientation` = 0, `Comment` = '回血Boss Lv64 泰罗卡森林 #395071' WHERE `id1` = 395071;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -2644.7, `position_y` = 4449.7, `position_z` = 36.2, `orientation` = 0, `Comment` = '回血Boss Lv64 泰罗卡森林 #395072' WHERE `id1` = 395072;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -2562.4, `position_y` = 4387, `position_z` = 34.6, `orientation` = 0, `Comment` = '回血Boss Lv64 泰罗卡森林 #395073' WHERE `id1` = 395073;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -2458.6, `position_y` = 4883.9, `position_z` = 34.6, `orientation` = 0, `Comment` = '回血Boss Lv64 泰罗卡森林 #395074' WHERE `id1` = 395074;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -2605, `position_y` = 4440.7, `position_z` = 36.2, `orientation` = 0, `Comment` = '回血Boss Lv64 泰罗卡森林 #395075' WHERE `id1` = 395075;
+
+-- 等级64 - 纳格兰 (map 530)
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -1204.4, `position_y` = 8178.3, `position_z` = -6.3, `orientation` = 0, `Comment` = '回血Boss Lv64 纳格兰 #395076' WHERE `id1` = 395076;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -1520, `position_y` = 7818.5, `position_z` = -102.3, `orientation` = 0, `Comment` = '回血Boss Lv64 纳格兰 #395077' WHERE `id1` = 395077;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -1112, `position_y` = 7769.8, `position_z` = 17.9, `orientation` = 0, `Comment` = '回血Boss Lv64 纳格兰 #395078' WHERE `id1` = 395078;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -1128.1, `position_y` = 8033.5, `position_z` = -81.5, `orientation` = 0, `Comment` = '回血Boss Lv64 纳格兰 #395079' WHERE `id1` = 395079;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -1558.5, `position_y` = 7638.6, `position_z` = -7.7, `orientation` = 0, `Comment` = '回血Boss Lv64 纳格兰 #395080' WHERE `id1` = 395080;
+
+-- 等级72 - 龙骨荒野 (map 571)
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 3707, `position_y` = -539, `position_z` = 292.4, `orientation` = 0, `Comment` = '回血Boss Lv72 龙骨荒野 #395081' WHERE `id1` = 395081;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 3485.6, `position_y` = -1197.2, `position_z` = 113.5, `orientation` = 0, `Comment` = '回血Boss Lv72 龙骨荒野 #395082' WHERE `id1` = 395082;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 3465.7, `position_y` = -1154.1, `position_z` = 113.1, `orientation` = 0, `Comment` = '回血Boss Lv72 龙骨荒野 #395083' WHERE `id1` = 395083;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 3925.2, `position_y` = -861.4, `position_z` = 121.9, `orientation` = 0, `Comment` = '回血Boss Lv72 龙骨荒野 #395084' WHERE `id1` = 395084;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 3577.1, `position_y` = -1154.7, `position_z` = 88.9, `orientation` = 0, `Comment` = '回血Boss Lv72 龙骨荒野 #395085' WHERE `id1` = 395085;
+
+-- 等级72 - 灰熊丘陵 (map 571)
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 3777.8, `position_y` = -3111.9, `position_z` = 279.2, `orientation` = 0, `Comment` = '回血Boss Lv72 灰熊丘陵 #395086' WHERE `id1` = 395086;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 4322.9, `position_y` = -3693.6, `position_z` = 263.9, `orientation` = 0, `Comment` = '回血Boss Lv72 灰熊丘陵 #395087' WHERE `id1` = 395087;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 4034.4, `position_y` = -3471, `position_z` = 272.2, `orientation` = 0, `Comment` = '回血Boss Lv72 灰熊丘陵 #395088' WHERE `id1` = 395088;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 4213.7, `position_y` = -3655.9, `position_z` = 255.1, `orientation` = 0, `Comment` = '回血Boss Lv72 灰熊丘陵 #395089' WHERE `id1` = 395089;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 4143.8, `position_y` = -3790.8, `position_z` = 194.8, `orientation` = 0, `Comment` = '回血Boss Lv72 灰熊丘陵 #395090' WHERE `id1` = 395090;
+
+-- 等级80 - 风暴峭壁 (map 571)
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 7594.4, `position_y` = -2281.3, `position_z` = 940.1, `orientation` = 0, `Comment` = '回血Boss Lv80 风暴峭壁 #395091' WHERE `id1` = 395091;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 7384.3, `position_y` = -2517.3, `position_z` = 750, `orientation` = 0, `Comment` = '回血Boss Lv80 风暴峭壁 #395092' WHERE `id1` = 395092;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 7311.8, `position_y` = -2530.1, `position_z` = 749.5, `orientation` = 0, `Comment` = '回血Boss Lv80 风暴峭壁 #395093' WHERE `id1` = 395093;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 7309.5, `position_y` = -2613, `position_z` = 814.9, `orientation` = 0, `Comment` = '回血Boss Lv80 风暴峭壁 #395094' WHERE `id1` = 395094;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 7304, `position_y` = -2519.6, `position_z` = 750.3, `orientation` = 0, `Comment` = '回血Boss Lv80 风暴峭壁 #395095' WHERE `id1` = 395095;
+
+-- 等级80 - 索拉查盆地 (map 571)
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5826.2, `position_y` = 4610.8, `position_z` = -134.2, `orientation` = 0, `Comment` = '回血Boss Lv80 索拉查盆地 #395096' WHERE `id1` = 395096;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5619.1, `position_y` = 4702.1, `position_z` = -136.5, `orientation` = 0, `Comment` = '回血Boss Lv80 索拉查盆地 #395097' WHERE `id1` = 395097;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5780.6, `position_y` = 4504.5, `position_z` = -133.4, `orientation` = 0, `Comment` = '回血Boss Lv80 索拉查盆地 #395098' WHERE `id1` = 395098;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5503.4, `position_y` = 4885, `position_z` = -198.3, `orientation` = 0, `Comment` = '回血Boss Lv80 索拉查盆地 #395099' WHERE `id1` = 395099;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5616.6, `position_y` = 4284.5, `position_z` = -103.4, `orientation` = 0, `Comment` = '回血Boss Lv80 索拉查盆地 #395100' WHERE `id1` = 395100;
+
+-- ========================================
+-- 切割Boss (395101-395200)
+-- ========================================
+
+-- 等级8 - 丹莫罗 (map 0)
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -5826.3, `position_y` = -376.7, `position_z` = 376.3, `orientation` = 0, `Comment` = '切割Boss Lv8 丹莫罗 #395101' WHERE `id1` = 395101;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -5310.4, `position_y` = 135.8, `position_z` = 388.7, `orientation` = 0, `Comment` = '切割Boss Lv8 丹莫罗 #395102' WHERE `id1` = 395102;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -5432.3, `position_y` = -134.6, `position_z` = 350.6, `orientation` = 0, `Comment` = '切割Boss Lv8 丹莫罗 #395103' WHERE `id1` = 395103;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -5532.2, `position_y` = -296.4, `position_z` = 358.1, `orientation` = 0, `Comment` = '切割Boss Lv8 丹莫罗 #395104' WHERE `id1` = 395104;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -5669.4, `position_y` = -256.4, `position_z` = 368.2, `orientation` = 0, `Comment` = '切割Boss Lv8 丹莫罗 #395105' WHERE `id1` = 395105;
+
+-- 等级8 - 泰达希尔 (map 1)
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 10134.3, `position_y` = 1086.4, `position_z` = 1327.6, `orientation` = 0, `Comment` = '切割Boss Lv8 泰达希尔 #395106' WHERE `id1` = 395106;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 9695.8, `position_y` = 1240.8, `position_z` = 1281.9, `orientation` = 0, `Comment` = '切割Boss Lv8 泰达希尔 #395107' WHERE `id1` = 395107;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 9850.4, `position_y` = 818.6, `position_z` = 1308.1, `orientation` = 0, `Comment` = '切割Boss Lv8 泰达希尔 #395108' WHERE `id1` = 395108;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 10084, `position_y` = 1119.2, `position_z` = 1326.5, `orientation` = 0, `Comment` = '切割Boss Lv8 泰达希尔 #395109' WHERE `id1` = 395109;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = 9604.1, `position_y` = 1269.7, `position_z` = 1287.3, `orientation` = 0, `Comment` = '切割Boss Lv8 泰达希尔 #395110' WHERE `id1` = 395110;
+
+-- 等级16 - 银松森林 (map 0)
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 479.5, `position_y` = 954, `position_z` = 128.9, `orientation` = 0, `Comment` = '切割Boss Lv16 银松森林 #395111' WHERE `id1` = 395111;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 1014, `position_y` = 682.2, `position_z` = 65.1, `orientation` = 0, `Comment` = '切割Boss Lv16 银松森林 #395112' WHERE `id1` = 395112;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 482.4, `position_y` = 984.1, `position_z` = 128.7, `orientation` = 0, `Comment` = '切割Boss Lv16 银松森林 #395113' WHERE `id1` = 395113;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 1071.9, `position_y` = 644.7, `position_z` = 50.6, `orientation` = 0, `Comment` = '切割Boss Lv16 银松森林 #395114' WHERE `id1` = 395114;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 995.3, `position_y` = 696.3, `position_z` = 70, `orientation` = 0, `Comment` = '切割Boss Lv16 银松森林 #395115' WHERE `id1` = 395115;
+
+-- 等级16 - 幽魂之地 (map 530)
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 7256.3, `position_y` = -6915.9, `position_z` = 49, `orientation` = 0, `Comment` = '切割Boss Lv16 幽魂之地 #395116' WHERE `id1` = 395116;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 6897.1, `position_y` = -6971.6, `position_z` = 47.2, `orientation` = 0, `Comment` = '切割Boss Lv16 幽魂之地 #395117' WHERE `id1` = 395117;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 7113.6, `position_y` = -6924.3, `position_z` = 47.5, `orientation` = 0, `Comment` = '切割Boss Lv16 幽魂之地 #395118' WHERE `id1` = 395118;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 7157.5, `position_y` = -6611.4, `position_z` = 60.7, `orientation` = 0, `Comment` = '切割Boss Lv16 幽魂之地 #395119' WHERE `id1` = 395119;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 6933.8, `position_y` = -6715.6, `position_z` = 23.8, `orientation` = 0, `Comment` = '切割Boss Lv16 幽魂之地 #395120' WHERE `id1` = 395120;
+
+-- 等级24 - 希尔斯布莱德丘陵 (map 0)
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 3.9, `position_y` = -338.2, `position_z` = 131.3, `orientation` = 0, `Comment` = '切割Boss Lv24 希尔斯布莱德丘陵 #395121' WHERE `id1` = 395121;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -413.8, `position_y` = 53.4, `position_z` = 54.3, `orientation` = 0, `Comment` = '切割Boss Lv24 希尔斯布莱德丘陵 #395122' WHERE `id1` = 395122;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 62.3, `position_y` = -228.4, `position_z` = 129.7, `orientation` = 0, `Comment` = '切割Boss Lv24 希尔斯布莱德丘陵 #395123' WHERE `id1` = 395123;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -81.9, `position_y` = -82.5, `position_z` = 136.9, `orientation` = 0, `Comment` = '切割Boss Lv24 希尔斯布莱德丘陵 #395124' WHERE `id1` = 395124;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -314.4, `position_y` = -531.5, `position_z` = 57, `orientation` = 0, `Comment` = '切割Boss Lv24 希尔斯布莱德丘陵 #395125' WHERE `id1` = 395125;
+
+-- 等级24 - 凄凉之地 (map 1)
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -1468, `position_y` = 2824.8, `position_z` = 92.5, `orientation` = 0, `Comment` = '切割Boss Lv24 凄凉之地 #395126' WHERE `id1` = 395126;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -1408.5, `position_y` = 2709.6, `position_z` = 93.5, `orientation` = 0, `Comment` = '切割Boss Lv24 凄凉之地 #395127' WHERE `id1` = 395127;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -1221.9, `position_y` = 2917.2, `position_z` = 87.2, `orientation` = 0, `Comment` = '切割Boss Lv24 凄凉之地 #395128' WHERE `id1` = 395128;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -1710.1, `position_y` = 2577.5, `position_z` = 117.6, `orientation` = 0, `Comment` = '切割Boss Lv24 凄凉之地 #395129' WHERE `id1` = 395129;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -1458.9, `position_y` = 2797.6, `position_z` = 93.8, `orientation` = 0, `Comment` = '切割Boss Lv24 凄凉之地 #395130' WHERE `id1` = 395130;
+
+-- 等级32 - 奥特兰克山脉 (map 0)
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 843.6, `position_y` = -541.1, `position_z` = 139.9, `orientation` = 0, `Comment` = '切割Boss Lv32 奥特兰克山脉 #395131' WHERE `id1` = 395131;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 447.5, `position_y` = -644.7, `position_z` = 167.2, `orientation` = 0, `Comment` = '切割Boss Lv32 奥特兰克山脉 #395132' WHERE `id1` = 395132;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 235, `position_y` = -359.1, `position_z` = 161.4, `orientation` = 0, `Comment` = '切割Boss Lv32 奥特兰克山脉 #395133' WHERE `id1` = 395133;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 355.4, `position_y` = -590, `position_z` = 154, `orientation` = 0, `Comment` = '切割Boss Lv32 奥特兰克山脉 #395134' WHERE `id1` = 395134;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 888.1, `position_y` = -121.8, `position_z` = 38.5, `orientation` = 0, `Comment` = '切割Boss Lv32 奥特兰克山脉 #395135' WHERE `id1` = 395135;
+
+-- 等级32 - 荆棘谷北部 (map 0)
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -11513.4, `position_y` = -53.4, `position_z` = 13.7, `orientation` = 0, `Comment` = '切割Boss Lv32 荆棘谷北部 #395136' WHERE `id1` = 395136;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -11457.6, `position_y` = 378, `position_z` = 77.6, `orientation` = 0, `Comment` = '切割Boss Lv32 荆棘谷北部 #395137' WHERE `id1` = 395137;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -11764.4, `position_y` = 16.8, `position_z` = 22.6, `orientation` = 0, `Comment` = '切割Boss Lv32 荆棘谷北部 #395138' WHERE `id1` = 395138;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -11658.1, `position_y` = 561.9, `position_z` = 50.8, `orientation` = 0, `Comment` = '切割Boss Lv32 荆棘谷北部 #395139' WHERE `id1` = 395139;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -11460.3, `position_y` = 385.8, `position_z` = 77.5, `orientation` = 0, `Comment` = '切割Boss Lv32 荆棘谷北部 #395140' WHERE `id1` = 395140;
+
+-- 等级40 - 灼热峡谷 (map 0)
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -6641, `position_y` = -861.6, `position_z` = 244.3, `orientation` = 0, `Comment` = '切割Boss Lv40 灼热峡谷 #395141' WHERE `id1` = 395141;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -6639.9, `position_y` = -805.5, `position_z` = 244.7, `orientation` = 0, `Comment` = '切割Boss Lv40 灼热峡谷 #395142' WHERE `id1` = 395142;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -6685.1, `position_y` = -879.4, `position_z` = 257.6, `orientation` = 0, `Comment` = '切割Boss Lv40 灼热峡谷 #395143' WHERE `id1` = 395143;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -6454.2, `position_y` = -937.5, `position_z` = 334.5, `orientation` = 0, `Comment` = '切割Boss Lv40 灼热峡谷 #395144' WHERE `id1` = 395144;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = -6531.1, `position_y` = -1297, `position_z` = 201, `orientation` = 0, `Comment` = '切割Boss Lv40 灼热峡谷 #395145' WHERE `id1` = 395145;
+
+-- 等级40 - 辛特兰 (map 0)
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 414.1, `position_y` = -3716.3, `position_z` = 130, `orientation` = 0, `Comment` = '切割Boss Lv40 辛特兰 #395146' WHERE `id1` = 395146;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 276.8, `position_y` = -3585.1, `position_z` = 123.1, `orientation` = 0, `Comment` = '切割Boss Lv40 辛特兰 #395147' WHERE `id1` = 395147;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 332.5, `position_y` = -3335.4, `position_z` = 115.8, `orientation` = 0, `Comment` = '切割Boss Lv40 辛特兰 #395148' WHERE `id1` = 395148;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 376.1, `position_y` = -3170.1, `position_z` = 146.4, `orientation` = 0, `Comment` = '切割Boss Lv40 辛特兰 #395149' WHERE `id1` = 395149;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 451.2, `position_y` = -3348.2, `position_z` = 119.7, `orientation` = 0, `Comment` = '切割Boss Lv40 辛特兰 #395150' WHERE `id1` = 395150;
+
+-- 等级48 - 安戈洛环形山 (map 1)
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -6513.5, `position_y` = 827.7, `position_z` = 13, `orientation` = 0, `Comment` = '切割Boss Lv48 安戈洛环形山 #395151' WHERE `id1` = 395151;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -6685.5, `position_y` = 805.1, `position_z` = 14.5, `orientation` = 0, `Comment` = '切割Boss Lv48 安戈洛环形山 #395152' WHERE `id1` = 395152;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -6804.9, `position_y` = 820.4, `position_z` = 51.3, `orientation` = 0, `Comment` = '切割Boss Lv48 安戈洛环形山 #395153' WHERE `id1` = 395153;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -6593.8, `position_y` = 887.4, `position_z` = -43.7, `orientation` = 0, `Comment` = '切割Boss Lv48 安戈洛环形山 #395154' WHERE `id1` = 395154;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -6939.1, `position_y` = 1114.2, `position_z` = 0.9, `orientation` = 0, `Comment` = '切割Boss Lv48 安戈洛环形山 #395155' WHERE `id1` = 395155;
+
+-- 等级48 - 东瘟疫之地 (map 0)
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 2510, `position_y` = -4160.9, `position_z` = 47.1, `orientation` = 0, `Comment` = '切割Boss Lv48 东瘟疫之地 #395156' WHERE `id1` = 395156;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 2548.8, `position_y` = -4449.4, `position_z` = 78.5, `orientation` = 0, `Comment` = '切割Boss Lv48 东瘟疫之地 #395157' WHERE `id1` = 395157;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 2410.8, `position_y` = -4165.4, `position_z` = 75.5, `orientation` = 0, `Comment` = '切割Boss Lv48 东瘟疫之地 #395158' WHERE `id1` = 395158;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 2567.7, `position_y` = -4599.9, `position_z` = 81, `orientation` = 0, `Comment` = '切割Boss Lv48 东瘟疫之地 #395159' WHERE `id1` = 395159;
+UPDATE `creature` SET `map` = 0, `zoneId` = 0, `areaId` = 0, `position_x` = 2989.2, `position_y` = -4184, `position_z` = 95, `orientation` = 0, `Comment` = '切割Boss Lv48 东瘟疫之地 #395160' WHERE `id1` = 395160;
+
+-- 等级56 - 希利苏斯 (map 1)
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -6894.5, `position_y` = 1788.8, `position_z` = 5.4, `orientation` = 0, `Comment` = '切割Boss Lv56 希利苏斯 #395161' WHERE `id1` = 395161;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -6985.5, `position_y` = 1748.2, `position_z` = 2.1, `orientation` = 0, `Comment` = '切割Boss Lv56 希利苏斯 #395162' WHERE `id1` = 395162;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -7323.1, `position_y` = 1729, `position_z` = -94.1, `orientation` = 0, `Comment` = '切割Boss Lv56 希利苏斯 #395163' WHERE `id1` = 395163;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -7381.5, `position_y` = 1805.7, `position_z` = -32.4, `orientation` = 0, `Comment` = '切割Boss Lv56 希利苏斯 #395164' WHERE `id1` = 395164;
+UPDATE `creature` SET `map` = 1, `zoneId` = 0, `areaId` = 0, `position_x` = -7329.6, `position_y` = 1837.4, `position_z` = -88.8, `orientation` = 0, `Comment` = '切割Boss Lv56 希利苏斯 #395165' WHERE `id1` = 395165;
+
+-- 等级56 - 影月谷 (map 530)
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -2907.6, `position_y` = 2603, `position_z` = 93.8, `orientation` = 0, `Comment` = '切割Boss Lv56 影月谷 #395166' WHERE `id1` = 395166;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -3123, `position_y` = 2643, `position_z` = 62.4, `orientation` = 0, `Comment` = '切割Boss Lv56 影月谷 #395167' WHERE `id1` = 395167;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -3409.1, `position_y` = 2585.8, `position_z` = 57.6, `orientation` = 0, `Comment` = '切割Boss Lv56 影月谷 #395168' WHERE `id1` = 395168;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -3316.2, `position_y` = 2455.4, `position_z` = 51.7, `orientation` = 0, `Comment` = '切割Boss Lv56 影月谷 #395169' WHERE `id1` = 395169;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = -3016.4, `position_y` = 2549.7, `position_z` = 79.1, `orientation` = 0, `Comment` = '切割Boss Lv56 影月谷 #395170' WHERE `id1` = 395170;
+
+-- 等级64 - 刀锋山 (map 530)
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 3282.4, `position_y` = 5831.6, `position_z` = -3.5, `orientation` = 0, `Comment` = '切割Boss Lv64 刀锋山 #395171' WHERE `id1` = 395171;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 3053.4, `position_y` = 5664, `position_z` = 143.4, `orientation` = 0, `Comment` = '切割Boss Lv64 刀锋山 #395172' WHERE `id1` = 395172;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 3285.2, `position_y` = 5708.7, `position_z` = -5.4, `orientation` = 0, `Comment` = '切割Boss Lv64 刀锋山 #395173' WHERE `id1` = 395173;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 3022.6, `position_y` = 5963.6, `position_z` = 130.8, `orientation` = 0, `Comment` = '切割Boss Lv64 刀锋山 #395174' WHERE `id1` = 395174;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 3154.8, `position_y` = 6252.1, `position_z` = 124.9, `orientation` = 0, `Comment` = '切割Boss Lv64 刀锋山 #395175' WHERE `id1` = 395175;
+
+-- 等级64 - 虚空风暴 (map 530)
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 3590.3, `position_y` = 3544, `position_z` = 120, `orientation` = 0, `Comment` = '切割Boss Lv64 虚空风暴 #395176' WHERE `id1` = 395176;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 3569.7, `position_y` = 3655.3, `position_z` = 129.8, `orientation` = 0, `Comment` = '切割Boss Lv64 虚空风暴 #395177' WHERE `id1` = 395177;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 4142.8, `position_y` = 3231.2, `position_z` = 192.1, `orientation` = 0, `Comment` = '切割Boss Lv64 虚空风暴 #395178' WHERE `id1` = 395178;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 3987.4, `position_y` = 3785.5, `position_z` = 124.3, `orientation` = 0, `Comment` = '切割Boss Lv64 虚空风暴 #395179' WHERE `id1` = 395179;
+UPDATE `creature` SET `map` = 530, `zoneId` = 0, `areaId` = 0, `position_x` = 3562.9, `position_y` = 3536.7, `position_z` = 128.1, `orientation` = 0, `Comment` = '切割Boss Lv64 虚空风暴 #395180' WHERE `id1` = 395180;
+
+-- 等级72 - 索拉查盆地北 (map 571)
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5633, `position_y` = 5048.1, `position_z` = -134.3, `orientation` = 0, `Comment` = '切割Boss Lv72 索拉查盆地北 #395181' WHERE `id1` = 395181;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5932.6, `position_y` = 5589, `position_z` = -73, `orientation` = 0, `Comment` = '切割Boss Lv72 索拉查盆地北 #395182' WHERE `id1` = 395182;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 6209.3, `position_y` = 5533.1, `position_z` = -47.3, `orientation` = 0, `Comment` = '切割Boss Lv72 索拉查盆地北 #395183' WHERE `id1` = 395183;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 6146.4, `position_y` = 5014.9, `position_z` = -98, `orientation` = 0, `Comment` = '切割Boss Lv72 索拉查盆地北 #395184' WHERE `id1` = 395184;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5904.2, `position_y` = 5639.4, `position_z` = -69.9, `orientation` = 0, `Comment` = '切割Boss Lv72 索拉查盆地北 #395185' WHERE `id1` = 395185;
+
+-- 等级72 - 龙骨荒野南 (map 571)
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 2994.2, `position_y` = -1843.6, `position_z` = 59.8, `orientation` = 0, `Comment` = '切割Boss Lv72 龙骨荒野南 #395186' WHERE `id1` = 395186;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 2724.9, `position_y` = -1864.6, `position_z` = 19.7, `orientation` = 0, `Comment` = '切割Boss Lv72 龙骨荒野南 #395187' WHERE `id1` = 395187;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 2846.8, `position_y` = -1714, `position_z` = 17.6, `orientation` = 0, `Comment` = '切割Boss Lv72 龙骨荒野南 #395188' WHERE `id1` = 395188;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 2813.6, `position_y` = -1637.9, `position_z` = 15.7, `orientation` = 0, `Comment` = '切割Boss Lv72 龙骨荒野南 #395189' WHERE `id1` = 395189;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 3307.8, `position_y` = -2003.8, `position_z` = 96.7, `orientation` = 0, `Comment` = '切割Boss Lv72 龙骨荒野南 #395190' WHERE `id1` = 395190;
+
+-- 等级80 - 冬拥湖 (map 571)
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5129.8, `position_y` = 2545.4, `position_z` = 366, `orientation` = 0, `Comment` = '切割Boss Lv80 冬拥湖 #395191' WHERE `id1` = 395191;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5336, `position_y` = 2566.2, `position_z` = 396.2, `orientation` = 0, `Comment` = '切割Boss Lv80 冬拥湖 #395192' WHERE `id1` = 395192;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5440.3, `position_y` = 2870.6, `position_z` = 418.8, `orientation` = 0, `Comment` = '切割Boss Lv80 冬拥湖 #395193' WHERE `id1` = 395193;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5081.1, `position_y` = 2586.9, `position_z` = 364, `orientation` = 0, `Comment` = '切割Boss Lv80 冬拥湖 #395194' WHERE `id1` = 395194;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 4949, `position_y` = 2937.8, `position_z` = 550.5, `orientation` = 0, `Comment` = '切割Boss Lv80 冬拥湖 #395195' WHERE `id1` = 395195;
+
+-- 等级80 - 水晶之歌森林 (map 571)
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5778.7, `position_y` = 351.7, `position_z` = 178.4, `orientation` = 0, `Comment` = '切割Boss Lv80 水晶之歌森林 #395196' WHERE `id1` = 395196;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5774, `position_y` = 746, `position_z` = 641.5, `orientation` = 0, `Comment` = '切割Boss Lv80 水晶之歌森林 #395197' WHERE `id1` = 395197;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5844.3, `position_y` = 610.2, `position_z` = 620.4, `orientation` = 0, `Comment` = '切割Boss Lv80 水晶之歌森林 #395198' WHERE `id1` = 395198;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5888.7, `position_y` = 507.9, `position_z` = 641.7, `orientation` = 0, `Comment` = '切割Boss Lv80 水晶之歌森林 #395199' WHERE `id1` = 395199;
+UPDATE `creature` SET `map` = 571, `zoneId` = 0, `areaId` = 0, `position_x` = 5817.4, `position_y` = 417.1, `position_z` = 657.7, `orientation` = 0, `Comment` = '切割Boss Lv80 水晶之歌森林 #395200' WHERE `id1` = 395200;

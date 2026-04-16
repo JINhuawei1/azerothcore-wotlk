@@ -1,0 +1,29 @@
+#
+# This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+#
+# This file is free software; as a special exception the author gives
+# unlimited permission to copy and/or distribute it, with or without
+# modifications, as long as this notice is preserved.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY, to the extent permitted by law; without even the
+# implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+
+[worldserver]
+
+########################################
+# 图鉴系统配置
+########################################
+#
+#    TujianSystem.Enable
+#        描述: 启用图鉴系统
+#        默认: 1 (启用)
+#
+#    TujianSystem.Announce
+#        描述: 在服务器启动时显示加载信息
+#        默认: 1 (启用)
+#
+
+TujianSystem.Enable = 1
+TujianSystem.Announce = 1

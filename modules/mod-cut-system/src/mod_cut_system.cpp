@@ -270,6 +270,20 @@ public:
             return false;
         }
 
+        if (entry.cutLevel != currentLevel + 1)
+        {
+            if (showMessages)
+                ChatHandler(player->GetSession()).PSendSysMessage(
+                    "切割系统：请先升级到 {} 级后，再升级到 {} 级。",
+                    currentLevel + 1,
+                    entry.cutLevel);
+
+            if (failureMessage)
+                *failureMessage = "请先升级上一等级切割";
+
+            return false;
+        }
+
         if (entry.requirementTemplateId == 0)
             return true;
 
