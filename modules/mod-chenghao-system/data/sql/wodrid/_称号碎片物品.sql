@@ -102,3 +102,11 @@ INSERT INTO `item_template` (`entry`,`class`,`subclass`,`SoundOverrideSubclass`,
 INSERT INTO `item_template` (`entry`,`class`,`subclass`,`SoundOverrideSubclass`,`name`,`displayid`,`Quality`,`Flags`,`FlagsExtra`,`BuyCount`,`BuyPrice`,`SellPrice`,`InventoryType`,`AllowableClass`,`AllowableRace`,`ItemLevel`,`stackable`,`description`,`Material`,`BagFamily`,`VerifiedBuild`) VALUES (62198,12,0,-1,'称号碎片·第98阶',6948,5,32768,0,1,0,0,0,-1,-1,98,20,'用于激活第98阶称号，由特定Boss掉落',0,0,12340);
 INSERT INTO `item_template` (`entry`,`class`,`subclass`,`SoundOverrideSubclass`,`name`,`displayid`,`Quality`,`Flags`,`FlagsExtra`,`BuyCount`,`BuyPrice`,`SellPrice`,`InventoryType`,`AllowableClass`,`AllowableRace`,`ItemLevel`,`stackable`,`description`,`Material`,`BagFamily`,`VerifiedBuild`) VALUES (62199,12,0,-1,'称号碎片·第99阶',6948,5,32768,0,1,0,0,0,-1,-1,99,20,'用于激活第99阶称号，由特定Boss掉落',0,0,12340);
 INSERT INTO `item_template` (`entry`,`class`,`subclass`,`SoundOverrideSubclass`,`name`,`displayid`,`Quality`,`Flags`,`FlagsExtra`,`BuyCount`,`BuyPrice`,`SellPrice`,`InventoryType`,`AllowableClass`,`AllowableRace`,`ItemLevel`,`stackable`,`description`,`Material`,`BagFamily`,`VerifiedBuild`) VALUES (62200,12,0,-1,'称号碎片·第100阶',6948,5,32768,0,1,0,0,0,-1,-1,100,20,'用于激活第100阶称号，由特定Boss掉落',0,0,12340);
+
+-- 统一修正称号材料品质、底部绿色描述与模型
+UPDATE `item_template`
+SET
+  `displayid` = 60021,
+  `Quality` = 5,
+  `description` = CONCAT('|cFF33FF66', REPLACE(REPLACE(CONCAT('用于激活第', `entry` - 62100, '阶称号，由特定Boss掉落'), '|cFF33FF66', ''), '|r', ''), '|r')
+WHERE `entry` BETWEEN 62101 AND 62200;
