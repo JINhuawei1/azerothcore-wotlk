@@ -753,7 +753,7 @@ FROM `_tmp_worldboss395_levels`;
 DROP TEMPORARY TABLE IF EXISTS `_tmp_worldboss395_levels`;
 -- ============================================
 -- 世界Boss外观强化
--- 每5个Boss固定一套模型，统一放大到 5 倍
+-- 每5个Boss固定一套模型，统一设置模型显示缩放为 3 倍
 -- 01组 末日行者         21435
 -- 02组 末日领主卡扎克   17887
 -- 03组 屠龙者格鲁尔     18698
@@ -784,7 +784,7 @@ DROP TEMPORARY TABLE IF EXISTS `_tmp_worldboss395_levels`;
 
 UPDATE `creature_template`
 SET
-  `scale` = 5.0,
+  `scale` = 3.0,
   `faction` = 14,
   `detection_range` = 60,
   `rank` = 3,
@@ -830,5 +830,5 @@ SET
     WHEN (`CreatureID` BETWEEN 395096 AND 395100) OR (`CreatureID` BETWEEN 395196 AND 395200) THEN 29268
     ELSE `CreatureDisplayID`
   END,
-  `DisplayScale` = 1.0
+  `DisplayScale` = 3.0
 WHERE `CreatureID` BETWEEN 395001 AND 395200;

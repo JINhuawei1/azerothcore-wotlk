@@ -72,17 +72,17 @@ BEGIN
     INSERT INTO `creature_template`
       (`entry`,`name`,`subname`,`minlevel`,`maxlevel`,`faction`,`unit_class`,`rank`,
        `mingold`,`maxgold`,`HealthModifier`,`DamageModifier`,`ArmorModifier`,
-       `mechanic_immune_mask`,`unit_flags`,`detection_range`,`lootid`,`type`,`AIName`)
+       `mechanic_immune_mask`,`unit_flags`,`detection_range`,`scale`,`lootid`,`type`,`AIName`)
     VALUES
       (v_entry, v_name, '称号守护者', v_level, v_level, 14, 1, v_rank,
        i * 50, i * 100, v_hmod, v_dmod, v_amod,
-       v_immune, v_flags, 60, v_entry, 10, '');
+       v_immune, v_flags, 60, 3.0, v_entry, 10, '');
 
     -- 模型表 (AzerothCore用独立表)
     INSERT INTO `creature_template_model`
       (`CreatureID`,`Idx`,`CreatureDisplayID`,`DisplayScale`,`Probability`,`VerifiedBuild`)
     VALUES
-      (v_entry, 0, v_disp, 1.0, 1.0, 0);
+      (v_entry, 0, v_disp, 3.0, 1.0, 0);
 
     -- 掉落表: 100%掉对应阶碎片
     INSERT INTO `creature_loot_template`

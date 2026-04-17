@@ -1,5 +1,7 @@
 -- 回血Boss 300独立模型更新 (395001-395100)
 -- 每个Boss一个独特模型，不重复
+UPDATE `creature_template_model` SET `DisplayScale` = 3.0
+ WHERE `CreatureID` BETWEEN 395001 AND 395200 AND `Idx` = 0;
 UPDATE `creature_template_model` SET `CreatureDisplayID` = 10709 WHERE `CreatureID` = 395001 AND `Idx` = 0;
 UPDATE `creature_template_model` SET `CreatureDisplayID` = 10701 WHERE `CreatureID` = 395002 AND `Idx` = 0;
 UPDATE `creature_template_model` SET `CreatureDisplayID` = 10626 WHERE `CreatureID` = 395003 AND `Idx` = 0;
