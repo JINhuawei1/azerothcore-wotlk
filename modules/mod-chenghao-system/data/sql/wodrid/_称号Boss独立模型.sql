@@ -1,5 +1,7 @@
 -- 称号Boss 300独立模型更新 (396001-396100)
 -- 每个Boss一个独特模型，不重复
+UPDATE `creature_template_model` SET `DisplayScale` = 3.0
+ WHERE `CreatureID` BETWEEN 396001 AND 396100 AND `Idx` = 0;
 UPDATE `creature_template_model` SET `CreatureDisplayID` = 26193 WHERE `CreatureID` = 396001 AND `Idx` = 0;
 UPDATE `creature_template_model` SET `CreatureDisplayID` = 26087 WHERE `CreatureID` = 396002 AND `Idx` = 0;
 UPDATE `creature_template_model` SET `CreatureDisplayID` = 25656 WHERE `CreatureID` = 396003 AND `Idx` = 0;
