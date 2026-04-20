@@ -17,6 +17,7 @@
 #include "SpellMgr.h"
 #include "SpellInfo.h"
 #include <unordered_map>
+#include <unordered_set>
 #include <map>
 #include <vector>
 #include <set>
@@ -129,6 +130,7 @@ public:
 
     bool Initialize();
     void LoadSlotControls();
+    void LoadRestrictedItems();
 
     // 玩家数据管理
     void LoadPlayerData(Player* player);
@@ -157,6 +159,7 @@ public:
     // 槽位验证
     bool CanEquipItemInSlot(Player* player, uint8 slot, uint32 itemId);
     uint8 GetSlotForItemClass(uint32 itemClass, uint32 itemSubClass, uint32 inventoryType);
+    bool IsAscensionOnlyItem(uint32 itemId) const;
 
     // 获取数据
     PlayerAscensionStatus* GetPlayerStatus(uint32 playerGuid);
@@ -179,6 +182,7 @@ private:
 
     std::map<uint8, AscensionSlotControl> _slotControls;
     std::map<uint32, PlayerAscensionStatus> _playerStatus;
+    std::unordered_set<uint32> _restrictedItemIds;
 };
 
 #define sAscensionManager AscensionManager::instance()
@@ -208,6 +212,7 @@ public:
     void OnPlayerLogin(Player* player) override;
     void OnPlayerLogout(Player* player) override;
     void OnPlayerDelete(ObjectGuid guid, uint32 accountId) override;
+    bool OnPlayerCanEquipItem(Player* player, uint8 slot, uint16& dest, Item* pItem, bool swap, bool not_loading) override;
 };
 
 // 命令脚本

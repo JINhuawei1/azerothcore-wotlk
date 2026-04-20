@@ -275,14 +275,11 @@ bool ReincarnationMgr::DoReincarnate(Player* player)
     playerData.totalBonusStats += config->bonusStats;
     playerData.totalBonusTalentPoints += config->bonusTalentPoints;
 
-    // 重置玩家等级为1
-    player->SetLevel(1);
-
-    // 重置经验
-    player->SetUInt32Value(PLAYER_XP, 0);
-
     // 更新属性加成（先移除旧的，再应用新的）
     UpdateReincarnationStats(player, oldBonusStats, playerData.totalBonusStats);
+
+    // 不再内置修改角色等级，转身后直接重算可用天赋点。
+    player->InitTalentForLevel();
 
     // 立即保存到数据库
     SavePlayerData(player);

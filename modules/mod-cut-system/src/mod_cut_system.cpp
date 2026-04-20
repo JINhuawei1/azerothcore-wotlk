@@ -852,7 +852,8 @@ public:
 
         static Acore::ChatCommands::ChatCommandTable commandTable =
         {
-            Acore::ChatCommands::ChatCommandBuilder("切割", cutCommandTable)
+            Acore::ChatCommands::ChatCommandBuilder("切割", cutCommandTable),
+            Acore::ChatCommands::ChatCommandBuilder("裂刃谱", cutCommandTable)
         };
 
         return commandTable;
@@ -872,7 +873,6 @@ public:
             return false;
 
         SendCutSystemOpenUI(player);
-        handler->SendSysMessage("已向客户端发送切割系统界面打开请求。");
         return true;
     }
 

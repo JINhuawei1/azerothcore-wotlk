@@ -1288,7 +1288,8 @@ public:
 
         static Acore::ChatCommands::ChatCommandTable rootTable =
         {
-            Acore::ChatCommands::ChatCommandBuilder("时装", subTable)
+            Acore::ChatCommands::ChatCommandBuilder("时装", subTable),
+            Acore::ChatCommands::ChatCommandBuilder("时装系统", subTable)
         };
 
         return rootTable;
@@ -1301,7 +1302,6 @@ public:
             return false;
 
         SendFashionSystemPayload(player, "FS_OPEN");
-        handler->SendSysMessage("已向客户端发送时装系统界面打开请求。");
         return true;
     }
 

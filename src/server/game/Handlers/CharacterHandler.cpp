@@ -801,7 +801,7 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recvData)
 void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
 {
     using namespace std::chrono;
-    auto phaseStart = high_resolution_clock::now();
+    auto handleStart = high_resolution_clock::now();
 
     ObjectGuid playerGuid = holder.GetGuid();
 
@@ -818,8 +818,6 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         m_playerLoading = false;
         return;
     }
-
-    // LoadFromDB completed
 
     pCurrChar->GetMotionMaster()->Initialize();
     pCurrChar->SendDungeonDifficulty(false);
@@ -1143,6 +1141,17 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     {
         pCurrChar->RemoveAtLoginFlag(AT_LOGIN_FIRST);
         sScriptMgr->OnPlayerFirstLogin(pCurrChar);
+    }
+
+    auto handleMs = duration_cast<milliseconds>(high_resolution_clock::now() - handleStart).count();
+    if (handleMs >= 10)
+    {
+        LOG_INFO("server.loading",
+            "[性能监控-登录阶段总耗时] 账号={} 角色={} GUID={} HandlePlayerLoginFromDB={}ms",
+            GetAccountId(),
+            pCurrChar->GetName(),
+            playerGuid.ToString(),
+            handleMs);
     }
 
     METRIC_EVENT("player_events", "Login", pCurrChar->GetName());

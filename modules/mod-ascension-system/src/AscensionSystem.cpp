@@ -9,6 +9,7 @@
 #include "Mail.h"
 #include "DBCStores.h"
 #include <sstream>
+#include <chrono>
 #include <algorithm>  // 用于 std::all_of, std::min, std::remove
 
 // 需求模板系统集成：通过模块管理器访问统一的需求接口
@@ -79,6 +80,7 @@ bool AscensionManager::Initialize()
         return false;
 
     LoadSlotControls();
+    LoadRestrictedItems();
     return true;
 }
 
@@ -121,6 +123,27 @@ void AscensionManager::LoadSlotControls()
         _slotControls[ctrl.slot] = ctrl;
         count++;
     } while (result->NextRow());
+}
+
+void AscensionManager::LoadRestrictedItems()
+{
+    _restrictedItemIds.clear();
+
+    QueryResult result = WorldDatabase.Query(
+        "SELECT `物品模板ID` FROM `_深渊装备模板` WHERE `是否启用` = 1");
+
+    if (!result)
+        return;
+
+    do
+    {
+        _restrictedItemIds.insert(result->Fetch()[0].Get<uint32>());
+    } while (result->NextRow());
+
+    if (sAscensionConfig->IsDebugMode())
+    {
+        LOG_INFO("module", "飞升系统: 已加载 {} 个只能穿戴到飞升槽的深渊装备", _restrictedItemIds.size());
+    }
 }
 
 void AscensionManager::LoadPlayerData(Player* player)
@@ -387,10 +410,7 @@ void AscensionManager::LoadAscensionItems(Player* player)
         "WHERE ci.guid = {} AND ci.bag = {}", playerGuid, ASCENSION_VIRTUAL_BAG);
 
     if (!invResult)
-    {
-        LOG_INFO("module", "飞升系统: 玩家 {} 没有飞升装备（character_inventory bag=200 无记录）", player->GetName());
         return;
-    }
 
     // 清空旧的槽位数据，从数据库重新加载
     status->slots.clear();
@@ -406,6 +426,16 @@ void AscensionManager::LoadAscensionItems(Player* player)
         {
             LOG_ERROR("module", "飞升系统: 无效槽位 {} 物品GUID={}", slot, itemGuid);
             continue;
+        }
+
+        if (status->slots.find(slot) != status->slots.end())
+        {
+            LOG_WARN("module",
+                "飞升系统: 玩家 {} LoadAscensionItems 检测到重复槽位 slot={} 旧物品GUID={} 新物品GUID={}",
+                player->GetName(),
+                slot,
+                status->slots[slot].itemGuid,
+                itemGuid);
         }
 
         // 【修复】先校验物品模板是否存在，避免空指针崩溃
@@ -460,12 +490,7 @@ void AscensionManager::LoadAscensionItems(Player* player)
         slotData.itemGuid = itemGuid;
         slotData.itemPtr = item;
         status->slots[slot] = slotData;
-
-
-
     } while (invResult->NextRow());
-
-
 }
 
 void AscensionManager::ValidateEquippedItems(Player* player)
@@ -520,6 +545,16 @@ void AscensionManager::ValidateEquippedItems(Player* player)
     // 【修复】恢复清理逻辑 - 移除无效的装备记录并同步清理数据库
     for (uint8 slot : slotsToRemove)
     {
+        auto slotDataIt = status->slots.find(slot);
+        if (slotDataIt != status->slots.end())
+        {
+            if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(slotDataIt->second.itemId))
+            {
+                if (proto->ItemSet != 0)
+                    RemoveItemsSetItem(player, proto);
+            }
+        }
+
         // 【关键修复】移除该槽位已应用的属性，防止属性叠加bug
         auto statIt = status->slotStats.find(slot);
         if (statIt != status->slotStats.end())
@@ -583,10 +618,7 @@ void AscensionManager::ValidateEquippedItems(Player* player)
 
     // 如果有变动，保存数据
     if (needSave)
-    {
         SavePlayerData(player);
-        LOG_INFO("module", "飞升系统: ValidateEquippedItems 清理了 {} 条无效装备记录", slotsToRemove.size());
-    }
 }
 
 bool AscensionManager::IsSlotUnlocked(Player* player, uint8 slot)
@@ -869,6 +901,10 @@ bool AscensionManager::UnequipItem(Player* player, uint8 slot)
     uint32 itemId = it->second.itemId;
     uint32 itemGuid = it->second.itemGuid;
     Item* item = it->second.itemPtr;
+    ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
+
+    if (proto && proto->ItemSet != 0)
+        RemoveItemsSetItem(player, proto);
 
     // 【修复】使用 slotStats 记录的值精确移除该槽位的属性，防止属性漂移
     auto statIt = status->slotStats.find(slot);
@@ -975,7 +1011,6 @@ bool AscensionManager::UnequipItem(Player* player, uint8 slot)
 
     if (sAscensionConfig->ShowNotification())
     {
-        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
         std::string itemName = proto ? proto->Name1 : "未知物品";
         std::string slotName = GetSlotName(slot);
         ChatHandler(player->GetSession()).PSendSysMessage("飞升装备: {} 已从 {} 卸下", itemName.c_str(), slotName.c_str());
@@ -1088,12 +1123,24 @@ void AscensionManager::ApplyAllEffects(Player* player)
     if (!status)
         return;
 
+    uint32 appliedCount = 0;
+
     for (const auto& pair : status->slots)
     {
         ApplyItemEffect(player, pair.second.itemId, pair.first, true);
+        ++appliedCount;
     }
 
-    UpdatePlayerStats(player);
+    size_t statRecordCount = 0;
+    for (auto const& slotStats : status->slotStats)
+        statRecordCount += slotStats.second.size();
+
+    size_t spellRecordCount = 0;
+    for (auto const& slotSpells : status->slotSpells)
+        spellRecordCount += slotSpells.second.size();
+
+    if (appliedCount > 0 || statRecordCount > 0 || spellRecordCount > 0)
+        UpdatePlayerStats(player);
 
     if (sAscensionConfig->IsDebugMode())
     {
@@ -1110,6 +1157,15 @@ void AscensionManager::RemoveAllEffects(Player* player)
     PlayerAscensionStatus* status = GetPlayerStatus(playerGuid);
     if (!status)
         return;
+
+    for (const auto& slotPair : status->slots)
+    {
+        if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(slotPair.second.itemId))
+        {
+            if (proto->ItemSet != 0)
+                RemoveItemsSetItem(player, proto);
+        }
+    }
 
     // 【修复】移除所有已应用的法术 - 遍历按槽位记录的法术
     for (const auto& slotPair : status->slotSpells)
@@ -1203,6 +1259,19 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
     // 全局倍率
     float globalMultiplier = sAscensionConfig->GetStatMultiplier();
     float totalMultiplier = slotMultiplier * globalMultiplier;
+
+    if (proto->ItemSet != 0 && apply)
+    {
+        if (item)
+        {
+            AddItemsSetItem(player, item);
+        }
+        else if (sAscensionConfig->IsDebugMode())
+        {
+            LOG_WARN("module", "飞升系统: 槽位 {} 的套装物品 {} 缺少实例指针，无法应用套装效果",
+                slot, itemId);
+        }
+    }
 
     // 应用物品属性 - 使用正确的属性类型映射
     for (uint8 i = 0; i < MAX_ITEM_PROTO_STATS; ++i)
@@ -1853,6 +1922,9 @@ bool AscensionManager::CanEquipItemInSlot(Player* player, uint8 slot, uint32 ite
 
 uint8 AscensionManager::GetSlotForItemClass(uint32 itemClass, uint32 itemSubClass, uint32 inventoryType)
 {
+    (void)itemClass;
+    (void)itemSubClass;
+
     switch (inventoryType)
     {
         case INVTYPE_HEAD:          return ASCENSION_SLOT_HEAD;
@@ -1884,6 +1956,11 @@ uint8 AscensionManager::GetSlotForItemClass(uint32 itemClass, uint32 itemSubClas
         case INVTYPE_RELIC:         return ASCENSION_SLOT_RANGED;
         default:                    return 0xFF; // 无效槽位
     }
+}
+
+bool AscensionManager::IsAscensionOnlyItem(uint32 itemId) const
+{
+    return _restrictedItemIds.find(itemId) != _restrictedItemIds.end();
 }
 
 PlayerAscensionStatus* AscensionManager::GetPlayerStatus(uint32 playerGuid)
@@ -2380,6 +2457,7 @@ void AscensionWorldScript::OnAfterConfigLoad(bool reload)
     if (reload && _initialized)
     {
         sAscensionManager->LoadSlotControls();
+        sAscensionManager->LoadRestrictedItems();
         LOG_INFO("module", "飞升系统: 配置已重新加载");
     }
 }
@@ -2408,7 +2486,8 @@ void AscensionWorldScript::OnUpdate(uint32 diff)
 AscensionPlayerScript::AscensionPlayerScript() : PlayerScript("AscensionPlayerScript", {
     PLAYERHOOK_ON_LOGIN,
     PLAYERHOOK_ON_LOGOUT,
-    PLAYERHOOK_ON_DELETE
+    PLAYERHOOK_ON_DELETE,
+    PLAYERHOOK_CAN_EQUIP_ITEM
 })
 {
 }
@@ -2418,17 +2497,42 @@ void AscensionPlayerScript::OnPlayerLogin(Player* player)
     if (!sAscensionConfig->IsEnabled() || !player)
         return;
 
-    // 加载玩家数据
+    using namespace std::chrono;
+    auto loginStart = high_resolution_clock::now();
+
     sAscensionManager->LoadPlayerData(player);
 
-    // 验证飞升装备是否还在背包中
     sAscensionManager->ValidateEquippedItems(player);
 
-    // 应用所有飞升装备效果
     sAscensionManager->ApplyAllEffects(player);
 
-    // 发送数据到客户端
     sAscensionManager->SendAscensionDataToClient(player);
+
+    uint32 restrictedEquippedCount = 0;
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        Item* equipped = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (equipped && sAscensionManager->IsAscensionOnlyItem(equipped->GetEntry()))
+            ++restrictedEquippedCount;
+    }
+
+    if (restrictedEquippedCount > 0 && player->GetSession())
+    {
+        ChatHandler(player->GetSession()).PSendSysMessage(
+            "检测到 {} 件深渊修仙装备仍在官方装备栏。后续不能再直接穿戴，请手动卸下后放入飞升装备槽。",
+            restrictedEquippedCount);
+    }
+
+    PlayerAscensionStatus* status = sAscensionManager->GetPlayerStatus(player->GetGUID().GetCounter());
+    auto totalMs = duration_cast<milliseconds>(high_resolution_clock::now() - loginStart).count();
+    LOG_INFO("module",
+        "飞升系统: 玩家 {} OnPlayerLogin 完成 GUID={} 解锁槽位={} 飞升装备={} 官方栏深渊装备={} 总耗时={}ms",
+        player->GetName(),
+        player->GetGUID().ToString(),
+        status ? status->unlockedSlots.size() : 0,
+        status ? status->slots.size() : 0,
+        restrictedEquippedCount,
+        totalMs);
 
     if (sAscensionConfig->IsDebugMode())
     {
@@ -2473,6 +2577,27 @@ void AscensionPlayerScript::OnPlayerDelete(ObjectGuid guid, uint32 accountId)
     {
         LOG_INFO("module", "飞升系统: 角色删除，清理玩家GUID:{} 的飞升数据", playerGuid);
     }
+}
+
+bool AscensionPlayerScript::OnPlayerCanEquipItem(Player* player, uint8 slot, uint16& dest, Item* pItem, bool swap, bool not_loading)
+{
+    (void)slot;
+    (void)dest;
+    (void)swap;
+
+    if (!sAscensionConfig->IsEnabled() || !player || !pItem || !not_loading)
+        return true;
+
+    if (!sAscensionManager->IsAscensionOnlyItem(pItem->GetEntry()))
+        return true;
+
+    if (player->GetSession())
+    {
+        ChatHandler(player->GetSession()).SendSysMessage(
+            "深渊修仙装备只能穿戴到飞升装备槽位，不能直接装备到官方装备栏。");
+    }
+
+    return false;
 }
 
 //=============================================================================
@@ -2709,6 +2834,7 @@ bool AscensionCommandScript::HandleAscensionUnlock(ChatHandler* handler, const c
 bool AscensionCommandScript::HandleAscensionReload(ChatHandler* handler, const char* args)
 {
     sAscensionManager->LoadSlotControls();
+    sAscensionManager->LoadRestrictedItems();
     handler->SendSysMessage("飞升系统配置已重新加载。");
     return true;
 }
@@ -2815,5 +2941,3 @@ void AddAscensionSystemScripts()
     new AscensionCommandScript();
     new AscensionItemScript();
 }
-
-

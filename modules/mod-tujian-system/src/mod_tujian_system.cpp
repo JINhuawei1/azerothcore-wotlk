@@ -6,6 +6,7 @@
 #include "DatabaseEnv.h"
 #include "ObjectMgr.h"
 #include "Item.h"
+#include "SpellMgr.h"
 
 #if __has_include("RequirementSystem.h")
     #ifndef MODULE_REQUIREMENT_TEMPLATE
@@ -23,6 +24,8 @@
 #endif
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cctype>
 #include <cstring>
 #include <memory>
@@ -110,7 +113,39 @@ namespace
     {
         uint32 itemEntry = 0;
         uint32 applyCount = 0;
-        bool applyItemSet = false;
+    };
+
+    struct AggregatedItemBonusCache
+    {
+        std::unordered_map<uint32, int64> itemStatTotals;
+        std::array<int64, MAX_SPELL_SCHOOL> resistanceTotals = {};
+        int64 armorBase = 0;
+        int64 armorTotal = 0;
+        int64 armorDamageModifierTotal = 0;
+        int64 blockFromTemplate = 0;
+        int64 feralApBonus = 0;
+
+        bool HasAnyValue() const
+        {
+            if (armorBase != 0 || armorTotal != 0 || armorDamageModifierTotal != 0 || blockFromTemplate != 0 || feralApBonus != 0)
+                return true;
+
+            for (auto const& pair : itemStatTotals)
+                if (pair.second != 0)
+                    return true;
+
+            for (int64 value : resistanceTotals)
+                if (value != 0)
+                    return true;
+
+            return false;
+        }
+    };
+
+    struct AggregatedItemSetContribution
+    {
+        uint32 setId = 0;
+        uint32 itemCount = 0;
     };
 
     struct PlayerWeaponDamageBonusCache
@@ -126,7 +161,9 @@ namespace
     std::unordered_map<uint32, std::set<uint32>> tuJianSetGroupsByChapter;
     std::unordered_map<uint32, std::vector<PlayerActivationRecord>> playerActivationCache;
     std::unordered_map<uint32, std::vector<VirtualAppliedItem>> playerVirtualItems;
-    std::unordered_map<uint32, std::vector<DirectAppliedItem>> playerDirectAppliedItems;
+    std::unordered_map<uint32, std::vector<DirectAppliedItem>> playerFallbackAppliedItems;
+    std::unordered_map<uint32, AggregatedItemBonusCache> playerAggregatedItemBonuses;
+    std::unordered_map<uint32, std::vector<AggregatedItemSetContribution>> playerItemSetContributions;
     std::unordered_map<uint32, PlayerWeaponDamageBonusCache> playerWeaponDamageBonuses;
     std::unordered_map<uint32, int32> playerFixedAllStatsBonus;
     std::unordered_set<uint32> blockedVirtualEquipSpellItemGuids;
@@ -230,6 +267,413 @@ namespace
         {
             player->HandleStatModifier(UnitMods(UNIT_MOD_STAT_START + stat), BASE_VALUE, float(amount), apply);
             player->ApplyStatBuffMod(Stats(stat), float(amount), apply);
+        }
+    }
+
+    void ApplyAggregatedItemStat(Player* player, uint32 statType, int64 value, bool apply)
+    {
+        if (!player || value == 0)
+            return;
+
+        int32 val = static_cast<int32>(value);
+        switch (statType)
+        {
+            case ITEM_MOD_MANA:
+                player->HandleStatModifier(UNIT_MOD_MANA, BASE_VALUE, float(val), apply);
+                break;
+            case ITEM_MOD_HEALTH:
+                player->HandleStatModifier(UNIT_MOD_HEALTH, BASE_VALUE, float(val), apply);
+                break;
+            case ITEM_MOD_AGILITY:
+                player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, BASE_VALUE, float(val), apply);
+                player->ApplyStatBuffMod(STAT_AGILITY, float(val), apply);
+                break;
+            case ITEM_MOD_STRENGTH:
+                player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, BASE_VALUE, float(val), apply);
+                player->ApplyStatBuffMod(STAT_STRENGTH, float(val), apply);
+                break;
+            case ITEM_MOD_INTELLECT:
+                player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, BASE_VALUE, float(val), apply);
+                player->ApplyStatBuffMod(STAT_INTELLECT, float(val), apply);
+                break;
+            case ITEM_MOD_SPIRIT:
+                player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, BASE_VALUE, float(val), apply);
+                player->ApplyStatBuffMod(STAT_SPIRIT, float(val), apply);
+                break;
+            case ITEM_MOD_STAMINA:
+                player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, BASE_VALUE, float(val), apply);
+                player->ApplyStatBuffMod(STAT_STAMINA, float(val), apply);
+                break;
+            case ITEM_MOD_DEFENSE_SKILL_RATING:
+                player->ApplyRatingMod(CR_DEFENSE_SKILL, val, apply);
+                break;
+            case ITEM_MOD_DODGE_RATING:
+                player->ApplyRatingMod(CR_DODGE, val, apply);
+                break;
+            case ITEM_MOD_PARRY_RATING:
+                player->ApplyRatingMod(CR_PARRY, val, apply);
+                break;
+            case ITEM_MOD_BLOCK_RATING:
+                player->ApplyRatingMod(CR_BLOCK, val, apply);
+                break;
+            case ITEM_MOD_HIT_MELEE_RATING:
+                player->ApplyRatingMod(CR_HIT_MELEE, val, apply);
+                break;
+            case ITEM_MOD_HIT_RANGED_RATING:
+                player->ApplyRatingMod(CR_HIT_RANGED, val, apply);
+                break;
+            case ITEM_MOD_HIT_SPELL_RATING:
+                player->ApplyRatingMod(CR_HIT_SPELL, val, apply);
+                break;
+            case ITEM_MOD_CRIT_MELEE_RATING:
+                player->ApplyRatingMod(CR_CRIT_MELEE, val, apply);
+                break;
+            case ITEM_MOD_CRIT_RANGED_RATING:
+                player->ApplyRatingMod(CR_CRIT_RANGED, val, apply);
+                break;
+            case ITEM_MOD_CRIT_SPELL_RATING:
+                player->ApplyRatingMod(CR_CRIT_SPELL, val, apply);
+                break;
+            case ITEM_MOD_HIT_TAKEN_MELEE_RATING:
+                player->ApplyRatingMod(CR_HIT_TAKEN_MELEE, val, apply);
+                break;
+            case ITEM_MOD_HIT_TAKEN_RANGED_RATING:
+                player->ApplyRatingMod(CR_HIT_TAKEN_RANGED, val, apply);
+                break;
+            case ITEM_MOD_HIT_TAKEN_SPELL_RATING:
+                player->ApplyRatingMod(CR_HIT_TAKEN_SPELL, val, apply);
+                break;
+            case ITEM_MOD_CRIT_TAKEN_MELEE_RATING:
+                player->ApplyRatingMod(CR_CRIT_TAKEN_MELEE, val, apply);
+                break;
+            case ITEM_MOD_CRIT_TAKEN_RANGED_RATING:
+                player->ApplyRatingMod(CR_CRIT_TAKEN_RANGED, val, apply);
+                break;
+            case ITEM_MOD_CRIT_TAKEN_SPELL_RATING:
+                player->ApplyRatingMod(CR_CRIT_TAKEN_SPELL, val, apply);
+                break;
+            case ITEM_MOD_HASTE_MELEE_RATING:
+                player->ApplyRatingMod(CR_HASTE_MELEE, val, apply);
+                break;
+            case ITEM_MOD_HASTE_RANGED_RATING:
+                player->ApplyRatingMod(CR_HASTE_RANGED, val, apply);
+                break;
+            case ITEM_MOD_HASTE_SPELL_RATING:
+                player->ApplyRatingMod(CR_HASTE_SPELL, val, apply);
+                break;
+            case ITEM_MOD_HIT_RATING:
+                player->ApplyRatingMod(CR_HIT_MELEE, val, apply);
+                player->ApplyRatingMod(CR_HIT_RANGED, val, apply);
+                player->ApplyRatingMod(CR_HIT_SPELL, val, apply);
+                break;
+            case ITEM_MOD_CRIT_RATING:
+                player->ApplyRatingMod(CR_CRIT_MELEE, val, apply);
+                player->ApplyRatingMod(CR_CRIT_RANGED, val, apply);
+                player->ApplyRatingMod(CR_CRIT_SPELL, val, apply);
+                break;
+            case ITEM_MOD_HIT_TAKEN_RATING:
+                player->ApplyRatingMod(CR_HIT_TAKEN_MELEE, val, apply);
+                player->ApplyRatingMod(CR_HIT_TAKEN_RANGED, val, apply);
+                player->ApplyRatingMod(CR_HIT_TAKEN_SPELL, val, apply);
+                break;
+            case ITEM_MOD_CRIT_TAKEN_RATING:
+            case ITEM_MOD_RESILIENCE_RATING:
+                player->ApplyRatingMod(CR_CRIT_TAKEN_MELEE, val, apply);
+                player->ApplyRatingMod(CR_CRIT_TAKEN_RANGED, val, apply);
+                player->ApplyRatingMod(CR_CRIT_TAKEN_SPELL, val, apply);
+                break;
+            case ITEM_MOD_HASTE_RATING:
+                player->ApplyRatingMod(CR_HASTE_MELEE, val, apply);
+                player->ApplyRatingMod(CR_HASTE_RANGED, val, apply);
+                player->ApplyRatingMod(CR_HASTE_SPELL, val, apply);
+                break;
+            case ITEM_MOD_EXPERTISE_RATING:
+                player->ApplyRatingMod(CR_EXPERTISE, val, apply);
+                break;
+            case ITEM_MOD_ATTACK_POWER:
+                player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, float(val), apply);
+                player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, float(val), apply);
+                break;
+            case ITEM_MOD_RANGED_ATTACK_POWER:
+                player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, float(val), apply);
+                break;
+            case ITEM_MOD_MANA_REGENERATION:
+                player->ApplyManaRegenBonus(val, apply);
+                break;
+            case ITEM_MOD_ARMOR_PENETRATION_RATING:
+                player->ApplyRatingMod(CR_ARMOR_PENETRATION, val, apply);
+                break;
+            case ITEM_MOD_SPELL_POWER:
+                player->ApplySpellPowerBonus(val, apply);
+                break;
+            case ITEM_MOD_HEALTH_REGEN:
+                player->ApplyHealthRegenBonus(val, apply);
+                break;
+            case ITEM_MOD_SPELL_PENETRATION:
+                player->ApplySpellPenetrationBonus(val, apply);
+                break;
+            case ITEM_MOD_BLOCK_VALUE:
+                player->HandleBaseModValue(SHIELD_BLOCK_VALUE, FLAT_MOD, float(val), apply);
+                break;
+            case ITEM_MOD_SPELL_HEALING_DONE:
+            case ITEM_MOD_SPELL_DAMAGE_DONE:
+                break;
+            default:
+                break;
+        }
+    }
+
+    void ApplyAggregatedItemBonuses(Player* player, AggregatedItemBonusCache const& cache, bool apply)
+    {
+        if (!player || !cache.HasAnyValue())
+            return;
+
+        for (auto const& pair : cache.itemStatTotals)
+            ApplyAggregatedItemStat(player, pair.first, pair.second, apply);
+
+        if (cache.armorBase != 0)
+            player->HandleStatModifier(UNIT_MOD_ARMOR, BASE_VALUE, float(cache.armorBase), apply);
+        if (cache.armorTotal != 0)
+            player->HandleStatModifier(UNIT_MOD_ARMOR, TOTAL_VALUE, float(cache.armorTotal), apply);
+        if (cache.armorDamageModifierTotal != 0)
+            player->HandleStatModifier(UNIT_MOD_ARMOR, TOTAL_VALUE, float(cache.armorDamageModifierTotal), apply);
+        if (cache.blockFromTemplate != 0)
+            player->HandleBaseModValue(SHIELD_BLOCK_VALUE, FLAT_MOD, float(cache.blockFromTemplate), apply);
+        if (cache.resistanceTotals[SPELL_SCHOOL_HOLY] != 0)
+            player->HandleStatModifier(UNIT_MOD_RESISTANCE_HOLY, BASE_VALUE, float(cache.resistanceTotals[SPELL_SCHOOL_HOLY]), apply);
+        if (cache.resistanceTotals[SPELL_SCHOOL_FIRE] != 0)
+            player->HandleStatModifier(UNIT_MOD_RESISTANCE_FIRE, BASE_VALUE, float(cache.resistanceTotals[SPELL_SCHOOL_FIRE]), apply);
+        if (cache.resistanceTotals[SPELL_SCHOOL_NATURE] != 0)
+            player->HandleStatModifier(UNIT_MOD_RESISTANCE_NATURE, BASE_VALUE, float(cache.resistanceTotals[SPELL_SCHOOL_NATURE]), apply);
+        if (cache.resistanceTotals[SPELL_SCHOOL_FROST] != 0)
+            player->HandleStatModifier(UNIT_MOD_RESISTANCE_FROST, BASE_VALUE, float(cache.resistanceTotals[SPELL_SCHOOL_FROST]), apply);
+        if (cache.resistanceTotals[SPELL_SCHOOL_SHADOW] != 0)
+            player->HandleStatModifier(UNIT_MOD_RESISTANCE_SHADOW, BASE_VALUE, float(cache.resistanceTotals[SPELL_SCHOOL_SHADOW]), apply);
+        if (cache.resistanceTotals[SPELL_SCHOOL_ARCANE] != 0)
+            player->HandleStatModifier(UNIT_MOD_RESISTANCE_ARCANE, BASE_VALUE, float(cache.resistanceTotals[SPELL_SCHOOL_ARCANE]), apply);
+        if (cache.feralApBonus != 0)
+            player->ApplyFeralAPBonus(static_cast<int32>(cache.feralApBonus), apply);
+    }
+
+    bool CanUseFastItemBonusPath(ItemTemplate const* proto)
+    {
+        if (!proto)
+            return false;
+
+        return proto->ScalingStatDistribution == 0 && proto->ScalingStatValue == 0;
+    }
+
+    void AccumulateItemBonuses(Player* player, ItemTemplate const* proto, uint32 applyCount, AggregatedItemBonusCache& cache)
+    {
+        if (!player || !proto || applyCount == 0)
+            return;
+
+        for (uint8 i = 0; i < MAX_ITEM_PROTO_STATS && i < proto->StatsCount; ++i)
+        {
+            uint32 statType = proto->ItemStat[i].ItemStatType;
+            int32 val = proto->ItemStat[i].ItemStatValue;
+            if (val == 0)
+                continue;
+
+            cache.itemStatTotals[statType] += static_cast<int64>(val) * applyCount;
+        }
+
+        uint32 armor = proto->Armor;
+        if (armor && proto->ArmorDamageModifier)
+            armor -= uint32(proto->ArmorDamageModifier);
+
+        if (armor)
+        {
+            bool isBaseArmor =
+                proto->Class == ITEM_CLASS_ARMOR &&
+                (proto->SubClass == ITEM_SUBCLASS_ARMOR_CLOTH ||
+                 proto->SubClass == ITEM_SUBCLASS_ARMOR_LEATHER ||
+                 proto->SubClass == ITEM_SUBCLASS_ARMOR_MAIL ||
+                 proto->SubClass == ITEM_SUBCLASS_ARMOR_PLATE ||
+                 proto->SubClass == ITEM_SUBCLASS_ARMOR_SHIELD);
+
+            if (isBaseArmor)
+                cache.armorBase += static_cast<int64>(armor) * applyCount;
+            else
+                cache.armorTotal += static_cast<int64>(armor) * applyCount;
+        }
+
+        if (proto->ArmorDamageModifier > 0 && sScriptMgr->OnPlayerCanArmorDamageModifier(player))
+            cache.armorDamageModifierTotal += static_cast<int64>(proto->ArmorDamageModifier * applyCount);
+
+        if (proto->Block)
+            cache.blockFromTemplate += static_cast<int64>(proto->Block) * applyCount;
+
+        if (proto->HolyRes)
+            cache.resistanceTotals[SPELL_SCHOOL_HOLY] += static_cast<int64>(proto->HolyRes) * applyCount;
+        if (proto->FireRes)
+            cache.resistanceTotals[SPELL_SCHOOL_FIRE] += static_cast<int64>(proto->FireRes) * applyCount;
+        if (proto->NatureRes)
+            cache.resistanceTotals[SPELL_SCHOOL_NATURE] += static_cast<int64>(proto->NatureRes) * applyCount;
+        if (proto->FrostRes)
+            cache.resistanceTotals[SPELL_SCHOOL_FROST] += static_cast<int64>(proto->FrostRes) * applyCount;
+        if (proto->ShadowRes)
+            cache.resistanceTotals[SPELL_SCHOOL_SHADOW] += static_cast<int64>(proto->ShadowRes) * applyCount;
+        if (proto->ArcaneRes)
+            cache.resistanceTotals[SPELL_SCHOOL_ARCANE] += static_cast<int64>(proto->ArcaneRes) * applyCount;
+
+        if (player->IsClass(CLASS_DRUID, CLASS_CONTEXT_STATS))
+        {
+            int32 dpsMod = 0;
+            int32 feralBonus = proto->getFeralBonus(dpsMod);
+            sScriptMgr->OnPlayerGetFeralApBonus(player, feralBonus, dpsMod, proto, nullptr);
+            if (feralBonus != 0)
+                cache.feralApBonus += static_cast<int64>(feralBonus) * applyCount;
+        }
+    }
+
+    ItemSetEffect* FindItemSetEffect(Player* player, uint32 setId)
+    {
+        if (!player || setId == 0)
+            return nullptr;
+
+        for (ItemSetEffect* effect : player->ItemSetEff)
+            if (effect && effect->setid == setId)
+                return effect;
+
+        return nullptr;
+    }
+
+    ItemSetEffect* FindOrCreateItemSetEffect(Player* player, uint32 setId)
+    {
+        if (!player || setId == 0)
+            return nullptr;
+
+        if (ItemSetEffect* effect = FindItemSetEffect(player, setId))
+            return effect;
+
+        ItemSetEffect* effect = new ItemSetEffect();
+        effect->setid = setId;
+        effect->item_count = 0;
+        for (SpellInfo const*& spellInfo : effect->spells)
+            spellInfo = nullptr;
+
+        for (std::size_t index = 0; index < player->ItemSetEff.size(); ++index)
+        {
+            if (!player->ItemSetEff[index])
+            {
+                player->ItemSetEff[index] = effect;
+                return effect;
+            }
+        }
+
+        player->ItemSetEff.push_back(effect);
+        return effect;
+    }
+
+    bool ApplyItemSetContribution(Player* player, uint32 setId, uint32 itemCount)
+    {
+        if (!player || setId == 0 || itemCount == 0)
+            return false;
+
+        ItemSetEntry const* set = sItemSetStore.LookupEntry(setId);
+        if (!set)
+        {
+            LOG_ERROR("sql.sql", "mod-tujian-system: item set {} not found during aggregated apply.", setId);
+            return false;
+        }
+
+        if (set->required_skill_id && player->GetSkillValue(set->required_skill_id) < set->required_skill_value)
+            return false;
+
+        ItemSetEffect* effect = FindOrCreateItemSetEffect(player, setId);
+        if (!effect)
+            return false;
+
+        uint32 oldCount = effect->item_count;
+        effect->item_count += itemCount;
+
+        for (uint32 spellIndex = 0; spellIndex < MAX_ITEM_SET_SPELLS; ++spellIndex)
+        {
+            uint32 spellId = set->spells[spellIndex];
+            uint32 requiredCount = set->items_to_triggerspell[spellIndex];
+            if (!spellId || requiredCount == 0 || oldCount >= requiredCount || effect->item_count < requiredCount)
+                continue;
+
+            bool alreadyActive = false;
+            for (SpellInfo const* activeSpell : effect->spells)
+            {
+                if (activeSpell && activeSpell->Id == spellId)
+                {
+                    alreadyActive = true;
+                    break;
+                }
+            }
+
+            if (alreadyActive)
+                continue;
+
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+            if (!spellInfo)
+            {
+                LOG_ERROR("entities.item", "mod-tujian-system: unknown spell id {} in aggregated item set {}.", spellId, setId);
+                continue;
+            }
+
+            for (uint32 slot = 0; slot < MAX_ITEM_SET_SPELLS; ++slot)
+            {
+                if (!effect->spells[slot])
+                {
+                    effect->spells[slot] = spellInfo;
+                    player->ApplyEquipSpell(spellInfo, nullptr, true);
+                    break;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    void RemoveItemSetContribution(Player* player, uint32 setId, uint32 itemCount)
+    {
+        if (!player || setId == 0 || itemCount == 0)
+            return;
+
+        ItemSetEntry const* set = sItemSetStore.LookupEntry(setId);
+        if (!set)
+            return;
+
+        ItemSetEffect* effect = FindItemSetEffect(player, setId);
+        if (!effect)
+            return;
+
+        uint32 oldCount = effect->item_count;
+        effect->item_count = oldCount > itemCount ? oldCount - itemCount : 0;
+
+        for (uint32 spellIndex = 0; spellIndex < MAX_ITEM_SET_SPELLS; ++spellIndex)
+        {
+            uint32 spellId = set->spells[spellIndex];
+            uint32 requiredCount = set->items_to_triggerspell[spellIndex];
+            if (!spellId || requiredCount == 0 || oldCount < requiredCount || effect->item_count >= requiredCount)
+                continue;
+
+            for (uint32 slot = 0; slot < MAX_ITEM_SET_SPELLS; ++slot)
+            {
+                if (effect->spells[slot] && effect->spells[slot]->Id == spellId)
+                {
+                    player->ApplyEquipSpell(effect->spells[slot], nullptr, false);
+                    effect->spells[slot] = nullptr;
+                    break;
+                }
+            }
+        }
+
+        if (effect->item_count == 0)
+        {
+            for (std::size_t index = 0; index < player->ItemSetEff.size(); ++index)
+            {
+                if (player->ItemSetEff[index] == effect)
+                {
+                    delete effect;
+                    player->ItemSetEff[index] = nullptr;
+                    break;
+                }
+            }
         }
     }
 
@@ -1029,7 +1473,9 @@ namespace
     void ClearPlayerCache(uint32 playerGuid)
     {
         playerActivationCache.erase(playerGuid);
-        playerDirectAppliedItems.erase(playerGuid);
+        playerFallbackAppliedItems.erase(playerGuid);
+        playerAggregatedItemBonuses.erase(playerGuid);
+        playerItemSetContributions.erase(playerGuid);
         playerWeaponDamageBonuses.erase(playerGuid);
         playerFixedAllStatsBonus.erase(playerGuid);
     }
@@ -1075,10 +1521,31 @@ namespace
             playerVirtualItems.erase(itr);
         }
 
-        auto directItr = playerDirectAppliedItems.find(playerGuid);
-        if (directItr != playerDirectAppliedItems.end())
+        auto setItr = playerItemSetContributions.find(playerGuid);
+        if (setItr != playerItemSetContributions.end())
         {
-            for (auto appliedItr = directItr->second.rbegin(); appliedItr != directItr->second.rend(); ++appliedItr)
+            for (auto appliedItr = setItr->second.rbegin(); appliedItr != setItr->second.rend(); ++appliedItr)
+            {
+                if (appliedItr->setId == 0 || appliedItr->itemCount == 0)
+                    continue;
+
+                RemoveItemSetContribution(player, appliedItr->setId, appliedItr->itemCount);
+            }
+
+            playerItemSetContributions.erase(setItr);
+        }
+
+        auto aggregatedItr = playerAggregatedItemBonuses.find(playerGuid);
+        if (aggregatedItr != playerAggregatedItemBonuses.end())
+        {
+            ApplyAggregatedItemBonuses(player, aggregatedItr->second, false);
+            playerAggregatedItemBonuses.erase(aggregatedItr);
+        }
+
+        auto fallbackItr = playerFallbackAppliedItems.find(playerGuid);
+        if (fallbackItr != playerFallbackAppliedItems.end())
+        {
+            for (auto appliedItr = fallbackItr->second.rbegin(); appliedItr != fallbackItr->second.rend(); ++appliedItr)
             {
                 if (appliedItr->itemEntry == 0 || appliedItr->applyCount == 0)
                     continue;
@@ -1089,15 +1556,9 @@ namespace
 
                 for (uint32 i = 0; i < appliedItr->applyCount; ++i)
                     player->_ApplyItemBonuses(proto, VIRTUAL_TUJIAN_SLOT, false);
-
-                if (appliedItr->applyItemSet && proto->ItemSet)
-                {
-                    for (uint32 i = 0; i < appliedItr->applyCount; ++i)
-                        RemoveItemsSetItem(player, proto);
-                }
             }
 
-            playerDirectAppliedItems.erase(directItr);
+            playerFallbackAppliedItems.erase(fallbackItr);
         }
 
         playerWeaponDamageBonuses.erase(playerGuid);
@@ -1154,18 +1615,28 @@ namespace
             return;
 
         uint32 playerGuid = player->GetGUID().GetCounter();
+        bool hadCachedState =
+            playerVirtualItems.find(playerGuid) != playerVirtualItems.end() ||
+            playerFallbackAppliedItems.find(playerGuid) != playerFallbackAppliedItems.end() ||
+            playerAggregatedItemBonuses.find(playerGuid) != playerAggregatedItemBonuses.end() ||
+            playerItemSetContributions.find(playerGuid) != playerItemSetContributions.end() ||
+            playerWeaponDamageBonuses.find(playerGuid) != playerWeaponDamageBonuses.end() ||
+            playerFixedAllStatsBonus.find(playerGuid) != playerFixedAllStatsBonus.end();
         RemovePlayerVirtualItems(player, false);
 
         auto activationItr = playerActivationCache.find(playerGuid);
         if (activationItr == playerActivationCache.end() || activationItr->second.empty())
         {
-            RefreshPlayerStats(player);
+            if (hadCachedState)
+                RefreshPlayerStats(player);
             return;
         }
 
         auto& appliedItems = playerVirtualItems[playerGuid];
-        std::vector<DirectAppliedItem> directAppliedItems;
-        directAppliedItems.reserve(activationItr->second.size());
+        std::vector<DirectAppliedItem> fallbackAppliedItems;
+        fallbackAppliedItems.reserve(activationItr->second.size());
+        AggregatedItemBonusCache aggregatedBonusCache;
+        std::unordered_map<uint32, uint32> aggregatedItemSetCounts;
         PlayerWeaponDamageBonusCache weaponDamageBonuses;
         int32 totalFixedAllStatsBonus = 0;
         uint32 equipModeActivationCount = 0;
@@ -1186,7 +1657,6 @@ namespace
                 continue;
             }
 
-            ++equipModeActivationCount;
             uint32 applyCount = GetTuJianApplyCount(tuJian, record.currentLevel);
             if (applyCount == 0)
                 continue;
@@ -1198,20 +1668,29 @@ namespace
                 continue;
             }
 
-            for (uint32 i = 0; i < applyCount; ++i)
-                player->_ApplyItemBonuses(proto, VIRTUAL_TUJIAN_SLOT, true);
+            ++equipModeActivationCount;
+            if (CanUseFastItemBonusPath(proto))
+                AccumulateItemBonuses(player, proto, applyCount, aggregatedBonusCache);
+            else
+            {
+                for (uint32 i = 0; i < applyCount; ++i)
+                    player->_ApplyItemBonuses(proto, VIRTUAL_TUJIAN_SLOT, true);
+
+                DirectAppliedItem fallbackApplied;
+                fallbackApplied.itemEntry = record.currentItemEntry;
+                fallbackApplied.applyCount = applyCount;
+                fallbackAppliedItems.push_back(fallbackApplied);
+            }
 
             AddWeaponDamageBonus(weaponDamageBonuses, proto, applyCount);
 
             bool needItemSet = proto->ItemSet != 0;
             bool needEquipSpell = ItemTemplateHasEquipSpell(proto);
 
-            DirectAppliedItem directApplied;
-            directApplied.itemEntry = record.currentItemEntry;
-            directApplied.applyCount = applyCount;
-            directAppliedItems.push_back(directApplied);
+            if (needItemSet)
+                aggregatedItemSetCounts[proto->ItemSet] += applyCount;
 
-            if (!needItemSet && !needEquipSpell)
+            if (!needEquipSpell)
                 continue;
 
             std::unique_ptr<Item> tempItem(Item::CreateItem(record.currentItemEntry, 1, player, true, 0));
@@ -1223,14 +1702,6 @@ namespace
 
             tempItem->SetOwnerGUID(player->GetGUID());
             tempItem->SetSlot(VIRTUAL_TUJIAN_SLOT);
-
-            if (needItemSet)
-            {
-                for (uint32 i = 0; i < applyCount; ++i)
-                    AddItemsSetItem(player, tempItem.get());
-
-                directAppliedItems.back().applyItemSet = true;
-            }
 
             if (needEquipSpell)
             {
@@ -1247,10 +1718,39 @@ namespace
             }
         }
 
-        if (!directAppliedItems.empty())
-            playerDirectAppliedItems[playerGuid] = std::move(directAppliedItems);
+        if (!fallbackAppliedItems.empty())
+            playerFallbackAppliedItems[playerGuid] = std::move(fallbackAppliedItems);
         if (equipModeActivationCount > 0)
             playerWeaponDamageBonuses[playerGuid] = weaponDamageBonuses;
+
+        if (aggregatedBonusCache.HasAnyValue())
+        {
+            ApplyAggregatedItemBonuses(player, aggregatedBonusCache, true);
+            playerAggregatedItemBonuses[playerGuid] = aggregatedBonusCache;
+        }
+
+        if (!aggregatedItemSetCounts.empty())
+        {
+            std::vector<AggregatedItemSetContribution> contributions;
+            contributions.reserve(aggregatedItemSetCounts.size());
+
+            for (auto const& pair : aggregatedItemSetCounts)
+            {
+                if (pair.first == 0 || pair.second == 0)
+                    continue;
+
+                if (!ApplyItemSetContribution(player, pair.first, pair.second))
+                    continue;
+
+                AggregatedItemSetContribution contribution;
+                contribution.setId = pair.first;
+                contribution.itemCount = pair.second;
+                contributions.push_back(contribution);
+            }
+
+            if (!contributions.empty())
+                playerItemSetContributions[playerGuid] = std::move(contributions);
+        }
 
         if (totalFixedAllStatsBonus > 0)
         {
@@ -1314,7 +1814,6 @@ namespace
 
         sItemSkillsEffects->UpdatePlayerHitSkillsCache(player);
 #endif
-
         RefreshPlayerStats(player);
     }
 
@@ -1570,8 +2069,21 @@ public:
         if (!TujianSystem_Enable || !player)
             return;
 
+        using namespace std::chrono;
+        auto totalStart = high_resolution_clock::now();
+
         LoadPlayerActivationData(player);
+
         ApplyPlayerActivationData(player);
+
+        auto cacheItr = playerActivationCache.find(player->GetGUID().GetCounter());
+        size_t activationCount = cacheItr != playerActivationCache.end() ? cacheItr->second.size() : 0;
+        LOG_INFO("module",
+            "mod-tujian-system: 玩家 {} OnPlayerLogin 完成 GUID={} 激活缓存={} 总耗时={}ms",
+            player->GetName(),
+            player->GetGUID().ToString(),
+            activationCount,
+            duration_cast<milliseconds>(high_resolution_clock::now() - totalStart).count());
     }
 
     void OnPlayerLogout(Player* player) override
@@ -1592,7 +2104,9 @@ public:
 
         playerActivationCache.erase(guid);
         playerVirtualItems.erase(guid);
-        playerDirectAppliedItems.erase(guid);
+        playerFallbackAppliedItems.erase(guid);
+        playerAggregatedItemBonuses.erase(guid);
+        playerItemSetContributions.erase(guid);
         playerWeaponDamageBonuses.erase(guid);
         playerFixedAllStatsBonus.erase(guid);
     }
@@ -1758,7 +2272,8 @@ public:
 
         static ChatCommandTable commandTable =
         {
-            { "图鉴", subCommandTable }
+            { "图鉴", subCommandTable },
+            { "装备图鉴", subCommandTable }
         };
 
         return commandTable;
@@ -1772,6 +2287,7 @@ public:
         handler->SendSysMessage(".图鉴 激活 物品ID [等级]");
         handler->SendSysMessage(".图鉴 移除 物品ID");
         handler->SendSysMessage(".图鉴 界面");
+        handler->SendSysMessage(".装备图鉴 界面");
         handler->SendSysMessage(".图鉴 重载");
         return true;
     }
@@ -1789,7 +2305,6 @@ public:
         }
 
         SendTuJianOpenUI(player);
-        handler->SendSysMessage("已向客户端发送图鉴界面打开请求。");
         return true;
     }
 

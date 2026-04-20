@@ -1410,6 +1410,7 @@ public:
         static ChatCommandTable rootTable =
         {
             { "修仙", subTable },
+            { "修仙系统", subTable },
         };
 
         return rootTable;

@@ -1,9 +1,75 @@
 #include "PluginManager.h"
 #include "World.h"
-#include "EventProcessor.h"
+#include <algorithm>
+#include <limits>
+#include <sstream>
 
 // 前向声明
 void AddPluginManager_CommandsScripts();
+
+namespace
+{
+constexpr char PLUGIN_MANAGER_ADDON_PREFIX[] = "PLUGMGR";
+constexpr char PLUGIN_MANAGER_REQUEST_ALL[] = "REQ_ALL";
+constexpr char PLUGIN_MANAGER_SAVE_POS_PREFIX[] = "SAVE_POS:";
+constexpr char PLUGIN_MANAGER_SYNC_START[] = ".plugincfg_start";
+constexpr char PLUGIN_MANAGER_SYNC_END[] = ".plugincfg_end";
+
+std::vector<std::string> SplitFields(std::string const& text, char delimiter)
+{
+    std::vector<std::string> fields;
+    std::stringstream stream(text);
+    std::string part;
+
+    while (std::getline(stream, part, delimiter))
+        fields.push_back(part);
+
+    if (!text.empty() && text.back() == delimiter)
+        fields.emplace_back();
+
+    return fields;
+}
+
+bool TryParseInt32(std::string const& text, int32& value)
+{
+    if (text.empty())
+        return false;
+
+    try
+    {
+        long long parsed = std::stoll(text);
+        if (parsed < std::numeric_limits<int32>::min() || parsed > std::numeric_limits<int32>::max())
+            return false;
+
+        value = static_cast<int32>(parsed);
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+bool TryParseUInt32(std::string const& text, uint32& value)
+{
+    if (text.empty())
+        return false;
+
+    try
+    {
+        unsigned long long parsed = std::stoull(text);
+        if (parsed > std::numeric_limits<uint32>::max())
+            return false;
+
+        value = static_cast<uint32>(parsed);
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+}
 
 PluginManager* PluginManager::_instance = nullptr;
 
@@ -16,6 +82,9 @@ PluginManager* PluginManager::instance()
 
 PluginManager::PluginManager()
     : _enabled(sConfigMgr->GetOption<bool>("PluginManager.Enabled", true)),
+      _loadPlayerConfig(sConfigMgr->GetOption<bool>("PluginManager.LoadPlayerConfig", true)),
+      _autoSavePlayerConfig(sConfigMgr->GetOption<bool>("PluginManager.AutoSavePlayerConfig", true)),
+      _allowCustomPositioning(sConfigMgr->GetOption<bool>("PluginManager.AllowCustomPositioning", true)),
       _commandPermissionLevel(sConfigMgr->GetOption<int32>("PluginManager.CommandLevel", SEC_ADMINISTRATOR)),
       _nextPluginId(1)
 {
@@ -38,6 +107,7 @@ void PluginManager::Initialize()
 void PluginManager::LoadAllPlugins()
 {
     _plugins.clear();
+    _nextPluginId = 1;
     LoadPluginsFromDatabase();
 }
 
@@ -78,6 +148,52 @@ void PluginManager::LoadPluginsFromDatabase()
     LOG_INFO("module", "插件管理器: 成功加载 {} 个插件", static_cast<uint32>(_plugins.size()));
 }
 
+void PluginManager::LoadPlayerLayouts(uint32 playerGuid)
+{
+    if (!_loadPlayerConfig)
+        return;
+
+    if (_loadedPlayerLayouts.find(playerGuid) != _loadedPlayerLayouts.end())
+        return;
+
+    std::unordered_map<uint32, PlayerPluginLayout> layouts;
+
+    QueryResult result = CharacterDatabase.Query(
+        "SELECT `插件ID`, `X坐标`, `Y坐标`, `宽度`, `高度` "
+        "FROM `_插件管理玩家坐标` WHERE `玩家GUID` = {}",
+        playerGuid);
+
+    if (result)
+    {
+        do
+        {
+            Field* fields = result->Fetch();
+            PlayerPluginLayout layout;
+            layout.positionX = fields[1].Get<int32>();
+            layout.positionY = fields[2].Get<int32>();
+            layout.width = fields[3].Get<uint32>();
+            layout.height = fields[4].Get<uint32>();
+
+            layouts[fields[0].Get<uint32>()] = layout;
+        } while (result->NextRow());
+    }
+
+    _playerLayouts[playerGuid] = std::move(layouts);
+    _loadedPlayerLayouts.insert(playerGuid);
+}
+
+void PluginManager::UnloadPlayerLayouts(uint32 playerGuid)
+{
+    _playerLayouts.erase(playerGuid);
+    _loadedPlayerLayouts.erase(playerGuid);
+}
+
+void PluginManager::DeletePlayerLayouts(uint32 playerGuid)
+{
+    CharacterDatabase.Execute("DELETE FROM `_插件管理玩家坐标` WHERE `玩家GUID` = {}", playerGuid);
+    UnloadPlayerLayouts(playerGuid);
+}
+
 PluginEntry const* PluginManager::GetPlugin(uint32 pluginId) const
 {
     for (auto const& plugin : _plugins)
@@ -96,6 +212,17 @@ PluginEntry const* PluginManager::GetPluginByName(const std::string& pluginName)
             return &plugin;
     }
     return nullptr;
+}
+
+std::vector<PluginEntry> PluginManager::GetVisiblePlugins() const
+{
+    std::vector<PluginEntry> result;
+    for (auto const& plugin : _plugins)
+    {
+        if (plugin.enabled && plugin.position != POSITION_HIDDEN)
+            result.push_back(plugin);
+    }
+    return result;
 }
 
 std::vector<PluginEntry> PluginManager::GetEnabledPlugins() const
@@ -381,12 +508,66 @@ bool PluginManager::ReorderPlugins(const std::vector<uint32>& pluginIds)
         SetPluginSortOrder(pluginId, sortOrder++);
     }
 
-    std::sort(_plugins.begin(), _plugins.end(), 
-        [](const PluginEntry& a, const PluginEntry& b) {
+    std::sort(_plugins.begin(), _plugins.end(),
+        [](const PluginEntry& a, const PluginEntry& b)
+        {
             return a.sortOrder < b.sortOrder;
         });
 
     return true;
+}
+
+bool PluginManager::SavePlayerLayout(uint32 playerGuid, uint32 pluginId, int32 posX, int32 posY, uint32 width, uint32 height)
+{
+    if (!_allowCustomPositioning || !_autoSavePlayerConfig)
+        return false;
+
+    if (_loadedPlayerLayouts.find(playerGuid) == _loadedPlayerLayouts.end())
+        LoadPlayerLayouts(playerGuid);
+
+    PlayerPluginLayout layout;
+    layout.positionX = posX;
+    layout.positionY = posY;
+    layout.width = width;
+    layout.height = height;
+
+    _playerLayouts[playerGuid][pluginId] = layout;
+
+    CharacterDatabase.Execute(
+        "INSERT INTO `_插件管理玩家坐标` (`玩家GUID`, `插件ID`, `X坐标`, `Y坐标`, `宽度`, `高度`) "
+        "VALUES ({}, {}, {}, {}, {}, {}) "
+        "ON DUPLICATE KEY UPDATE "
+        "`X坐标` = VALUES(`X坐标`), "
+        "`Y坐标` = VALUES(`Y坐标`), "
+        "`宽度` = VALUES(`宽度`), "
+        "`高度` = VALUES(`高度`)",
+        playerGuid, pluginId, posX, posY, width, height);
+
+    return true;
+}
+
+PlayerPluginLayout const* PluginManager::GetPlayerLayout(uint32 playerGuid, uint32 pluginId) const
+{
+    auto playerIt = _playerLayouts.find(playerGuid);
+    if (playerIt == _playerLayouts.end())
+        return nullptr;
+
+    auto layoutIt = playerIt->second.find(pluginId);
+    if (layoutIt == playerIt->second.end())
+        return nullptr;
+
+    return &layoutIt->second;
+}
+
+void PluginManager::SendAddonPayload(Player* player, std::string const& payload) const
+{
+    if (!player || payload.empty())
+        return;
+
+    std::string fullMessage = std::string(PLUGIN_MANAGER_ADDON_PREFIX) + '\t' + payload;
+    WorldPacket data;
+    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
+    player->SendDirectMessage(&data);
 }
 
 // 向玩家发送单个插件配置
@@ -395,28 +576,42 @@ void PluginManager::SendPluginConfigToPlayer(Player* player, const std::string& 
     if (!player || !_enabled)
         return;
 
-    // 查找插件
-    const PluginEntry* plugin = GetPluginByName(pluginName);
+    PluginEntry const* plugin = GetPluginByName(pluginName);
     if (!plugin)
     {
         LOG_ERROR("module", "插件管理器: 找不到插件 '{}'", pluginName);
         return;
     }
 
-    // 构造配置消息
-    // 格式: .plugincfg <插件名称> <X坐标> <Y坐标> <宽度> <高度> <启用状态>
+    uint32 playerGuid = player->GetGUID().GetCounter();
+    if (_loadPlayerConfig && _loadedPlayerLayouts.find(playerGuid) == _loadedPlayerLayouts.end())
+        LoadPlayerLayouts(playerGuid);
+
+    int32 posX = static_cast<int32>(plugin->positionX);
+    int32 posY = static_cast<int32>(plugin->positionY);
+    uint32 width = plugin->width;
+    uint32 height = plugin->height;
+
+    if (PlayerPluginLayout const* layout = GetPlayerLayout(playerGuid, plugin->pluginId))
+    {
+        posX = layout->positionX;
+        posY = layout->positionY;
+        if (layout->width > 0)
+            width = layout->width;
+        if (layout->height > 0)
+            height = layout->height;
+    }
+
     std::string configCmd = ".plugincfg " + plugin->pluginName + " " +
-        std::to_string(plugin->positionX) + " " +
-        std::to_string(plugin->positionY) + " " +
-        std::to_string(plugin->width) + " " +
-        std::to_string(plugin->height) + " " +
+        std::to_string(posX) + " " +
+        std::to_string(posY) + " " +
+        std::to_string(width) + " " +
+        std::to_string(height) + " " +
         std::to_string(plugin->enabled ? 1 : 0);
 
-    // 通过聊天消息发送配置
-    ChatHandler(player->GetSession()).PSendSysMessage(configCmd.c_str());
+    SendAddonPayload(player, configCmd);
 
-    LOG_DEBUG("module", "插件管理器: 向玩家 {} 发送插件 '{}' 的配置",
-        player->GetName(), plugin->pluginName);
+    LOG_DEBUG("module", "插件管理器: 向玩家 {} 发送插件 '{}' 的配置", player->GetName(), plugin->pluginName);
 }
 
 // 向玩家发送所有插件配置
@@ -425,24 +620,83 @@ void PluginManager::SendAllPluginConfigsToPlayer(Player* player)
     if (!player || !_enabled)
         return;
 
-    // 发送插件配置开始标记
-    ChatHandler(player->GetSession()).PSendSysMessage(".plugincfg_start");
+    uint32 playerGuid = player->GetGUID().GetCounter();
+    if (_loadPlayerConfig && _loadedPlayerLayouts.find(playerGuid) == _loadedPlayerLayouts.end())
+        LoadPlayerLayouts(playerGuid);
 
-    // 遍历所有插件并发送配置
-    for (const auto& plugin : _plugins)
+    SendAddonPayload(player, PLUGIN_MANAGER_SYNC_START);
+
+    for (PluginEntry const& plugin : _plugins)
+        SendPluginConfigToPlayer(player, plugin.pluginName);
+
+    SendAddonPayload(player, PLUGIN_MANAGER_SYNC_END);
+}
+
+bool PluginManager::HandleAddonMessage(Player* player, std::string const& payload)
+{
+    if (!player || !_enabled || payload.empty())
+        return false;
+
+    if (payload == PLUGIN_MANAGER_REQUEST_ALL)
     {
-        std::string configCmd = ".plugincfg " + plugin.pluginName + " " +
-            std::to_string(plugin.positionX) + " " +
-            std::to_string(plugin.positionY) + " " +
-            std::to_string(plugin.width) + " " +
-            std::to_string(plugin.height) + " " +
-            std::to_string(plugin.enabled ? 1 : 0);
-
-        ChatHandler(player->GetSession()).PSendSysMessage(configCmd.c_str());
+        SendAllPluginConfigsToPlayer(player);
+        return true;
     }
 
-    // 发送插件配置结束标记
-    ChatHandler(player->GetSession()).PSendSysMessage(".plugincfg_end");
+    if (payload.rfind(PLUGIN_MANAGER_SAVE_POS_PREFIX, 0) == 0)
+    {
+        if (!_allowCustomPositioning)
+            return true;
+
+        std::vector<std::string> fields = SplitFields(payload, ':');
+        if (fields.size() < 4)
+        {
+            LOG_WARN("module", "插件管理器: 收到无效的坐标保存请求 '{}'", payload);
+            return true;
+        }
+
+        PluginEntry const* plugin = GetPluginByName(fields[1]);
+        if (!plugin)
+        {
+            LOG_WARN("module", "插件管理器: 坐标保存失败，插件 '{}' 不存在", fields[1]);
+            return true;
+        }
+
+        int32 posX = 0;
+        int32 posY = 0;
+        uint32 width = plugin->width;
+        uint32 height = plugin->height;
+
+        if (!TryParseInt32(fields[2], posX) || !TryParseInt32(fields[3], posY))
+        {
+            LOG_WARN("module", "插件管理器: 插件 '{}' 坐标解析失败", plugin->pluginName);
+            return true;
+        }
+
+        if (fields.size() >= 5)
+        {
+            uint32 parsedWidth = 0;
+            if (TryParseUInt32(fields[4], parsedWidth) && parsedWidth > 0)
+                width = parsedWidth;
+        }
+
+        if (fields.size() >= 6)
+        {
+            uint32 parsedHeight = 0;
+            if (TryParseUInt32(fields[5], parsedHeight) && parsedHeight > 0)
+                height = parsedHeight;
+        }
+
+        if (SavePlayerLayout(player->GetGUID().GetCounter(), plugin->pluginId, posX, posY, width, height))
+        {
+            LOG_DEBUG("module", "插件管理器: 已保存玩家 {} 的插件 '{}' 坐标({}, {})",
+                player->GetName(), plugin->pluginName, posX, posY);
+        }
+
+        return true;
+    }
+
+    return false;
 }
 
 bool PluginManager::SavePluginToDatabase(const PluginEntry& entry)
@@ -450,16 +704,29 @@ bool PluginManager::SavePluginToDatabase(const PluginEntry& entry)
     if (!_enabled)
         return false;
 
-    WorldDatabase.Execute("INSERT INTO `插件管理器` (`插件ID`, `插件名称`, `显示名称`, `插件描述`, `插件类型`, `显示位置`, `X坐标`, `Y坐标`, `宽度`, `高度`, `排序顺序`, `图标路径`, `启用状态`) VALUES ({}, '{}', '{}', '{}', {}, {}, {}, {}, {}, {}, {}, '{}', {}) ON DUPLICATE KEY UPDATE `显示名称` = '{}', `插件描述` = '{}', `插件类型` = {}, `显示位置` = {}, `X坐标` = {}, `Y坐标` = {}, `宽度` = {}, `高度` = {}, `排序顺序` = {}, `图标路径` = '{}', `启用状态` = {}",
-        entry.pluginId,
-        entry.pluginName, entry.displayName, entry.description,
+    std::string pluginName = entry.pluginName;
+    std::string displayName = entry.displayName;
+    std::string description = entry.description;
+    std::string iconPath = entry.iconPath;
+
+    WorldDatabase.EscapeString(pluginName);
+    WorldDatabase.EscapeString(displayName);
+    WorldDatabase.EscapeString(description);
+    WorldDatabase.EscapeString(iconPath);
+
+    WorldDatabase.Execute(
+        "INSERT INTO `插件管理器` (`插件ID`, `插件名称`, `显示名称`, `插件描述`, `插件类型`, `显示位置`, `X坐标`, `Y坐标`, `宽度`, `高度`, `排序顺序`, `图标路径`, `启用状态`) "
+        "VALUES ({}, '{}', '{}', '{}', {}, {}, {}, {}, {}, {}, {}, '{}', {}) "
+        "ON DUPLICATE KEY UPDATE "
+        "`显示名称` = '{}', `插件描述` = '{}', `插件类型` = {}, `显示位置` = {}, `X坐标` = {}, `Y坐标` = {}, `宽度` = {}, `高度` = {}, `排序顺序` = {}, `图标路径` = '{}', `启用状态` = {}",
+        entry.pluginId, pluginName, displayName, description,
         static_cast<uint32>(entry.type), static_cast<uint32>(entry.position),
         entry.positionX, entry.positionY, entry.width, entry.height,
-        entry.sortOrder, entry.iconPath, entry.enabled ? 1 : 0,
-        entry.displayName, entry.description,
+        entry.sortOrder, iconPath, entry.enabled ? 1 : 0,
+        displayName, description,
         static_cast<uint32>(entry.type), static_cast<uint32>(entry.position),
         entry.positionX, entry.positionY, entry.width, entry.height,
-        entry.sortOrder, entry.iconPath, entry.enabled ? 1 : 0);
+        entry.sortOrder, iconPath, entry.enabled ? 1 : 0);
 
     return true;
 }
@@ -469,7 +736,10 @@ bool PluginManager::UpdatePluginInDatabase(uint32 pluginId, const std::string& f
     if (!_enabled)
         return false;
 
-    WorldDatabase.Execute("UPDATE `插件管理器` SET `{}` = '{}' WHERE `插件ID` = {}", field, value, pluginId);
+    std::string escapedValue = value;
+    WorldDatabase.EscapeString(escapedValue);
+
+    WorldDatabase.Execute("UPDATE `插件管理器` SET `{}` = '{}' WHERE `插件ID` = {}", field, escapedValue, pluginId);
     return true;
 }
 
@@ -479,6 +749,7 @@ bool PluginManager::DeletePluginFromDatabase(uint32 pluginId)
         return false;
 
     WorldDatabase.Execute("DELETE FROM `插件管理器` WHERE `插件ID` = {}", pluginId);
+    CharacterDatabase.Execute("DELETE FROM `_插件管理玩家坐标` WHERE `插件ID` = {}", pluginId);
     return true;
 }
 
@@ -504,9 +775,7 @@ void PluginManagerLoader::OnUpdate(uint32 diff)
 
     _updateTimer += diff;
     if (_updateTimer > 30000)
-    {
         _updateTimer = 0;
-    }
 }
 
 void PluginManagerLoader::OnShutdown()
@@ -518,41 +787,62 @@ void PluginManagerLoader::OnShutdown()
     }
 }
 
-// ========================================
-// 玩家登录脚本实现
-// ========================================
-
-// 延迟发送插件配置的事件类
-class SendPluginConfigEvent : public BasicEvent
-{
-public:
-    SendPluginConfigEvent(Player* player) : _player(player) {}
-
-    bool Execute(uint64 /*time*/, uint32 /*diff*/) override
-    {
-        if (_player && _player->IsInWorld())
-        {
-            sPluginManager->SendAllPluginConfigsToPlayer(_player);
-        }
-        return true; // 事件执行完毕后删除
-    }
-
-private:
-    Player* _player;
-};
-
 PluginManagerPlayerScript::PluginManagerPlayerScript()
-    : PlayerScript("PluginManagerPlayerScript")
+    : PlayerScript("PluginManagerPlayerScript",
+    {
+        PLAYERHOOK_ON_LOGIN,
+        PLAYERHOOK_ON_LOGOUT,
+        PLAYERHOOK_ON_DELETE,
+        PLAYERHOOK_ON_CHAT_WITH_RECEIVER
+    })
 {
 }
 
 void PluginManagerPlayerScript::OnPlayerLogin(Player* player)
 {
-    if (!player)
+    if (!player || !sPluginManager->IsSystemEnabled())
         return;
 
-    // 插件配置现在仅由客户端请求时发送，删除了服务器自动发送的逻辑
-    // 以避免重复发送导致的聊天刷屏问题
+    sPluginManager->LoadPlayerLayouts(player->GetGUID().GetCounter());
+}
+
+void PluginManagerPlayerScript::OnPlayerLogout(Player* player)
+{
+    if (!player || !sPluginManager->IsSystemEnabled())
+        return;
+
+    sPluginManager->UnloadPlayerLayouts(player->GetGUID().GetCounter());
+}
+
+void PluginManagerPlayerScript::OnPlayerDelete(ObjectGuid guid, uint32 /*accountId*/)
+{
+    if (!sPluginManager->IsSystemEnabled())
+        return;
+
+    sPluginManager->DeletePlayerLayouts(guid.GetCounter());
+}
+
+void PluginManagerPlayerScript::OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg, Player* receiver)
+{
+    if (!sPluginManager->IsSystemEnabled() || !player || !receiver)
+        return;
+
+    if (type != CHAT_MSG_WHISPER || lang != LANG_ADDON)
+        return;
+
+    if (receiver->GetGUID() != player->GetGUID())
+        return;
+
+    std::size_t tabPos = msg.find('\t');
+    if (tabPos == std::string::npos)
+        return;
+
+    std::string prefix = msg.substr(0, tabPos);
+    if (prefix != PLUGIN_MANAGER_ADDON_PREFIX)
+        return;
+
+    std::string payload = msg.substr(tabPos + 1);
+    sPluginManager->HandleAddonMessage(player, payload);
 }
 
 void AddPluginManagerScripts()

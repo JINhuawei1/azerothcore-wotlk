@@ -956,7 +956,6 @@ public:
             return false;
 
         SendHealRuneOpenUI(player);
-        handler->SendSysMessage("已向客户端发送回血神符界面打开请求。");
         return true;
     }
 

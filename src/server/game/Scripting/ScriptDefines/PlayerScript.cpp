@@ -16,8 +16,11 @@
  */
 
 #include "PlayerScript.h"
+#include "Log.h"
+#include "Player.h"
 #include "ScriptMgr.h"
 #include "ScriptMgrMacros.h"
+#include <chrono>
 
 void ScriptMgr::OnPlayerBeforeDurabilityRepair(Player* player, ObjectGuid npcGUID, ObjectGuid itemGUID, float& discountMod, uint8 guildBank)
 {
@@ -221,12 +224,50 @@ void ScriptMgr::OnPlayerUpdate(Player* player, uint32 p_time)
 
 void ScriptMgr::OnPlayerLogin(Player* player)
 {
-    CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_LOGIN, script->OnPlayerLogin(player));
+    auto const& scripts = ScriptRegistry<PlayerScript>::EnabledHooks[PLAYERHOOK_ON_LOGIN];
+    if (scripts.empty())
+        return;
+
+    using namespace std::chrono;
+    auto hookStart = high_resolution_clock::now();
+
+    for (PlayerScript* script : scripts)
+        script->OnPlayerLogin(player);
+
+    auto hookMs = duration_cast<milliseconds>(high_resolution_clock::now() - hookStart).count();
+    if (hookMs >= 10)
+    {
+        LOG_INFO("server.loading",
+            "[性能监控-玩家脚本] 玩家={} GUID={} 钩子=OnPlayerLogin 脚本数={} 总耗时={}ms",
+            player ? player->GetName() : "n/a",
+            player ? player->GetGUID().ToString() : "n/a",
+            scripts.size(),
+            hookMs);
+    }
 }
 
 void ScriptMgr::OnPlayerLoadFromDB(Player* player)
 {
-    CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_LOAD_FROM_DB, script->OnPlayerLoadFromDB(player));
+    auto const& scripts = ScriptRegistry<PlayerScript>::EnabledHooks[PLAYERHOOK_ON_LOAD_FROM_DB];
+    if (scripts.empty())
+        return;
+
+    using namespace std::chrono;
+    auto hookStart = high_resolution_clock::now();
+
+    for (PlayerScript* script : scripts)
+        script->OnPlayerLoadFromDB(player);
+
+    auto hookMs = duration_cast<milliseconds>(high_resolution_clock::now() - hookStart).count();
+    if (hookMs >= 10)
+    {
+        LOG_INFO("server.loading",
+            "[性能监控-玩家脚本] 玩家={} GUID={} 钩子=OnPlayerLoadFromDB 脚本数={} 总耗时={}ms",
+            player ? player->GetName() : "n/a",
+            player ? player->GetGUID().ToString() : "n/a",
+            scripts.size(),
+            hookMs);
+    }
 }
 
 void ScriptMgr::OnPlayerBeforeLogout(Player* player)

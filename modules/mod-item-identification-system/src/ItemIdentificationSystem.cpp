@@ -2142,23 +2142,45 @@ void ItemIdentificationSystemModuleLoader::OnUpdate(uint32 diff)
         sItemIdentificationSystem->CleanExpiredCache();
     }
 
-    // ★★★ 定期清理待鉴定物品标记表的孤立数据（每30分钟执行一次）★★★
+    // ★★★ 定期清理待鉴定物品标记表的孤立数据 ★★★
     // 原因：玩家拾取物品后没有手动鉴定就删除/出售/交易物品，导致待鉴定标记永久保留
-    // 这个清理在服务器运行期间持续进行，确保数据库不会无限膨胀
+    // 规则：每30分钟进入一次“待清理”状态，但只有在全服无人在线时才真正执行，避免在线时清理造成卡顿
     static uint32 pendingCleanTimer = 0;
-    pendingCleanTimer += diff;
+    static bool pendingCleanupDue = false;
+    static bool pendingCleanupDeferredLogged = false;
 
-    if (pendingCleanTimer >= 1800000)  // 30分钟 = 1800000ms
+    if (!pendingCleanupDue)
     {
-        pendingCleanTimer = 0;
-        CleanupPendingIdentificationData();
+        pendingCleanTimer += diff;
+
+        if (pendingCleanTimer >= 1800000)  // 30分钟 = 1800000ms
+            pendingCleanupDue = true;
+    }
+
+    if (pendingCleanupDue)
+    {
+        uint32 onlinePlayerCount = sWorldSessionMgr->GetPlayerCount();
+        if (onlinePlayerCount == 0)
+        {
+            pendingCleanTimer = 0;
+            pendingCleanupDue = false;
+            pendingCleanupDeferredLogged = false;
+            CleanupPendingIdentificationData();
+        }
+        else if (!pendingCleanupDeferredLogged)
+        {
+            pendingCleanupDeferredLogged = true;
+            LOG_INFO("module.itemidentification",
+                "[定期清理] 当前仍有 {} 名玩家在线，延后执行待鉴定孤立数据清理。",
+                onlinePlayerCount);
+        }
     }
 }
 
-// 清理孤立的物品数据（服务器启动时执行）
+// 启动阶段全量清理孤立的物品数据（服务器启动时执行一次）
 void ItemIdentificationSystemModuleLoader::CleanupOrphanedItemData()
 {
-    LOG_INFO("module.itemidentification", "[启动清理] 开始清理孤立的物品数据...");
+    LOG_INFO("module.itemidentification", "[启动清理] 开始全量清理孤立的物品数据...");
 
     auto startTime = std::chrono::high_resolution_clock::now();
     uint32 totalCleaned = 0;
@@ -2205,7 +2227,9 @@ void ItemIdentificationSystemModuleLoader::CleanupOrphanedItemData()
     auto endTime = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
 
-    LOG_INFO("module.itemidentification", "[启动清理] 孤立数据清理完成，耗时 {} ms", duration);
+    LOG_INFO("module.itemidentification",
+        "[启动清理] 全量孤立数据清理已提交到数据库队列，提交耗时 {} ms",
+        duration);
 }
 
 // ★★★ 定期清理待鉴定物品标记表的孤立数据 ★★★
@@ -2216,18 +2240,74 @@ void ItemIdentificationSystemModuleLoader::CleanupPendingIdentificationData()
     LOG_INFO("module.itemidentification", "[定期清理] 开始清理待鉴定物品标记表的孤立数据...");
 
     auto startTime = std::chrono::high_resolution_clock::now();
+    static constexpr uint32 kBatchSize = 5000;
+    static constexpr uint32 kMaxBatchesPerRun = 10;
 
-    // 使用异步执行，不阻塞主线程
-    // 删除物品已不存在的待鉴定标记（物品被删除/出售/交易后）
-    CharacterDatabase.Execute(
-        "DELETE p FROM `待鉴定物品标记` p "
-        "LEFT JOIN `item_instance` i ON p.`物品GUID` = i.`guid` "
-        "WHERE i.`guid` IS NULL");
+    uint32 totalDeleted = 0;
+    bool hasMoreOrphans = false;
+
+    for (uint32 batch = 0; batch < kMaxBatchesPerRun; ++batch)
+    {
+        std::vector<uint32> orphanGuids;
+        orphanGuids.reserve(kBatchSize);
+
+        QueryResult result = CharacterDatabase.Query(
+            "SELECT p.`物品GUID` "
+            "FROM `待鉴定物品标记` p "
+            "LEFT JOIN `item_instance` i ON p.`物品GUID` = i.`guid` "
+            "WHERE i.`guid` IS NULL "
+            "ORDER BY p.`物品GUID` ASC "
+            "LIMIT {}",
+            kBatchSize);
+
+        if (!result)
+        {
+            hasMoreOrphans = false;
+            break;
+        }
+
+        do
+        {
+            orphanGuids.push_back(result->Fetch()[0].Get<uint32>());
+        } while (result->NextRow());
+
+        if (orphanGuids.empty())
+        {
+            hasMoreOrphans = false;
+            break;
+        }
+
+        std::ostringstream deleteSql;
+        deleteSql << "DELETE FROM `待鉴定物品标记` WHERE `物品GUID` IN (";
+        for (size_t i = 0; i < orphanGuids.size(); ++i)
+        {
+            if (i > 0)
+                deleteSql << ",";
+            deleteSql << orphanGuids[i];
+        }
+        deleteSql << ")";
+
+        // 全服无人在线时，使用同步分批删除，避免一次性大事务长期占用表锁。
+        CharacterDatabase.DirectExecute(deleteSql.str());
+        totalDeleted += static_cast<uint32>(orphanGuids.size());
+
+        if (orphanGuids.size() < kBatchSize)
+        {
+            hasMoreOrphans = false;
+            break;
+        }
+
+        hasMoreOrphans = true;
+    }
 
     auto endTime = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
 
-    LOG_INFO("module.itemidentification", "[定期清理] 待鉴定孤立数据清理完成，耗时 {} ms", duration);
+    LOG_INFO("module.itemidentification",
+        "[定期清理] 待鉴定孤立数据分批清理完成，本次删除 {} 条，耗时 {} ms{}",
+        totalDeleted,
+        duration,
+        hasMoreOrphans ? "，仍有剩余孤立数据，等待下一个空闲周期继续清理" : "");
 }
 
 // 【关键修复】服务器关闭时保存数据

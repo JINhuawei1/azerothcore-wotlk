@@ -63,6 +63,7 @@
 #include "Util.h"
 #include "World.h"
 #include "WorldPacket.h"
+#include <chrono>
 
 /// @todo: this import is not necessary for compilation and marked as unused by the IDE
 //  however, for some reasons removing it would cause a damn linking issue
@@ -4957,6 +4958,8 @@ bool Player::isBeingLoaded() const
 
 bool Player::LoadFromDB(ObjectGuid playerGuid, CharacterDatabaseQueryHolder const& holder)
 {
+    using namespace std::chrono;
+
     ////                                                     0     1        2     3     4        5      6    7      8     9    10    11         12         13           14         15         16
     //QueryResult* result = CharacterDatabase.Query("SELECT guid, account, name, race, class, gender, level, xp, money, skin, face, hairStyle, hairColor, facialStyle, bankSlots, restState, playerFlags, "
     // 17          18          19          20   21           22        23        24         25         26          27           28                 29
@@ -5000,6 +5003,8 @@ bool Player::LoadFromDB(ObjectGuid playerGuid, CharacterDatabaseQueryHolder cons
     Object::_Create(guid, 0, HighGuid::Player);
 
     m_name = fields[2].Get<std::string>();
+
+    auto loadStart = high_resolution_clock::now();
 
     // check name limitations
     if (ObjectMgr::CheckPlayerName(m_name) != CHAR_NAME_SUCCESS)
@@ -5667,6 +5672,16 @@ bool Player::LoadFromDB(ObjectGuid playerGuid, CharacterDatabaseQueryHolder cons
             aura->HandleAllEffects(itr->second, AURA_EFFECT_HANDLE_REAL, false);
     }
 
+    auto totalMs = duration_cast<milliseconds>(high_resolution_clock::now() - loadStart).count();
+    if (totalMs >= 10)
+    {
+        LOG_INFO("server.loading",
+            "[性能监控-角色载入总耗时] 玩家={} GUID={} 总耗时={}ms",
+            GetName(),
+            GetGUID().ToString(),
+            totalMs);
+    }
+
     return true;
 }
 
@@ -5887,6 +5902,8 @@ void Player::LoadCorpse(PreparedQueryResult result)
 
 void Player::_LoadInventory(PreparedQueryResult result, uint32 timeDiff)
 {
+    using namespace std::chrono;
+
     //QueryResult* result = CharacterDatabase.Query("SELECT data, text, bag, slot, item, item_template FROM character_inventory JOIN item_instance ON character_inventory.item = item_instance.guid WHERE character_inventory.guid = '{}' ORDER BY bag, slot", GetGUID().GetCounter());
     //NOTE: the "order by `bag`" is important because it makes sure
     //the bagMap is filled before items in the bags are loaded
@@ -5894,6 +5911,9 @@ void Player::_LoadInventory(PreparedQueryResult result, uint32 timeDiff)
     //expected to be equipped before offhand items (TODO: fixme)
 
     uint32 loadedItemCount = 0;
+    uint32 ascensionVirtualItemCount = 0;
+    uint32 problematicItemCount = 0;
+    auto inventoryLoadStart = high_resolution_clock::now();
 
     if (result)
     {
@@ -5962,6 +5982,7 @@ void Player::_LoadInventory(PreparedQueryResult result, uint32 timeDiff)
                     // 如果是，跳过这个物品，让飞升系统自己加载和管理
                     if (bagGuid == 200)
                     {
+                        ++ascensionVirtualItemCount;
                         // 飞升系统物品，设置为 ITEM_UNCHANGED 状态，不添加到更新队列
                         item->SetSlot(slot);
                         item->FSetState(ITEM_UNCHANGED);
@@ -6008,6 +6029,7 @@ void Player::_LoadInventory(PreparedQueryResult result, uint32 timeDiff)
                     LOG_ERROR("entities.player", "Player::_LoadInventory: player ({}, name: '{}') has item ({}, entry: {}) which can't be loaded into inventory (Bag GUID: {}, slot: {}) by reason {}. Item will be sent by mail.",
                               GetGUID().ToString(), GetName(), item->GetGUID().ToString(), item->GetEntry(), bagGuid, slot, err);
                     item->DeleteFromInventoryDB(trans);
+                    ++problematicItemCount;
                     problematicItems.push_back(item);
                 }
             }
@@ -6030,8 +6052,21 @@ void Player::_LoadInventory(PreparedQueryResult result, uint32 timeDiff)
         }
         CharacterDatabase.CommitTransaction(trans);
     }
-    //if (IsAlive())
     _ApplyAllItemMods();
+
+    auto inventoryLoadMs = duration_cast<milliseconds>(high_resolution_clock::now() - inventoryLoadStart).count();
+    if (inventoryLoadMs >= 10 || ascensionVirtualItemCount > 0 || problematicItemCount > 0)
+    {
+        uint32 regularItemCount = loadedItemCount >= ascensionVirtualItemCount ? loadedItemCount - ascensionVirtualItemCount : 0;
+        LOG_INFO("server.loading",
+            "[性能监控-背包加载] 玩家={} GUID={} 常规物品={} 飞升虚拟物品={} 异常邮寄={} 总耗时={}ms",
+            GetName(),
+            GetGUID().ToString(),
+            regularItemCount,
+            ascensionVirtualItemCount,
+            problematicItemCount,
+            inventoryLoadMs);
+    }
 }
 
 Item* Player::_LoadItem(CharacterDatabaseTransaction trans, uint32 zoneId, uint32 timeDiff, Field* fields)

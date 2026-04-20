@@ -195,7 +195,7 @@ SET
 WHERE q.`任务类型` = 1
   AND q.`任务ID` BETWEEN 700001 AND 740074;
 
--- 正传 / 深渊 / 腐化任务：事件型任务，由模块 C++ 在对应模式击杀锚点时完成
+-- 正传 / 深渊 / 腐化任务：事件型任务，由模块 C++ 在对应模式击杀对应首领时完成
 UPDATE `quest_template` qt
 JOIN `_深渊任务模板对接` q ON q.`任务ID` = qt.`ID`
 JOIN `_深渊章节配置` c ON c.`章节ID` = q.`章节ID`
@@ -205,14 +205,14 @@ SET
   qt.`Flags` = 0,
   qt.`ObjectiveText1` = CASE
     WHEN q.`任务类型` = 2 THEN CONCAT('在官方副本【', c.`章节名称`, '】中击败锚点首领【', COALESCE(NULLIF(ab.`首领名称`, ''), CONCAT('entry:', c.`锚点首领入口`)), '】')
-    WHEN q.`任务类型` = 3 THEN CONCAT('在正传模式【', c.`章节名称`, '】中击败锚点首领【', COALESCE(NULLIF(ab.`首领名称`, ''), CONCAT('entry:', c.`锚点首领入口`)), '】')
+    WHEN q.`任务类型` = 3 THEN CONCAT('在正传模式【', c.`章节名称`, '】中击败首领【', COALESCE(NULLIF(db.`首领名称`, ''), CONCAT('entry:', c.`深渊首领入口`)), '】')
     WHEN q.`任务类型` = 4 THEN CONCAT('在深渊模式【', c.`章节名称`, '】中击败深渊首领【', COALESCE(NULLIF(db.`首领名称`, ''), CONCAT('entry:', c.`深渊首领入口`)), '】')
     WHEN q.`任务类型` = 5 THEN CONCAT('在腐化模式【', c.`章节名称`, '】中击败深渊首领【', COALESCE(NULLIF(db.`首领名称`, ''), CONCAT('entry:', c.`深渊首领入口`)), '】')
     ELSE qt.`ObjectiveText1`
   END,
   qt.`QuestDescription` = CASE
     WHEN q.`任务类型` = 2 THEN CONCAT('在官方副本【', c.`章节名称`, '】中击败锚点首领【', COALESCE(NULLIF(ab.`首领名称`, ''), CONCAT('entry:', c.`锚点首领入口`)), '】，完成后即可解锁正传模式。')
-    WHEN q.`任务类型` = 3 THEN CONCAT('在正传模式中推进【', c.`章节名称`, '】，击败锚点首领【', COALESCE(NULLIF(ab.`首领名称`, ''), CONCAT('entry:', c.`锚点首领入口`)), '】后即可解锁深渊模式。')
+    WHEN q.`任务类型` = 3 THEN CONCAT('在正传模式中推进【', c.`章节名称`, '】，击败首领【', COALESCE(NULLIF(db.`首领名称`, ''), CONCAT('entry:', c.`深渊首领入口`)), '】后即可解锁深渊模式。')
     WHEN q.`任务类型` = 4 THEN CONCAT('在深渊模式中推进【', c.`章节名称`, '】，击败深渊首领【', COALESCE(NULLIF(db.`首领名称`, ''), CONCAT('entry:', c.`深渊首领入口`)), '】后即可解锁腐化模式。')
     WHEN q.`任务类型` = 5 THEN CONCAT('在腐化模式中推进【', c.`章节名称`, '】，击败深渊首领【', COALESCE(NULLIF(db.`首领名称`, ''), CONCAT('entry:', c.`深渊首领入口`)), '】后即可解锁轮回模式，并开启下一副本任务。')
     ELSE qt.`QuestDescription`
@@ -225,8 +225,8 @@ SET
     ELSE qt.`QuestCompletionLog`
   END,
   qt.`RequiredNpcOrGo1` = CASE
-    WHEN q.`任务类型` IN (2, 3) THEN c.`锚点首领入口`
-    WHEN q.`任务类型` IN (4, 5) THEN c.`深渊首领入口`
+    WHEN q.`任务类型` = 2 THEN c.`锚点首领入口`
+    WHEN q.`任务类型` IN (3, 4, 5) THEN c.`深渊首领入口`
     ELSE 0
   END,
   qt.`RequiredNpcOrGoCount1` = 1
@@ -298,7 +298,7 @@ SET
   qr.`CompletionText` = CONCAT(
     CASE q.`任务类型`
       WHEN 2 THEN CONCAT('你已击破【', c.`章节名称`, '】的官方锚点【', COALESCE(NULLIF(ab.`首领名称`, ''), CONCAT('entry:', c.`锚点首领入口`)), '】，正传模式即将开启。')
-      WHEN 3 THEN CONCAT('你已击破【', c.`章节名称`, '】的正传锚点【', COALESCE(NULLIF(ab.`首领名称`, ''), CONCAT('entry:', c.`锚点首领入口`)), '】，深渊模式即将开启。')
+      WHEN 3 THEN CONCAT('你已击破【', c.`章节名称`, '】的正传首领【', COALESCE(NULLIF(db.`首领名称`, ''), CONCAT('entry:', c.`深渊首领入口`)), '】，深渊模式即将开启。')
       WHEN 4 THEN CONCAT('你已击破【', c.`章节名称`, '】的深渊首领【', COALESCE(NULLIF(db.`首领名称`, ''), CONCAT('entry:', c.`深渊首领入口`)), '】，腐化模式即将开启。')
       WHEN 5 THEN CONCAT('你已击破【', c.`章节名称`, '】的腐化首领【', COALESCE(NULLIF(db.`首领名称`, ''), CONCAT('entry:', c.`深渊首领入口`)), '】，轮回模式即将开启。')
       ELSE CONCAT('你已完成【', c.`章节名称`, '】。')
@@ -321,7 +321,7 @@ SET
   qo.`RewardText` = CONCAT(
     CASE q.`任务类型`
       WHEN 2 THEN CONCAT('你已完成锚点首领【', COALESCE(NULLIF(ab.`首领名称`, ''), CONCAT('entry:', c.`锚点首领入口`)), '】的官方试炼，【', c.`章节名称`, '】正传模式已解锁。')
-      WHEN 3 THEN CONCAT('你已完成锚点首领【', COALESCE(NULLIF(ab.`首领名称`, ''), CONCAT('entry:', c.`锚点首领入口`)), '】的正传试炼，【', c.`章节名称`, '】深渊模式已解锁。')
+      WHEN 3 THEN CONCAT('你已完成首领【', COALESCE(NULLIF(db.`首领名称`, ''), CONCAT('entry:', c.`深渊首领入口`)), '】的正传试炼，【', c.`章节名称`, '】深渊模式已解锁。')
       WHEN 4 THEN CONCAT('你已完成深渊首领【', COALESCE(NULLIF(db.`首领名称`, ''), CONCAT('entry:', c.`深渊首领入口`)), '】的深渊试炼，【', c.`章节名称`, '】腐化模式已解锁。')
       WHEN 5 THEN CONCAT('你已完成深渊首领【', COALESCE(NULLIF(db.`首领名称`, ''), CONCAT('entry:', c.`深渊首领入口`)), '】的腐化试炼，【', c.`章节名称`, '】轮回模式已解锁。')
       ELSE CONCAT('【', c.`章节名称`, '】流程已推进。')

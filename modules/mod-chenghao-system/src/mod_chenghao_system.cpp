@@ -786,7 +786,8 @@ public:
 
         static Acore::ChatCommands::ChatCommandTable commandTable =
         {
-            Acore::ChatCommands::ChatCommandBuilder("称号", chenghaoCommandTable)
+            Acore::ChatCommands::ChatCommandBuilder("称号", chenghaoCommandTable),
+            Acore::ChatCommands::ChatCommandBuilder("称号圣册", chenghaoCommandTable)
         };
 
         return commandTable;
@@ -813,7 +814,6 @@ public:
             return false;
 
         SendChengHaoOpenUI(player);
-        handler->SendSysMessage("已向客户端发送称号界面打开请求。");
         return true;
     }
 
