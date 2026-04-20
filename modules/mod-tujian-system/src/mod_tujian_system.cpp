@@ -74,9 +74,11 @@ namespace
         uint32 id = 0;
         uint32 group = 0;
         uint32 requiredActivationCount = 0;
+        uint32 effectiveRequiredActivationCount = 0;
         std::string comment;
         std::string activationDesc;
         std::string activationTemplates;
+        std::vector<uint32> activationTemplateIds;
         std::string activationCommand;
     };
 
@@ -154,11 +156,36 @@ namespace
         float maxDamage[MAX_ATTACK][MAX_ITEM_PROTO_DAMAGES] = {};
     };
 
+    struct ApplyPlayerActivationProfile
+    {
+        size_t activationRecordCount = 0;
+        size_t equipModeActivationCount = 0;
+        size_t fastPathActivationCount = 0;
+        size_t fallbackPathActivationCount = 0;
+        size_t virtualEquipSpellCount = 0;
+        size_t itemSetContributionCount = 0;
+        size_t itemSetSpellApplyCount = 0;
+        size_t activatedGroupCount = 0;
+        size_t externalSkillCarrierCount = 0;
+        uint32 slowestItemSetId = 0;
+        int64 clearPreviousStateMs = 0;
+        int64 collectActivationStateMs = 0;
+        int64 applyBonusesMs = 0;
+        int64 applyItemSetsMs = 0;
+        int64 applyExternalSkillsMs = 0;
+        int64 refreshStatsMs = 0;
+        int64 slowestItemSetMs = 0;
+        int64 totalMs = 0;
+    };
+
     std::unordered_map<uint32, TuJianEntry> tuJianEntries;
     std::unordered_map<uint32, TuJianSetEntry> tuJianSetEntries;
     std::vector<TuJianMenuEntry> tuJianMenuEntries;
     std::unordered_map<uint32, std::vector<uint32>> tuJianItemEntriesByChapter;
     std::unordered_map<uint32, std::set<uint32>> tuJianSetGroupsByChapter;
+    std::unordered_map<uint32, uint32> tuJianActivationCountByGroup;
+    std::unordered_map<uint32, std::vector<uint32>> tuJianSetEntryIdsByGroup;
+    std::unordered_map<uint32, uint32> tuJianDefaultCarrierItemByGroup;
     std::unordered_map<uint32, std::vector<PlayerActivationRecord>> playerActivationCache;
     std::unordered_map<uint32, std::vector<VirtualAppliedItem>> playerVirtualItems;
     std::unordered_map<uint32, std::vector<DirectAppliedItem>> playerFallbackAppliedItems;
@@ -169,6 +196,7 @@ namespace
     std::unordered_set<uint32> blockedVirtualEquipSpellItemGuids;
 
     uint8 GetAttackSlotForVirtualItem(ItemTemplate const* proto);
+    uint32 ResolveSetGroupId(uint32 assignedSetId);
 
     std::string SanitizeAddonText(std::string text)
     {
@@ -212,9 +240,8 @@ namespace
         return result;
     }
 
-    std::string FormatActivationTemplatesForClient(std::string const& value)
+    std::string FormatActivationTemplatesForClient(std::vector<uint32> const& templateIds)
     {
-        std::vector<uint32> templateIds = ParseUint32List(value);
         if (templateIds.empty())
             return "";
 
@@ -244,6 +271,11 @@ namespace
         }
 
         return displayText.str();
+    }
+
+    std::string FormatActivationTemplatesForClient(std::string const& value)
+    {
+        return FormatActivationTemplatesForClient(ParseUint32List(value));
     }
 
     uint32 GetTuJianApplyCount(TuJianEntry const& entry, uint32 currentLevel)
@@ -735,8 +767,12 @@ namespace
         tuJianMenuEntries.clear();
         tuJianItemEntriesByChapter.clear();
         tuJianSetGroupsByChapter.clear();
+        tuJianActivationCountByGroup.clear();
+        tuJianSetEntryIdsByGroup.clear();
+        tuJianDefaultCarrierItemByGroup.clear();
 
         std::unordered_map<uint32, TuJianMenuEntry> menuEntryByChapter;
+        std::unordered_map<uint32, std::unordered_set<uint32>> activatedTuJianIdsByGroup;
 
         for (auto const& pair : tuJianEntries)
         {
@@ -759,6 +795,16 @@ namespace
 
             if (entry.setId != 0)
                 tuJianSetGroupsByChapter[chapterId].insert(entry.setId);
+
+            uint32 groupId = ResolveSetGroupId(entry.setId);
+            if (groupId == 0)
+                continue;
+
+            if (entry.id != 0)
+                activatedTuJianIdsByGroup[groupId].insert(entry.id);
+
+            if (entry.itemEntry != 0 && tuJianDefaultCarrierItemByGroup[groupId] == 0)
+                tuJianDefaultCarrierItemByGroup[groupId] = entry.itemEntry;
         }
 
         for (auto& pair : menuEntryByChapter)
@@ -794,6 +840,47 @@ namespace
                 return left.itemEntry < right.itemEntry;
             });
         }
+
+        for (auto const& pair : activatedTuJianIdsByGroup)
+            tuJianActivationCountByGroup[pair.first] = static_cast<uint32>(pair.second.size());
+
+        for (auto& pair : tuJianSetEntries)
+        {
+            TuJianSetEntry& entry = pair.second;
+            uint32 totalGroupActivationCount = 0;
+
+            auto countItr = tuJianActivationCountByGroup.find(entry.group);
+            if (countItr != tuJianActivationCountByGroup.end())
+                totalGroupActivationCount = countItr->second;
+
+            if (totalGroupActivationCount == 0)
+                entry.effectiveRequiredActivationCount = 0;
+            else if (entry.requiredActivationCount == 0)
+                entry.effectiveRequiredActivationCount = totalGroupActivationCount;
+            else
+                entry.effectiveRequiredActivationCount = std::min(entry.requiredActivationCount, totalGroupActivationCount);
+
+            if (entry.group != 0)
+                tuJianSetEntryIdsByGroup[entry.group].push_back(entry.id);
+        }
+
+        for (auto& pair : tuJianSetEntryIdsByGroup)
+        {
+            std::vector<uint32>& setEntryIds = pair.second;
+            std::sort(setEntryIds.begin(), setEntryIds.end(), [](uint32 leftId, uint32 rightId)
+            {
+                auto leftItr = tuJianSetEntries.find(leftId);
+                auto rightItr = tuJianSetEntries.find(rightId);
+                if (leftItr == tuJianSetEntries.end() || rightItr == tuJianSetEntries.end())
+                    return leftId < rightId;
+
+                TuJianSetEntry const& left = leftItr->second;
+                TuJianSetEntry const& right = rightItr->second;
+                if (left.effectiveRequiredActivationCount != right.effectiveRequiredActivationCount)
+                    return left.effectiveRequiredActivationCount < right.effectiveRequiredActivationCount;
+                return left.id < right.id;
+            });
+        }
     }
 
     uint32 ResolveSetGroupId(uint32 assignedSetId)
@@ -806,89 +893,6 @@ namespace
             return setItr->second.group;
 
         return assignedSetId;
-    }
-
-    std::set<uint32> GetTuJianIdsForGroup(uint32 groupId)
-    {
-        std::set<uint32> tuJianIds;
-        if (groupId == 0)
-            return tuJianIds;
-
-        for (auto const& pair : tuJianEntries)
-        {
-            TuJianEntry const& entry = pair.second;
-            if (ResolveSetGroupId(entry.setId) == groupId && entry.id != 0)
-                tuJianIds.insert(entry.id);
-        }
-
-        return tuJianIds;
-    }
-
-    std::set<uint32> GetActivatedTuJianIdsForGroup(uint32 playerGuid, uint32 groupId)
-    {
-        std::set<uint32> activatedIds;
-        if (groupId == 0)
-            return activatedIds;
-
-        auto itr = playerActivationCache.find(playerGuid);
-        if (itr == playerActivationCache.end())
-            return activatedIds;
-
-        for (PlayerActivationRecord const& record : itr->second)
-        {
-            if (ResolveSetGroupId(record.setId) == groupId && record.tuJianId != 0 && record.currentLevel > 0)
-                activatedIds.insert(record.tuJianId);
-        }
-
-        return activatedIds;
-    }
-
-    uint32 GetRequiredActivationCountForSetEntry(TuJianSetEntry const& setEntry)
-    {
-        uint32 groupId = setEntry.group;
-        if (groupId == 0)
-            return 0;
-
-        std::set<uint32> groupIds = GetTuJianIdsForGroup(groupId);
-        uint32 totalCount = static_cast<uint32>(groupIds.size());
-        if (totalCount == 0)
-            return 0;
-
-        if (setEntry.requiredActivationCount == 0)
-            return totalCount;
-
-        return std::min(setEntry.requiredActivationCount, totalCount);
-    }
-
-    bool IsSetTierActivated(uint32 playerGuid, TuJianSetEntry const& setEntry)
-    {
-        uint32 requiredCount = GetRequiredActivationCountForSetEntry(setEntry);
-        if (requiredCount == 0)
-            return false;
-
-        std::set<uint32> activatedIds = GetActivatedTuJianIdsForGroup(playerGuid, setEntry.group);
-        return activatedIds.size() >= requiredCount;
-    }
-
-    uint32 GetCarrierItemEntryForGroup(uint32 playerGuid, uint32 groupId)
-    {
-        auto activationItr = playerActivationCache.find(playerGuid);
-        if (activationItr != playerActivationCache.end())
-        {
-            for (PlayerActivationRecord const& record : activationItr->second)
-            {
-                if (ResolveSetGroupId(record.setId) == groupId && record.currentItemEntry != 0)
-                    return record.currentItemEntry;
-            }
-        }
-
-        for (auto const& pair : tuJianEntries)
-        {
-            if (ResolveSetGroupId(pair.second.setId) == groupId && pair.second.itemEntry != 0)
-                return pair.second.itemEntry;
-        }
-
-        return 0;
     }
 
     void SendAddonPayload(Player* player, std::string const& payload)
@@ -1083,7 +1087,7 @@ namespace
                     << entry->group << '^'
                     << entry->requiredActivationCount << '^'
                     << SanitizeAddonText(entry->activationDesc) << '^'
-                    << FormatActivationTemplatesForClient(entry->activationTemplates) << '^'
+                    << FormatActivationTemplatesForClient(entry->activationTemplateIds) << '^'
                     << SanitizeAddonText(entry->comment);
         }
 
@@ -1139,7 +1143,7 @@ namespace
                     << entry->group << '^'
                     << entry->requiredActivationCount << '^'
                     << SanitizeAddonText(entry->activationDesc) << '^'
-                    << FormatActivationTemplatesForClient(entry->activationTemplates) << '^'
+                    << FormatActivationTemplatesForClient(entry->activationTemplateIds) << '^'
                     << SanitizeAddonText(entry->comment);
         }
 
@@ -1444,6 +1448,7 @@ namespace
             entry.requiredActivationCount = fields[3].Get<uint32>();
             entry.activationDesc = fields[4].Get<std::string>();
             entry.activationTemplates = fields[5].Get<std::string>();
+            entry.activationTemplateIds = ParseUint32List(entry.activationTemplates);
             entry.activationCommand = fields[6].Get<std::string>();
 
             tuJianSetEntries[entry.id] = entry;
@@ -1578,10 +1583,10 @@ namespace
             RefreshPlayerStats(player);
     }
 
-    void LoadPlayerActivationData(Player* player)
+    size_t LoadPlayerActivationData(Player* player)
     {
         if (!player)
-            return;
+            return 0;
 
         uint32 playerGuid = player->GetGUID().GetCounter();
         playerActivationCache.erase(playerGuid);
@@ -1591,7 +1596,7 @@ namespace
             playerGuid);
 
         if (!result)
-            return;
+            return 0;
 
         auto& records = playerActivationCache[playerGuid];
         do
@@ -1607,12 +1612,18 @@ namespace
             if (record.tuJianId != 0 && record.currentItemEntry != 0 && record.currentLevel != 0)
                 records.push_back(record);
         } while (result->NextRow());
+
+        return records.size();
     }
 
-    void ApplyPlayerActivationData(Player* player)
+    ApplyPlayerActivationProfile ApplyPlayerActivationData(Player* player)
     {
+        ApplyPlayerActivationProfile profile;
         if (!player)
-            return;
+            return profile;
+
+        using namespace std::chrono;
+        auto totalStart = high_resolution_clock::now();
 
         uint32 playerGuid = player->GetGUID().GetCounter();
         bool hadCachedState =
@@ -1622,27 +1633,60 @@ namespace
             playerItemSetContributions.find(playerGuid) != playerItemSetContributions.end() ||
             playerWeaponDamageBonuses.find(playerGuid) != playerWeaponDamageBonuses.end() ||
             playerFixedAllStatsBonus.find(playerGuid) != playerFixedAllStatsBonus.end();
+
+        auto clearStart = high_resolution_clock::now();
         RemovePlayerVirtualItems(player, false);
+        profile.clearPreviousStateMs = duration_cast<milliseconds>(high_resolution_clock::now() - clearStart).count();
 
         auto activationItr = playerActivationCache.find(playerGuid);
         if (activationItr == playerActivationCache.end() || activationItr->second.empty())
         {
             if (hadCachedState)
+            {
+                auto refreshStart = high_resolution_clock::now();
                 RefreshPlayerStats(player);
-            return;
+                profile.refreshStatsMs = duration_cast<milliseconds>(high_resolution_clock::now() - refreshStart).count();
+            }
+
+            profile.totalMs = duration_cast<milliseconds>(high_resolution_clock::now() - totalStart).count();
+            return profile;
         }
 
-        auto& appliedItems = playerVirtualItems[playerGuid];
+        profile.activationRecordCount = activationItr->second.size();
+
+        std::vector<VirtualAppliedItem> appliedItems;
+        appliedItems.reserve(profile.activationRecordCount);
         std::vector<DirectAppliedItem> fallbackAppliedItems;
-        fallbackAppliedItems.reserve(activationItr->second.size());
+        fallbackAppliedItems.reserve(profile.activationRecordCount);
         AggregatedItemBonusCache aggregatedBonusCache;
         std::unordered_map<uint32, uint32> aggregatedItemSetCounts;
+        aggregatedItemSetCounts.reserve(profile.activationRecordCount);
         PlayerWeaponDamageBonusCache weaponDamageBonuses;
         int32 totalFixedAllStatsBonus = 0;
-        uint32 equipModeActivationCount = 0;
+
+#ifdef MODULE_ITEM_SKILLS
+        std::unordered_map<uint32, std::unordered_set<uint32>> activatedTuJianIdsByGroup;
+        std::unordered_map<uint32, uint32> carrierItemEntryByGroup;
+        activatedTuJianIdsByGroup.reserve(profile.activationRecordCount);
+        carrierItemEntryByGroup.reserve(profile.activationRecordCount);
+#endif
+
+        auto collectStart = high_resolution_clock::now();
 
         for (PlayerActivationRecord const& record : activationItr->second)
         {
+#ifdef MODULE_ITEM_SKILLS
+            uint32 groupId = ResolveSetGroupId(record.setId);
+            if (groupId != 0)
+            {
+                if (record.tuJianId != 0)
+                    activatedTuJianIdsByGroup[groupId].insert(record.tuJianId);
+
+                if (record.currentItemEntry != 0 && carrierItemEntryByGroup[groupId] == 0)
+                    carrierItemEntryByGroup[groupId] = record.currentItemEntry;
+            }
+#endif
+
             auto tuJianItr = tuJianEntries.find(record.currentItemEntry);
             if (tuJianItr == tuJianEntries.end())
             {
@@ -1668,9 +1712,12 @@ namespace
                 continue;
             }
 
-            ++equipModeActivationCount;
+            ++profile.equipModeActivationCount;
             if (CanUseFastItemBonusPath(proto))
+            {
                 AccumulateItemBonuses(player, proto, applyCount, aggregatedBonusCache);
+                ++profile.fastPathActivationCount;
+            }
             else
             {
                 for (uint32 i = 0; i < applyCount; ++i)
@@ -1680,6 +1727,7 @@ namespace
                 fallbackApplied.itemEntry = record.currentItemEntry;
                 fallbackApplied.applyCount = applyCount;
                 fallbackAppliedItems.push_back(fallbackApplied);
+                ++profile.fallbackPathActivationCount;
             }
 
             AddWeaponDamageBonus(weaponDamageBonuses, proto, applyCount);
@@ -1703,34 +1751,51 @@ namespace
             tempItem->SetOwnerGUID(player->GetGUID());
             tempItem->SetSlot(VIRTUAL_TUJIAN_SLOT);
 
-            if (needEquipSpell)
-            {
-                player->ApplyItemEquipSpell(tempItem.get(), true);
+            player->ApplyItemEquipSpell(tempItem.get(), true);
 
-                VirtualAppliedItem applied;
-                applied.slot = VIRTUAL_TUJIAN_SLOT;
-                applied.tuJianId = record.tuJianId;
-                applied.setId = record.setId;
-                applied.allowEquipSpell = true;
-                applied.applyEquipSpell = true;
-                applied.item = std::move(tempItem);
-                appliedItems.push_back(std::move(applied));
-            }
+            VirtualAppliedItem applied;
+            applied.slot = VIRTUAL_TUJIAN_SLOT;
+            applied.tuJianId = record.tuJianId;
+            applied.setId = record.setId;
+            applied.allowEquipSpell = true;
+            applied.applyEquipSpell = true;
+            applied.item = std::move(tempItem);
+            appliedItems.push_back(std::move(applied));
+            ++profile.virtualEquipSpellCount;
         }
+
+        profile.collectActivationStateMs = duration_cast<milliseconds>(high_resolution_clock::now() - collectStart).count();
+
+        auto applyBonusesStart = high_resolution_clock::now();
+        bool hasAggregatedBonuses = aggregatedBonusCache.HasAnyValue();
 
         if (!fallbackAppliedItems.empty())
             playerFallbackAppliedItems[playerGuid] = std::move(fallbackAppliedItems);
-        if (equipModeActivationCount > 0)
+        if (profile.equipModeActivationCount > 0)
             playerWeaponDamageBonuses[playerGuid] = weaponDamageBonuses;
 
-        if (aggregatedBonusCache.HasAnyValue())
+        if (hasAggregatedBonuses)
         {
             ApplyAggregatedItemBonuses(player, aggregatedBonusCache, true);
             playerAggregatedItemBonuses[playerGuid] = aggregatedBonusCache;
         }
 
+        if (totalFixedAllStatsBonus > 0)
+        {
+            ApplyFixedAllStatsBonus(player, totalFixedAllStatsBonus, true);
+            playerFixedAllStatsBonus[playerGuid] = totalFixedAllStatsBonus;
+        }
+
+        profile.applyBonusesMs = duration_cast<milliseconds>(high_resolution_clock::now() - applyBonusesStart).count();
+
+        auto applyItemSetsStart = high_resolution_clock::now();
         if (!aggregatedItemSetCounts.empty())
         {
+            // 批量施加套装法术时先暂停属性即时重算，最后统一 RefreshPlayerStats。
+            bool restoreCanModifyStats = player->CanModifyStats();
+            if (restoreCanModifyStats)
+                player->SetCanModifyStats(false);
+
             std::vector<AggregatedItemSetContribution> contributions;
             contributions.reserve(aggregatedItemSetCounts.size());
 
@@ -1746,44 +1811,62 @@ namespace
                 contribution.setId = pair.first;
                 contribution.itemCount = pair.second;
                 contributions.push_back(contribution);
+                ++profile.itemSetContributionCount;
             }
+
+            if (restoreCanModifyStats)
+                player->SetCanModifyStats(true);
 
             if (!contributions.empty())
                 playerItemSetContributions[playerGuid] = std::move(contributions);
         }
 
-        if (totalFixedAllStatsBonus > 0)
-        {
-            ApplyFixedAllStatsBonus(player, totalFixedAllStatsBonus, true);
-            playerFixedAllStatsBonus[playerGuid] = totalFixedAllStatsBonus;
-        }
-
-        if (equipModeActivationCount > 500)
-            LOG_WARN("module", "mod-tujian-system: 玩家 {} 当前启用了 {} 个装备属性模式图鉴，虽然已启用轻量化应用，但仍可能带来较高的属性刷新和战斗计算开销。", player->GetName(), equipModeActivationCount);
+        profile.applyItemSetsMs = duration_cast<milliseconds>(high_resolution_clock::now() - applyItemSetsStart).count();
 
 #ifdef MODULE_ITEM_SKILLS
-        std::unordered_set<uint32> processedGroups;
-        for (PlayerActivationRecord const& record : activationItr->second)
+        auto applyExternalSkillsStart = high_resolution_clock::now();
+        profile.activatedGroupCount = activatedTuJianIdsByGroup.size();
+
+        for (auto const& pair : activatedTuJianIdsByGroup)
         {
-            uint32 groupId = ResolveSetGroupId(record.setId);
-            if (groupId == 0 || !processedGroups.insert(groupId).second)
+            uint32 groupId = pair.first;
+            uint32 activatedCount = static_cast<uint32>(pair.second.size());
+            if (groupId == 0 || activatedCount == 0)
                 continue;
 
-            uint32 carrierItemEntry = GetCarrierItemEntryForGroup(playerGuid, groupId);
+            uint32 carrierItemEntry = 0;
+            auto carrierItr = carrierItemEntryByGroup.find(groupId);
+            if (carrierItr != carrierItemEntryByGroup.end())
+                carrierItemEntry = carrierItr->second;
+
+            if (carrierItemEntry == 0)
+            {
+                auto defaultCarrierItr = tuJianDefaultCarrierItemByGroup.find(groupId);
+                if (defaultCarrierItr != tuJianDefaultCarrierItemByGroup.end())
+                    carrierItemEntry = defaultCarrierItr->second;
+            }
+
             if (carrierItemEntry == 0)
             {
                 LOG_WARN("module", "mod-tujian-system: 套装组 {} 未找到可用的图鉴物品作为技能载体。", groupId);
                 continue;
             }
 
-            for (auto const& pair : tuJianSetEntries)
+            auto setIdsItr = tuJianSetEntryIdsByGroup.find(groupId);
+            if (setIdsItr == tuJianSetEntryIdsByGroup.end())
+                continue;
+
+            for (uint32 setEntryId : setIdsItr->second)
             {
-                TuJianSetEntry const& setEntry = pair.second;
-                if (setEntry.group != groupId || !IsSetTierActivated(playerGuid, setEntry))
+                auto setEntryItr = tuJianSetEntries.find(setEntryId);
+                if (setEntryItr == tuJianSetEntries.end())
                     continue;
 
-                std::vector<uint32> skillTemplateIds = ParseUint32List(setEntry.activationTemplates);
-                if (skillTemplateIds.empty())
+                TuJianSetEntry const& setEntry = setEntryItr->second;
+                if (setEntry.effectiveRequiredActivationCount == 0 || activatedCount < setEntry.effectiveRequiredActivationCount)
+                    continue;
+
+                if (setEntry.activationTemplateIds.empty())
                     continue;
 
                 std::unique_ptr<Item> tempItem(Item::CreateItem(carrierItemEntry, 1, player, true, 0));
@@ -1797,7 +1880,7 @@ namespace
                 tempItem->SetSlot(VIRTUAL_TUJIAN_SLOT);
 
                 sItemSkillsManager->SetExternalItemSkills(
-                    playerGuid, tempItem->GetGUID().GetCounter(), carrierItemEntry, skillTemplateIds);
+                    playerGuid, tempItem->GetGUID().GetCounter(), carrierItemEntry, setEntry.activationTemplateIds);
                 sItemSkillsEffects->ApplyItemSkillEffects(player, tempItem.get());
 
                 VirtualAppliedItem applied;
@@ -1809,12 +1892,35 @@ namespace
                 applied.hasExternalSkills = true;
                 applied.item = std::move(tempItem);
                 appliedItems.push_back(std::move(applied));
+                ++profile.externalSkillCarrierCount;
             }
         }
 
         sItemSkillsEffects->UpdatePlayerHitSkillsCache(player);
+        profile.applyExternalSkillsMs = duration_cast<milliseconds>(high_resolution_clock::now() - applyExternalSkillsStart).count();
 #endif
-        RefreshPlayerStats(player);
+
+        if (!appliedItems.empty())
+            playerVirtualItems[playerGuid] = std::move(appliedItems);
+
+        bool needRefreshStats =
+            hadCachedState ||
+            profile.equipModeActivationCount > 0 ||
+            hasAggregatedBonuses ||
+            profile.itemSetContributionCount > 0 ||
+            totalFixedAllStatsBonus > 0 ||
+            profile.externalSkillCarrierCount > 0;
+
+        if (needRefreshStats)
+        {
+            auto refreshStart = high_resolution_clock::now();
+            RefreshPlayerStats(player);
+            profile.refreshStatsMs = duration_cast<milliseconds>(high_resolution_clock::now() - refreshStart).count();
+        }
+
+        profile.totalMs = duration_cast<milliseconds>(high_resolution_clock::now() - totalStart).count();
+
+        return profile;
     }
 
     void UpsertPlayerActivationRecord(uint32 playerGuid, PlayerActivationRecord const& newRecord)
@@ -2073,16 +2179,12 @@ public:
         auto totalStart = high_resolution_clock::now();
 
         LoadPlayerActivationData(player);
-
         ApplyPlayerActivationData(player);
 
-        auto cacheItr = playerActivationCache.find(player->GetGUID().GetCounter());
-        size_t activationCount = cacheItr != playerActivationCache.end() ? cacheItr->second.size() : 0;
         LOG_INFO("module",
-            "mod-tujian-system: 玩家 {} OnPlayerLogin 完成 GUID={} 激活缓存={} 总耗时={}ms",
+            "mod-tujian-system: 玩家 {} OnPlayerLogin 完成 GUID={} 总耗时={}ms",
             player->GetName(),
             player->GetGUID().ToString(),
-            activationCount,
             duration_cast<milliseconds>(high_resolution_clock::now() - totalStart).count());
     }
 

@@ -35,6 +35,7 @@ constexpr char const* CONF_ENABLE = "CutSystem.Enable";
 constexpr char const* CONF_DEBUG = "CutSystem.Debug";
 constexpr char CUT_SYSTEM_ADDON_PREFIX[] = "CUT_SYS";
 constexpr size_t MAX_ADDON_PAYLOAD = 220;
+constexpr size_t MAX_CLIENT_HIT_NOTIFICATIONS = 10;
 
 std::string SanitizeAddonText(std::string text)
 {
@@ -389,7 +390,11 @@ public:
         if (!playerGuid || damage == 0)
             return;
 
-        _pendingHitNotifications[playerGuid].push_back(damage);
+        std::vector<uint32>& pendingDamages = _pendingHitNotifications[playerGuid];
+        if (pendingDamages.size() >= MAX_CLIENT_HIT_NOTIFICATIONS)
+            return;
+
+        pendingDamages.push_back(damage);
     }
 
     void FlushHitNotifications()
@@ -615,19 +620,25 @@ void SendCutSystemHitNotification(Player* player, std::vector<uint32> const& dam
     payload << "CT_HITS:";
 
     bool first = true;
+    size_t sentCount = 0;
     for (uint32 damage : damages)
     {
         if (damage == 0)
             continue;
+
+        if (sentCount >= MAX_CLIENT_HIT_NOTIFICATIONS)
+            break;
 
         if (!first)
             payload << '~';
 
         first = false;
         payload << damage;
+        ++sentCount;
     }
 
-    SendCutSystemPayload(player, payload.str());
+    if (!first)
+        SendCutSystemPayload(player, payload.str());
 }
 
 class CutSystemWorldScript : public WorldScript
