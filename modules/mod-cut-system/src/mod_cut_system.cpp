@@ -19,6 +19,7 @@
 #include "Player.h"
 #include "Random.h"
 #include "ScriptMgr.h"
+#include "SpellInfo.h"
 #include "Unit.h"
 #include <algorithm>
 #include <cmath>
@@ -418,7 +419,7 @@ public:
         }
     }
 
-    uint32 CalculateCutDisplayDamage(Unit* attacker, Unit* victim, CutEntry const& entry) const
+    uint32 CalculateCutDamage(Unit* attacker, Unit* victim, CutEntry const& entry) const
     {
         if (!attacker || !victim)
             return 0;
@@ -433,9 +434,9 @@ public:
         return std::max<uint32>(1, finalDamage);
     }
 
-    bool TryPrepareCutDamage(Unit* attacker, Unit* victim, uint32& displayDamage) const
+    bool TryPrepareCutDamage(Unit* attacker, Unit* victim, uint32& cutDamage) const
     {
-        displayDamage = 0;
+        cutDamage = 0;
 
         if (!IsEnabled() || !attacker || !victim)
             return false;
@@ -456,8 +457,8 @@ public:
         if (!roll_chance_f(entry->chance))
             return false;
 
-        displayDamage = CalculateCutDisplayDamage(attacker, victim, *entry);
-        if (displayDamage == 0)
+        cutDamage = CalculateCutDamage(attacker, victim, *entry);
+        if (cutDamage == 0)
             return false;
 
         if (IsDebugEnabled())
@@ -466,13 +467,55 @@ public:
                 player->GetName(),
                 playerCutLevel,
                 victim->GetName(),
-                displayDamage,
+                cutDamage,
                 entry->cutLevel,
                 static_cast<uint32>(entry->damageType),
                 entry->cutDamage,
                 entry->chance);
         }
 
+        return true;
+    }
+
+    bool TryApplyCutDamage(Unit* attacker, Unit* victim, uint32& damage, uint32& appliedDamage) const
+    {
+        appliedDamage = 0;
+
+        if (!attacker || !victim || !victim->IsAlive())
+            return false;
+
+        uint32 cutDamage = 0;
+        if (!TryPrepareCutDamage(attacker, victim, cutDamage))
+            return false;
+
+        appliedDamage = std::min(cutDamage, std::numeric_limits<uint32>::max() - damage);
+        if (appliedDamage == 0)
+            return false;
+
+        damage += appliedDamage;
+        return true;
+    }
+
+    bool TryApplyCutDamage(Unit* attacker, Unit* victim, int32& damage, uint32& appliedDamage) const
+    {
+        appliedDamage = 0;
+
+        if (!attacker || !victim || !victim->IsAlive() || damage < 0)
+            return false;
+
+        uint32 cutDamage = 0;
+        if (!TryPrepareCutDamage(attacker, victim, cutDamage))
+            return false;
+
+        int32 remainingSpace = std::numeric_limits<int32>::max() - damage;
+        if (remainingSpace <= 0)
+            return false;
+
+        appliedDamage = std::min<uint32>(cutDamage, static_cast<uint32>(remainingSpace));
+        if (appliedDamage == 0)
+            return false;
+
+        damage += static_cast<int32>(appliedDamage);
         return true;
     }
 
@@ -819,27 +862,50 @@ public:
 class CutSystemUnitScript : public UnitScript
 {
 public:
-    CutSystemUnitScript() : UnitScript("CutSystemUnitScript") { }
-
-    void OnDamage(Unit* attacker, Unit* victim, uint32& damage) override
+    CutSystemUnitScript() : UnitScript("CutSystemUnitScript", true,
     {
-        if (!attacker || !victim || !victim->IsAlive())
+        UNITHOOK_MODIFY_PERIODIC_DAMAGE_AURAS_TICK,
+        UNITHOOK_MODIFY_MELEE_DAMAGE,
+        UNITHOOK_MODIFY_SPELL_DAMAGE_TAKEN
+    }) { }
+
+    void ModifyPeriodicDamageAurasTick(Unit* victim, Unit* attacker, uint32& damage, SpellInfo const* spellInfo) override
+    {
+        if (!spellInfo || spellInfo->IsPositive())
             return;
 
-        uint32 displayDamage = 0;
-        if (!CutSystemMgr::Instance()->TryPrepareCutDamage(attacker, victim, displayDamage))
+        uint32 appliedDamage = 0;
+        if (!CutSystemMgr::Instance()->TryApplyCutDamage(attacker, victim, damage, appliedDamage))
             return;
 
-        uint32 appliedDamage = displayDamage;
-        if (appliedDamage > std::numeric_limits<uint32>::max() - damage)
-            appliedDamage = std::numeric_limits<uint32>::max() - damage;
+        QueueCutHitNotification(attacker, appliedDamage);
+    }
 
+    void ModifyMeleeDamage(Unit* victim, Unit* attacker, uint32& damage) override
+    {
+        uint32 appliedDamage = 0;
+        if (!CutSystemMgr::Instance()->TryApplyCutDamage(attacker, victim, damage, appliedDamage))
+            return;
+
+        QueueCutHitNotification(attacker, appliedDamage);
+    }
+
+    void ModifySpellDamageTaken(Unit* victim, Unit* attacker, int32& damage, SpellInfo const* /*spellInfo*/) override
+    {
+        uint32 appliedDamage = 0;
+        if (!CutSystemMgr::Instance()->TryApplyCutDamage(attacker, victim, damage, appliedDamage))
+            return;
+
+        QueueCutHitNotification(attacker, appliedDamage);
+    }
+
+private:
+    static void QueueCutHitNotification(Unit* attacker, uint32 appliedDamage)
+    {
         if (appliedDamage == 0)
             return;
 
-        damage += appliedDamage;
-
-        if (Player* player = attacker->ToPlayer())
+        if (Player* player = attacker ? attacker->ToPlayer() : nullptr)
             CutSystemMgr::Instance()->QueueHitNotification(player->GetGUID().GetCounter(), appliedDamage);
     }
 };

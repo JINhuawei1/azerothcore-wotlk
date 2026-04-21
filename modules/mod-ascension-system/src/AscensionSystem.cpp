@@ -4,10 +4,13 @@
  */
 
 #include "AscensionSystem.h"
+#include "ObjectAccessor.h"
+#include "ScriptedCreature.h"
 #include "Logging/Log.h"
 #include "World.h"
 #include "Mail.h"
 #include "DBCStores.h"
+#include <array>
 #include <sstream>
 #include <chrono>
 #include <algorithm>  // 用于 std::all_of, std::min, std::remove
@@ -32,6 +35,350 @@ static RequirementInterface* GetRequirementModule()
     if (!mgr)
         return nullptr;
     return mgr->GetRequirementModule();
+}
+
+namespace
+{
+    constexpr uint32 ASCENSION_CHAIN_BOSS_FIRST = 399801;
+    constexpr uint32 ASCENSION_CHAIN_BOSS_LAST  = 399818;
+    constexpr uint32 ASCENSION_CHAIN_BOSS_COUNT = ASCENSION_CHAIN_BOSS_LAST - ASCENSION_CHAIN_BOSS_FIRST + 1;
+    constexpr uint32 ASCENSION_CHAIN_SUMMON_MS  = 30 * IN_MILLISECONDS;
+    constexpr uint32 ASCENSION_BOSS_HEALTH_BASE = 1000000000;
+    constexpr uint32 ASCENSION_BOSS_HEALTH_STEP = 100000000;
+    constexpr uint32 ASCENSION_TRUE_STRIKE_MIN_MS = 1800;
+    constexpr uint32 ASCENSION_TRUE_STRIKE_MAX_MS = 2400;
+
+    enum AscensionBossSpellId : uint32
+    {
+        SPELL_ASCENSION_CLEAVE              = 15284,
+        SPELL_ASCENSION_MORTAL_STRIKE       = 16856,
+        SPELL_ASCENSION_WHIRLWIND           = 13736,
+        SPELL_ASCENSION_WAR_STOMP           = 31480,
+        SPELL_ASCENSION_ARCANE_EXPLOSION    = 26192,
+        SPELL_ASCENSION_FROSTBOLT           = 62601,
+        SPELL_ASCENSION_FROST_NOVA          = 62605,
+        SPELL_ASCENSION_CHAIN_LIGHTNING     = 33665,
+        SPELL_ASCENSION_SHADOW_BOLT         = 27646,
+        SPELL_ASCENSION_SHADOW_BOLT_VOLLEY  = 20741,
+        SPELL_ASCENSION_FLAME_BREATH        = 43140,
+        SPELL_ASCENSION_FEAR                = 26580,
+        SPELL_ASCENSION_SHOCK_BLAST         = 38509,
+        SPELL_ASCENSION_FORKED_LIGHTNING    = 38145,
+        SPELL_ASCENSION_NEEDLE_SPINE        = 39992,
+        SPELL_ASCENSION_TIDAL_BURST         = 39878,
+        SPELL_ASCENSION_RAIN_OF_FIRE        = 31340
+    };
+
+    enum class AscensionBossSpellCastType : uint8
+    {
+        Victim,
+        Area,
+        Random
+    };
+
+    struct AscensionBossSpellAction
+    {
+        uint32 SpellId;
+        AscensionBossSpellCastType CastType;
+        uint32 FirstCastMinMs;
+        uint32 FirstCastMaxMs;
+        uint32 RepeatMinMs;
+        uint32 RepeatMaxMs;
+        float RandomTargetDistance;
+    };
+
+    struct AscensionBossSpellProfile
+    {
+        std::array<AscensionBossSpellAction, 3> Actions;
+    };
+
+    struct AscensionBossCombatProfile
+    {
+        std::array<AscensionBossSpellAction, 5> Actions;
+        std::array<uint8, 3> ComboActionOrder;
+        uint32 ComboCooldownMinMs;
+        uint32 ComboCooldownMaxMs;
+    };
+
+    #if 0
+    constexpr std::array<AscensionBossSpellProfile, ASCENSION_CHAIN_BOSS_COUNT> ASCENSION_BOSS_SPELL_PROFILES =
+    {{
+        {{ SPELL_ASCENSION_SHOCK_BLAST,         AscensionBossSpellCastType::Area,   6000,  9000, 12000, 16000,  0.0f },
+           { SPELL_ASCENSION_FEAR,               AscensionBossSpellCastType::Area,  12000, 16000, 21000, 26000,  0.0f },
+           { SPELL_ASCENSION_ARCANE_EXPLOSION,  AscensionBossSpellCastType::Area,   4000,  6000, 10000, 13000,  0.0f }}},
+        {{ SPELL_ASCENSION_FROSTBOLT,           AscensionBossSpellCastType::Random,  5000,  8000,  8000, 11000, 45.0f },
+           { SPELL_ASCENSION_FROST_NOVA,        AscensionBossSpellCastType::Area,   10000, 13000, 17000, 21000,  0.0f },
+           { SPELL_ASCENSION_CHAIN_LIGHTNING,   AscensionBossSpellCastType::Random,  8000, 12000, 14000, 18000, 45.0f }}},
+        {{ SPELL_ASCENSION_CLEAVE,              AscensionBossSpellCastType::Victim,  4000,  6000,  7000, 10000,  0.0f },
+           { SPELL_ASCENSION_WHIRLWIND,         AscensionBossSpellCastType::Area,   10000, 14000, 18000, 22000,  0.0f },
+           { SPELL_ASCENSION_WAR_STOMP,         AscensionBossSpellCastType::Area,    8000, 12000, 16000, 20000,  0.0f }}},
+        {{ SPELL_ASCENSION_SHADOW_BOLT,         AscensionBossSpellCastType::Random,  4000,  7000,  8000, 11000, 45.0f },
+           { SPELL_ASCENSION_SHADOW_BOLT_VOLLEY,AscensionBossSpellCastType::Area,   10000, 14000, 17000, 21000,  0.0f },
+           { SPELL_ASCENSION_RAIN_OF_FIRE,      AscensionBossSpellCastType::Random, 14000, 18000, 21000, 25000, 40.0f }}},
+        {{ SPELL_ASCENSION_MORTAL_STRIKE,       AscensionBossSpellCastType::Victim,  5000,  8000,  9000, 12000,  0.0f },
+           { SPELL_ASCENSION_CLEAVE,            AscensionBossSpellCastType::Victim,  3000,  5000,  6000,  8000,  0.0f },
+           { SPELL_ASCENSION_WAR_STOMP,         AscensionBossSpellCastType::Area,   10000, 13000, 18000, 22000,  0.0f }}},
+        {{ SPELL_ASCENSION_CHAIN_LIGHTNING,     AscensionBossSpellCastType::Random,  5000,  8000,  9000, 12000, 45.0f },
+           { SPELL_ASCENSION_FORKED_LIGHTNING,  AscensionBossSpellCastType::Area,   10000, 14000, 18000, 22000,  0.0f },
+           { SPELL_ASCENSION_SHOCK_BLAST,       AscensionBossSpellCastType::Area,   14000, 18000, 22000, 26000,  0.0f }}},
+        {{ SPELL_ASCENSION_MORTAL_STRIKE,       AscensionBossSpellCastType::Victim,  4000,  7000,  8000, 11000,  0.0f },
+           { SPELL_ASCENSION_WHIRLWIND,         AscensionBossSpellCastType::Area,    9000, 12000, 16000, 20000,  0.0f },
+           { SPELL_ASCENSION_FEAR,              AscensionBossSpellCastType::Area,   15000, 18000, 24000, 28000,  0.0f }}},
+        {{ SPELL_ASCENSION_FLAME_BREATH,        AscensionBossSpellCastType::Victim,  5000,  8000,  9000, 12000,  0.0f },
+           { SPELL_ASCENSION_WAR_STOMP,         AscensionBossSpellCastType::Area,   10000, 13000, 16000, 20000,  0.0f },
+           { SPELL_ASCENSION_CLEAVE,            AscensionBossSpellCastType::Victim,  3000,  5000,  6000,  9000,  0.0f }}},
+        {{ SPELL_ASCENSION_FROSTBOLT,           AscensionBossSpellCastType::Random,  4000,  7000,  7000, 10000, 45.0f },
+           { SPELL_ASCENSION_ARCANE_EXPLOSION,  AscensionBossSpellCastType::Area,    9000, 12000, 15000, 18000,  0.0f },
+           { SPELL_ASCENSION_FROST_NOVA,        AscensionBossSpellCastType::Area,   13000, 16000, 20000, 24000,  0.0f }}},
+        {{ SPELL_ASCENSION_CLEAVE,              AscensionBossSpellCastType::Victim,  4000,  6000,  7000,  9000,  0.0f },
+           { SPELL_ASCENSION_MORTAL_STRIKE,     AscensionBossSpellCastType::Victim,  8000, 11000, 12000, 15000,  0.0f },
+           { SPELL_ASCENSION_SHOCK_BLAST,       AscensionBossSpellCastType::Area,   12000, 16000, 20000, 24000,  0.0f }}},
+        {{ SPELL_ASCENSION_SHADOW_BOLT,         AscensionBossSpellCastType::Random,  5000,  8000,  8000, 11000, 45.0f },
+           { SPELL_ASCENSION_FEAR,              AscensionBossSpellCastType::Area,   12000, 16000, 21000, 25000,  0.0f },
+           { SPELL_ASCENSION_RAIN_OF_FIRE,      AscensionBossSpellCastType::Random, 15000, 18000, 24000, 28000, 40.0f }}},
+        {{ SPELL_ASCENSION_SHADOW_BOLT_VOLLEY,  AscensionBossSpellCastType::Area,    7000, 10000, 12000, 15000,  0.0f },
+           { SPELL_ASCENSION_CHAIN_LIGHTNING,   AscensionBossSpellCastType::Random, 10000, 13000, 16000, 19000, 45.0f },
+           { SPELL_ASCENSION_FORKED_LIGHTNING,  AscensionBossSpellCastType::Area,   14000, 18000, 22000, 26000,  0.0f }}},
+        {{ SPELL_ASCENSION_NEEDLE_SPINE,        AscensionBossSpellCastType::Random,  5000,  8000, 10000, 13000, 45.0f },
+           { SPELL_ASCENSION_TIDAL_BURST,       AscensionBossSpellCastType::Area,   12000, 15000, 20000, 24000,  0.0f },
+           { SPELL_ASCENSION_FROST_NOVA,        AscensionBossSpellCastType::Area,    9000, 12000, 18000, 22000,  0.0f }}},
+        {{ SPELL_ASCENSION_RAIN_OF_FIRE,        AscensionBossSpellCastType::Random,  6000,  9000, 11000, 14000, 40.0f },
+           { SPELL_ASCENSION_SHADOW_BOLT_VOLLEY,AscensionBossSpellCastType::Area,   11000, 15000, 18000, 22000,  0.0f },
+           { SPELL_ASCENSION_FEAR,              AscensionBossSpellCastType::Area,   16000, 20000, 24000, 28000,  0.0f }}},
+        {{ SPELL_ASCENSION_ARCANE_EXPLOSION,    AscensionBossSpellCastType::Area,    5000,  8000, 10000, 13000,  0.0f },
+           { SPELL_ASCENSION_CHAIN_LIGHTNING,   AscensionBossSpellCastType::Random,  8000, 11000, 14000, 17000, 45.0f },
+           { SPELL_ASCENSION_FORKED_LIGHTNING,  AscensionBossSpellCastType::Area,   13000, 16000, 19000, 23000,  0.0f }}},
+        {{ SPELL_ASCENSION_MORTAL_STRIKE,       AscensionBossSpellCastType::Victim,  4000,  6000,  8000, 10000,  0.0f },
+           { SPELL_ASCENSION_WHIRLWIND,         AscensionBossSpellCastType::Area,    9000, 12000, 16000, 20000,  0.0f },
+           { SPELL_ASCENSION_FLAME_BREATH,      AscensionBossSpellCastType::Victim, 14000, 17000, 22000, 26000,  0.0f }}},
+        {{ SPELL_ASCENSION_CLEAVE,              AscensionBossSpellCastType::Victim,  3000,  5000,  6000,  8000,  0.0f },
+           { SPELL_ASCENSION_WAR_STOMP,         AscensionBossSpellCastType::Area,    9000, 12000, 16000, 19000,  0.0f },
+           { SPELL_ASCENSION_TIDAL_BURST,       AscensionBossSpellCastType::Area,   14000, 18000, 23000, 27000,  0.0f }}},
+        {{ SPELL_ASCENSION_NEEDLE_SPINE,        AscensionBossSpellCastType::Random,  4000,  7000,  8000, 11000, 45.0f },
+           { SPELL_ASCENSION_SHADOW_BOLT,       AscensionBossSpellCastType::Random,  9000, 12000, 14000, 18000, 45.0f },
+           { SPELL_ASCENSION_CHAIN_LIGHTNING,   AscensionBossSpellCastType::Random, 13000, 16000, 20000, 24000, 45.0f }}}
+    }};
+
+    #endif
+
+    AscensionBossSpellProfile MakeAscensionBossSpellProfile(
+        AscensionBossSpellAction const& action1,
+        AscensionBossSpellAction const& action2,
+        AscensionBossSpellAction const& action3)
+    {
+        AscensionBossSpellProfile profile = {};
+        profile.Actions[0] = action1;
+        profile.Actions[1] = action2;
+        profile.Actions[2] = action3;
+        return profile;
+    }
+
+    std::array<AscensionBossSpellProfile, ASCENSION_CHAIN_BOSS_COUNT> const ASCENSION_BOSS_SPELL_PROFILES =
+    {{
+        MakeAscensionBossSpellProfile(
+            { SPELL_ASCENSION_SHOCK_BLAST,        AscensionBossSpellCastType::Area,   6000,  9000, 12000, 16000,  0.0f },
+            { SPELL_ASCENSION_FEAR,               AscensionBossSpellCastType::Area,  12000, 16000, 21000, 26000,  0.0f },
+            { SPELL_ASCENSION_ARCANE_EXPLOSION,  AscensionBossSpellCastType::Area,   4000,  6000, 10000, 13000,  0.0f }),
+        MakeAscensionBossSpellProfile(
+            { SPELL_ASCENSION_FROSTBOLT,         AscensionBossSpellCastType::Random,  5000,  8000,  8000, 11000, 45.0f },
+            { SPELL_ASCENSION_FROST_NOVA,        AscensionBossSpellCastType::Area,   10000, 13000, 17000, 21000,  0.0f },
+            { SPELL_ASCENSION_CHAIN_LIGHTNING,   AscensionBossSpellCastType::Random,  8000, 12000, 14000, 18000, 45.0f }),
+        MakeAscensionBossSpellProfile(
+            { SPELL_ASCENSION_CLEAVE,            AscensionBossSpellCastType::Victim,  4000,  6000,  7000, 10000,  0.0f },
+            { SPELL_ASCENSION_WHIRLWIND,         AscensionBossSpellCastType::Area,   10000, 14000, 18000, 22000,  0.0f },
+            { SPELL_ASCENSION_WAR_STOMP,         AscensionBossSpellCastType::Area,    8000, 12000, 16000, 20000,  0.0f }),
+        MakeAscensionBossSpellProfile(
+            { SPELL_ASCENSION_SHADOW_BOLT,       AscensionBossSpellCastType::Random,  4000,  7000,  8000, 11000, 45.0f },
+            { SPELL_ASCENSION_SHADOW_BOLT_VOLLEY,AscensionBossSpellCastType::Area,   10000, 14000, 17000, 21000,  0.0f },
+            { SPELL_ASCENSION_RAIN_OF_FIRE,      AscensionBossSpellCastType::Random, 14000, 18000, 21000, 25000, 40.0f }),
+        MakeAscensionBossSpellProfile(
+            { SPELL_ASCENSION_MORTAL_STRIKE,     AscensionBossSpellCastType::Victim,  5000,  8000,  9000, 12000,  0.0f },
+            { SPELL_ASCENSION_CLEAVE,            AscensionBossSpellCastType::Victim,  3000,  5000,  6000,  8000,  0.0f },
+            { SPELL_ASCENSION_WAR_STOMP,         AscensionBossSpellCastType::Area,   10000, 13000, 18000, 22000,  0.0f }),
+        MakeAscensionBossSpellProfile(
+            { SPELL_ASCENSION_CHAIN_LIGHTNING,   AscensionBossSpellCastType::Random,  5000,  8000,  9000, 12000, 45.0f },
+            { SPELL_ASCENSION_FORKED_LIGHTNING,  AscensionBossSpellCastType::Area,   10000, 14000, 18000, 22000,  0.0f },
+            { SPELL_ASCENSION_SHOCK_BLAST,       AscensionBossSpellCastType::Area,   14000, 18000, 22000, 26000,  0.0f }),
+        MakeAscensionBossSpellProfile(
+            { SPELL_ASCENSION_MORTAL_STRIKE,     AscensionBossSpellCastType::Victim,  4000,  7000,  8000, 11000,  0.0f },
+            { SPELL_ASCENSION_WHIRLWIND,         AscensionBossSpellCastType::Area,    9000, 12000, 16000, 20000,  0.0f },
+            { SPELL_ASCENSION_FEAR,              AscensionBossSpellCastType::Area,   15000, 18000, 24000, 28000,  0.0f }),
+        MakeAscensionBossSpellProfile(
+            { SPELL_ASCENSION_FLAME_BREATH,      AscensionBossSpellCastType::Victim,  5000,  8000,  9000, 12000,  0.0f },
+            { SPELL_ASCENSION_WAR_STOMP,         AscensionBossSpellCastType::Area,   10000, 13000, 16000, 20000,  0.0f },
+            { SPELL_ASCENSION_CLEAVE,            AscensionBossSpellCastType::Victim,  3000,  5000,  6000,  9000,  0.0f }),
+        MakeAscensionBossSpellProfile(
+            { SPELL_ASCENSION_FROSTBOLT,         AscensionBossSpellCastType::Random,  4000,  7000,  7000, 10000, 45.0f },
+            { SPELL_ASCENSION_ARCANE_EXPLOSION,  AscensionBossSpellCastType::Area,    9000, 12000, 15000, 18000,  0.0f },
+            { SPELL_ASCENSION_FROST_NOVA,        AscensionBossSpellCastType::Area,   13000, 16000, 20000, 24000,  0.0f }),
+        MakeAscensionBossSpellProfile(
+            { SPELL_ASCENSION_CLEAVE,            AscensionBossSpellCastType::Victim,  4000,  6000,  7000,  9000,  0.0f },
+            { SPELL_ASCENSION_MORTAL_STRIKE,     AscensionBossSpellCastType::Victim,  8000, 11000, 12000, 15000,  0.0f },
+            { SPELL_ASCENSION_SHOCK_BLAST,       AscensionBossSpellCastType::Area,   12000, 16000, 20000, 24000,  0.0f }),
+        MakeAscensionBossSpellProfile(
+            { SPELL_ASCENSION_SHADOW_BOLT,       AscensionBossSpellCastType::Random,  5000,  8000,  8000, 11000, 45.0f },
+            { SPELL_ASCENSION_FEAR,              AscensionBossSpellCastType::Area,   12000, 16000, 21000, 25000,  0.0f },
+            { SPELL_ASCENSION_RAIN_OF_FIRE,      AscensionBossSpellCastType::Random, 15000, 18000, 24000, 28000, 40.0f }),
+        MakeAscensionBossSpellProfile(
+            { SPELL_ASCENSION_SHADOW_BOLT_VOLLEY,AscensionBossSpellCastType::Area,    7000, 10000, 12000, 15000,  0.0f },
+            { SPELL_ASCENSION_CHAIN_LIGHTNING,   AscensionBossSpellCastType::Random, 10000, 13000, 16000, 19000, 45.0f },
+            { SPELL_ASCENSION_FORKED_LIGHTNING,  AscensionBossSpellCastType::Area,   14000, 18000, 22000, 26000,  0.0f }),
+        MakeAscensionBossSpellProfile(
+            { SPELL_ASCENSION_NEEDLE_SPINE,      AscensionBossSpellCastType::Random,  5000,  8000, 10000, 13000, 45.0f },
+            { SPELL_ASCENSION_TIDAL_BURST,       AscensionBossSpellCastType::Area,   12000, 15000, 20000, 24000,  0.0f },
+            { SPELL_ASCENSION_FROST_NOVA,        AscensionBossSpellCastType::Area,    9000, 12000, 18000, 22000,  0.0f }),
+        MakeAscensionBossSpellProfile(
+            { SPELL_ASCENSION_RAIN_OF_FIRE,      AscensionBossSpellCastType::Random,  6000,  9000, 11000, 14000, 40.0f },
+            { SPELL_ASCENSION_SHADOW_BOLT_VOLLEY,AscensionBossSpellCastType::Area,   11000, 15000, 18000, 22000,  0.0f },
+            { SPELL_ASCENSION_FEAR,              AscensionBossSpellCastType::Area,   16000, 20000, 24000, 28000,  0.0f }),
+        MakeAscensionBossSpellProfile(
+            { SPELL_ASCENSION_ARCANE_EXPLOSION,  AscensionBossSpellCastType::Area,    5000,  8000, 10000, 13000,  0.0f },
+            { SPELL_ASCENSION_CHAIN_LIGHTNING,   AscensionBossSpellCastType::Random,  8000, 11000, 14000, 17000, 45.0f },
+            { SPELL_ASCENSION_FORKED_LIGHTNING,  AscensionBossSpellCastType::Area,   13000, 16000, 19000, 23000,  0.0f }),
+        MakeAscensionBossSpellProfile(
+            { SPELL_ASCENSION_MORTAL_STRIKE,     AscensionBossSpellCastType::Victim,  4000,  6000,  8000, 10000,  0.0f },
+            { SPELL_ASCENSION_WHIRLWIND,         AscensionBossSpellCastType::Area,    9000, 12000, 16000, 20000,  0.0f },
+            { SPELL_ASCENSION_FLAME_BREATH,      AscensionBossSpellCastType::Victim, 14000, 17000, 22000, 26000,  0.0f }),
+        MakeAscensionBossSpellProfile(
+            { SPELL_ASCENSION_CLEAVE,            AscensionBossSpellCastType::Victim,  3000,  5000,  6000,  8000,  0.0f },
+            { SPELL_ASCENSION_WAR_STOMP,         AscensionBossSpellCastType::Area,    9000, 12000, 16000, 19000,  0.0f },
+            { SPELL_ASCENSION_TIDAL_BURST,       AscensionBossSpellCastType::Area,   14000, 18000, 23000, 27000,  0.0f }),
+        MakeAscensionBossSpellProfile(
+            { SPELL_ASCENSION_NEEDLE_SPINE,      AscensionBossSpellCastType::Random,  4000,  7000,  8000, 11000, 45.0f },
+            { SPELL_ASCENSION_SHADOW_BOLT,       AscensionBossSpellCastType::Random,  9000, 12000, 14000, 18000, 45.0f },
+            { SPELL_ASCENSION_CHAIN_LIGHTNING,   AscensionBossSpellCastType::Random, 13000, 16000, 20000, 24000, 45.0f })
+    }};
+
+    uint32 GetAscensionBossSequenceIndex(uint32 entry)
+    {
+        if (!entry || entry < ASCENSION_CHAIN_BOSS_FIRST || entry > ASCENSION_CHAIN_BOSS_LAST)
+            return 0;
+
+        return entry - ASCENSION_CHAIN_BOSS_FIRST;
+    }
+
+    uint32 GetAscensionBossMaxHealth(uint32 entry)
+    {
+        return ASCENSION_BOSS_HEALTH_BASE + GetAscensionBossSequenceIndex(entry) * ASCENSION_BOSS_HEALTH_STEP;
+    }
+
+    uint32 GetAscensionBossTrueStrikeDamage(uint32 entry)
+    {
+        uint32 maxHealth = GetAscensionBossMaxHealth(entry);
+        return std::max<uint32>(25000u, maxHealth / 25000u);
+    }
+
+    AscensionBossCombatProfile MakeAscensionBossCombatProfile(
+        AscensionBossSpellAction const& action1,
+        AscensionBossSpellAction const& action2,
+        AscensionBossSpellAction const& action3,
+        AscensionBossSpellAction const& action4,
+        AscensionBossSpellAction const& action5,
+        uint8 comboAction1,
+        uint8 comboAction2,
+        uint8 comboAction3,
+        uint32 comboCooldownMinMs,
+        uint32 comboCooldownMaxMs)
+    {
+        AscensionBossCombatProfile profile = {};
+        profile.Actions[0] = action1;
+        profile.Actions[1] = action2;
+        profile.Actions[2] = action3;
+        profile.Actions[3] = action4;
+        profile.Actions[4] = action5;
+        profile.ComboActionOrder[0] = comboAction1;
+        profile.ComboActionOrder[1] = comboAction2;
+        profile.ComboActionOrder[2] = comboAction3;
+        profile.ComboCooldownMinMs = comboCooldownMinMs;
+        profile.ComboCooldownMaxMs = comboCooldownMaxMs;
+        return profile;
+    }
+
+    constexpr uint32 ASCENSION_COMBAT_ARCHETYPE_COUNT = 6;
+
+    std::array<AscensionBossCombatProfile, ASCENSION_COMBAT_ARCHETYPE_COUNT> const ASCENSION_BOSS_COMBAT_PROFILES =
+    {{
+        MakeAscensionBossCombatProfile(
+            { SPELL_ASCENSION_CLEAVE,            AscensionBossSpellCastType::Victim,  3000,  5000,  6000,  8000,  0.0f },
+            { SPELL_ASCENSION_MORTAL_STRIKE,     AscensionBossSpellCastType::Victim,  7000,  9000, 10000, 13000,  0.0f },
+            { SPELL_ASCENSION_WAR_STOMP,         AscensionBossSpellCastType::Area,   10000, 13000, 17000, 21000,  0.0f },
+            { SPELL_ASCENSION_WHIRLWIND,         AscensionBossSpellCastType::Area,   12000, 15000, 18000, 22000,  0.0f },
+            { SPELL_ASCENSION_SHOCK_BLAST,       AscensionBossSpellCastType::Area,   15000, 18000, 22000, 26000,  0.0f },
+            2, 3, 1, 14000, 18000),
+        MakeAscensionBossCombatProfile(
+            { SPELL_ASCENSION_FROSTBOLT,         AscensionBossSpellCastType::Random,  4000,  6000,  7000,  9000, 45.0f },
+            { SPELL_ASCENSION_FROST_NOVA,        AscensionBossSpellCastType::Area,    8000, 11000, 15000, 19000,  0.0f },
+            { SPELL_ASCENSION_ARCANE_EXPLOSION,  AscensionBossSpellCastType::Area,   10000, 13000, 14000, 17000,  0.0f },
+            { SPELL_ASCENSION_CHAIN_LIGHTNING,   AscensionBossSpellCastType::Random, 12000, 15000, 16000, 19000, 45.0f },
+            { SPELL_ASCENSION_FEAR,              AscensionBossSpellCastType::Area,   16000, 20000, 24000, 28000,  0.0f },
+            1, 0, 2, 15000, 19000),
+        MakeAscensionBossCombatProfile(
+            { SPELL_ASCENSION_CHAIN_LIGHTNING,   AscensionBossSpellCastType::Random,  4000,  7000,  8000, 11000, 45.0f },
+            { SPELL_ASCENSION_FORKED_LIGHTNING,  AscensionBossSpellCastType::Area,    7000, 10000, 13000, 16000,  0.0f },
+            { SPELL_ASCENSION_SHOCK_BLAST,       AscensionBossSpellCastType::Area,   10000, 13000, 18000, 22000,  0.0f },
+            { SPELL_ASCENSION_RAIN_OF_FIRE,      AscensionBossSpellCastType::Random, 13000, 16000, 18000, 22000, 40.0f },
+            { SPELL_ASCENSION_WAR_STOMP,         AscensionBossSpellCastType::Area,   15000, 18000, 20000, 24000,  0.0f },
+            4, 0, 1, 13000, 17000),
+        MakeAscensionBossCombatProfile(
+            { SPELL_ASCENSION_SHADOW_BOLT,       AscensionBossSpellCastType::Random,  3000,  5000,  7000,  9000, 45.0f },
+            { SPELL_ASCENSION_SHADOW_BOLT_VOLLEY,AscensionBossSpellCastType::Area,    8000, 11000, 14000, 17000,  0.0f },
+            { SPELL_ASCENSION_FLAME_BREATH,      AscensionBossSpellCastType::Victim, 10000, 13000, 14000, 17000,  0.0f },
+            { SPELL_ASCENSION_FEAR,              AscensionBossSpellCastType::Area,   14000, 18000, 22000, 26000,  0.0f },
+            { SPELL_ASCENSION_RAIN_OF_FIRE,      AscensionBossSpellCastType::Random, 16000, 20000, 23000, 27000, 40.0f },
+            3, 1, 2, 15000, 19000),
+        MakeAscensionBossCombatProfile(
+            { SPELL_ASCENSION_NEEDLE_SPINE,      AscensionBossSpellCastType::Random,  4000,  6000,  7000,  9000, 45.0f },
+            { SPELL_ASCENSION_TIDAL_BURST,       AscensionBossSpellCastType::Area,    9000, 12000, 15000, 18000,  0.0f },
+            { SPELL_ASCENSION_FROST_NOVA,        AscensionBossSpellCastType::Area,   11000, 14000, 18000, 21000,  0.0f },
+            { SPELL_ASCENSION_SHADOW_BOLT,       AscensionBossSpellCastType::Random, 13000, 16000, 15000, 19000, 45.0f },
+            { SPELL_ASCENSION_CLEAVE,            AscensionBossSpellCastType::Victim, 16000, 19000,  9000, 12000,  0.0f },
+            0, 2, 1, 14000, 18000),
+        MakeAscensionBossCombatProfile(
+            { SPELL_ASCENSION_ARCANE_EXPLOSION,  AscensionBossSpellCastType::Area,    5000,  7000, 10000, 13000,  0.0f },
+            { SPELL_ASCENSION_FLAME_BREATH,      AscensionBossSpellCastType::Victim,  8000, 11000, 12000, 16000,  0.0f },
+            { SPELL_ASCENSION_CHAIN_LIGHTNING,   AscensionBossSpellCastType::Random, 10000, 13000, 14000, 18000, 45.0f },
+            { SPELL_ASCENSION_WHIRLWIND,         AscensionBossSpellCastType::Area,   13000, 16000, 18000, 22000,  0.0f },
+            { SPELL_ASCENSION_WAR_STOMP,         AscensionBossSpellCastType::Area,   15000, 19000, 21000, 25000,  0.0f },
+            4, 3, 1, 13000, 17000)
+    }};
+
+    bool IsAscensionChainBossEntry(uint32 entry)
+    {
+        return entry >= ASCENSION_CHAIN_BOSS_FIRST && entry <= ASCENSION_CHAIN_BOSS_LAST;
+    }
+
+    uint32 GetNextAscensionChainBossEntry(uint32 entry)
+    {
+        if (!IsAscensionChainBossEntry(entry) || entry >= ASCENSION_CHAIN_BOSS_LAST)
+            return 0;
+
+        return entry + 1;
+    }
+
+    std::string GetAscensionBossDisplayName(uint32 entry)
+    {
+        if (CreatureTemplate const* creatureTemplate = sObjectMgr->GetCreatureTemplate(entry))
+            if (!creatureTemplate->Name.empty())
+                return creatureTemplate->Name;
+
+        return "更强大的飞升BOSS";
+    }
+
+    AscensionBossSpellProfile const* GetAscensionBossSpellProfile(uint32 entry)
+    {
+        if (!IsAscensionChainBossEntry(entry))
+            return nullptr;
+
+        return &ASCENSION_BOSS_SPELL_PROFILES[entry - ASCENSION_CHAIN_BOSS_FIRST];
+    }
+
+    AscensionBossCombatProfile const* GetAscensionBossCombatProfile(uint32 entry)
+    {
+        if (!IsAscensionChainBossEntry(entry))
+            return nullptr;
+
+        return &ASCENSION_BOSS_COMBAT_PROFILES[(entry - ASCENSION_CHAIN_BOSS_FIRST) % ASCENSION_COMBAT_ARCHETYPE_COUNT];
+    }
 }
 
 //=============================================================================
@@ -2931,6 +3278,216 @@ bool AscensionItemScript::CanItemRemove(Player* player, Item* item)
 }
 
 //=============================================================================
+// 飞升首领连环脚本
+//=============================================================================
+
+class npc_ascension_chain_boss : public CreatureScript
+{
+public:
+    npc_ascension_chain_boss() : CreatureScript("npc_ascension_chain_boss") { }
+
+    struct npc_ascension_chain_bossAI : public ScriptedAI
+    {
+        explicit npc_ascension_chain_bossAI(Creature* creature) : ScriptedAI(creature)
+        {
+            scheduler.SetValidator([this]
+            {
+                return !me->HasUnitState(UNIT_STATE_CASTING);
+            });
+        }
+
+        bool _phaseTwoTriggered = false;
+        bool _phaseThreeTriggered = false;
+
+        void Reset() override
+        {
+            scheduler.CancelAll();
+            SetAutoAttackAllowed(true);
+            _phaseTwoTriggered = false;
+            _phaseThreeTriggered = false;
+
+            uint32 maxHealth = GetAscensionBossMaxHealth(me->GetEntry());
+            if (maxHealth > 0)
+            {
+                me->SetCreateHealth(maxHealth);
+                me->SetMaxHealth(maxHealth);
+                me->SetHealth(maxHealth);
+            }
+
+            if (me->HasWeapon(OFF_ATTACK))
+                me->SetCanDualWield(true);
+            else
+                me->SetCanDualWield(false);
+        }
+
+        void JustEngagedWith(Unit* /*who*/) override
+        {
+            AscensionBossCombatProfile const* combatProfile = GetAscensionBossCombatProfile(me->GetEntry());
+            if (!combatProfile)
+                return;
+
+            for (AscensionBossSpellAction const& action : combatProfile->Actions)
+                ScheduleSpell(action);
+
+            scheduler.Schedule(std::chrono::milliseconds(combatProfile->ComboCooldownMinMs), std::chrono::milliseconds(combatProfile->ComboCooldownMaxMs), [this, combatProfile](TaskContext context)
+            {
+                StartAscensionCombo(*combatProfile);
+                context.Repeat(std::chrono::milliseconds(combatProfile->ComboCooldownMinMs), std::chrono::milliseconds(combatProfile->ComboCooldownMaxMs));
+            });
+        }
+
+        void ScheduleSpell(AscensionBossSpellAction const& action)
+        {
+            scheduler.Schedule(std::chrono::milliseconds(action.FirstCastMinMs), std::chrono::milliseconds(action.FirstCastMaxMs), [this, action](TaskContext context)
+            {
+                CastSpellByProfile(action);
+                context.Repeat(std::chrono::milliseconds(action.RepeatMinMs), std::chrono::milliseconds(action.RepeatMaxMs));
+            });
+        }
+
+        void CastSpellByProfile(AscensionBossSpellAction const& action)
+        {
+            switch (action.CastType)
+            {
+                case AscensionBossSpellCastType::Victim:
+                    DoCastVictim(action.SpellId);
+                    break;
+                case AscensionBossSpellCastType::Area:
+                    DoCastAOE(action.SpellId);
+                    break;
+                case AscensionBossSpellCastType::Random:
+                    DoCastRandomTarget(action.SpellId, 0, action.RandomTargetDistance, true, false, true);
+                    break;
+            }
+        }
+
+        void StartAscensionCombo(AscensionBossCombatProfile const& combatProfile)
+        {
+            scheduler.DelayAll(std::chrono::milliseconds(3200));
+
+            ScheduleComboAction(combatProfile, 0, std::chrono::milliseconds(1));
+            ScheduleComboAction(combatProfile, 1, std::chrono::milliseconds(900));
+            ScheduleComboAction(combatProfile, 2, std::chrono::milliseconds(1800));
+
+            scheduler.Schedule(std::chrono::milliseconds(2700), [this](TaskContext /*context*/)
+            {
+                DoAscensionTrueStrike(true);
+            });
+        }
+
+        void ScheduleComboAction(AscensionBossCombatProfile const& combatProfile, uint8 comboIndex, std::chrono::milliseconds delay)
+        {
+            uint8 actionIndex = combatProfile.ComboActionOrder[comboIndex];
+            AscensionBossSpellAction action = combatProfile.Actions[actionIndex];
+            scheduler.Schedule(delay, [this, action](TaskContext /*context*/)
+            {
+                CastSpellByProfile(action);
+            });
+        }
+
+        void DoAscensionTrueStrike(bool comboFinisher = false)
+        {
+            Unit* victim = me->GetVictim();
+            if (!victim || !victim->IsAlive())
+                return;
+
+            uint32 damage = GetAscensionBossTrueStrikeDamage(me->GetEntry());
+            if (comboFinisher)
+                damage = std::max<uint32>(damage * 3, victim->GetMaxHealth() * 75 / 100);
+
+            Unit::DealDamage(me, victim, damage, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW, nullptr, false);
+        }
+
+        void JustDied(Unit* killer) override
+        {
+            scheduler.CancelAll();
+
+            uint32 nextBossEntry = GetNextAscensionChainBossEntry(me->GetEntry());
+            if (nextBossEntry == 0)
+                return;
+
+            Position anchorPos = me->GetHomePosition();
+            ObjectGuid killerGuid = killer ? killer->GetGUID() : ObjectGuid::Empty;
+            Player* killerPlayer = killer ? killer->GetCharmerOrOwnerPlayerOrPlayerItself() : nullptr;
+
+            if (killerPlayer)
+            {
+                std::string nextBossName = GetAscensionBossDisplayName(nextBossEntry);
+                ChatHandler handler(killerPlayer->GetSession());
+                handler.SendNotification("5秒后将召唤更强大的飞升BOSS：{}。", nextBossName);
+                handler.PSendSysMessage("飞升锚点已被击破，5秒后将召唤更强大的飞升BOSS：{}。", nextBossName);
+            }
+
+            me->m_Events.AddEventAtOffset([this, nextBossEntry, anchorPos, killerGuid]()
+            {
+                if (!me->IsInWorld())
+                    return;
+
+                Creature* nextBoss = me->SummonCreature(nextBossEntry, anchorPos, TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, ASCENSION_CHAIN_SUMMON_MS);
+                if (!nextBoss)
+                {
+                    LOG_ERROR("module", "飞升系统: 无法召唤下一阶段首领 entry={}", nextBossEntry);
+                    return;
+                }
+
+                nextBoss->SetHomePosition(anchorPos);
+
+                if (!killerGuid.IsEmpty())
+                {
+                    if (Unit* killerUnit = ObjectAccessor::GetUnit(*me, killerGuid))
+                    {
+                        nextBoss->SetInCombatWith(killerUnit);
+                        nextBoss->AddThreat(killerUnit, 1000.0f);
+                        if (nextBoss->IsAIEnabled)
+                            nextBoss->AI()->AttackStart(killerUnit);
+                    }
+                }
+            }, std::chrono::seconds(5));
+        }
+
+        void UpdateAI(uint32 diff) override
+        {
+            if (!UpdateVictim())
+                return;
+
+            AscensionBossCombatProfile const* combatProfile = GetAscensionBossCombatProfile(me->GetEntry());
+            if (combatProfile)
+            {
+                if (!_phaseTwoTriggered && me->HealthBelowPct(70))
+                {
+                    _phaseTwoTriggered = true;
+                    StartAscensionCombo(*combatProfile);
+                }
+
+                if (!_phaseThreeTriggered && me->HealthBelowPct(40))
+                {
+                    _phaseThreeTriggered = true;
+                    StartAscensionCombo(*combatProfile);
+                    scheduler.Schedule(std::chrono::milliseconds(3400), [this](TaskContext /*context*/)
+                    {
+                        DoAscensionTrueStrike(true);
+                    });
+                }
+            }
+
+            scheduler.Update(diff, [this]
+            {
+                if (IsAutoAttackAllowed())
+                    DoMeleeAttackIfReady();
+            });
+        }
+    };
+
+    CreatureAI* GetAI(Creature* creature) const override
+    {
+        if (!creature || !IsAscensionChainBossEntry(creature->GetEntry()))
+            return nullptr;
+
+        return new npc_ascension_chain_bossAI(creature);
+    }
+};
+
+//=============================================================================
 // 脚本加载函数
 //=============================================================================
 
@@ -2940,4 +3497,5 @@ void AddAscensionSystemScripts()
     new AscensionPlayerScript();
     new AscensionCommandScript();
     new AscensionItemScript();
+    new npc_ascension_chain_boss();
 }

@@ -217,8 +217,18 @@ SELECT
   1,
   1,
   0,
-  t.`target_position_x` + COS(t.`target_orientation` + 1.5707963) * 2.5,
-  t.`target_position_y` + SIN(t.`target_orientation` + 1.5707963) * 2.5,
+  CASE
+    WHEN c.`副本地图ID` = 229 THEN
+      t.`target_position_x` + COS(t.`target_orientation` + 1.5707963) * 3.0 + COS(t.`target_orientation`) * 2.5
+    ELSE
+      t.`target_position_x` + COS(t.`target_orientation` + 1.5707963) * 2.5
+  END,
+  CASE
+    WHEN c.`副本地图ID` = 229 THEN
+      t.`target_position_y` + SIN(t.`target_orientation` + 1.5707963) * 3.0 + SIN(t.`target_orientation`) * 2.5
+    ELSE
+      t.`target_position_y` + SIN(t.`target_orientation` + 1.5707963) * 2.5
+  END,
   t.`target_position_z`,
   t.`target_orientation` + 3.1415926,
   120,
@@ -241,7 +251,8 @@ JOIN `areatrigger_teleport` t
     FROM `areatrigger_teleport` t2
     WHERE t2.`target_map` = c.`副本地图ID`
   )
-WHERE c.`章节ID` BETWEEN 1 AND 74;
+WHERE c.`章节ID` BETWEEN 1 AND 74
+  AND c.`副本地图ID` <> 229;
 
 REPLACE INTO `creature`
 (`id1`, `id2`, `id3`, `map`, `zoneId`, `areaId`, `spawnMask`, `phaseMask`, `equipment_id`,
@@ -258,8 +269,10 @@ SELECT
   1,
   1,
   0,
-  t.`target_position_x` + COS(t.`target_orientation` - 1.5707963) * 2.5,
-  t.`target_position_y` + SIN(t.`target_orientation` - 1.5707963) * 2.5,
+  t.`target_position_x` + COS(t.`target_orientation` - 1.5707963) *
+    CASE WHEN c.`副本地图ID` = 229 THEN 4.5 ELSE 2.5 END,
+  t.`target_position_y` + SIN(t.`target_orientation` - 1.5707963) *
+    CASE WHEN c.`副本地图ID` = 229 THEN 4.5 ELSE 2.5 END,
   t.`target_position_z`,
   t.`target_orientation` + 3.1415926,
   120,
@@ -284,10 +297,45 @@ JOIN `areatrigger_teleport` t
   )
 WHERE c.`章节ID` BETWEEN 1 AND 74;
 
+-- 黑石塔上下层任务固定使用 192016 / 192017 这一组 NPC，单独固定站位，避免共享地图时刷错 entry。
+UPDATE `creature` c
+JOIN `areatrigger_teleport` t
+  ON t.`ID` = (
+    SELECT MIN(t2.`ID`)
+    FROM `areatrigger_teleport` t2
+    WHERE t2.`target_map` = 229
+  )
+SET
+  c.`position_x` = t.`target_position_x` + COS(t.`target_orientation` + 1.5707963) * -1.5 + COS(t.`target_orientation`) * 1.4,
+  c.`position_y` = t.`target_position_y` + SIN(t.`target_orientation` + 1.5707963) * -1.5 + SIN(t.`target_orientation`) * 1.4,
+  c.`position_z` = t.`target_position_z`,
+  c.`orientation` = t.`target_orientation` + 3.1415926
+WHERE c.`id1` = 192016
+  AND c.`map` = 229;
+
+UPDATE `creature` c
+JOIN `areatrigger_teleport` t
+  ON t.`ID` = (
+    SELECT MIN(t2.`ID`)
+    FROM `areatrigger_teleport` t2
+    WHERE t2.`target_map` = 229
+  )
+SET
+  c.`position_x` = t.`target_position_x` + COS(t.`target_orientation` + 1.5707963) * 1.5 + COS(t.`target_orientation`) * 1.4,
+  c.`position_y` = t.`target_position_y` + SIN(t.`target_orientation` + 1.5707963) * 1.5 + SIN(t.`target_orientation`) * 1.4,
+  c.`position_z` = t.`target_position_z`,
+  c.`orientation` = t.`target_orientation` + 3.1415926
+WHERE c.`id1` = 192017
+  AND c.`map` = 229;
+
+-- 黑石塔(229)上下层只绑定到 192016 / 192017 这两个 NPC，自成一组。
 REPLACE INTO `creature_queststarter`
 (`id`, `quest`)
 SELECT
-  191000 + c.`章节ID`,
+  CASE
+    WHEN c.`副本地图ID` = 229 THEN 192000 + c.`章节ID`
+    ELSE 191000 + c.`章节ID`
+  END,
   c.`起始任务ID`
 FROM `_深渊章节配置` c
 WHERE c.`起始任务ID` BETWEEN 700001 AND 700074;
@@ -295,7 +343,10 @@ WHERE c.`起始任务ID` BETWEEN 700001 AND 700074;
 REPLACE INTO `creature_queststarter`
 (`id`, `quest`)
 SELECT
-  191000 + c.`章节ID`,
+  CASE
+    WHEN c.`副本地图ID` = 229 THEN 192000 + c.`章节ID`
+    ELSE 191000 + c.`章节ID`
+  END,
   c.`完成任务ID`
 FROM `_深渊章节配置` c
 WHERE c.`完成任务ID` BETWEEN 710001 AND 710074;
@@ -303,7 +354,10 @@ WHERE c.`完成任务ID` BETWEEN 710001 AND 710074;
 REPLACE INTO `creature_queststarter`
 (`id`, `quest`)
 SELECT
-  191000 + c.`章节ID`,
+  CASE
+    WHEN c.`副本地图ID` = 229 THEN 192000 + c.`章节ID`
+    ELSE 191000 + c.`章节ID`
+  END,
   720000 + c.`章节ID`
 FROM `_深渊章节配置` c
 WHERE c.`章节ID` BETWEEN 1 AND 74;
@@ -311,7 +365,10 @@ WHERE c.`章节ID` BETWEEN 1 AND 74;
 REPLACE INTO `creature_queststarter`
 (`id`, `quest`)
 SELECT
-  191000 + c.`章节ID`,
+  CASE
+    WHEN c.`副本地图ID` = 229 THEN 192000 + c.`章节ID`
+    ELSE 191000 + c.`章节ID`
+  END,
   730000 + c.`章节ID`
 FROM `_深渊章节配置` c
 WHERE c.`章节ID` BETWEEN 1 AND 74;
@@ -319,7 +376,10 @@ WHERE c.`章节ID` BETWEEN 1 AND 74;
 REPLACE INTO `creature_queststarter`
 (`id`, `quest`)
 SELECT
-  191000 + c.`章节ID`,
+  CASE
+    WHEN c.`副本地图ID` = 229 THEN 192000 + c.`章节ID`
+    ELSE 191000 + c.`章节ID`
+  END,
   740000 + c.`章节ID`
 FROM `_深渊章节配置` c
 WHERE c.`章节ID` BETWEEN 1 AND 74;
