@@ -3834,13 +3834,13 @@ public:
                     {
                         case ABYSS_PHASE_ARTIFACT_BURNING_PACT_ITEM:
                             if (procState.artifactMainProcCounter % 4 == 0 && subRelic1Spell != 0)
-                                player->CastSpell(player, subRelic1Spell, true);
+                                CastManagedRelicSpell(player, subRelic1Spell);
                             break;
                         case ABYSS_PHASE_ARTIFACT_BUG_DECREE_ITEM:
                             if (!procState.artifactCombatEchoUsed)
                             {
                                 procState.artifactCombatEchoUsed = true;
-                                player->CastSpell(player, mainRelicSpell, true);
+                                CastManagedRelicSpell(player, mainRelicSpell);
                             }
                             break;
                         case ABYSS_PHASE_ARTIFACT_SCOURGE_CHAPTER_ITEM:
@@ -3851,7 +3851,7 @@ public:
                                 if (candidate != 0)
                                     valid.push_back(candidate);
                             if (!valid.empty())
-                                player->CastSpell(player, valid[RollWeight(static_cast<uint32>(valid.size()))], true);
+                                CastManagedRelicSpell(player, valid[RollWeight(static_cast<uint32>(valid.size()))]);
                             break;
                         }
                         default:
@@ -3864,7 +3864,7 @@ public:
                     if (!procState.artifactSubLinkUsed)
                     {
                         procState.artifactSubLinkUsed = true;
-                        player->CastSpell(player, 89166, true);
+                        CastManagedRelicSpell(player, 89166);
                     }
                 }
             }
@@ -4386,7 +4386,7 @@ public:
             }
             case 89179: // 日蚀王契
             {
-                player->CastSpell(player, 89166, true);
+                CastManagedRelicSpell(player, 89166);
                 break;
             }
             case 89180: // 天灾断章
@@ -4487,10 +4487,13 @@ public:
         if (!source || !target || source == target)
             return;
 
-        // 这里不要再对 source 播放 321。
-        // 321 会让源单位自己出现放电/缠身表现，看起来像“连自己都电”。
-        // 先只保留命中目标的官方 impact，避免弹射链路产生自电错觉。
-        source->SendPlaySpellImpact(target->GetGUID(), 282);
+        if ((source->IsCreature() && source->ToCreature()->IsTrigger()) ||
+            (target->IsCreature() && target->ToCreature()->IsTrigger()) ||
+            !target->isTargetableForAttack(false, source))
+            return;
+
+        // 怪对怪电弧 impact 在部分客户端/模型组合下不稳定，保留伤害与弹射，
+        // 但不再发送这条额外表现包，避免客户端崩溃。
     }
 
     Unit* SelectChainLightningBounceTarget(Player* player, WorldObject* center, Unit* exclude1 = nullptr, Unit* exclude2 = nullptr, float radius = 15.0f) const
@@ -4499,19 +4502,26 @@ public:
             return nullptr;
 
         std::list<Unit*> nearbyTargets;
-        Acore::AnyUnfriendlyUnitInObjectRangeCheck check(center, player, radius);
-        Acore::UnitListSearcher<Acore::AnyUnfriendlyUnitInObjectRangeCheck> searcher(center, nearbyTargets, check);
+        Acore::AnyUnfriendlyNoTotemUnitInObjectRangeCheck check(center, player, radius);
+        Acore::UnitListSearcher<Acore::AnyUnfriendlyNoTotemUnitInObjectRangeCheck> searcher(center, nearbyTargets, check);
         Cell::VisitAllObjects(center, searcher, radius);
 
         Unit* bestTarget = nullptr;
         float bestDistanceSq = std::numeric_limits<float>::max();
-
+        Unit const* centerUnit = center->ToUnit();
         for (Unit* candidate : nearbyTargets)
         {
-            if (!candidate || candidate == player || candidate == exclude1 || candidate == exclude2)
+            if (!candidate)
+                continue;
+
+            if (candidate == player || candidate == centerUnit || candidate == exclude1 || candidate == exclude2)
                 continue;
 
             if (!candidate->IsAlive() || !player->IsValidAttackTarget(candidate))
+                continue;
+
+            if ((candidate->IsCreature() && candidate->ToCreature()->IsTrigger()) ||
+                !candidate->isTargetableForAttack(false, player))
                 continue;
 
             if (!center->IsWithinLOSInMap(candidate))
@@ -4522,6 +4532,24 @@ public:
             {
                 bestDistanceSq = distanceSq;
                 bestTarget = candidate;
+            }
+        }
+
+        if (!bestTarget)
+        {
+            if (Unit const* centerUnit = center->ToUnit())
+            {
+                if (Unit* fallbackTarget = centerUnit->SelectNearbyNoTotemTarget(exclude1, radius))
+                {
+                    if (fallbackTarget != exclude2 &&
+                        fallbackTarget != player &&
+                        fallbackTarget != centerUnit &&
+                        fallbackTarget->IsAlive() &&
+                        player->IsValidAttackTarget(fallbackTarget))
+                    {
+                        bestTarget = fallbackTarget;
+                    }
+                }
             }
         }
 
@@ -4564,6 +4592,7 @@ public:
             return;
 
         DealConfiguredBurst(player, primaryTarget, 140, 220, SPELL_SCHOOL_MASK_NATURE, scale);
+
         if (Unit* bounce1 = SelectChainLightningBounceTarget(player, primaryTarget, nullptr, nullptr, 15.0f))
         {
             DealConfiguredBurst(player, bounce1, 100, 160, SPELL_SCHOOL_MASK_NATURE, scale);

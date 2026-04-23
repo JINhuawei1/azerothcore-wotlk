@@ -1675,8 +1675,9 @@ namespace
 
         for (PlayerActivationRecord const& record : activationItr->second)
         {
-#ifdef MODULE_ITEM_SKILLS
             uint32 groupId = ResolveSetGroupId(record.setId);
+
+#ifdef MODULE_ITEM_SKILLS
             if (groupId != 0)
             {
                 if (record.tuJianId != 0)
@@ -1732,7 +1733,7 @@ namespace
 
             AddWeaponDamageBonus(weaponDamageBonuses, proto, applyCount);
 
-            bool needItemSet = proto->ItemSet != 0;
+            bool needItemSet = proto->ItemSet != 0 && groupId == 0;
             bool needEquipSpell = ItemTemplateHasEquipSpell(proto);
 
             if (needItemSet)
