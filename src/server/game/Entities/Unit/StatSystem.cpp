@@ -25,6 +25,7 @@
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
 #include "Unit.h"
+#include <limits>
 
 inline bool _ModifyUInt32(bool apply, uint32& baseValue, int32& amount)
 {
@@ -141,9 +142,19 @@ bool Player::UpdateStats(Stats stat)
 
     // value = ((base_value * base_pct) + total_value) * total_pct
     float value  = GetTotalStatValue(stat);
+    double extendedStatValue = 0.0;
 
     // 先调用脚本钩子，允许模块修改最终属性值（转生模块等会在这里加成）
     sScriptMgr->OnPlayerAfterUpdateStat(this, stat, value);
+
+    constexpr double MAX_EXTENDED_VALUE = static_cast<double>(std::numeric_limits<uint64>::max());
+
+    if (std::isnan(value) || value < 0.0f)
+        extendedStatValue = 0.0;
+    else if (std::isinf(value) || static_cast<double>(value) > MAX_EXTENDED_VALUE)
+        extendedStatValue = MAX_EXTENDED_VALUE;
+    else
+        extendedStatValue = static_cast<double>(value);
 
     // 【重要】在钩子之后应用属性上限限制
     constexpr float MAX_SAFE_VALUE = 2000000000.0f;
@@ -179,9 +190,14 @@ bool Player::UpdateStats(Stats stat)
                 {
                     value = static_cast<float>(limitU32);
                 }
+
+                if (limitU32 > 0 && extendedStatValue > limitD)
+                    extendedStatValue = limitD;
             }
         }
     }
+
+    _extendedStats[stat] = static_cast<uint64>(extendedStatValue);
 
     SetStat(stat, static_cast<int32>(value));
 
@@ -247,14 +263,33 @@ bool Player::UpdateStats(Stats stat)
     return true;
 }
 
-void Player::ApplySpellPowerBonus(int32 amount, bool apply)
+void Player::ApplySpellPowerBonus(int64 amount, bool apply)
 {
-    apply = _ModifyUInt32(apply, m_baseSpellPower, amount);
+    if (amount < 0)
+    {
+        apply = !apply;
+        amount = -amount;
+    }
+
+    if (apply)
+    {
+        if (amount > static_cast<int64>(std::numeric_limits<uint64>::max() - m_baseSpellPower))
+            m_baseSpellPower = std::numeric_limits<uint64>::max();
+        else
+            m_baseSpellPower += static_cast<uint64>(amount);
+    }
+    else
+    {
+        uint64 removeAmount = static_cast<uint64>(amount);
+        m_baseSpellPower = removeAmount > m_baseSpellPower ? 0 : m_baseSpellPower - removeAmount;
+    }
+
+    int32 displayAmount = amount > std::numeric_limits<int32>::max() ? std::numeric_limits<int32>::max() : static_cast<int32>(amount);
 
     // For speed just update for client
-    ApplyModUInt32Value(PLAYER_FIELD_MOD_HEALING_DONE_POS, amount, apply);
+    ApplyModUInt32Value(PLAYER_FIELD_MOD_HEALING_DONE_POS, displayAmount, apply);
     for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
-        ApplyModInt32Value(PLAYER_FIELD_MOD_DAMAGE_DONE_POS + i, amount, apply);
+        ApplyModInt32Value(PLAYER_FIELD_MOD_DAMAGE_DONE_POS + i, displayAmount, apply);
 }
 
 void Player::UpdateSpellDamageAndHealingBonus()
@@ -270,8 +305,152 @@ void Player::UpdateSpellDamageAndHealingBonus()
     for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
         spellDamage[i] = SpellBaseDamageBonusDone(SpellSchoolMask(1 << i));
 
+    auto getServerStatValue = [this](Stats stat) -> double
+    {
+        uint64 extendedValue = GetExtendedStat(stat);
+        if (extendedValue > 0)
+            return static_cast<double>(extendedValue);
+
+        int32 displayValue = GetStat(stat);
+        return displayValue > 0 ? static_cast<double>(displayValue) : 0.0;
+    };
+
+    auto toExtendedValue = [](double value) -> uint64
+    {
+        if (std::isnan(value) || value <= 0.0)
+            return 0;
+        if (std::isinf(value) || value >= static_cast<double>(std::numeric_limits<uint64>::max()))
+            return std::numeric_limits<uint64>::max();
+        return static_cast<uint64>(value);
+    };
+
+    double extendedHealingBonus = 0.0;
+    std::array<double, MAX_SPELL_SCHOOL> extendedSpellDamage = { };
+    double spellPowerMultiplier = 100.0;
+    double healingMultiplier = 100.0;
+
+    if (sConfigMgr->GetOption<bool>("ClassAttributes.Enable", false))
+    {
+        QueryResult result = WorldDatabase.Query("SELECT `法强倍率`, `治疗倍率` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+        if (result)
+        {
+            Field* fields = result->Fetch();
+            spellPowerMultiplier = static_cast<double>(fields[0].Get<float>());
+            healingMultiplier = static_cast<double>(fields[1].Get<float>());
+        }
+    }
+
+    AuraEffectList const& mDamageDone = GetAuraEffectsByType(SPELL_AURA_MOD_DAMAGE_DONE);
+    for (AuraEffectList::const_iterator i = mDamageDone.begin(); i != mDamageDone.end(); ++i)
+    {
+        if ((*i)->GetSpellInfo()->EquippedItemClass != -1 || (*i)->GetSpellInfo()->EquippedItemInventoryTypeMask != 0)
+            continue;
+
+        for (int school = SPELL_SCHOOL_HOLY; school < MAX_SPELL_SCHOOL; ++school)
+        {
+            SpellSchoolMask schoolMask = SpellSchoolMask(1 << school);
+            if (((*i)->GetMiscValue() & schoolMask) != 0)
+                extendedSpellDamage[school] += static_cast<double>((*i)->GetAmount());
+        }
+    }
+
+    AuraEffectList const& mHealingDone = GetAuraEffectsByType(SPELL_AURA_MOD_HEALING_DONE);
+    for (AuraEffectList::const_iterator i = mHealingDone.begin(); i != mHealingDone.end(); ++i)
+        if (!(*i)->GetMiscValue() || ((*i)->GetMiscValue() & SPELL_SCHOOL_MASK_ALL) != 0)
+            extendedHealingBonus += static_cast<double>((*i)->GetAmount());
+
+    double baseSpellPower = static_cast<double>(GetBaseSpellPowerBonus());
+    double attackPowerBonus = GetExtendedTotalAttackPowerValue(BASE_ATTACK);
+
+    extendedHealingBonus += baseSpellPower;
+    for (int school = SPELL_SCHOOL_HOLY; school < MAX_SPELL_SCHOOL; ++school)
+        extendedSpellDamage[school] += baseSpellPower;
+
+    AuraEffectList const& mDamageDoneOfStatPercent = GetAuraEffectsByType(SPELL_AURA_MOD_SPELL_DAMAGE_OF_STAT_PERCENT);
+    for (AuraEffectList::const_iterator i = mDamageDoneOfStatPercent.begin(); i != mDamageDoneOfStatPercent.end(); ++i)
+    {
+        Stats usedStat = Stats((*i)->GetMiscValueB());
+        if (usedStat < STAT_STRENGTH || usedStat >= MAX_STATS)
+            continue;
+
+        double statValue = getServerStatValue(usedStat);
+        if (statValue <= 0.0)
+            continue;
+
+        double statContribution = statValue * static_cast<double>((*i)->GetAmount()) / 100.0;
+        for (int school = SPELL_SCHOOL_HOLY; school < MAX_SPELL_SCHOOL; ++school)
+        {
+            SpellSchoolMask schoolMask = SpellSchoolMask(1 << school);
+            if (((*i)->GetMiscValue() & schoolMask) != 0)
+                extendedSpellDamage[school] += statContribution;
+        }
+    }
+
+    AuraEffectList const& mHealingDoneOfStatPercent = GetAuraEffectsByType(SPELL_AURA_MOD_SPELL_HEALING_OF_STAT_PERCENT);
+    for (AuraEffectList::const_iterator i = mHealingDoneOfStatPercent.begin(); i != mHealingDoneOfStatPercent.end(); ++i)
+    {
+        Stats usedStat = Stats((*i)->GetSpellInfo()->Effects[(*i)->GetEffIndex()].MiscValue);
+        if (usedStat < STAT_STRENGTH || usedStat >= MAX_STATS)
+            continue;
+
+        double statValue = getServerStatValue(usedStat);
+        if (statValue <= 0.0)
+            continue;
+
+        extendedHealingBonus += statValue * static_cast<double>((*i)->GetAmount()) / 100.0;
+    }
+
+    AuraEffectList const& mDamageDonebyAP = GetAuraEffectsByType(SPELL_AURA_MOD_SPELL_DAMAGE_OF_ATTACK_POWER);
+    for (AuraEffectList::const_iterator i = mDamageDonebyAP.begin(); i != mDamageDonebyAP.end(); ++i)
+    {
+        if (attackPowerBonus <= 0.0)
+            continue;
+
+        double attackPowerContribution = attackPowerBonus * static_cast<double>((*i)->GetAmount()) / 100.0;
+        for (int school = SPELL_SCHOOL_HOLY; school < MAX_SPELL_SCHOOL; ++school)
+        {
+            SpellSchoolMask schoolMask = SpellSchoolMask(1 << school);
+            if (((*i)->GetMiscValue() & schoolMask) != 0)
+                extendedSpellDamage[school] += attackPowerContribution;
+        }
+    }
+
+    AuraEffectList const& mHealingDonebyAP = GetAuraEffectsByType(SPELL_AURA_MOD_SPELL_HEALING_OF_ATTACK_POWER);
+    for (AuraEffectList::const_iterator i = mHealingDonebyAP.begin(); i != mHealingDonebyAP.end(); ++i)
+    {
+        if (attackPowerBonus <= 0.0)
+            continue;
+
+        if ((*i)->GetMiscValue() & SPELL_SCHOOL_MASK_ALL)
+            extendedHealingBonus += attackPowerBonus * static_cast<double>((*i)->GetAmount()) / 100.0;
+    }
+
+    if (spellPowerMultiplier > 0.0 && spellPowerMultiplier != 100.0)
+        for (int school = SPELL_SCHOOL_HOLY; school < MAX_SPELL_SCHOOL; ++school)
+            extendedSpellDamage[school] = extendedSpellDamage[school] * spellPowerMultiplier / 100.0;
+
+    if (healingMultiplier > 0.0 && healingMultiplier != 100.0)
+        extendedHealingBonus = extendedHealingBonus * healingMultiplier / 100.0;
+
+    int32 preHookHealingBonus = healingBonus;
+    std::array<int32, MAX_SPELL_SCHOOL> preHookSpellDamage = { };
+    for (int i = SPELL_SCHOOL_NORMAL; i < MAX_SPELL_SCHOOL; ++i)
+        preHookSpellDamage[i] = spellDamage[i];
+
     // 调用钩子允许模块修改法术强度和治疗强度
     sScriptMgr->OnPlayerAfterUpdateSpellDamageAndHealing(this, healingBonus, spellDamage);
+
+    if (extendedHealingBonus > 0.0 && preHookHealingBonus > 0 && healingBonus != preHookHealingBonus)
+        extendedHealingBonus = extendedHealingBonus * static_cast<double>(healingBonus) / static_cast<double>(preHookHealingBonus);
+
+    for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
+        if (extendedSpellDamage[i] > 0.0 && preHookSpellDamage[i] > 0 && spellDamage[i] != preHookSpellDamage[i])
+            extendedSpellDamage[i] = extendedSpellDamage[i] * static_cast<double>(spellDamage[i]) / static_cast<double>(preHookSpellDamage[i]);
+
+    _extendedHealingBonus = toExtendedValue(extendedHealingBonus);
+    _extendedSpellDamageBonuses[SPELL_SCHOOL_NORMAL] = 0;
+    for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
+        _extendedSpellDamageBonuses[i] = toExtendedValue(extendedSpellDamage[i]);
 
     // 设置最终值到客户端显示字段
     SetStatInt32Value(PLAYER_FIELD_MOD_HEALING_DONE_POS, healingBonus);
@@ -349,23 +528,39 @@ void Player::UpdateArmor()
 {
     UnitMods unitMod = UNIT_MOD_ARMOR;
 
-    float value = GetModifierValue(unitMod, BASE_VALUE);   // base armor (from items)
-    value *= GetModifierValue(unitMod, BASE_PCT);           // armor percent from items
-    value += GetStat(STAT_AGILITY) * 2.0f;                  // armor bonus from stats
-    value += GetModifierValue(unitMod, TOTAL_VALUE);
+    double value = static_cast<double>(GetModifierValue(unitMod, BASE_VALUE));   // base armor (from items)
+    value *= static_cast<double>(GetModifierValue(unitMod, BASE_PCT));           // armor percent from items
+    value += static_cast<double>(GetExtendedStat(STAT_AGILITY) > 0 ? GetExtendedStat(STAT_AGILITY) : GetStat(STAT_AGILITY)) * 2.0; // armor bonus from stats
+    value += static_cast<double>(GetModifierValue(unitMod, TOTAL_VALUE));
 
     //add dynamic flat mods
     AuraEffectList const& mResbyIntellect = GetAuraEffectsByType(SPELL_AURA_MOD_RESISTANCE_OF_STAT_PERCENT);
     for (AuraEffectList::const_iterator i = mResbyIntellect.begin(); i != mResbyIntellect.end(); ++i)
     {
         if ((*i)->GetMiscValue() & SPELL_SCHOOL_MASK_NORMAL)
-            value += CalculatePct(GetStat(Stats((*i)->GetMiscValueB())), (*i)->GetAmount());
+        {
+            uint64 extendedStat = GetExtendedStat(Stats((*i)->GetMiscValueB()));
+            double statValue = extendedStat > 0 ? static_cast<double>(extendedStat) : static_cast<double>(GetStat(Stats((*i)->GetMiscValueB())));
+            value += statValue * static_cast<double>((*i)->GetAmount()) / 100.0;
+        }
     }
 
-    value *= GetModifierValue(unitMod, TOTAL_PCT);
+    value *= static_cast<double>(GetModifierValue(unitMod, TOTAL_PCT));
 
     // 调用钩子允许模块修改护甲值
-    sScriptMgr->OnPlayerAfterUpdateArmor(this, value);
+    float hookValue = 0.0f;
+    if (value > static_cast<double>(std::numeric_limits<float>::max()))
+        hookValue = std::numeric_limits<float>::max();
+    else if (value > 0.0)
+        hookValue = static_cast<float>(value);
+    sScriptMgr->OnPlayerAfterUpdateArmor(this, hookValue);
+    if (hookValue != static_cast<float>(value))
+        value = static_cast<double>(hookValue);
+
+    if (value < 0.0 || std::isnan(value))
+        value = 0.0;
+    else if (std::isinf(value) || value > static_cast<double>(std::numeric_limits<uint64>::max()))
+        value = static_cast<double>(std::numeric_limits<uint64>::max());
 
     // Apply armor limit from database
     {
@@ -376,26 +571,30 @@ void Player::UpdateArmor()
             if (result)
             {
                 Field* fields = result->Fetch();
-                float armorLimit = fields[0].Get<uint32>();
-                if (armorLimit > 0.0f && value > armorLimit)
+                uint64 armorLimit = fields[0].Get<uint64>();
+                if (armorLimit > 0 && value > static_cast<double>(armorLimit))
                 {
-                    value = armorLimit;
+                    value = static_cast<double>(armorLimit);
                 }
             }
         }
     }
 
-    SetArmor(int32(value));
+    _extendedArmor = static_cast<uint64>(value);
+
+    constexpr double MAX_CLIENT_ARMOR = 2000000000.0;
+    double clientArmor = value > MAX_CLIENT_ARMOR ? MAX_CLIENT_ARMOR : value;
+    SetArmor(static_cast<int32>(clientArmor));
 
     UpdateAttackPowerAndDamage();                           // armor dependent auras update for SPELL_AURA_MOD_ATTACK_POWER_OF_ARMOR
 }
 
-float Player::GetHealthBonusFromStamina()
+double Player::GetHealthBonusFromStamina()
 {
-    float stamina = GetStat(STAT_STAMINA);
+    double stamina = GetExtendedStat(STAT_STAMINA) > 0 ? static_cast<double>(GetExtendedStat(STAT_STAMINA)) : static_cast<double>(GetStat(STAT_STAMINA));
 
-    float baseStam = stamina < 20 ? stamina : 20;
-    float moreStam = stamina - baseStam;
+    double baseStam = stamina < 20.0 ? stamina : 20.0;
+    double moreStam = stamina - baseStam;
 
     // Apply stamina to health conversion rate from database
     float staminaToHealthRate = 1.0f; // Default 100% conversion rate
@@ -406,15 +605,23 @@ float Player::GetHealthBonusFromStamina()
         staminaToHealthRate = fields[0].Get<float>() / 100.0f; // Convert percentage to decimal
     }
 
-    return baseStam + (moreStam * 10.0f * staminaToHealthRate);
+    double bonusHealth = baseStam + (moreStam * 5.0 * static_cast<double>(staminaToHealthRate));
+    constexpr double MAX_SAFE_BONUS = static_cast<double>(std::numeric_limits<float>::max());
+
+    if (bonusHealth < 0.0 || std::isnan(bonusHealth))
+        return 0.0;
+    if (std::isinf(bonusHealth) || bonusHealth > MAX_SAFE_BONUS)
+        return MAX_SAFE_BONUS;
+
+    return bonusHealth;
 }
 
-float Player::GetManaBonusFromIntellect()
+double Player::GetManaBonusFromIntellect()
 {
-    float intellect = GetStat(STAT_INTELLECT);
+    double intellect = GetExtendedStat(STAT_INTELLECT) > 0 ? static_cast<double>(GetExtendedStat(STAT_INTELLECT)) : static_cast<double>(GetStat(STAT_INTELLECT));
 
-    float baseInt = intellect < 20 ? intellect : 20;
-    float moreInt = intellect - baseInt;
+    double baseInt = intellect < 20.0 ? intellect : 20.0;
+    double moreInt = intellect - baseInt;
 
     // Apply intellect to mana conversion rate from database
     float intellectToManaRate = 1.0f; // Default 100% conversion rate
@@ -425,20 +632,42 @@ float Player::GetManaBonusFromIntellect()
         intellectToManaRate = fields[0].Get<float>() / 100.0f; // Convert percentage to decimal
     }
 
-    return baseInt + (moreInt * 15.0f * intellectToManaRate);
+    double bonusMana = baseInt + (moreInt * 15.0 * static_cast<double>(intellectToManaRate));
+    constexpr double MAX_SAFE_BONUS = static_cast<double>(std::numeric_limits<float>::max());
+
+    if (bonusMana < 0.0 || std::isnan(bonusMana))
+        return 0.0;
+    if (std::isinf(bonusMana) || bonusMana > MAX_SAFE_BONUS)
+        return MAX_SAFE_BONUS;
+
+    return bonusMana;
 }
 
 void Player::UpdateMaxHealth()
 {
     UnitMods unitMod = UNIT_MOD_HEALTH;
+    uint64 oldExtendedMaxHealth = GetExtendedMaxHealth();
+    uint64 oldExtendedHealth = GetExtendedHealth();
+    uint32 oldClientMaxHealth = GetMaxHealth();
+    bool wasFullHealth = _extendedHealth ? oldExtendedHealth >= oldExtendedMaxHealth : GetHealth() >= GetMaxHealth();
 
     float value = GetModifierValue(unitMod, BASE_VALUE) + GetCreateHealth();
     value *= GetModifierValue(unitMod, BASE_PCT);
-    value += GetModifierValue(unitMod, TOTAL_VALUE) + GetHealthBonusFromStamina();
+    value += GetModifierValue(unitMod, TOTAL_VALUE) + static_cast<float>(GetHealthBonusFromStamina());
     value *= GetModifierValue(unitMod, TOTAL_PCT);
 
     // 先调用钩子（转生模块等会在这里加成）
     sScriptMgr->OnPlayerAfterUpdateMaxHealth(this, value);
+
+    double extendedMaxHealth = 0.0;
+    constexpr double MAX_EXTENDED_VALUE = static_cast<double>(std::numeric_limits<uint64>::max());
+
+    if (std::isnan(value) || value < 0.0f)
+        extendedMaxHealth = 0.0;
+    else if (std::isinf(value) || static_cast<double>(value) > MAX_EXTENDED_VALUE)
+        extendedMaxHealth = MAX_EXTENDED_VALUE;
+    else
+        extendedMaxHealth = static_cast<double>(value);
 
     // 【重要】在钩子之后应用血量上限限制
     constexpr float MAX_SAFE_VALUE = 2000000000.0f;
@@ -460,16 +689,28 @@ void Player::UpdateMaxHealth()
         {
             value = static_cast<float>(healthLimitU32);
         }
+
+        if (healthLimitU32 > 0 && extendedMaxHealth > limitD)
+            extendedMaxHealth = limitD;
     }
 
+    _extendedMaxHealth = static_cast<uint64>(extendedMaxHealth);
     SetMaxHealth(static_cast<uint32>(value));
+    if (wasFullHealth)
+        SetExtendedHealth(GetExtendedMaxHealth());
+    else if (oldClientMaxHealth && oldExtendedMaxHealth <= oldClientMaxHealth && oldExtendedHealth <= oldClientMaxHealth && GetExtendedMaxHealth() > GetMaxHealth())
+        SetExtendedHealthFromClientHealth(static_cast<uint32>(oldExtendedHealth));
+    else
+        SetExtendedHealth(oldExtendedHealth);
+
+    SyncClientHealthFromExtended();
 }
 
 void Player::UpdateMaxPower(Powers power)
 {
     UnitMods unitMod = UnitMods(static_cast<uint16>(UNIT_MOD_POWER_START) + power);
 
-    float bonusPower = (power == POWER_MANA && GetCreatePowers(power) > 0) ? GetManaBonusFromIntellect() : 0;
+    float bonusPower = (power == POWER_MANA && GetCreatePowers(power) > 0) ? static_cast<float>(GetManaBonusFromIntellect()) : 0;
 
     float value = GetModifierValue(unitMod, BASE_VALUE) + GetCreatePowers(power);
     value *= GetModifierValue(unitMod, BASE_PCT);
@@ -478,6 +719,16 @@ void Player::UpdateMaxPower(Powers power)
 
     // 先调用钩子（转生模块等会在这里加成）
     sScriptMgr->OnPlayerAfterUpdateMaxPower(this, power, value);
+
+    double extendedMaxPower = 0.0;
+    constexpr double MAX_EXTENDED_VALUE = static_cast<double>(std::numeric_limits<uint64>::max());
+
+    if (std::isnan(value) || value < 0.0f)
+        extendedMaxPower = 0.0;
+    else if (std::isinf(value) || static_cast<double>(value) > MAX_EXTENDED_VALUE)
+        extendedMaxPower = MAX_EXTENDED_VALUE;
+    else
+        extendedMaxPower = static_cast<double>(value);
 
     // 【重要】在钩子之后应用法力上限限制
     constexpr float MAX_SAFE_VALUE = 2000000000.0f;
@@ -501,9 +752,13 @@ void Player::UpdateMaxPower(Powers power)
             {
                 value = static_cast<float>(manaLimitU32);
             }
+
+            if (manaLimitU32 > 0 && extendedMaxPower > limitD)
+                extendedMaxPower = limitD;
         }
     }
 
+    _extendedMaxPowers[power] = static_cast<uint64>(extendedMaxPower);
     SetMaxPower(power, static_cast<uint32>(value));
 }
 
@@ -526,6 +781,18 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
     uint16 index_mod = UNIT_FIELD_ATTACK_POWER_MODS;
     uint16 index_mult = UNIT_FIELD_ATTACK_POWER_MULTIPLIER;
 
+    auto getServerStatValue = [this](Stats stat) -> double
+    {
+        uint64 extendedValue = GetExtendedStat(stat);
+        if (extendedValue > 0)
+            return static_cast<double>(extendedValue);
+
+        int32 displayValue = GetStat(stat);
+        return displayValue > 0 ? static_cast<double>(displayValue) : 0.0;
+    };
+
+    double val2D = static_cast<double>(val2);
+
     if (ranged)
     {
         index = UNIT_FIELD_RANGED_ATTACK_POWER;
@@ -543,11 +810,11 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
 
         if (IsClass(CLASS_HUNTER, CLASS_CONTEXT_STATS))
         {
-            val2 = level * 2.0f + (GetStat(STAT_AGILITY) * agilityToAPRate) - 10.0f;
+            val2D = static_cast<double>(level) * 2.0 + getServerStatValue(STAT_AGILITY) * static_cast<double>(agilityToAPRate) - 10.0;
         }
         else if (IsClass(CLASS_ROGUE, CLASS_CONTEXT_STATS) || IsClass(CLASS_WARRIOR, CLASS_CONTEXT_STATS))
         {
-            val2 = level + (GetStat(STAT_AGILITY) * agilityToAPRate) - 10.0f;
+            val2D = static_cast<double>(level) + getServerStatValue(STAT_AGILITY) * static_cast<double>(agilityToAPRate) - 10.0;
         }
         else if (IsClass(CLASS_DRUID, CLASS_CONTEXT_STATS))
         {
@@ -556,16 +823,16 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
             case FORM_CAT:
             case FORM_BEAR:
             case FORM_DIREBEAR:
-                val2 = 0.0f;
+                val2D = 0.0;
                 break;
             default:
-                val2 = (GetStat(STAT_AGILITY) * agilityToAPRate) - 10.0f;
+                val2D = getServerStatValue(STAT_AGILITY) * static_cast<double>(agilityToAPRate) - 10.0;
                 break;
             }
         }
         else
         {
-            val2 = (GetStat(STAT_AGILITY) * agilityToAPRate) - 10.0f;
+            val2D = getServerStatValue(STAT_AGILITY) * static_cast<double>(agilityToAPRate) - 10.0;
         }
     }
     else
@@ -590,11 +857,11 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
 
         if (IsClass(CLASS_PALADIN, CLASS_CONTEXT_STATS) || IsClass(CLASS_DEATH_KNIGHT, CLASS_CONTEXT_STATS) || IsClass(CLASS_WARRIOR, CLASS_CONTEXT_STATS))
         {
-            val2 = level * 3.0f + (GetStat(STAT_STRENGTH) * strengthToAPRate) * 2.0f - 20.0f;
+            val2D = static_cast<double>(level) * 3.0 + (getServerStatValue(STAT_STRENGTH) * static_cast<double>(strengthToAPRate)) * 2.0 - 20.0;
         }
         else if (IsClass(CLASS_HUNTER, CLASS_CONTEXT_STATS) || IsClass(CLASS_SHAMAN, CLASS_CONTEXT_STATS) || IsClass(CLASS_ROGUE, CLASS_CONTEXT_STATS))
         {
-            val2 = level * 2.0f + (GetStat(STAT_STRENGTH) * strengthToAPRate) + (GetStat(STAT_AGILITY) * agilityToAPRate) - 20.0f;
+            val2D = static_cast<double>(level) * 2.0 + getServerStatValue(STAT_STRENGTH) * static_cast<double>(strengthToAPRate) + getServerStatValue(STAT_AGILITY) * static_cast<double>(agilityToAPRate) - 20.0;
         }
         else if (IsClass(CLASS_DRUID, CLASS_CONTEXT_STATS))
         {
@@ -663,49 +930,49 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
             switch (GetShapeshiftForm())
             {
             case FORM_CAT:
-                val2 = (GetLevel() * mLevelMult) + GetStat(STAT_STRENGTH) * 2.0f + GetStat(STAT_AGILITY) - 20.0f + weapon_bonus + m_baseFeralAP;
+                val2D = static_cast<double>(GetLevel()) * static_cast<double>(mLevelMult) + getServerStatValue(STAT_STRENGTH) * 2.0 + getServerStatValue(STAT_AGILITY) - 20.0 + static_cast<double>(weapon_bonus) + static_cast<double>(m_baseFeralAP);
                 break;
             case FORM_BEAR:
             case FORM_DIREBEAR:
-                val2 = (GetLevel() * mLevelMult) + GetStat(STAT_STRENGTH) * 2.0f - 20.0f + weapon_bonus + m_baseFeralAP;
+                val2D = static_cast<double>(GetLevel()) * static_cast<double>(mLevelMult) + getServerStatValue(STAT_STRENGTH) * 2.0 - 20.0 + static_cast<double>(weapon_bonus) + static_cast<double>(m_baseFeralAP);
                 break;
             case FORM_MOONKIN:
-                val2 = (GetLevel() * mLevelMult) + GetStat(STAT_STRENGTH) * 2.0f - 20.0f + m_baseFeralAP;
+                val2D = static_cast<double>(GetLevel()) * static_cast<double>(mLevelMult) + getServerStatValue(STAT_STRENGTH) * 2.0 - 20.0 + static_cast<double>(m_baseFeralAP);
                 break;
             default:
-                val2 = GetStat(STAT_STRENGTH) * 2.0f - 20.0f;
+                val2D = getServerStatValue(STAT_STRENGTH) * 2.0 - 20.0;
                 break;
             }
         }
         else if (IsClass(CLASS_MAGE, CLASS_CONTEXT_STATS) || IsClass(CLASS_PRIEST, CLASS_CONTEXT_STATS) || IsClass(CLASS_WARLOCK, CLASS_CONTEXT_STATS))
         {
-            val2 = GetStat(STAT_STRENGTH) - 10.0f;
+            val2D = getServerStatValue(STAT_STRENGTH) - 10.0;
         }
     }
 
-    // 【安全检查】限制val2避免后续计算溢出
-    constexpr float MAX_SAFE_VAL = 2000000000.0f;
-    if (val2 < 0.0f)
-        val2 = 0.0f;
-    else if (val2 > MAX_SAFE_VAL)
-        val2 = MAX_SAFE_VAL;
+    constexpr double MAX_SERVER_AP_D = static_cast<double>(std::numeric_limits<float>::max());
 
-    SetModifierValue(unitMod, BASE_VALUE, val2);
+    // 服务端内部使用真实攻强，只做数值安全保护
+    if (val2D < 0.0 || std::isnan(val2D))
+        val2D = 0.0;
+    else if (std::isinf(val2D) || val2D > MAX_SERVER_AP_D)
+        val2D = MAX_SERVER_AP_D;
+
+    SetModifierValue(unitMod, BASE_VALUE, static_cast<float>(val2D));
 
     // 使用 double 进行乘法计算，避免 float 精度溢出
     double dBasePct = static_cast<double>(GetModifierValue(unitMod, BASE_PCT));
     double dBaseValue = static_cast<double>(GetModifierValue(unitMod, BASE_VALUE));
     double dBaseAttPower = dBaseValue * dBasePct;
 
-    constexpr double MAX_SAFE_AP_D = 2000000000.0;
-
-    // 检查溢出
-    if (dBaseAttPower < 0.0 || dBaseAttPower > MAX_SAFE_AP_D || std::isnan(dBaseAttPower) || std::isinf(dBaseAttPower))
-        dBaseAttPower = MAX_SAFE_AP_D;
+    if (dBaseAttPower < 0.0 || std::isnan(dBaseAttPower))
+        dBaseAttPower = 0.0;
+    else if (std::isinf(dBaseAttPower) || dBaseAttPower > MAX_SERVER_AP_D)
+        dBaseAttPower = MAX_SERVER_AP_D;
 
     float base_attPower = static_cast<float>(dBaseAttPower);
 
-    float attPowerMod = GetModifierValue(unitMod, TOTAL_VALUE);
+    double dAttPowerModValue = static_cast<double>(GetModifierValue(unitMod, TOTAL_VALUE));
 
     //add dynamic flat mods
     if (ranged)
@@ -714,20 +981,27 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
         {
             AuraEffectList const& mRAPbyStat = GetAuraEffectsByType(SPELL_AURA_MOD_RANGED_ATTACK_POWER_OF_STAT_PERCENT);
             for (AuraEffectList::const_iterator i = mRAPbyStat.begin(); i != mRAPbyStat.end(); ++i)
-                attPowerMod += CalculatePct(GetStat(Stats((*i)->GetMiscValue())), (*i)->GetAmount());
+                dAttPowerModValue += CalculatePct(getServerStatValue(Stats((*i)->GetMiscValue())), (*i)->GetAmount());
         }
     }
     else
     {
         AuraEffectList const& mAPbyStat = GetAuraEffectsByType(SPELL_AURA_MOD_ATTACK_POWER_OF_STAT_PERCENT);
         for (AuraEffectList::const_iterator i = mAPbyStat.begin(); i != mAPbyStat.end(); ++i)
-            attPowerMod += CalculatePct(GetStat(Stats((*i)->GetMiscValue())), (*i)->GetAmount());
+            dAttPowerModValue += CalculatePct(getServerStatValue(Stats((*i)->GetMiscValue())), (*i)->GetAmount());
 
         AuraEffectList const& mAPbyArmor = GetAuraEffectsByType(SPELL_AURA_MOD_ATTACK_POWER_OF_ARMOR);
         for (AuraEffectList::const_iterator iter = mAPbyArmor.begin(); iter != mAPbyArmor.end(); ++iter)
             // always: ((*i)->GetModifier()->m_miscvalue == 1 == SPELL_SCHOOL_MASK_NORMAL)
-            attPowerMod += int32(GetArmor() / (*iter)->GetAmount());
+            dAttPowerModValue += static_cast<double>(GetExtendedArmor()) / static_cast<double>((*iter)->GetAmount());
     }
+
+    if (dAttPowerModValue < -MAX_SERVER_AP_D || std::isnan(dAttPowerModValue))
+        dAttPowerModValue = -MAX_SERVER_AP_D;
+    else if (std::isinf(dAttPowerModValue) || dAttPowerModValue > MAX_SERVER_AP_D)
+        dAttPowerModValue = MAX_SERVER_AP_D;
+
+    float attPowerMod = static_cast<float>(dAttPowerModValue);
 
     float attPowerMultiplier = GetModifierValue(unitMod, TOTAL_PCT) - 1.0f;
 
@@ -737,10 +1011,14 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
     double dBaseAP = static_cast<double>(base_attPower);
     double dAttPowerMod = static_cast<double>(attPowerMod);
 
-    if (dBaseAP < 0.0 || dBaseAP > MAX_SAFE_AP_D || std::isnan(base_attPower) || std::isinf(base_attPower))
-        dBaseAP = MAX_SAFE_AP_D;
-    if (dAttPowerMod < -MAX_SAFE_AP_D || dAttPowerMod > MAX_SAFE_AP_D || std::isnan(attPowerMod) || std::isinf(attPowerMod))
-        dAttPowerMod = (dAttPowerMod < 0) ? -MAX_SAFE_AP_D : MAX_SAFE_AP_D;
+    if (dBaseAP < 0.0 || std::isnan(base_attPower))
+        dBaseAP = 0.0;
+    else if (std::isinf(base_attPower) || dBaseAP > MAX_SERVER_AP_D)
+        dBaseAP = MAX_SERVER_AP_D;
+    if (dAttPowerMod < -MAX_SERVER_AP_D || std::isnan(attPowerMod))
+        dAttPowerMod = -MAX_SERVER_AP_D;
+    else if (std::isinf(attPowerMod) || dAttPowerMod > MAX_SERVER_AP_D)
+        dAttPowerMod = MAX_SERVER_AP_D;
 
     // Calculate final attack power
     double dFinalAttackPower = dBaseAP;
@@ -773,41 +1051,52 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
         }
     }
 
-    // 最终安全检查 - 确保不超过 int32 最大值，防止溢出
-    if (dFinalAttackPower < 0.0 || dFinalAttackPower > MAX_SAFE_AP_D || std::isnan(dFinalAttackPower) || std::isinf(dFinalAttackPower))
-        dFinalAttackPower = MAX_SAFE_AP_D;
+    if (dFinalAttackPower < 0.0 || std::isnan(dFinalAttackPower))
+        dFinalAttackPower = 0.0;
+    else if (std::isinf(dFinalAttackPower) || dFinalAttackPower > MAX_SERVER_AP_D)
+        dFinalAttackPower = MAX_SERVER_AP_D;
 
-    if (dAttPowerMod > MAX_SAFE_AP_D)
-        dAttPowerMod = MAX_SAFE_AP_D;
-    if (dAttPowerMod < -MAX_SAFE_AP_D)
-        dAttPowerMod = -MAX_SAFE_AP_D;
+    if (dAttPowerMod > MAX_SERVER_AP_D)
+        dAttPowerMod = MAX_SERVER_AP_D;
+    if (dAttPowerMod < -MAX_SERVER_AP_D)
+        dAttPowerMod = -MAX_SERVER_AP_D;
+
+    double serverTotalAP = dFinalAttackPower + dAttPowerMod;
+    if (serverTotalAP < 0.0 || std::isnan(serverTotalAP))
+        serverTotalAP = 0.0;
+    else if (std::isinf(serverTotalAP) || serverTotalAP > MAX_SERVER_AP_D)
+        serverTotalAP = MAX_SERVER_AP_D;
+
+    _extendedAttackPower[ranged ? RANGED_ATTACK : BASE_ATTACK] = serverTotalAP;
+    if (!ranged)
+        _extendedAttackPower[OFF_ATTACK] = serverTotalAP;
 
     // 【重要】客户端显示攻强 = (AP + Mod) * (1 + Multiplier)
     // 必须确保这个最终显示值不超过 INT32_MAX (约21.47亿)
     // 否则客户端会溢出显示为 0 或负数
 
     // 先计算合并后的总攻强
-    double totalAP = dFinalAttackPower + dAttPowerMod;
+    double totalAPForClient = serverTotalAP;
 
     // 客户端显示值 = totalAP * (1 + multiplier)
     double displayMultiplier = 1.0 + static_cast<double>(attPowerMultiplier);
-    double clientDisplayValue = totalAP * displayMultiplier;
+    double clientDisplayValue = totalAPForClient * displayMultiplier;
 
     // 客户端使用 int32 显示，最大安全值约 21.47 亿，保守使用 20 亿
     constexpr double MAX_CLIENT_DISPLAY = 2000000000.0;
 
-    if (clientDisplayValue > MAX_CLIENT_DISPLAY || clientDisplayValue < 0.0)
+    if (clientDisplayValue > MAX_CLIENT_DISPLAY || clientDisplayValue < 0.0 || std::isnan(clientDisplayValue) || std::isinf(clientDisplayValue))
     {
         // 客户端显示值会溢出，需要调整
         // 反推：totalAP = MAX_CLIENT_DISPLAY / (1 + multiplier)
         if (displayMultiplier > 0.0)
-            totalAP = MAX_CLIENT_DISPLAY / displayMultiplier;
+            totalAPForClient = MAX_CLIENT_DISPLAY / displayMultiplier;
         else
-            totalAP = MAX_CLIENT_DISPLAY;
+            totalAPForClient = MAX_CLIENT_DISPLAY;
     }
 
     // 将 totalAP 全部放入 base 字段，mod 设为 0
-    dFinalAttackPower = totalAP;
+    dFinalAttackPower = totalAPForClient;
     dAttPowerMod = 0.0;
 
     int32 finalAP_int32 = static_cast<int32>(dFinalAttackPower);
@@ -840,6 +1129,15 @@ void Player::UpdateShieldBlockValue()
 
 void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bool addTotalPct, float& minDamage, float& maxDamage, uint8 damageIndex)
 {
+    if (attType == OFF_ATTACK && !HasOffhandWeaponForAttack())
+    {
+        _extendedDamageMin[OFF_ATTACK] = 0.0;
+        _extendedDamageMax[OFF_ATTACK] = 0.0;
+        minDamage = 0.0f;
+        maxDamage = 0.0f;
+        return;
+    }
+
     // Only proto damage, not affected by any mods
     if (damageIndex != 0)
     {
@@ -981,6 +1279,9 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
     if (dMinDamage > dMaxDamage)
         dMinDamage = dMaxDamage;
 
+    _extendedDamageMin[attType] = dMinDamage > 0.0 ? dMinDamage : 0.0;
+    _extendedDamageMax[attType] = dMaxDamage > 0.0 ? dMaxDamage : 0.0;
+
     // 转换回 float
     minDamage = static_cast<float>(dMinDamage);
     maxDamage = static_cast<float>(dMaxDamage);
@@ -1002,7 +1303,7 @@ void Player::UpdateBlockPercentage()
         // Base value
         value = 5.0f;
         // Modify value from defense skill
-        value += (int32(GetDefenseSkillValue()) - int32(GetMaxSkillValueForLevel())) * 0.04f;
+        value += static_cast<float>((static_cast<double>(GetExtendedDefenseSkillValue()) - static_cast<double>(GetMaxSkillValueForLevel())) * 0.04);
         // Increase from SPELL_AURA_MOD_BLOCK_PERCENT aura
         value += GetTotalAuraModifier(SPELL_AURA_MOD_BLOCK_PERCENT);
         // Increase from rating
@@ -1018,8 +1319,10 @@ void Player::UpdateBlockPercentage()
                 if (customRate > 0.0f)
                 {
                     // Use custom conversion rate: rating / customRate = percentage
-                    float ratingValue = float(GetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + CR_BLOCK));
-                    blockRating = ratingValue / customRate;
+                    uint64 extendedRating = GetExtendedCombatRating(CR_BLOCK);
+                    double ratingValue = extendedRating > 0 ? static_cast<double>(extendedRating) : static_cast<double>(GetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + CR_BLOCK));
+                    double converted = ratingValue / static_cast<double>(customRate);
+                    blockRating = converted > static_cast<double>(std::numeric_limits<float>::max()) ? std::numeric_limits<float>::max() : static_cast<float>(converted);
 
                 }
             }
@@ -1172,14 +1475,20 @@ float Player::GetMissPercentageFromDefence() const
         16.00f      // Druid   //?
     };
 
-    float diminishing = 0.0f, nondiminishing = 0.0f;
+    double diminishing = 0.0, nondiminishing = 0.0;
     // Modify value from defense skill (only bonus from defense rating diminishes)
-    nondiminishing += (GetSkillValue(SKILL_DEFENSE) - GetMaxSkillValueForLevel()) * 0.04f;
-    diminishing += (int32(GetRatingBonusValue(CR_DEFENSE_SKILL))) * 0.04f;
+    nondiminishing += (static_cast<double>(GetSkillValue(SKILL_DEFENSE)) - static_cast<double>(GetMaxSkillValueForLevel())) * 0.04;
+    diminishing += GetExtendedRatingBonusValue(CR_DEFENSE_SKILL) * 0.04;
 
     // apply diminishing formula to diminishing miss chance
     uint32 pclass = getClass() - 1;
-    return nondiminishing + (diminishing * miss_cap[pclass] / (diminishing + miss_cap[pclass] * m_diminishing_k[pclass]));
+    double result = nondiminishing + (diminishing * static_cast<double>(miss_cap[pclass]) / (diminishing + static_cast<double>(miss_cap[pclass]) * static_cast<double>(m_diminishing_k[pclass])));
+    if (result <= 0.0 || std::isnan(result))
+        return 0.0f;
+    if (std::isinf(result) || result > static_cast<double>(std::numeric_limits<float>::max()))
+        return std::numeric_limits<float>::max();
+
+    return static_cast<float>(result);
 }
 
 void Player::UpdateParryPercentage()
@@ -1219,14 +1528,17 @@ void Player::UpdateParryPercentage()
                 if (customRate > 0.0f)
                 {
                     // Use custom conversion rate: rating / customRate = percentage
-                    float ratingValue = float(GetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + CR_PARRY));
-                    diminishing = ratingValue / customRate;
+                    uint64 extendedRating = GetExtendedCombatRating(CR_PARRY);
+                    double ratingValue = extendedRating > 0 ? static_cast<double>(extendedRating) : static_cast<double>(GetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + CR_PARRY));
+                    double converted = ratingValue / static_cast<double>(customRate);
+                    diminishing = converted > static_cast<double>(std::numeric_limits<float>::max()) ? std::numeric_limits<float>::max() : static_cast<float>(converted);
                 }
             }
         }
         // Modify value from defense skill (only bonus from defense rating diminishes)
-        nondiminishing += (GetSkillValue(SKILL_DEFENSE) - GetMaxSkillValueForLevel()) * 0.04f;
-        diminishing += (int32(GetRatingBonusValue(CR_DEFENSE_SKILL))) * 0.04f;
+        nondiminishing += static_cast<float>((static_cast<double>(GetSkillValue(SKILL_DEFENSE)) - static_cast<double>(GetMaxSkillValueForLevel())) * 0.04);
+        double defenseRating = GetExtendedRatingBonusValue(CR_DEFENSE_SKILL) * 0.04;
+        diminishing += defenseRating > static_cast<double>(std::numeric_limits<float>::max()) ? std::numeric_limits<float>::max() : static_cast<float>(defenseRating);
         // Parry from SPELL_AURA_MOD_PARRY_PERCENT aura
         nondiminishing += GetTotalAuraModifier(SPELL_AURA_MOD_PARRY_PERCENT);
         // apply diminishing formula to diminishing parry chance
@@ -1286,8 +1598,9 @@ void Player::UpdateDodgePercentage()
     float diminishing = 0.0f, nondiminishing = 0.0f;
     GetDodgeFromAgility(diminishing, nondiminishing);
     // Modify value from defense skill (only bonus from defense rating diminishes)
-    nondiminishing += (GetSkillValue(SKILL_DEFENSE) - GetMaxSkillValueForLevel()) * 0.04f;
-    diminishing += (int32(GetRatingBonusValue(CR_DEFENSE_SKILL))) * 0.04f;
+    nondiminishing += static_cast<float>((static_cast<double>(GetSkillValue(SKILL_DEFENSE)) - static_cast<double>(GetMaxSkillValueForLevel())) * 0.04);
+    double defenseRating = GetExtendedRatingBonusValue(CR_DEFENSE_SKILL) * 0.04;
+    diminishing += defenseRating > static_cast<double>(std::numeric_limits<float>::max()) ? std::numeric_limits<float>::max() : static_cast<float>(defenseRating);
     // Dodge from SPELL_AURA_MOD_DODGE_PERCENT aura
     nondiminishing += GetTotalAuraModifier(SPELL_AURA_MOD_DODGE_PERCENT);
     // Dodge from rating
@@ -1405,10 +1718,13 @@ void Player::UpdateArmorPenetration(int32 amount)
 
 void Player::UpdateMeleeHitChances()
 {
-    m_modMeleeHitChance = (float)GetTotalAuraModifier(SPELL_AURA_MOD_HIT_CHANCE);
+    double baseHitChance = static_cast<double>(GetTotalAuraModifier(SPELL_AURA_MOD_HIT_CHANCE));
 
     // Check for custom hit rating conversion rate
-    float hitRating = GetRatingBonusValue(CR_HIT_MELEE);
+    double hitRating = static_cast<double>(GetRatingBonusValue(CR_HIT_MELEE));
+    uint64 extendedRatingValue = GetExtendedCombatRating(CR_HIT_MELEE);
+    if (extendedRatingValue > 0)
+        hitRating = static_cast<double>(extendedRatingValue) * static_cast<double>(GetRatingMultiplier(CR_HIT_MELEE));
     QueryResult result = WorldDatabase.Query("SELECT `命中等级转换率` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
     if (result)
     {
@@ -1417,20 +1733,34 @@ void Player::UpdateMeleeHitChances()
         if (customRate > 0.0f)
         {
             // Use custom conversion rate: rating / customRate = percentage
-            float ratingValue = float(GetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + CR_HIT_MELEE));
-            hitRating = ratingValue / customRate;
+            if (extendedRatingValue > 0)
+                hitRating = static_cast<double>(extendedRatingValue) / static_cast<double>(customRate);
+            else
+            {
+                float ratingValue = float(GetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + CR_HIT_MELEE));
+                hitRating = static_cast<double>(ratingValue) / static_cast<double>(customRate);
+            }
         }
     }
 
-    m_modMeleeHitChance += hitRating;
+    double totalHitChance = baseHitChance + hitRating;
+    if (totalHitChance < 0.0 || std::isnan(totalHitChance))
+        totalHitChance = 0.0;
+    else if (std::isinf(totalHitChance) || totalHitChance > static_cast<double>(std::numeric_limits<float>::max()))
+        totalHitChance = static_cast<double>(std::numeric_limits<float>::max());
+
+    m_modMeleeHitChance = static_cast<float>(totalHitChance);
 }
 
 void Player::UpdateRangedHitChances()
 {
-    m_modRangedHitChance = (float)GetTotalAuraModifier(SPELL_AURA_MOD_HIT_CHANCE);
+    double baseHitChance = static_cast<double>(GetTotalAuraModifier(SPELL_AURA_MOD_HIT_CHANCE));
 
     // Check for custom hit rating conversion rate
-    float hitRating = GetRatingBonusValue(CR_HIT_RANGED);
+    double hitRating = static_cast<double>(GetRatingBonusValue(CR_HIT_RANGED));
+    uint64 extendedRatingValue = GetExtendedCombatRating(CR_HIT_RANGED);
+    if (extendedRatingValue > 0)
+        hitRating = static_cast<double>(extendedRatingValue) * static_cast<double>(GetRatingMultiplier(CR_HIT_RANGED));
 
     QueryResult result = WorldDatabase.Query("SELECT `命中等级转换率` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
     if (result)
@@ -1441,20 +1771,34 @@ void Player::UpdateRangedHitChances()
         if (customRate > 0.0f)
         {
             // Use custom conversion rate: rating / customRate = percentage
-            float ratingValue = float(GetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + CR_HIT_RANGED));
-            hitRating = ratingValue / customRate;
+            if (extendedRatingValue > 0)
+                hitRating = static_cast<double>(extendedRatingValue) / static_cast<double>(customRate);
+            else
+            {
+                float ratingValue = float(GetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + CR_HIT_RANGED));
+                hitRating = static_cast<double>(ratingValue) / static_cast<double>(customRate);
+            }
         }
     }
 
-    m_modRangedHitChance += hitRating;
+    double totalHitChance = baseHitChance + hitRating;
+    if (totalHitChance < 0.0 || std::isnan(totalHitChance))
+        totalHitChance = 0.0;
+    else if (std::isinf(totalHitChance) || totalHitChance > static_cast<double>(std::numeric_limits<float>::max()))
+        totalHitChance = static_cast<double>(std::numeric_limits<float>::max());
+
+    m_modRangedHitChance = static_cast<float>(totalHitChance);
 }
 
 void Player::UpdateSpellHitChances()
 {
-    m_modSpellHitChance = (float)GetTotalAuraModifier(SPELL_AURA_MOD_SPELL_HIT_CHANCE);
+    double baseHitChance = static_cast<double>(GetTotalAuraModifier(SPELL_AURA_MOD_SPELL_HIT_CHANCE));
 
     // Check for custom hit rating conversion rate
-    float hitRating = GetRatingBonusValue(CR_HIT_SPELL);
+    double hitRating = static_cast<double>(GetRatingBonusValue(CR_HIT_SPELL));
+    uint64 extendedRatingValue = GetExtendedCombatRating(CR_HIT_SPELL);
+    if (extendedRatingValue > 0)
+        hitRating = static_cast<double>(extendedRatingValue) * static_cast<double>(GetRatingMultiplier(CR_HIT_SPELL));
     QueryResult result = WorldDatabase.Query("SELECT `命中等级转换率` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
     if (result)
     {
@@ -1463,12 +1807,23 @@ void Player::UpdateSpellHitChances()
         if (customRate > 0.0f)
         {
             // Use custom conversion rate: rating / customRate = percentage
-            float ratingValue = float(GetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + CR_HIT_SPELL));
-            hitRating = ratingValue / customRate;
+            if (extendedRatingValue > 0)
+                hitRating = static_cast<double>(extendedRatingValue) / static_cast<double>(customRate);
+            else
+            {
+                float ratingValue = float(GetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + CR_HIT_SPELL));
+                hitRating = static_cast<double>(ratingValue) / static_cast<double>(customRate);
+            }
         }
     }
 
-    m_modSpellHitChance += hitRating;
+    double totalHitChance = baseHitChance + hitRating;
+    if (totalHitChance < 0.0 || std::isnan(totalHitChance))
+        totalHitChance = 0.0;
+    else if (std::isinf(totalHitChance) || totalHitChance > static_cast<double>(std::numeric_limits<float>::max()))
+        totalHitChance = static_cast<double>(std::numeric_limits<float>::max());
+
+    m_modSpellHitChance = static_cast<float>(totalHitChance);
 }
 
 void Player::UpdateAllSpellCritChances()

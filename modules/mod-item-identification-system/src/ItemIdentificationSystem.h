@@ -163,6 +163,9 @@ public:
         // 幻境系统数据（新增）
         std::string huanjingData;        // 格式：multiplier|enhancedAttrs  例如：3|3 10 30,4 20 60
 
+        // 物品模板64位属性数据
+        std::string templateStatsData;    // 格式：TPL64|statType value,...|armor|damageMin damageMax damageType,...
+
         bool hasData;                    // 是否有任何数据
     };
 

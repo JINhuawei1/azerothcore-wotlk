@@ -1820,7 +1820,7 @@ public:
     void SetLastPotionId(uint32 item_id) { m_lastPotionId = item_id; }
     void UpdatePotionCooldown(Spell* spell = nullptr);
 
-    void setResurrectRequestData(ObjectGuid guid, uint32 mapId, float X, float Y, float Z, uint32 health, uint32 mana)
+    void setResurrectRequestData(ObjectGuid guid, uint32 mapId, float X, float Y, float Z, uint64 health, uint32 mana)
     {
         m_resurrectGUID = guid;
         m_resurrectMap = mapId;
@@ -1944,8 +1944,8 @@ public:
 
     uint32 GetSpellByProto(ItemTemplate* proto);
 
-    float GetHealthBonusFromStamina();
-    float GetManaBonusFromIntellect();
+    double GetHealthBonusFromStamina();
+    double GetManaBonusFromIntellect();
 
     bool UpdateStats(Stats stat) override;
     bool UpdateAllStats() override;
@@ -1957,9 +1957,9 @@ public:
     void ApplyFeralAPBonus(int32 amount, bool apply);
     void UpdateAttackPowerAndDamage(bool ranged = false) override;
     void UpdateShieldBlockValue();
-    void ApplySpellPowerBonus(int32 amount, bool apply);
+    void ApplySpellPowerBonus(int64 amount, bool apply);
     void UpdateSpellDamageAndHealingBonus();
-    void ApplyRatingMod(CombatRating cr, int32 value, bool apply);
+    void ApplyRatingMod(CombatRating cr, int64 value, bool apply);
     void UpdateRating(CombatRating cr);
     void UpdateAllRatings();
 
@@ -1975,7 +1975,7 @@ public:
     float OCTRegenMPPerSpirit();
     [[nodiscard]] float GetRatingMultiplier(CombatRating cr) const;
     [[nodiscard]] float GetRatingBonusValue(CombatRating cr) const;
-    uint32 GetBaseSpellPowerBonus() { return m_baseSpellPower; }
+    uint64 GetBaseSpellPowerBonus() const { return m_baseSpellPower; }
     [[nodiscard]] int32 GetSpellPenetrationItemMod() const { return m_spellPenetrationItemMod; }
 
     [[nodiscard]] float GetExpertiseDodgeOrParryReduction(WeaponAttackType attType) const;
@@ -2167,9 +2167,9 @@ public:
     void SetArenaPoints(uint32 value);
 
     // duel health and mana reset methods
-    void SaveHealthBeforeDuel()     { healthBeforeDuel = GetHealth(); }
+    void SaveHealthBeforeDuel()     { healthBeforeDuel = GetExtendedHealth(); }
     void SaveManaBeforeDuel()       { manaBeforeDuel = GetPower(POWER_MANA); }
-    void RestoreHealthAfterDuel()   { SetHealth(healthBeforeDuel); }
+    void RestoreHealthAfterDuel()   { SetExtendedHealth(healthBeforeDuel); SyncClientHealthFromExtended(); }
     void RestoreManaAfterDuel()     { SetPower(POWER_MANA, manaBeforeDuel); }
 
     //End of PvP System
@@ -2189,6 +2189,122 @@ public:
     void SendCorpseReclaimDelay(uint32 delay);
 
     [[nodiscard]] uint32 GetShieldBlockValue() const override;                 // overwrite Unit version (virtual)
+    [[nodiscard]] int64 GetExtendedStat(Stats stat) const { return _extendedStats[stat]; }
+    void SetExtendedStat(Stats stat, int64 value) { _extendedStats[stat] = value; }
+    [[nodiscard]] int64 GetExtendedStrength() const { return GetExtendedStat(STAT_STRENGTH); }
+    [[nodiscard]] double GetExtendedAttackPowerValue(WeaponAttackType attType) const { return _extendedAttackPower[attType]; }
+    [[nodiscard]] double GetExtendedTotalAttackPowerValue(WeaponAttackType attType) const
+    {
+        double extendedValue = _extendedAttackPower[attType];
+        if (extendedValue <= 0.0)
+        {
+            double fallback = static_cast<double>(GetTotalAttackPowerValue(attType));
+            return fallback > 0.0 ? fallback : 0.0;
+        }
+
+        double multiplier = 1.0;
+        if (attType == RANGED_ATTACK)
+            multiplier += static_cast<double>(GetFloatValue(UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER));
+        else
+            multiplier += static_cast<double>(GetFloatValue(UNIT_FIELD_ATTACK_POWER_MULTIPLIER));
+
+        double result = extendedValue * multiplier;
+        return result > 0.0 ? result : 0.0;
+    }
+    [[nodiscard]] uint64 GetExtendedHealth() const;
+    [[nodiscard]] uint64 GetExtendedMaxHealth() const { return _extendedMaxHealth ? _extendedMaxHealth : GetMaxHealth(); }
+    [[nodiscard]] uint64 GetHealthForCombat() const override { return GetExtendedHealth(); }
+    [[nodiscard]] uint64 GetMaxHealthForCombat() const override { return GetExtendedMaxHealth(); }
+    void SetExtendedHealth(uint64 value);
+    void SetExtendedHealthFromClientHealth(uint32 clientHealth);
+    void SyncClientHealthFromExtended();
+    void ApplyPendingClientHealthSync();
+    [[nodiscard]] bool IsSyncingClientHealthFromExtended() const { return _syncingClientHealthFromExtended; }
+    [[nodiscard]] uint64 GetExtendedMaxPower(Powers power) const { return _extendedMaxPowers[power] ? _extendedMaxPowers[power] : GetMaxPower(power); }
+    [[nodiscard]] int64 GetExtendedCombatRating(CombatRating cr) const { return _extendedCombatRatings[cr]; }
+    void SetExtendedCombatRating(CombatRating cr, int64 value) { _extendedCombatRatings[cr] = value; }
+    [[nodiscard]] double GetExtendedRatingBonusValue(CombatRating cr) const
+    {
+        int64 extendedValue = GetExtendedCombatRating(cr);
+        if (extendedValue > 0)
+            return static_cast<double>(extendedValue) * static_cast<double>(GetRatingMultiplier(cr));
+
+        int32 displayValue = GetInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + cr);
+        return displayValue > 0 ? static_cast<double>(displayValue) * static_cast<double>(GetRatingMultiplier(cr)) : 0.0;
+    }
+    [[nodiscard]] int64 GetExtendedArmor() const { return _extendedArmor ? _extendedArmor : GetArmor(); }
+    void SetExtendedArmor(int64 value) { _extendedArmor = value; }
+    [[nodiscard]] uint64 GetExtendedDefenseSkillValue(Unit const* target = nullptr) const
+    {
+        uint64 value = (target && target->IsPlayer()) ? GetMaxSkillValue(SKILL_DEFENSE) : GetSkillValue(SKILL_DEFENSE);
+        double defenseBonus = GetExtendedRatingBonusValue(CR_DEFENSE_SKILL);
+        if (defenseBonus > 0.0)
+            value += static_cast<uint64>(defenseBonus);
+
+        return value;
+    }
+    [[nodiscard]] double GetExtendedDamageMin(WeaponAttackType attType) const
+    {
+        if (_extendedDamageMin[attType] > 0.0)
+            return _extendedDamageMin[attType];
+
+        double fallback = static_cast<double>(GetWeaponDamageRange(attType, MINDAMAGE));
+        return fallback > 0.0 ? fallback : 0.0;
+    }
+    [[nodiscard]] double GetExtendedDamageMax(WeaponAttackType attType) const
+    {
+        if (_extendedDamageMax[attType] > 0.0)
+            return _extendedDamageMax[attType];
+
+        double fallback = static_cast<double>(GetWeaponDamageRange(attType, MAXDAMAGE));
+        return fallback > 0.0 ? fallback : 0.0;
+    }
+    [[nodiscard]] int64 GetExtendedHealingBonus() const { return _extendedHealingBonus; }
+    void SetExtendedHealingBonus(int64 value) { _extendedHealingBonus = value; }
+    void SetExtendedSpellDamageBonus(SpellSchools school, int64 value) { _extendedSpellDamageBonuses[school] = value; }
+    [[nodiscard]] int64 GetExtendedSpellDamageBonus() const
+    {
+        int64 maxBonus = 0;
+        for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
+            if (_extendedSpellDamageBonuses[i] > maxBonus)
+                maxBonus = _extendedSpellDamageBonuses[i];
+
+        if (maxBonus > 0)
+            return maxBonus;
+
+        int32 fallback = 0;
+        for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
+        {
+            int32 schoolBonus = GetInt32Value(PLAYER_FIELD_MOD_DAMAGE_DONE_POS + i);
+            if (schoolBonus > fallback)
+                fallback = schoolBonus;
+        }
+
+        return fallback > 0 ? static_cast<int64>(fallback) : 0;
+    }
+    [[nodiscard]] int64 GetExtendedSpellPowerBonus() const
+    {
+        int64 maxBonus = _extendedHealingBonus;
+        for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
+            if (_extendedSpellDamageBonuses[i] > maxBonus)
+                maxBonus = _extendedSpellDamageBonuses[i];
+
+        if (maxBonus > 0)
+            return maxBonus;
+
+        int32 fallback = GetInt32Value(PLAYER_FIELD_MOD_HEALING_DONE_POS);
+        if (fallback < 0)
+            fallback = 0;
+
+        for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
+        {
+            int32 schoolBonus = GetInt32Value(PLAYER_FIELD_MOD_DAMAGE_DONE_POS + i);
+            if (schoolBonus > fallback)
+                fallback = schoolBonus;
+        }
+
+        return fallback > 0 ? static_cast<int64>(fallback) : 0;
+    }
     [[nodiscard]] bool CanParry() const { return m_canParry; }
     void SetCanParry(bool value);
     [[nodiscard]] bool CanBlock() const { return m_canBlock; }
@@ -2832,8 +2948,8 @@ protected:
     ActionButtonList m_actionButtons;
 
     float m_auraBaseMod[BASEMOD_END][MOD_END];
-    int32 m_baseRatingValue[MAX_COMBAT_RATING];
-    uint32 m_baseSpellPower;
+    int64 m_baseRatingValue[MAX_COMBAT_RATING];
+    uint64 m_baseSpellPower;
     uint32 m_baseFeralAP;
     uint32 m_baseManaRegen;
     uint32 m_baseHealthRegen;
@@ -2851,7 +2967,8 @@ protected:
     ObjectGuid m_resurrectGUID;
     uint32 m_resurrectMap;
     float m_resurrectX, m_resurrectY, m_resurrectZ;
-    uint32 m_resurrectHealth, m_resurrectMana;
+    uint64 m_resurrectHealth;
+    uint32 m_resurrectMana;
 
     WorldSession* m_session;
 
@@ -3010,7 +3127,7 @@ private:
     uint32 _activeCheats;
 
     // duel health and mana reset attributes
-    uint32 healthBeforeDuel;
+    uint64 healthBeforeDuel;
     uint32 manaBeforeDuel;
 
     bool m_isInstantFlightOn;
@@ -3022,6 +3139,20 @@ private:
     Optional<float> _farSightDistance = { };
 
     bool _wasOutdoor;
+    std::array<int64, MAX_STATS> _extendedStats = { };
+    std::array<double, MAX_ATTACK> _extendedAttackPower = { };
+    uint64 _extendedHealth = 0;
+    uint64 _extendedMaxHealth = 0;
+    bool _syncingClientHealthFromExtended = false;
+    uint8 _pendingClientHealthSyncTicks = 0;
+    std::array<uint64, MAX_POWERS> _extendedMaxPowers = { };
+    std::array<int64, MAX_COMBAT_RATING> _extendedBaseRatingValue = { };
+    std::array<int64, MAX_COMBAT_RATING> _extendedCombatRatings = { };
+    int64 _extendedArmor = 0;
+    std::array<int64, MAX_SPELL_SCHOOL> _extendedSpellDamageBonuses = { };
+    int64 _extendedHealingBonus = 0;
+    std::array<double, MAX_ATTACK> _extendedDamageMin = { };
+    std::array<double, MAX_ATTACK> _extendedDamageMax = { };
 
     PlayerSettingMap m_charSettingsMap;
 

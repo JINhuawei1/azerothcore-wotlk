@@ -64,6 +64,7 @@
 #include "World.h"
 #include "WorldPacket.h"
 #include <chrono>
+#include <limits>
 
 /// @todo: this import is not necessary for compilation and marked as unused by the IDE
 //  however, for some reasons removing it would cause a damn linking issue
@@ -7916,19 +7917,31 @@ void Player::_SaveStats(CharacterDatabaseTransaction trans)
     stmt->SetData(0, GetGUID().GetCounter());
     trans->Append(stmt);
 
+    auto toUInt64Stat = [](double value) -> uint64
+    {
+        if (value <= 0.0)
+            return 0;
+
+        if (value > static_cast<double>(std::numeric_limits<uint64>::max()))
+            return std::numeric_limits<uint64>::max();
+
+        return static_cast<uint64>(value);
+    };
+
     uint8 index = 0;
 
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHAR_STATS);
     stmt->SetData(index++, GetGUID().GetCounter());
-    stmt->SetData(index++, GetMaxHealth());
+    stmt->SetData(index++, GetExtendedMaxHealth());
 
     for (uint8 i = 0; i < MAX_POWERS; ++i)
-        stmt->SetData(index++, GetMaxPower(Powers(i)));
+        stmt->SetData(index++, GetExtendedMaxPower(Powers(i)));
 
     for (uint8 i = 0; i < MAX_STATS; ++i)
-        stmt->SetData(index++, GetStat(Stats(i)));
+        stmt->SetData(index++, GetExtendedStat(Stats(i)));
 
-    for (int i = 0; i < MAX_SPELL_SCHOOL; ++i)
+    stmt->SetData(index++, GetExtendedArmor());
+    for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
         stmt->SetData(index++, GetResistance(SpellSchools(i)));
 
     stmt->SetData(index++, GetFloatValue(PLAYER_BLOCK_PERCENTAGE));
@@ -7937,10 +7950,10 @@ void Player::_SaveStats(CharacterDatabaseTransaction trans)
     stmt->SetData(index++, GetFloatValue(PLAYER_CRIT_PERCENTAGE));
     stmt->SetData(index++, GetFloatValue(PLAYER_RANGED_CRIT_PERCENTAGE));
     stmt->SetData(index++, GetFloatValue(PLAYER_SPELL_CRIT_PERCENTAGE1));
-    stmt->SetData(index++, GetUInt32Value(UNIT_FIELD_ATTACK_POWER));
-    stmt->SetData(index++, GetUInt32Value(UNIT_FIELD_RANGED_ATTACK_POWER));
+    stmt->SetData(index++, toUInt64Stat(GetExtendedTotalAttackPowerValue(BASE_ATTACK)));
+    stmt->SetData(index++, toUInt64Stat(GetExtendedTotalAttackPowerValue(RANGED_ATTACK)));
     stmt->SetData(index++, GetBaseSpellPowerBonus());
-    stmt->SetData(index++, GetUInt32Value(PLAYER_FIELD_COMBAT_RATING_1 + static_cast<uint16>(CR_CRIT_TAKEN_SPELL)));
+    stmt->SetData(index++, GetExtendedCombatRating(CR_CRIT_TAKEN_SPELL));
 
     trans->Append(stmt);
 }

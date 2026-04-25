@@ -1128,8 +1128,8 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
         // remove elite bonuses included in DB values
         CreatureBaseStats const* stats = sObjectMgr->GetCreatureBaseStats(petlevel, cinfo->unit_class);
         // xinef: multiply base values by creature_template factors!
-        float factorHealth = owner->IsPlayer() ? std::min(1.0f, cinfo->ModHealth) : cinfo->ModHealth;
-        float factorMana = owner->IsPlayer() ? std::min(1.0f, cinfo->ModMana) : cinfo->ModMana;
+        float factorHealth = owner->IsPlayer() ? std::min(1.0f, static_cast<float>(cinfo->ModHealth)) : static_cast<float>(cinfo->ModHealth);
+        float factorMana = owner->IsPlayer() ? std::min(1.0f, static_cast<float>(cinfo->ModMana)) : static_cast<float>(cinfo->ModMana);
 
         if (sWorld->getBoolConfig(CONFIG_ALLOWS_RANK_MOD_FOR_PET_HEALTH))
         {

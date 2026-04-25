@@ -22,6 +22,7 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
+#include <limits>
 /*
  * Scripts for spells with SPELLFAMILY_ROGUE and SPELLFAMILY_GENERIC spells used by rogue players.
  * Ordered alphabetically using scriptname.
@@ -168,21 +169,19 @@ class spell_rog_cheat_death : public AuraScript
     void Absorb(AuraEffect* /*aurEff*/, DamageInfo& dmgInfo, uint32& absorbAmount)
     {
         Player* target = GetTarget()->ToPlayer();
-        if (dmgInfo.GetDamage() < target->GetHealth() || target->HasSpellCooldown(SPELL_ROGUE_CHEAT_DEATH_COOLDOWN) || !roll_chance_i(absorbChance))
+        uint64 targetHealth = target->GetHealthForCombat();
+        if (dmgInfo.GetDamage() < targetHealth || target->HasSpellCooldown(SPELL_ROGUE_CHEAT_DEATH_COOLDOWN) || !roll_chance_i(absorbChance))
             return;
 
         target->CastSpell(target, SPELL_ROGUE_CHEAT_DEATH_COOLDOWN, true);
         target->CastSpell(target, SPELL_ROGUE_CHEATING_DEATH, true);
         target->AddSpellCooldown(SPELL_ROGUE_CHEAT_DEATH_COOLDOWN, 0, MINUTE * IN_MILLISECONDS);
 
-        uint32 health10 = target->CountPctFromMaxHealth(10);
+        uint64 health10 = target->CountPctFromMaxHealth(10);
 
-        // hp > 10% - absorb hp till 10%
-        if (target->GetHealth() > health10)
-            absorbAmount = dmgInfo.GetDamage() - target->GetHealth() + health10;
-        // hp lower than 10% - absorb everything
-        else
-            absorbAmount = dmgInfo.GetDamage();
+        uint64 amountToAbsorb = targetHealth > health10 ? dmgInfo.GetDamage() - targetHealth + health10 : dmgInfo.GetDamage();
+        dmgInfo.AbsorbDamage(amountToAbsorb);
+        absorbAmount = 0;
     }
 
     void Register() override

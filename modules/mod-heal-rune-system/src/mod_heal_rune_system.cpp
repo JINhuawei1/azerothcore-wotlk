@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -524,7 +525,7 @@ public:
     }
 
 private:
-    int32 CalculateTickAmount(HealRuneEntry const& entry, uint32 maxValue) const
+    int64 CalculateTickAmount(HealRuneEntry const& entry, uint64 maxValue) const
     {
         if (maxValue == 0)
             return 0;
@@ -532,10 +533,14 @@ private:
         if (entry.healMode == HEAL_RUNE_MODE_PERCENT)
         {
             uint32 percent = std::min<uint32>(entry.healValue, 100);
-            return std::max<int32>(1, static_cast<int32>(std::ceil(static_cast<double>(maxValue) * static_cast<double>(percent) / 100.0)));
+            long double amount = std::ceil(static_cast<long double>(maxValue) * static_cast<long double>(percent) / 100.0L);
+            if (amount >= static_cast<long double>(std::numeric_limits<int64>::max()))
+                return std::numeric_limits<int64>::max();
+
+            return std::max<int64>(1, static_cast<int64>(amount));
         }
 
-        return std::max<int32>(1, static_cast<int32>(entry.healValue));
+        return std::max<int64>(1, static_cast<int64>(entry.healValue));
     }
 
     int32 CalculateSecondaryTickAmount(HealRuneEntry const& entry, uint32 maxValue, Powers powerType) const
@@ -580,11 +585,11 @@ private:
     {
         bool applied = false;
 
-        uint32 maxHealth = player->GetMaxHealth();
-        uint32 currentHealth = player->GetHealth();
+        uint64 maxHealth = player->GetMaxHealthForCombat();
+        uint64 currentHealth = player->GetHealthForCombat();
         if (maxHealth > currentHealth)
         {
-            int32 healAmount = CalculateTickAmount(entry, maxHealth);
+            int64 healAmount = CalculateTickAmount(entry, maxHealth);
             if (healAmount > 0)
             {
                 player->ModifyHealth(healAmount);
@@ -596,7 +601,7 @@ private:
         uint32 currentMana = player->GetPower(POWER_MANA);
         if (maxMana > 0 && maxMana > currentMana)
         {
-            int32 manaAmount = CalculateTickAmount(entry, maxMana);
+            int32 manaAmount = static_cast<int32>(std::min<int64>(CalculateTickAmount(entry, maxMana), std::numeric_limits<int32>::max()));
             if (manaAmount > 0)
             {
                 player->ModifyPower(POWER_MANA, manaAmount);

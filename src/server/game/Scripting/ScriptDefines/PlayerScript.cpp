@@ -710,7 +710,7 @@ void ScriptMgr::OnPlayerCustomScalingStatValue(Player* player, ItemTemplate cons
     CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_CUSTOM_SCALING_STAT_VALUE, script->OnPlayerCustomScalingStatValue(player, proto, statType, val, itemProtoStatNumber, ScalingStatValue, ssv));
 }
 
-void ScriptMgr::OnPlayerApplyItemModsBefore(Player* player, uint8 slot, bool apply, uint8 itemProtoStatNumber, uint32 statType, int32& val)
+void ScriptMgr::OnPlayerApplyItemModsBefore(Player* player, uint8 slot, bool apply, uint8 itemProtoStatNumber, uint32 statType, int64& val)
 {
     CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_APPLY_ITEM_MODS_BEFORE, script->OnPlayerApplyItemModsBefore(player, slot, apply, itemProtoStatNumber, statType, val));
 }

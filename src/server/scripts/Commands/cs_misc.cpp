@@ -1146,7 +1146,7 @@ public:
             }
             else
             {
-                Unit::DealDamage(handler->GetSession()->GetPlayer(), target, target->GetHealth(), nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL, nullptr, false, true);
+                Unit::DealDamage(handler->GetSession()->GetPlayer(), target, target->GetHealthForCombat(), nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL, nullptr, false, true);
             }
         }
 

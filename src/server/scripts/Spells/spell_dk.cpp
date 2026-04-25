@@ -25,6 +25,8 @@
 #include "SpellScriptLoader.h"
 #include "Totem.h"
 #include "UnitAI.h"
+#include <algorithm>
+#include <limits>
 /*
  * Scripts for spells with SPELLFAMILY_DEATHKNIGHT and SPELLFAMILY_GENERIC spells used by deathknight players.
  * Ordered alphabetically using scriptname.
@@ -920,7 +922,9 @@ class spell_dk_anti_magic_shell_self : public AuraScript
 
     void Absorb(AuraEffect* /*aurEff*/, DamageInfo& dmgInfo, uint32& absorbAmount)
     {
-        absorbAmount = std::min(CalculatePct(dmgInfo.GetDamage(), absorbPct), GetTarget()->CountPctFromMaxHealth(hpPct));
+        uint64 damageAbsorb = CalculatePct(dmgInfo.GetDamage(), absorbPct);
+        uint64 healthAbsorb = GetTarget()->CountPctFromMaxHealth(hpPct);
+        absorbAmount = static_cast<uint32>(std::min(damageAbsorb, healthAbsorb));
     }
 
     void Trigger(AuraEffect* aurEff, DamageInfo& /*dmgInfo*/, uint32& absorbAmount)
@@ -1577,10 +1581,10 @@ class spell_dk_icebound_fortitude : public AuraScript
         if (Unit* caster = GetCaster())
         {
             int32 value = amount;
-            uint32 defValue = uint32(caster->ToPlayer()->GetSkillValue(SKILL_DEFENSE) + caster->ToPlayer()->GetRatingBonusValue(CR_DEFENSE_SKILL));
+            uint64 defValue = caster->ToPlayer()->GetExtendedDefenseSkillValue();
 
             if (defValue > 400)
-                value -= int32((defValue - 400) * 0.15);
+                value -= static_cast<int32>(std::min<uint64>(static_cast<uint64>((static_cast<long double>(defValue - 400) * 0.15L)), static_cast<uint64>(std::numeric_limits<int32>::max())));
 
             // Glyph of Icebound Fortitude
             if (AuraEffect const* aurEff = caster->GetAuraEffect(SPELL_DK_GLYPH_OF_ICEBOUND_FORTITUDE, EFFECT_0))
@@ -2188,12 +2192,16 @@ class spell_dk_will_of_the_necropolis : public AuraScript
         uint8 rank = GetSpellInfo()->GetRank();
         SpellInfo const* talentProto = sSpellMgr->AssertSpellInfo(sSpellMgr->GetSpellWithRank(SPELL_DK_WILL_OF_THE_NECROPOLIS_TALENT_R1, rank));
 
-        int32 remainingHp = int32(GetTarget()->GetHealth() - dmgInfo.GetDamage());
-        int32 minHp = int32(GetTarget()->CountPctFromMaxHealth(talentProto->Effects[EFFECT_0].CalcValue(GetCaster())));
+        uint64 targetHealth = GetTarget()->GetHealthForCombat();
+        uint64 remainingHp = targetHealth > dmgInfo.GetDamage() ? targetHealth - dmgInfo.GetDamage() : 0;
+        uint64 minHp = GetTarget()->CountPctFromMaxHealth(talentProto->Effects[EFFECT_0].CalcValue(GetCaster()));
 
         // Damage that would take you below [effect0] health or taken while you are at [effect0]
         if (remainingHp < minHp)
-            absorbAmount = CalculatePct(dmgInfo.GetDamage(), absorbPct);
+        {
+            dmgInfo.AbsorbDamage(CalculatePct(dmgInfo.GetDamage(), absorbPct));
+            absorbAmount = 0;
+        }
     }
 
     void Register() override

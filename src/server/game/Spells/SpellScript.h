@@ -431,13 +431,13 @@ public:
     WorldLocation* GetHitDest();
     // setter/getter for for damage done by spell to target of spell hit
     // returns damage calculated before hit, and real dmg done after hit
-    int32 GetHitDamage();
-    void SetHitDamage(int32 damage);
+    int64 GetHitDamage();
+    void SetHitDamage(int64 damage);
     void PreventHitDamage() { SetHitDamage(0); }
     // setter/getter for for heal done by spell to target of spell hit
     // returns healing calculated before hit, and real dmg done after hit
-    int32 GetHitHeal();
-    void SetHitHeal(int32 heal);
+    int64 GetHitHeal();
+    void SetHitHeal(int64 heal);
     void PreventHitHeal() { SetHitHeal(0); }
     Spell* GetSpell() { return m_spell; }
     // returns current spell hit target aura
@@ -457,8 +457,8 @@ public:
     void PreventHitDefaultEffect(SpellEffIndex effIndex);
 
     // method avalible only in EffectHandler method
-    int32 GetEffectValue() const;
-    void SetEffectValue(int32 value);
+    int64 GetEffectValue() const;
+    void SetEffectValue(int64 value);
 
     // returns: cast item if present.
     Item* GetCastItem();

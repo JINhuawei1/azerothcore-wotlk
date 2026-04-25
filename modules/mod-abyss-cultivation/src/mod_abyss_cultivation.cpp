@@ -468,12 +468,18 @@ uint32 ScaleUIntValue(uint32 value, float scale)
     return std::max<uint32>(1u, static_cast<uint32>(std::lround(static_cast<double>(value) * scale)));
 }
 
-int32 ScaleIntValue(int32 value, float scale)
+int64 ScaleIntValue(int64 value, float scale)
 {
     if (value == 0 || scale <= 0.0f)
         return 0;
 
-    return static_cast<int32>(std::lround(static_cast<double>(value) * scale));
+    long double scaledValue = static_cast<long double>(value) * static_cast<long double>(scale);
+    if (scaledValue >= static_cast<long double>(std::numeric_limits<int64>::max()))
+        return std::numeric_limits<int64>::max();
+    if (scaledValue <= static_cast<long double>(std::numeric_limits<int64>::min()))
+        return std::numeric_limits<int64>::min();
+
+    return static_cast<int64>(std::llround(scaledValue));
 }
 
 constexpr uint32 ABYSS_RELIC_MANAGED_SPELL_START = 89101;
@@ -4029,7 +4035,7 @@ public:
                 float scale = GetActiveScriptGroupScale(player, "遗物_残垒战契");
                 if (scale > 0.0f)
                 {
-                    player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(4)), scale));
+                    player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(4), scale));
                     if (Unit* target = GetPrimaryCombatTarget(player))
                         DealConfiguredBurst(player, target, 160, 240, SPELL_SCHOOL_MASK_NORMAL, scale);
                 }
@@ -4040,7 +4046,7 @@ public:
                 float scale = GetActiveScriptGroupScale(player, "遗物_邪血蒸馏器");
                 if (scale > 0.0f)
                 {
-                    player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(3)), scale));
+                    player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(3), scale));
                     if (Unit* target = GetPrimaryCombatTarget(player))
                         DealConfiguredBurst(player, target, 150, 230, SPELL_SCHOOL_MASK_SHADOW, scale);
                 }
@@ -4155,7 +4161,7 @@ public:
                 float scale = GetActiveScriptGroupScale(player, "遗物_维库战祷");
                 if (scale > 0.0f)
                 {
-                    player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(2)), scale));
+                    player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(2), scale));
                     if (Unit* target = GetPrimaryCombatTarget(player))
                         DealConfiguredBurst(player, target, 60, 100, SPELL_SCHOOL_MASK_NORMAL, scale);
 
@@ -4475,7 +4481,7 @@ public:
         if (scaledMaxDamage < scaledMinDamage)
             scaledMaxDamage = scaledMinDamage;
 
-        uint32 damage = scaledMinDamage;
+        uint64 damage = scaledMinDamage;
         if (scaledMaxDamage > scaledMinDamage)
             damage += RollWeight(scaledMaxDamage - scaledMinDamage + 1);
 
@@ -4614,7 +4620,7 @@ public:
         if (!player || scale <= 0.0f)
             return;
 
-        player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(6)), scale));
+        player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(6), scale));
         player->ModifyPower(player->getPowerType(), ScaleIntValue(20, scale));
         cooldownTime = GetNow();
 
@@ -4629,7 +4635,7 @@ public:
         if (!player || scale <= 0.0f)
             return;
 
-        player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(12)), scale));
+        player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(12), scale));
         if (Unit* target = GetPrimaryCombatTarget(player))
             DealConfiguredBurst(player, target, 180, 260, SPELL_SCHOOL_MASK_NORMAL, scale);
 
@@ -4650,7 +4656,7 @@ public:
         if (Unit* splash = player->SelectNearbyTarget(primaryTarget, 10.0f))
             DealConfiguredBurst(player, splash, 70, 110, SPELL_SCHOOL_MASK_NATURE, scale);
 
-        player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(3)), scale));
+        player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(3), scale));
         cooldownTime = GetNow();
         SendAbyssEffectMessage(player, "[AbyssEffect] 蛇蜕毒爆触发。");
     }
@@ -4722,7 +4728,7 @@ public:
         if (Unit* bounce = player->SelectNearbyTarget(primaryTarget, 14.0f))
             DealConfiguredBurst(player, bounce, 100, 150, SPELL_SCHOOL_MASK_FROST, scale);
 
-        player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(4)), scale));
+        player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(4), scale));
         cooldownTime = GetNow();
         SendAbyssEffectMessage(player, "[AbyssEffect] 潮汐回流触发。");
     }
@@ -4737,7 +4743,7 @@ public:
             return;
 
         DealConfiguredBurst(player, target, 140, 210, SPELL_SCHOOL_MASK_NATURE, scale);
-        player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(5)), scale));
+        player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(5), scale));
 
         cooldownTime = GetNow();
         SendAbyssEffectMessage(player, "[AbyssEffect] 古树/腐花协战触发。");
@@ -4791,7 +4797,7 @@ public:
             return;
 
         DealConfiguredBurst(player, target, 180, 260, SPELL_SCHOOL_MASK_NORMAL, scale);
-        player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(3)), scale));
+        player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(3), scale));
         cooldownTime = GetNow();
 
         SendAbyssEffectMessage(player, "[AbyssEffect] 守望战旌触发。");
@@ -4831,7 +4837,7 @@ public:
         if (!player || scale <= 0.0f)
             return;
 
-        player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(18)), scale));
+        player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(18), scale));
         if (Unit* target = GetPrimaryCombatTarget(player))
             DealConfiguredBurst(player, target, 220, 320, SPELL_SCHOOL_MASK_NORMAL, scale);
 
@@ -5020,7 +5026,7 @@ public:
         float soulDevourScale = GetActiveSetSpecialEffectScale(player, "套装_腐焰噬魂");
         if (soulDevourScale > 0.0f && GetNow() > procState.lastSetSoulDevourTime + 2)
         {
-            player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(5)), soulDevourScale));
+            player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(5), soulDevourScale));
             RestorePlayerPrimaryPowerPct(player, 5.0f * soulDevourScale);
             procState.lastSetSoulDevourTime = GetNow();
             if (player->GetSession())
@@ -5166,7 +5172,7 @@ public:
                 RollPercentage() < std::min(50.0f, 18.0f * artifactAbyssScale))
             {
                 DealConfiguredBurst(player, target, 240, 360, SPELL_SCHOOL_MASK_SHADOW, artifactAbyssScale);
-                player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(6)), artifactAbyssScale));
+                player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(6), artifactAbyssScale));
                 RestorePlayerPrimaryPowerPct(player, 4.0f * artifactAbyssScale);
                 procState.lastSetAbyssDrainTime = now;
             }
@@ -5178,7 +5184,7 @@ public:
                 RollPercentage() < std::min(40.0f, 15.0f * abyssDrainScale))
             {
                 DealConfiguredBurst(player, target, 180, 260, SPELL_SCHOOL_MASK_SHADOW, abyssDrainScale);
-                player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(4)), abyssDrainScale));
+                player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(4), abyssDrainScale));
                 procState.lastSetAbyssDrainTime = now;
             }
 
@@ -6318,7 +6324,7 @@ public:
         {
             procState.lastSetRebirthTime = now;
             player->ResurrectPlayer(1.0f, false);
-            player->SetHealth(player->GetMaxHealth());
+            player->SetFullHealth();
             RestorePlayerPrimaryPowerPct(player, 100.0f);
             player->UpdateAllStats();
             player->UpdateAllRatings();
@@ -6334,7 +6340,7 @@ public:
         {
             procState.lastSetRebirthTime = now;
             player->ResurrectPlayer(1.0f, false);
-            player->SetHealth(player->GetMaxHealth());
+            player->SetFullHealth();
             RestorePlayerPrimaryPowerPct(player, 100.0f);
             player->UpdateAllStats();
             player->UpdateAllRatings();
@@ -6351,7 +6357,8 @@ public:
             {
                 procState.lastSetDeathWardTime = now;
                 player->ResurrectPlayer(0.0f, false);
-                player->SetHealth(std::max<uint32>(1u, player->CountPctFromMaxHealth(20)));
+                player->SetExtendedHealth(std::max<uint64>(1u, player->CountPctFromMaxHealth(20)));
+                player->SyncClientHealthFromExtended();
                 RestorePlayerPrimaryPowerPct(player, 20.0f);
                 player->UpdateAllStats();
                 player->UpdateAllRatings();
@@ -9454,7 +9461,7 @@ public:
                 RollPercentage() < std::min(50.0f, 15.0f * artifactAbyssScale))
             {
                 sAbyssCultivationMgr->DealConfiguredBurst(player, target, 220, 320, SPELL_SCHOOL_MASK_SHADOW, artifactAbyssScale);
-                player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(5)), artifactAbyssScale));
+                player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(5), artifactAbyssScale));
                 sAbyssCultivationMgr->RestorePlayerPrimaryPowerPct(player, 4.0f * artifactAbyssScale);
                 procState.lastSetAbyssDrainTime = now;
             }
@@ -9466,7 +9473,7 @@ public:
                 RollPercentage() < std::min(40.0f, 12.0f * abyssDrainScale))
             {
                 sAbyssCultivationMgr->DealConfiguredBurst(player, target, 150, 220, SPELL_SCHOOL_MASK_SHADOW, abyssDrainScale);
-                player->ModifyHealth(ScaleIntValue(static_cast<int32>(player->CountPctFromMaxHealth(3)), abyssDrainScale));
+                player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(3), abyssDrainScale));
                 procState.lastSetAbyssDrainTime = now;
             }
         }
@@ -12138,13 +12145,35 @@ SpellSchoolMask GetArtifactWeaponSchoolMask(uint8 actId, ArtifactWeaponFamilyId 
     }
 }
 
-float GetArtifactWeaponPower(Player* player, ArtifactWeaponFamilyId familyId, SpellSchoolMask schoolMask)
+double GetAbyssAttackPower(Unit* caster)
+{
+    if (!caster)
+        return 0.0;
+
+    if (Player* player = caster->ToPlayer())
+        return player->GetExtendedTotalAttackPowerValue(BASE_ATTACK);
+
+    return caster->GetTotalAttackPowerValue(BASE_ATTACK);
+}
+
+double GetAbyssSpellPower(Unit* caster, SpellSchoolMask schoolMask)
+{
+    if (!caster)
+        return 0.0;
+
+    if (Player* player = caster->ToPlayer())
+        return player->GetExtendedSpellDamageBonus();
+
+    return caster->SpellBaseDamageBonusDone(schoolMask);
+}
+
+double GetArtifactWeaponPower(Player* player, ArtifactWeaponFamilyId familyId, SpellSchoolMask /*schoolMask*/)
 {
     if (!player)
         return 0.0f;
 
-    float attackPower = player->GetTotalAttackPowerValue(BASE_ATTACK);
-    float spellPower = player->SpellBaseDamageBonusDone(schoolMask);
+    double attackPower = player->GetExtendedTotalAttackPowerValue(BASE_ATTACK);
+    double spellPower = player->GetExtendedSpellDamageBonus();
 
     switch (familyId)
     {
@@ -12187,8 +12216,8 @@ void DealArtifactWeaponDamage(Player* player, Unit* target, ArtifactWeaponFamily
     if (!player || !target || scale <= 0.0f)
         return;
 
-    float power = GetArtifactWeaponPower(player, familyId, schoolMask);
-    int32 damage = std::max<int32>(1, static_cast<int32>(std::lround(power * scale)));
+    double power = GetArtifactWeaponPower(player, familyId, schoolMask);
+    int64 damage = std::max<int64>(1, static_cast<int64>(std::llround(power * scale)));
     player->DealDamage(player, target, damage, nullptr, SPELL_DIRECT_DAMAGE, schoolMask);
 }
 
@@ -12607,14 +12636,14 @@ class spell_abyss_blood_burst : public SpellScript
         if (!caster || !target)
             return;
 
-        float ap = caster->GetTotalAttackPowerValue(BASE_ATTACK);
-        int32 damage = int32(ap * 2.8f);
+        double ap = GetAbyssAttackPower(caster);
+        int64 damage = static_cast<int64>(ap * 2.8);
 
         // 连锁递减：每击杀一个目标，后续目标伤害递减25%
         float reduction = 1.0f - (_killCount * 0.25f);
         if (reduction < 0.25f)
             reduction = 0.25f;
-        damage = int32(damage * reduction);
+        damage = static_cast<int64>(damage * reduction);
 
         caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_FIRE);
         ++_hitCount;
@@ -12645,12 +12674,12 @@ class spell_abyss_soul_slash : public SpellScript
         if (!caster || !target)
             return;
 
-        float ap = caster->GetTotalAttackPowerValue(BASE_ATTACK);
+        double ap = GetAbyssAttackPower(caster);
         // 每多命中一个目标伤害+20%，最高翻倍
         float scale = 1.0f + (_targetIndex * 0.2f);
         if (scale > 2.0f)
             scale = 2.0f;
-        int32 damage = int32(ap * 1.6f * scale);
+        int64 damage = static_cast<int64>(ap * 1.6 * scale);
 
         caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW);
         ++_targetIndex;
@@ -12705,10 +12734,10 @@ class spell_abyss_poison_detonate : public SpellScript
         if (!caster || !target)
             return;
 
-        float sp = caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_NATURE);
-        float ap = caster->GetTotalAttackPowerValue(BASE_ATTACK);
-        float power = std::max(sp, ap);
-        int32 damage = int32(power * 2.0f);
+        double sp = GetAbyssSpellPower(caster, SPELL_SCHOOL_MASK_NATURE);
+        double ap = GetAbyssAttackPower(caster);
+        double power = std::max(sp, ap);
+        int64 damage = static_cast<int64>(power * 2.0);
 
         caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE);
 
@@ -12759,8 +12788,8 @@ class spell_abyss_hellfire_rain : public SpellScript
         if (!caster || !target)
             return;
 
-        float sp = caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_FIRE);
-        int32 damage = int32(sp * 1.2f);
+        double sp = GetAbyssSpellPower(caster, SPELL_SCHOOL_MASK_FIRE);
+        int64 damage = static_cast<int64>(sp * 1.2);
         caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_FIRE);
 
         // 施加点燃DOT（可叠加3层）
@@ -12787,8 +12816,8 @@ class spell_abyss_void_hole : public AuraScript
         if (!caster || !target)
             return;
 
-        float sp = caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_SHADOW);
-        int32 damage = int32(sp * 1.8f);
+        double sp = GetAbyssSpellPower(caster, SPELL_SCHOOL_MASK_SHADOW);
+        int64 damage = static_cast<int64>(sp * 1.8);
         caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW);
 
         // 吸引效果：将目标拉向施法者（模拟黑洞吸引）
@@ -12830,7 +12859,7 @@ class spell_abyss_corpse_explode : public SpellScript
         float reduction = 1.0f - (_chainCount * 0.15f);
         if (reduction < 0.25f)
             reduction = 0.25f;
-        int32 damage = int32(target->GetMaxHealth() * 0.25f * reduction);
+        int64 damage = static_cast<int64>(static_cast<double>(target->GetMaxHealthForCombat()) * 0.25 * reduction);
 
         caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL);
 
@@ -12862,8 +12891,8 @@ class spell_abyss_abyss_touch : public SpellScript
         if (!caster || !target)
             return;
 
-        float ap = caster->GetTotalAttackPowerValue(BASE_ATTACK);
-        int32 damage = int32(ap * 3.0f);
+        double ap = GetAbyssAttackPower(caster);
+        int64 damage = static_cast<int64>(ap * 3.0);
         caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW);
 
         // 施加定身
@@ -12902,8 +12931,8 @@ class spell_abyss_lava_rift : public SpellScript
         Acore::UnitListSearcher<Acore::AnyUnfriendlyUnitInObjectRangeCheck> searcher(target, nearbyTargets, check);
         Cell::VisitAllObjects(target, searcher, 8.0f);
 
-        float sp = caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_FIRE);
-        int32 damage = int32(sp * 1.5f);
+        double sp = GetAbyssSpellPower(caster, SPELL_SCHOOL_MASK_FIRE);
+        int64 damage = static_cast<int64>(sp * 1.5);
 
         for (Unit* nearbyTarget : nearbyTargets)
         {
@@ -12935,10 +12964,10 @@ class spell_abyss_destroy_pulse : public SpellScript
         if (!caster || !target)
             return;
 
-        float sp = caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_ARCANE);
-        float ap = caster->GetTotalAttackPowerValue(BASE_ATTACK);
-        float power = std::max(sp, ap);
-        int32 damage = int32(power * 4.0f);
+        double sp = GetAbyssSpellPower(caster, SPELL_SCHOOL_MASK_ARCANE);
+        double ap = GetAbyssAttackPower(caster);
+        double power = std::max(sp, ap);
+        int64 damage = static_cast<int64>(power * 4.0);
         caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_ARCANE);
 
         // 击退
@@ -12982,10 +13011,10 @@ class spell_abyss_soul_reap : public SpellScript
         Acore::UnitListSearcher<Acore::AnyUnfriendlyUnitInObjectRangeCheck> searcher(caster, nearbyTargets, check);
         Cell::VisitAllObjects(caster, searcher, 12.0f);
 
-        float sp = caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_SHADOW);
-        float ap = caster->GetTotalAttackPowerValue(BASE_ATTACK);
-        float power = std::max(sp, ap);
-        int32 damage = int32(power * 2.6f);
+        double sp = GetAbyssSpellPower(caster, SPELL_SCHOOL_MASK_SHADOW);
+        double ap = GetAbyssAttackPower(caster);
+        double power = std::max(sp, ap);
+        int64 damage = static_cast<int64>(power * 2.6);
 
         for (Unit* nearbyTarget : nearbyTargets)
         {
@@ -13013,7 +13042,7 @@ class spell_abyss_soul_reap : public SpellScript
         if (!caster || _hitCount == 0)
             return;
 
-        int32 healAmount = int32(caster->GetMaxHealth() * 0.03f * _hitCount);
+        int64 healAmount = static_cast<int64>(static_cast<double>(caster->GetMaxHealthForCombat()) * 0.03 * _hitCount);
         caster->ModifyHealth(healAmount);
 
         if (Player* player = caster->ToPlayer())
@@ -13044,8 +13073,8 @@ class spell_abyss_charge_destroy : public SpellScript
         if (!caster || !target)
             return;
 
-        float ap = caster->GetTotalAttackPowerValue(BASE_ATTACK);
-        int32 damage = int32(ap * 3.0f);
+        double ap = GetAbyssAttackPower(caster);
+        int64 damage = static_cast<int64>(ap * 3.0);
         caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL);
 
         // 击飞

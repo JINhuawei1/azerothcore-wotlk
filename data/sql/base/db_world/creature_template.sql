@@ -44,7 +44,7 @@ CREATE TABLE `creature_template` (
   `scale` float NOT NULL DEFAULT '1',
   `rank` tinyint unsigned NOT NULL DEFAULT '0',
   `dmgschool` tinyint NOT NULL DEFAULT '0',
-  `DamageModifier` float NOT NULL DEFAULT '1',
+  `DamageModifier` double NOT NULL DEFAULT '1',
   `BaseAttackTime` int unsigned NOT NULL DEFAULT '0',
   `RangeAttackTime` int unsigned NOT NULL DEFAULT '0',
   `BaseVariance` float NOT NULL DEFAULT '1',
@@ -65,15 +65,15 @@ CREATE TABLE `creature_template` (
   `skinloot` int unsigned NOT NULL DEFAULT '0',
   `PetSpellDataId` int unsigned NOT NULL DEFAULT '0',
   `VehicleId` int unsigned NOT NULL DEFAULT '0',
-  `mingold` int unsigned NOT NULL DEFAULT '0',
-  `maxgold` int unsigned NOT NULL DEFAULT '0',
+  `mingold` bigint unsigned NOT NULL DEFAULT '0',
+  `maxgold` bigint unsigned NOT NULL DEFAULT '0',
   `AIName` char(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
   `MovementType` tinyint unsigned NOT NULL DEFAULT '0',
   `HoverHeight` float NOT NULL DEFAULT '1',
-  `HealthModifier` float NOT NULL DEFAULT '1',
-  `ManaModifier` float NOT NULL DEFAULT '1',
-  `ArmorModifier` float NOT NULL DEFAULT '1',
-  `ExperienceModifier` float NOT NULL DEFAULT '1',
+  `HealthModifier` double NOT NULL DEFAULT '1',
+  `ManaModifier` double NOT NULL DEFAULT '1',
+  `ArmorModifier` double NOT NULL DEFAULT '1',
+  `ExperienceModifier` double NOT NULL DEFAULT '1',
   `RacialLeader` tinyint unsigned NOT NULL DEFAULT '0',
   `movementId` int unsigned NOT NULL DEFAULT '0',
   `RegenHealth` tinyint unsigned NOT NULL DEFAULT '1',
@@ -30059,4 +30059,3 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2024-12-17 22:33:38
-

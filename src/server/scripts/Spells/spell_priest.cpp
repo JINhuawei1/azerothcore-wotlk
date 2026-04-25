@@ -23,6 +23,7 @@
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
 #include "TemporarySummon.h"
+#include <limits>
 /*
  * Scripts for spells with SPELLFAMILY_PRIEST and SPELLFAMILY_GENERIC spells used by priest players.
  * Ordered alphabetically using scriptname.
@@ -300,14 +301,22 @@ class spell_pri_guardian_spirit : public AuraScript
     void Absorb(AuraEffect* /*aurEff*/, DamageInfo& dmgInfo, uint32& absorbAmount)
     {
         Unit* target = GetTarget();
-        if (dmgInfo.GetDamage() < target->GetHealth())
+        if (dmgInfo.GetDamage() < target->GetHealthForCombat())
             return;
 
-        int32 healAmount = int32(target->CountPctFromMaxHealth(healPct));
+        uint64 healAmount64 = target->CountPctFromMaxHealth(healPct);
+        int32 healAmount = healAmount64 > static_cast<uint64>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(healAmount64);
         // remove the aura now, we don't want 40% healing bonus
         Remove(AURA_REMOVE_BY_ENEMY_SPELL);
         target->CastCustomSpell(target, SPELL_PRIEST_GUARDIAN_SPIRIT_HEAL, &healAmount, nullptr, nullptr, true);
-        absorbAmount = dmgInfo.GetDamage();
+        if (Player* player = target->ToPlayer())
+            if (player->GetExtendedMaxHealth() > player->GetMaxHealth() && player->GetExtendedHealth() < healAmount64)
+            {
+                player->SetExtendedHealth(healAmount64);
+                player->SyncClientHealthFromExtended();
+            }
+        dmgInfo.AbsorbDamage(dmgInfo.GetDamage());
+        absorbAmount = 0;
     }
 
     void Register() override

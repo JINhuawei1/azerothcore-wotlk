@@ -78,12 +78,32 @@
 #include "Tokenize.h"
 #include "Transport.h"
 #include "UpdateData.h"
+#include <limits>
 #include "Util.h"
 #include "Vehicle.h"
 #include "Weather.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
+
+namespace
+{
+int32 ToInt32ForLegacyStatPath(int64 value)
+{
+    if (value > std::numeric_limits<int32>::max())
+        return std::numeric_limits<int32>::max();
+
+    if (value < std::numeric_limits<int32>::min())
+        return std::numeric_limits<int32>::min();
+
+    return static_cast<int32>(value);
+}
+
+uint32 ToUInt32ForDBC(uint64 value)
+{
+    return value > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(value);
+}
+}
 #include "WorldSessionMgr.h"
 #include "WorldState.h"
 #include "WorldStateDefines.h"
@@ -763,8 +783,9 @@ uint32 Player::EnvironmentalDamage(EnviromentalDamage type, uint32 damage)
         return 0;
 
     // Absorb, resist some environmental damage type
-    uint32 absorb = 0;
-    uint32 resist = 0;
+    uint64 absorb = 0;
+    uint64 resist = 0;
+    uint64 envDamage = damage;
 
     switch (type)
     {
@@ -775,23 +796,25 @@ uint32 Player::EnvironmentalDamage(EnviromentalDamage type, uint32 damage)
             Unit::CalcAbsorbResist(dmgInfo);
             absorb = dmgInfo.GetAbsorb();
             resist = dmgInfo.GetResist();
-            damage = dmgInfo.GetDamage();
+            envDamage = dmgInfo.GetDamage();
         }
         default:
             break;
     }
 
-    Unit::DealDamageMods(this, damage, &absorb);
+    Unit::DealDamageMods(this, envDamage, &absorb);
+    damage = envDamage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(envDamage);
 
     WorldPackets::CombatLog::EnvironmentalDamageLog packet;
     packet.Victim = GetGUID();
     packet.Type = type != DAMAGE_FALL_TO_VOID ? type : DAMAGE_FALL;
     packet.Amount = damage;
-    packet.Absorbed = absorb;
-    packet.Resisted = resist;
+    packet.Absorbed = absorb > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(absorb);
+    packet.Resisted = resist > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(resist);
     SendMessageToSet(packet.Write(), true);
 
-    uint32 final_damage = Unit::DealDamage(this, this, damage, nullptr, SELF_DAMAGE, SPELL_SCHOOL_MASK_NORMAL, nullptr, false);
+    uint64 dealtDamage = Unit::DealDamage(this, this, envDamage, nullptr, SELF_DAMAGE, SPELL_SCHOOL_MASK_NORMAL, nullptr, false);
+    uint32 final_damage = dealtDamage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(dealtDamage);
 
     if (!IsAlive())
     {
@@ -1076,6 +1099,97 @@ void Player::setDeathState(DeathState s, bool /*despawn = false*/)
     if (IsAlive() && !cur)
         //clear aura case after resurrection by another way (spells will be applied before next death)
         SetUInt32Value(PLAYER_SELF_RES_SPELL, 0);
+}
+
+uint64 Player::GetExtendedHealth() const
+{
+    return _extendedMaxHealth ? _extendedHealth : GetHealth();
+}
+
+void Player::SetExtendedHealth(uint64 value)
+{
+    uint64 maxHealth = GetExtendedMaxHealth();
+    _extendedHealth = maxHealth && value > maxHealth ? maxHealth : value;
+}
+
+void Player::SetExtendedHealthFromClientHealth(uint32 clientHealth)
+{
+    if (_syncingClientHealthFromExtended)
+        return;
+
+    uint32 clientMaxHealth = GetMaxHealth();
+    uint64 extendedMaxHealth = GetExtendedMaxHealth();
+
+    if (!clientHealth || !clientMaxHealth)
+    {
+        _extendedHealth = 0;
+        return;
+    }
+
+    if (extendedMaxHealth <= clientMaxHealth)
+    {
+        _extendedHealth = clientHealth;
+        return;
+    }
+
+    if (clientHealth >= clientMaxHealth)
+    {
+        _extendedHealth = extendedMaxHealth;
+        return;
+    }
+
+    _extendedHealth = clientHealth;
+}
+
+void Player::SyncClientHealthFromExtended()
+{
+    uint32 clientMaxHealth = GetMaxHealth();
+    uint64 extendedMaxHealth = GetExtendedMaxHealth();
+    uint64 extendedHealth = GetExtendedHealth();
+
+    uint32 clientHealth = 0;
+    if (!extendedHealth)
+        clientHealth = 0;
+    else if (!clientMaxHealth)
+        clientHealth = 1;
+    else if (extendedMaxHealth <= clientMaxHealth)
+        clientHealth = static_cast<uint32>(extendedHealth > clientMaxHealth ? clientMaxHealth : extendedHealth);
+    else if (extendedHealth > clientMaxHealth)
+        clientHealth = clientMaxHealth;
+    else
+        clientHealth = static_cast<uint32>(extendedHealth);
+
+    _syncingClientHealthFromExtended = true;
+    if (clientHealth == clientMaxHealth && extendedHealth > clientMaxHealth && GetHealth() == clientHealth && clientHealth > 1)
+    {
+        SetHealth(clientHealth - 1);
+        _pendingClientHealthSyncTicks = 2;
+    }
+    else
+    {
+        SetHealth(clientHealth);
+        _pendingClientHealthSyncTicks = 0;
+    }
+
+    _syncingClientHealthFromExtended = false;
+}
+
+void Player::ApplyPendingClientHealthSync()
+{
+    if (!_pendingClientHealthSyncTicks)
+        return;
+
+    --_pendingClientHealthSyncTicks;
+    if (_pendingClientHealthSyncTicks)
+        return;
+
+    uint32 clientMaxHealth = GetMaxHealth();
+    if (!clientMaxHealth || GetExtendedHealth() <= clientMaxHealth)
+        return;
+
+    _syncingClientHealthFromExtended = true;
+    SetHealth(clientMaxHealth);
+    _syncingClientHealthFromExtended = false;
 }
 
 void Player::SetRestState(uint32 triggerId)
@@ -1629,8 +1743,11 @@ void Player::ProcessDelayedOperations()
     {
         ResurrectPlayer(0.0f, false);
 
-        if (GetMaxHealth() > m_resurrectHealth)
-            SetHealth(m_resurrectHealth);
+        if (GetExtendedMaxHealth() > m_resurrectHealth)
+        {
+            SetExtendedHealth(m_resurrectHealth);
+            SyncClientHealthFromExtended();
+        }
         else
             SetFullHealth();
 
@@ -2043,7 +2160,7 @@ void Player::RegenerateHealth()
 
 void Player::ResetAllPowers()
 {
-    SetHealth(GetMaxHealth());
+    SetFullHealth();
     if (HasActivePowerType(POWER_MANA))
     {
         SetPower(POWER_MANA, GetMaxPower(POWER_MANA));
@@ -4507,7 +4624,8 @@ void Player::ResurrectPlayer(float restore_percent, bool applySickness)
     // set health/powers (0- will be set in caller)
     if (restore_percent > 0.0f)
     {
-        SetHealth(uint32(GetMaxHealth()*restore_percent));
+        SetExtendedHealth(static_cast<uint64>(static_cast<long double>(GetExtendedMaxHealth()) * static_cast<long double>(restore_percent)));
+        SyncClientHealthFromExtended();
         SetPower(POWER_MANA, uint32(GetMaxPower(POWER_MANA)*restore_percent));
         SetPower(POWER_RAGE, 0);
         SetPower(POWER_ENERGY, uint32(GetMaxPower(POWER_ENERGY)*restore_percent));
@@ -5230,8 +5348,13 @@ float Player::GetRatingMultiplier(CombatRating cr) const
 
 float Player::GetRatingBonusValue(CombatRating cr) const
 {
-    float ratingValue = float(GetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + cr));
-    return ratingValue * GetRatingMultiplier(cr);
+    double ratingBonus = GetExtendedRatingBonusValue(cr);
+    if (ratingBonus <= 0.0 || std::isnan(ratingBonus))
+        return 0.0f;
+    if (std::isinf(ratingBonus) || ratingBonus > static_cast<double>(std::numeric_limits<float>::max()))
+        return std::numeric_limits<float>::max();
+
+    return static_cast<float>(ratingBonus);
 }
 
 float Player::GetExpertiseDodgeOrParryReduction(WeaponAttackType attType) const
@@ -5290,16 +5413,28 @@ float Player::OCTRegenMPPerSpirit()
     return regen;
 }
 
-void Player::ApplyRatingMod(CombatRating cr, int32 value, bool apply)
+void Player::ApplyRatingMod(CombatRating cr, int64 value, bool apply)
 {
-    float oldRating = m_baseRatingValue[cr];
-    m_baseRatingValue[cr] += (apply ? value : -value);
+    int64 oldRating = m_baseRatingValue[cr];
+    int64 oldExtendedRating = _extendedBaseRatingValue[cr];
+    int64 nextRating = m_baseRatingValue[cr] + (apply ? value : -value);
+    int64 nextExtendedRating = oldExtendedRating + (apply ? value : -value);
+
+    if (nextRating < 0)
+        nextRating = 0;
+    if (nextExtendedRating < 0)
+        nextExtendedRating = 0;
+
+    m_baseRatingValue[cr] = nextRating;
+    _extendedBaseRatingValue[cr] = nextExtendedRating;
     // explicit affected values
     if (cr == CR_HASTE_MELEE || cr == CR_HASTE_RANGED || cr == CR_HASTE_SPELL)
     {
-        float const mult = GetRatingMultiplier(cr);
-        float const oldVal = oldRating * mult;
-        float const newVal = m_baseRatingValue[cr] * mult;
+        double const mult = static_cast<double>(GetRatingMultiplier(cr));
+        double const oldValD = static_cast<double>(oldExtendedRating > 0 ? oldExtendedRating : oldRating) * mult;
+        double const newValD = static_cast<double>(_extendedBaseRatingValue[cr] > 0 ? _extendedBaseRatingValue[cr] : m_baseRatingValue[cr]) * mult;
+        float const oldVal = oldValD > static_cast<double>(std::numeric_limits<float>::max()) ? std::numeric_limits<float>::max() : static_cast<float>(oldValD);
+        float const newVal = newValD > static_cast<double>(std::numeric_limits<float>::max()) ? std::numeric_limits<float>::max() : static_cast<float>(newValD);
         switch (cr)
         {
             case CR_HASTE_MELEE:
@@ -6651,7 +6786,7 @@ void Player::_ApplyItemBonuses(ItemTemplate const* proto, uint8 slot, bool apply
 
     sScriptMgr->OnPlayerCustomScalingStatValueBefore(this, proto, slot, apply, CustomScalingStatValue);
 
-    uint32 ScalingStatValue = proto->ScalingStatValue > 0 ? proto->ScalingStatValue : CustomScalingStatValue;
+    uint32 ScalingStatValue = proto->ScalingStatValue > 0 ? ToUInt32ForDBC(proto->ScalingStatValue) : CustomScalingStatValue;
 
     if (ssd && ssd_level > ssd->MaxLevel)
         ssd_level = ssd->MaxLevel;
@@ -6663,7 +6798,7 @@ void Player::_ApplyItemBonuses(ItemTemplate const* proto, uint8 slot, bool apply
     for (uint8 i = 0; i < MAX_ITEM_PROTO_STATS; ++i)
     {
         uint32 statType = 0;
-        int32  val = 0;
+        int64  val = 0;
         // If set ScalingStatDistribution need get stats and values from it
         if (ssv)
         {
@@ -6681,7 +6816,9 @@ void Player::_ApplyItemBonuses(ItemTemplate const* proto, uint8 slot, bool apply
                     continue;
 
                 // OnCustomScalingStatValue(Player* player, ItemTemplate const* proto, uint32& statType, int32& val, uint8 itemProtoStatNumber, uint32 ScalingStatValue, ScalingStatValuesEntry const* ssv)
-                sScriptMgr->OnPlayerCustomScalingStatValue(this, proto, statType, val, i, ScalingStatValue, ssv);
+                int32 scalingVal = ToInt32ForLegacyStatPath(val);
+                sScriptMgr->OnPlayerCustomScalingStatValue(this, proto, statType, scalingVal, i, ScalingStatValue, ssv);
+                val = scalingVal;
             }
         }
         else
@@ -6727,90 +6864,90 @@ void Player::_ApplyItemBonuses(ItemTemplate const* proto, uint8 slot, bool apply
                 ApplyStatBuffMod(STAT_STAMINA, float(val), apply);
                 break;
             case ITEM_MOD_DEFENSE_SKILL_RATING:
-                ApplyRatingMod(CR_DEFENSE_SKILL, int32(val), apply);
+                ApplyRatingMod(CR_DEFENSE_SKILL, val, apply);
                 break;
             case ITEM_MOD_DODGE_RATING:
-                ApplyRatingMod(CR_DODGE, int32(val), apply);
+                ApplyRatingMod(CR_DODGE, val, apply);
                 break;
             case ITEM_MOD_PARRY_RATING:
-                ApplyRatingMod(CR_PARRY, int32(val), apply);
+                ApplyRatingMod(CR_PARRY, val, apply);
                 break;
             case ITEM_MOD_BLOCK_RATING:
-                ApplyRatingMod(CR_BLOCK, int32(val), apply);
+                ApplyRatingMod(CR_BLOCK, val, apply);
                 break;
             case ITEM_MOD_HIT_MELEE_RATING:
-                ApplyRatingMod(CR_HIT_MELEE, int32(val), apply);
+                ApplyRatingMod(CR_HIT_MELEE, val, apply);
                 break;
             case ITEM_MOD_HIT_RANGED_RATING:
-                ApplyRatingMod(CR_HIT_RANGED, int32(val), apply);
+                ApplyRatingMod(CR_HIT_RANGED, val, apply);
                 break;
             case ITEM_MOD_HIT_SPELL_RATING:
-                ApplyRatingMod(CR_HIT_SPELL, int32(val), apply);
+                ApplyRatingMod(CR_HIT_SPELL, val, apply);
                 break;
             case ITEM_MOD_CRIT_MELEE_RATING:
-                ApplyRatingMod(CR_CRIT_MELEE, int32(val), apply);
+                ApplyRatingMod(CR_CRIT_MELEE, val, apply);
                 break;
             case ITEM_MOD_CRIT_RANGED_RATING:
-                ApplyRatingMod(CR_CRIT_RANGED, int32(val), apply);
+                ApplyRatingMod(CR_CRIT_RANGED, val, apply);
                 break;
             case ITEM_MOD_CRIT_SPELL_RATING:
-                ApplyRatingMod(CR_CRIT_SPELL, int32(val), apply);
+                ApplyRatingMod(CR_CRIT_SPELL, val, apply);
                 break;
             case ITEM_MOD_HIT_TAKEN_MELEE_RATING:
-                ApplyRatingMod(CR_HIT_TAKEN_MELEE, int32(val), apply);
+                ApplyRatingMod(CR_HIT_TAKEN_MELEE, val, apply);
                 break;
             case ITEM_MOD_HIT_TAKEN_RANGED_RATING:
-                ApplyRatingMod(CR_HIT_TAKEN_RANGED, int32(val), apply);
+                ApplyRatingMod(CR_HIT_TAKEN_RANGED, val, apply);
                 break;
             case ITEM_MOD_HIT_TAKEN_SPELL_RATING:
-                ApplyRatingMod(CR_HIT_TAKEN_SPELL, int32(val), apply);
+                ApplyRatingMod(CR_HIT_TAKEN_SPELL, val, apply);
                 break;
             case ITEM_MOD_CRIT_TAKEN_MELEE_RATING:
-                ApplyRatingMod(CR_CRIT_TAKEN_MELEE, int32(val), apply);
+                ApplyRatingMod(CR_CRIT_TAKEN_MELEE, val, apply);
                 break;
             case ITEM_MOD_CRIT_TAKEN_RANGED_RATING:
-                ApplyRatingMod(CR_CRIT_TAKEN_RANGED, int32(val), apply);
+                ApplyRatingMod(CR_CRIT_TAKEN_RANGED, val, apply);
                 break;
             case ITEM_MOD_CRIT_TAKEN_SPELL_RATING:
-                ApplyRatingMod(CR_CRIT_TAKEN_SPELL, int32(val), apply);
+                ApplyRatingMod(CR_CRIT_TAKEN_SPELL, val, apply);
                 break;
             case ITEM_MOD_HASTE_MELEE_RATING:
-                ApplyRatingMod(CR_HASTE_MELEE, int32(val), apply);
+                ApplyRatingMod(CR_HASTE_MELEE, val, apply);
                 break;
             case ITEM_MOD_HASTE_RANGED_RATING:
-                ApplyRatingMod(CR_HASTE_RANGED, int32(val), apply);
+                ApplyRatingMod(CR_HASTE_RANGED, val, apply);
                 break;
             case ITEM_MOD_HASTE_SPELL_RATING:
-                ApplyRatingMod(CR_HASTE_SPELL, int32(val), apply);
+                ApplyRatingMod(CR_HASTE_SPELL, val, apply);
                 break;
             case ITEM_MOD_HIT_RATING:
-                ApplyRatingMod(CR_HIT_MELEE, int32(val), apply);
-                ApplyRatingMod(CR_HIT_RANGED, int32(val), apply);
-                ApplyRatingMod(CR_HIT_SPELL, int32(val), apply);
+                ApplyRatingMod(CR_HIT_MELEE, val, apply);
+                ApplyRatingMod(CR_HIT_RANGED, val, apply);
+                ApplyRatingMod(CR_HIT_SPELL, val, apply);
                 break;
             case ITEM_MOD_CRIT_RATING:
-                ApplyRatingMod(CR_CRIT_MELEE, int32(val), apply);
-                ApplyRatingMod(CR_CRIT_RANGED, int32(val), apply);
-                ApplyRatingMod(CR_CRIT_SPELL, int32(val), apply);
+                ApplyRatingMod(CR_CRIT_MELEE, val, apply);
+                ApplyRatingMod(CR_CRIT_RANGED, val, apply);
+                ApplyRatingMod(CR_CRIT_SPELL, val, apply);
                 break;
             case ITEM_MOD_HIT_TAKEN_RATING:
-                ApplyRatingMod(CR_HIT_TAKEN_MELEE, int32(val), apply);
-                ApplyRatingMod(CR_HIT_TAKEN_RANGED, int32(val), apply);
-                ApplyRatingMod(CR_HIT_TAKEN_SPELL, int32(val), apply);
+                ApplyRatingMod(CR_HIT_TAKEN_MELEE, val, apply);
+                ApplyRatingMod(CR_HIT_TAKEN_RANGED, val, apply);
+                ApplyRatingMod(CR_HIT_TAKEN_SPELL, val, apply);
                 break;
             case ITEM_MOD_CRIT_TAKEN_RATING:
             case ITEM_MOD_RESILIENCE_RATING:
-                ApplyRatingMod(CR_CRIT_TAKEN_MELEE, int32(val), apply);
-                ApplyRatingMod(CR_CRIT_TAKEN_RANGED, int32(val), apply);
-                ApplyRatingMod(CR_CRIT_TAKEN_SPELL, int32(val), apply);
+                ApplyRatingMod(CR_CRIT_TAKEN_MELEE, val, apply);
+                ApplyRatingMod(CR_CRIT_TAKEN_RANGED, val, apply);
+                ApplyRatingMod(CR_CRIT_TAKEN_SPELL, val, apply);
                 break;
             case ITEM_MOD_HASTE_RATING:
-                ApplyRatingMod(CR_HASTE_MELEE, int32(val), apply);
-                ApplyRatingMod(CR_HASTE_RANGED, int32(val), apply);
-                ApplyRatingMod(CR_HASTE_SPELL, int32(val), apply);
+                ApplyRatingMod(CR_HASTE_MELEE, val, apply);
+                ApplyRatingMod(CR_HASTE_RANGED, val, apply);
+                ApplyRatingMod(CR_HASTE_SPELL, val, apply);
                 break;
             case ITEM_MOD_EXPERTISE_RATING:
-                ApplyRatingMod(CR_EXPERTISE, int32(val), apply);
+                ApplyRatingMod(CR_EXPERTISE, val, apply);
                 break;
             case ITEM_MOD_ATTACK_POWER:
                 HandleStatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, float(val), apply);
@@ -6823,19 +6960,19 @@ void Player::_ApplyItemBonuses(ItemTemplate const* proto, uint8 slot, bool apply
             //                ApplyFeralAPBonus(int32(val), apply);
             //                break;
             case ITEM_MOD_MANA_REGENERATION:
-                ApplyManaRegenBonus(int32(val), apply);
+                ApplyManaRegenBonus(ToInt32ForLegacyStatPath(val), apply);
                 break;
             case ITEM_MOD_ARMOR_PENETRATION_RATING:
-                ApplyRatingMod(CR_ARMOR_PENETRATION, int32(val), apply);
+                ApplyRatingMod(CR_ARMOR_PENETRATION, val, apply);
                 break;
             case ITEM_MOD_SPELL_POWER:
-                ApplySpellPowerBonus(int32(val), apply);
+                ApplySpellPowerBonus(val, apply);
                 break;
             case ITEM_MOD_HEALTH_REGEN:
-                ApplyHealthRegenBonus(int32(val), apply);
+                ApplyHealthRegenBonus(ToInt32ForLegacyStatPath(val), apply);
                 break;
             case ITEM_MOD_SPELL_PENETRATION:
-                ApplySpellPenetrationBonus(val, apply);
+                ApplySpellPenetrationBonus(ToInt32ForLegacyStatPath(val), apply);
                 break;
             case ITEM_MOD_BLOCK_VALUE:
                 HandleBaseModValue(SHIELD_BLOCK_VALUE, FLAT_MOD, float(val), apply);
@@ -6853,7 +6990,7 @@ void Player::_ApplyItemBonuses(ItemTemplate const* proto, uint8 slot, bool apply
             ApplySpellPowerBonus(spellbonus, apply);
 
     // If set ScalingStatValue armor get it or use item armor
-    uint32 armor = proto->Armor;
+    uint64 armor = proto->Armor;
     if (ssv)
     {
         if (uint32 ssvarmor = ssv->getArmorMod(ScalingStatValue))
@@ -6861,7 +6998,7 @@ void Player::_ApplyItemBonuses(ItemTemplate const* proto, uint8 slot, bool apply
                 armor = ssvarmor;
     }
     else if (armor && proto->ArmorDamageModifier)
-        armor -= uint32(proto->ArmorDamageModifier);
+        armor = proto->ArmorDamageModifier >= static_cast<double>(armor) ? 0 : armor - static_cast<uint64>(proto->ArmorDamageModifier);
 
     if (armor)
     {
@@ -6937,7 +7074,7 @@ void Player::_ApplyWeaponDamage(uint8 slot, ItemTemplate const* proto, ScalingSt
 
     sScriptMgr->OnPlayerCustomScalingStatValueBefore(this, proto, slot, apply, CustomScalingStatValue);
 
-    uint32 ScalingStatValue = proto->ScalingStatValue > 0 ? proto->ScalingStatValue : CustomScalingStatValue;
+    uint32 ScalingStatValue = proto->ScalingStatValue > 0 ? ToUInt32ForDBC(proto->ScalingStatValue) : CustomScalingStatValue;
 
     // following part fix disarm issue
     // that doesn't apply the scaling after disarmed
@@ -6972,7 +7109,7 @@ void Player::_ApplyWeaponDamage(uint8 slot, ItemTemplate const* proto, ScalingSt
             if (extraDPS)
             {
                 float average = extraDPS * proto->Delay / 1000.0f;
-                float mod = ssv->IsTwoHand(proto->ScalingStatValue) ? 0.2f : 0.3f;
+                float mod = ssv->IsTwoHand(ScalingStatValue) ? 0.2f : 0.3f;
 
                 minDamage = (1.0f - mod) * average;
                 maxDamage = (1.0f + mod) * average;
@@ -9878,6 +10015,7 @@ void Player::ApplySpellMod(uint32 spellId, SpellModOp op, T& basevalue, Spell* s
 template AC_GAME_API void Player::ApplySpellMod(uint32 spellId, SpellModOp op, int32& basevalue, Spell* spell, bool temporaryPet);
 template AC_GAME_API void Player::ApplySpellMod(uint32 spellId, SpellModOp op, uint32& basevalue, Spell* spell, bool temporaryPet);
 template AC_GAME_API void Player::ApplySpellMod(uint32 spellId, SpellModOp op, float& basevalue, Spell* spell, bool temporaryPet);
+template AC_GAME_API void Player::ApplySpellMod(uint32 spellId, SpellModOp op, long double& basevalue, Spell* spell, bool temporaryPet);
 
 // Binary predicate for sorting SpellModifiers
 struct SpellModPredicate
@@ -10845,13 +10983,13 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
     uint32 price = 0;
     if (crItem->IsGoldRequired(pProto) && pProto->BuyPrice > 0) //Assume price cannot be negative (do not know why it is int32)
     {
-        uint32 maxCount = MAX_MONEY_AMOUNT / pProto->BuyPrice;
+        uint32 maxCount = static_cast<uint32>(MAX_MONEY_AMOUNT / static_cast<uint64>(pProto->BuyPrice));
         if ((uint32)count > maxCount)
         {
             LOG_ERROR("entities.player", "Player {} tried to buy {} item id {}, causing overflow", GetName(), (uint32)count, pProto->ItemId);
             count = (uint8)maxCount;
         }
-        price = pProto->BuyPrice * count; //it should not exceed MAX_MONEY_AMOUNT
+        price = static_cast<uint32>(static_cast<uint64>(pProto->BuyPrice) * count); //it should not exceed MAX_MONEY_AMOUNT
 
         // reputation discount
         price = uint32(std::floor(price * GetReputationPriceDiscount(creature)));
@@ -12875,8 +13013,11 @@ void Player::ResurectUsingRequestData()
 
     ResurrectPlayer(0.0f, false);
 
-    if (GetMaxHealth() > m_resurrectHealth)
-        SetHealth(m_resurrectHealth);
+    if (GetExtendedMaxHealth() > m_resurrectHealth)
+    {
+        SetExtendedHealth(m_resurrectHealth);
+        SyncClientHealthFromExtended();
+    }
     else
         SetFullHealth();
 

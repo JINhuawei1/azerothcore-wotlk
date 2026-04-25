@@ -1,0 +1,9 @@
+## Interface: 30300
+## Title: 玩家属性面板
+## Title-zhCN: 玩家属性面板
+## Notes: 独立显示服务端下发的扩展玩家属性
+## Notes-zhCN: 独立显示服务端下发的扩展玩家属性
+## Author: OpenAI Codex
+## Version: 1.0.0
+
+PlayerAttributePanel.lua

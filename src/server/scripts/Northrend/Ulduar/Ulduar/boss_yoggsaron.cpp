@@ -2529,12 +2529,13 @@ class spell_yogg_saron_protective_gaze_aura : public AuraScript
     void Absorb(AuraEffect* /*aurEff*/, DamageInfo& dmgInfo, uint32& absorbAmount)
     {
         Unit* target = GetTarget();
-        if (dmgInfo.GetDamage() < target->GetHealth() || !GetCaster() || GetCaster()->ToCreature()->HasSpellCooldown(SPELL_HODIR_FLASH_FREEZE))
+        if (dmgInfo.GetDamage() < target->GetHealthForCombat() || !GetCaster() || GetCaster()->ToCreature()->HasSpellCooldown(SPELL_HODIR_FLASH_FREEZE))
             return;
 
         target->CastSpell(target, SPELL_HODIR_FLASH_FREEZE, true);
         GetCaster()->AddSpellCooldown(SPELL_HODIR_FLASH_FREEZE, 0, 0);
-        absorbAmount = dmgInfo.GetDamage();
+        dmgInfo.AbsorbDamage(dmgInfo.GetDamage());
+        absorbAmount = 0;
     }
 
     void Register() override

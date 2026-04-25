@@ -22,20 +22,20 @@ DROP TABLE IF EXISTS `character_stats`;
 /*!50503 SET character_set_client = utf8mb4 */;
 CREATE TABLE `character_stats` (
   `guid` int unsigned NOT NULL DEFAULT '0' COMMENT 'Global Unique Identifier, Low part',
-  `maxhealth` int unsigned NOT NULL DEFAULT '0',
-  `maxpower1` int unsigned NOT NULL DEFAULT '0',
-  `maxpower2` int unsigned NOT NULL DEFAULT '0',
-  `maxpower3` int unsigned NOT NULL DEFAULT '0',
-  `maxpower4` int unsigned NOT NULL DEFAULT '0',
-  `maxpower5` int unsigned NOT NULL DEFAULT '0',
-  `maxpower6` int unsigned NOT NULL DEFAULT '0',
-  `maxpower7` int unsigned NOT NULL DEFAULT '0',
-  `strength` int unsigned NOT NULL DEFAULT '0',
-  `agility` int unsigned NOT NULL DEFAULT '0',
-  `stamina` int unsigned NOT NULL DEFAULT '0',
-  `intellect` int unsigned NOT NULL DEFAULT '0',
-  `spirit` int unsigned NOT NULL DEFAULT '0',
-  `armor` int unsigned NOT NULL DEFAULT '0',
+  `maxhealth` bigint unsigned NOT NULL DEFAULT '0',
+  `maxpower1` bigint unsigned NOT NULL DEFAULT '0',
+  `maxpower2` bigint unsigned NOT NULL DEFAULT '0',
+  `maxpower3` bigint unsigned NOT NULL DEFAULT '0',
+  `maxpower4` bigint unsigned NOT NULL DEFAULT '0',
+  `maxpower5` bigint unsigned NOT NULL DEFAULT '0',
+  `maxpower6` bigint unsigned NOT NULL DEFAULT '0',
+  `maxpower7` bigint unsigned NOT NULL DEFAULT '0',
+  `strength` bigint unsigned NOT NULL DEFAULT '0',
+  `agility` bigint unsigned NOT NULL DEFAULT '0',
+  `stamina` bigint unsigned NOT NULL DEFAULT '0',
+  `intellect` bigint unsigned NOT NULL DEFAULT '0',
+  `spirit` bigint unsigned NOT NULL DEFAULT '0',
+  `armor` bigint unsigned NOT NULL DEFAULT '0',
   `resHoly` int unsigned NOT NULL DEFAULT '0',
   `resFire` int unsigned NOT NULL DEFAULT '0',
   `resNature` int unsigned NOT NULL DEFAULT '0',
@@ -48,10 +48,10 @@ CREATE TABLE `character_stats` (
   `critPct` float NOT NULL DEFAULT '0',
   `rangedCritPct` float NOT NULL DEFAULT '0',
   `spellCritPct` float NOT NULL DEFAULT '0',
-  `attackPower` int unsigned NOT NULL DEFAULT '0',
-  `rangedAttackPower` int unsigned NOT NULL DEFAULT '0',
-  `spellPower` int unsigned NOT NULL DEFAULT '0',
-  `resilience` int unsigned NOT NULL DEFAULT '0',
+  `attackPower` bigint unsigned NOT NULL DEFAULT '0',
+  `rangedAttackPower` bigint unsigned NOT NULL DEFAULT '0',
+  `spellPower` bigint unsigned NOT NULL DEFAULT '0',
+  `resilience` bigint unsigned NOT NULL DEFAULT '0',
   PRIMARY KEY (`guid`),
 
   CONSTRAINT `character_stats_chk_1` CHECK (((`blockPct` >= 0) and (`dodgePct` >= 0) and (`parryPct` >= 0) and (`critPct` >= 0) and (`rangedCritPct` >= 0) and (`spellCritPct` >= 0)))
@@ -76,4 +76,3 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2024-12-17 22:33:05
-

@@ -511,7 +511,7 @@ WorldLocation* SpellScript::GetHitDest()
     return m_spell->destTarget;
 }
 
-int32 SpellScript::GetHitDamage()
+int64 SpellScript::GetHitDamage()
 {
     if (!IsInTargetHook())
     {
@@ -521,7 +521,7 @@ int32 SpellScript::GetHitDamage()
     return m_spell->m_damage;
 }
 
-void SpellScript::SetHitDamage(int32 damage)
+void SpellScript::SetHitDamage(int64 damage)
 {
     if (!IsInTargetHook())
     {
@@ -531,7 +531,7 @@ void SpellScript::SetHitDamage(int32 damage)
     m_spell->m_damage = damage;
 }
 
-int32 SpellScript::GetHitHeal()
+int64 SpellScript::GetHitHeal()
 {
     if (!IsInTargetHook())
     {
@@ -541,7 +541,7 @@ int32 SpellScript::GetHitHeal()
     return m_spell->m_healing;
 }
 
-void SpellScript::SetHitHeal(int32 heal)
+void SpellScript::SetHitHeal(int64 heal)
 {
     if (!IsInTargetHook())
     {
@@ -597,7 +597,7 @@ void SpellScript::PreventHitDefaultEffect(SpellEffIndex effIndex)
     m_hitPreventDefaultEffectMask |= 1 << effIndex;
 }
 
-int32 SpellScript::GetEffectValue() const
+int64 SpellScript::GetEffectValue() const
 {
     if (!IsInEffectHook())
     {
@@ -607,7 +607,7 @@ int32 SpellScript::GetEffectValue() const
     return m_spell->damage;
 }
 
-void SpellScript::SetEffectValue(int32 value)
+void SpellScript::SetEffectValue(int64 value)
 {
     if (!IsInEffectHook())
     {

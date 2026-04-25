@@ -59,6 +59,8 @@
 #include "Vehicle.h"
 #include "World.h"
 #include "WorldPacket.h"
+#include <algorithm>
+#include <limits>
 
  /// @todo: this import is not necessary for compilation and marked as unused by the IDE
 //  however, for some reasons removing it would cause a damn linking issue
@@ -264,7 +266,7 @@ void Spell::EffectResurrectNew(SpellEffIndex effIndex)
     if (target->isResurrectRequested())       // already have one active request
         return;
 
-    uint32 health = damage;
+    uint64 health = damage > 0 ? static_cast<uint64>(damage) : 0;
     uint32 mana = m_spellInfo->Effects[effIndex].MiscValue;
     ExecuteLogEffectResurrect(effIndex, target);
     target->setResurrectRequestData(m_caster->GetGUID(), m_caster->GetMapId(), m_caster->GetPositionX(), m_caster->GetPositionY(), m_caster->GetPositionZ(), health, mana);
@@ -292,7 +294,7 @@ void Spell::EffectInstaKill(SpellEffIndex /*effIndex*/)
     data << uint32(m_spellInfo->Id);
     m_caster->SendMessageToSet(&data, true);
 
-    Unit::DealDamage(m_caster, unitTarget, unitTarget->GetHealth(), nullptr, NODAMAGE, SPELL_SCHOOL_MASK_NORMAL, nullptr, false);
+    Unit::DealDamage(m_caster, unitTarget, unitTarget->GetHealthForCombat(), nullptr, NODAMAGE, SPELL_SCHOOL_MASK_NORMAL, nullptr, false);
 }
 
 void Spell::EffectEnvironmentalDMG(SpellEffIndex /*effIndex*/)
@@ -309,14 +311,14 @@ void Spell::EffectEnvironmentalDMG(SpellEffIndex /*effIndex*/)
     {
         DamageInfo dmgInfo(m_caster, unitTarget, damage, m_spellInfo, m_spellInfo->GetSchoolMask(), SPELL_DIRECT_DAMAGE);
 
-        uint32 absorb = dmgInfo.GetAbsorb();
-        uint32 resist = dmgInfo.GetResist();
-        uint32 envDamage = dmgInfo.GetDamage();
+        uint64 absorb = dmgInfo.GetAbsorb();
+        uint64 resist = dmgInfo.GetResist();
+        uint64 envDamage = dmgInfo.GetDamage();
 
         Unit::DealDamageMods(unitTarget, envDamage, &absorb);
-        damage = envDamage;
+        damage = envDamage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(envDamage);
 
-        m_caster->SendSpellNonMeleeDamageLog(unitTarget, m_spellInfo, damage, m_spellInfo->GetSchoolMask(), absorb, resist, false, 0);
+        m_caster->SendSpellNonMeleeDamageLog(unitTarget, m_spellInfo, damage, m_spellInfo->GetSchoolMask(), absorb > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(absorb), resist > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(resist), false, 0);
     }
 }
 
@@ -651,8 +653,8 @@ void Spell::EffectSchoolDMG(SpellEffIndex effIndex)
             if (damage < 0)
                 damage = 0;
 
-            damage = m_originalCaster->SpellDamageBonusDone(unitTarget, m_spellInfo, (uint32)damage, SPELL_DIRECT_DAMAGE, effIndex);
-            damage = unitTarget->SpellDamageBonusTaken(m_originalCaster, m_spellInfo, (uint32)damage, SPELL_DIRECT_DAMAGE);
+            damage = static_cast<int64>(std::min<uint64>(m_originalCaster->SpellDamageBonusDone(unitTarget, m_spellInfo, static_cast<uint64>(damage), SPELL_DIRECT_DAMAGE, effIndex), static_cast<uint64>(std::numeric_limits<int64>::max())));
+            damage = static_cast<int64>(std::min<uint64>(unitTarget->SpellDamageBonusTaken(m_originalCaster, m_spellInfo, static_cast<uint64>(damage), SPELL_DIRECT_DAMAGE), static_cast<uint64>(std::numeric_limits<int64>::max())));
         }
 
         m_damage += damage;
@@ -1022,8 +1024,11 @@ void Spell::EffectForceCast(SpellEffIndex effIndex)
                 break;
             case 52463: // Hide In Mine Car
             case 52349: // Overtake
-                unitTarget->CastCustomSpell(unitTarget, spellInfo->Id, &damage, nullptr, nullptr, true, nullptr, nullptr, m_originalCasterGUID);
+            {
+                int32 basePoints = static_cast<int32>(damage);
+                unitTarget->CastCustomSpell(unitTarget, spellInfo->Id, &basePoints, nullptr, nullptr, true, nullptr, nullptr, m_originalCasterGUID);
                 return;
+            }
             case 72378: // Blood Nova
             case 73058: // Blood Nova
                 m_caster->CastSpell(unitTarget, damage, true);   // additional spell cast
@@ -1362,8 +1367,8 @@ void Spell::EffectPowerDrain(SpellEffIndex effIndex)
         return;
 
     // add spell damage bonus
-    damage = m_caster->SpellDamageBonusDone(unitTarget, m_spellInfo, uint32(damage), SPELL_DIRECT_DAMAGE, effIndex);
-    damage = unitTarget->SpellDamageBonusTaken(m_caster, m_spellInfo, uint32(damage), SPELL_DIRECT_DAMAGE);
+    damage = static_cast<int64>(std::min<uint64>(m_caster->SpellDamageBonusDone(unitTarget, m_spellInfo, static_cast<uint64>(damage), SPELL_DIRECT_DAMAGE, effIndex), static_cast<uint64>(std::numeric_limits<int64>::max())));
+    damage = static_cast<int64>(std::min<uint64>(unitTarget->SpellDamageBonusTaken(m_caster, m_spellInfo, static_cast<uint64>(damage), SPELL_DIRECT_DAMAGE), static_cast<uint64>(std::numeric_limits<int64>::max())));
 
     // resilience reduce mana draining effect at spell crit damage reduction (added in 2.4)
     int32 power = damage;
@@ -1445,7 +1450,7 @@ void Spell::EffectPowerBurn(SpellEffIndex effIndex)
     {
         int32 maxDamage = int32(CalculatePct(m_caster->GetMaxPower(PowerType), damage * 2));
         damage = int32(CalculatePct(unitTarget->GetMaxPower(PowerType), damage));
-        damage = std::min(damage, maxDamage);
+        damage = std::min<int32>(damage, maxDamage);
 
         // Remove fear
         unitTarget->RemoveAurasByType(SPELL_AURA_MOD_FEAR);
@@ -1483,7 +1488,7 @@ void Spell::EffectHeal(SpellEffIndex effIndex)
         if (!caster)
             return;
 
-        int32 addhealth = damage;
+        int64 addhealth = damage;
 
         // Vessel of the Naaru (Vial of the Sunwell trinket)
         if (m_spellInfo->Id == 45064)
@@ -1529,7 +1534,7 @@ void Spell::EffectHeal(SpellEffIndex effIndex)
                 return;
             }
 
-            int32 tickheal = targetAura->GetAmount();
+            int64 tickheal = targetAura->GetAmount();
             if (Unit* auraCaster = targetAura->GetCaster())
                 tickheal = unitTarget->SpellHealingBonusTaken(auraCaster, targetAura->GetSpellInfo(), tickheal, DOT);
 
@@ -1556,7 +1561,7 @@ void Spell::EffectHeal(SpellEffIndex effIndex)
         // Death Pact - return pct of max health to caster
         else if (m_spellInfo->SpellFamilyName == SPELLFAMILY_DEATHKNIGHT && m_spellInfo->SpellFamilyFlags[0] & 0x00080000)
         {
-            addhealth = caster->SpellHealingBonusDone(unitTarget, m_spellInfo, int32(caster->CountPctFromMaxHealth(damage)), HEAL, effIndex);
+            addhealth = caster->SpellHealingBonusDone(unitTarget, m_spellInfo, caster->CountPctFromMaxHealth(damage), HEAL, effIndex);
             addhealth = unitTarget->SpellHealingBonusTaken(caster, m_spellInfo, addhealth, HEAL);
         }
         else if (m_spellInfo->Id != 33778) // not lifebloom
@@ -1592,10 +1597,10 @@ void Spell::EffectHealPct(SpellEffIndex effIndex)
     if (!m_originalCaster)
         return;
 
-    uint32 heal = m_originalCaster->SpellHealingBonusDone(unitTarget, m_spellInfo, unitTarget->CountPctFromMaxHealth(damage), HEAL, effIndex);
+    uint64 heal = m_originalCaster->SpellHealingBonusDone(unitTarget, m_spellInfo, unitTarget->CountPctFromMaxHealth(damage), HEAL, effIndex);
     heal = unitTarget->SpellHealingBonusTaken(m_originalCaster, m_spellInfo, heal, HEAL);
 
-    m_damage -= heal;
+    m_damage -= heal > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(heal);
 }
 
 void Spell::EffectHealMechanical(SpellEffIndex effIndex)
@@ -1610,9 +1615,10 @@ void Spell::EffectHealMechanical(SpellEffIndex effIndex)
     if (!m_originalCaster)
         return;
 
-    uint32 heal = m_originalCaster->SpellHealingBonusDone(unitTarget, m_spellInfo, uint32(damage), HEAL, effIndex);
+    uint64 heal = m_originalCaster->SpellHealingBonusDone(unitTarget, m_spellInfo, static_cast<uint64>(damage), HEAL, effIndex);
 
-    m_damage -= unitTarget->SpellHealingBonusTaken(m_originalCaster, m_spellInfo, heal, HEAL);
+    uint64 takenHeal = unitTarget->SpellHealingBonusTaken(m_originalCaster, m_spellInfo, heal, HEAL);
+    m_damage -= takenHeal > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(takenHeal);
 }
 
 void Spell::EffectHealthLeech(SpellEffIndex  effIndex)
@@ -1623,8 +1629,8 @@ void Spell::EffectHealthLeech(SpellEffIndex  effIndex)
     if (!unitTarget || !unitTarget->IsAlive() || damage < 0)
         return;
 
-    damage = m_caster->SpellDamageBonusDone(unitTarget, m_spellInfo, uint32(damage), SPELL_DIRECT_DAMAGE, effIndex);
-    damage = unitTarget->SpellDamageBonusTaken(m_caster, m_spellInfo, uint32(damage), SPELL_DIRECT_DAMAGE);
+    damage = static_cast<int64>(std::min<uint64>(m_caster->SpellDamageBonusDone(unitTarget, m_spellInfo, static_cast<uint64>(damage), SPELL_DIRECT_DAMAGE, effIndex), static_cast<uint64>(std::numeric_limits<int64>::max())));
+    damage = static_cast<int64>(std::min<uint64>(unitTarget->SpellDamageBonusTaken(m_caster, m_spellInfo, static_cast<uint64>(damage), SPELL_DIRECT_DAMAGE), static_cast<uint64>(std::numeric_limits<int64>::max())));
 
     LOG_DEBUG("spells.aura", "HealthLeech :{}", damage);
 
@@ -3695,13 +3701,13 @@ void Spell::EffectHealMaxHealth(SpellEffIndex /*effIndex*/)
         return;
     }
 
-    int32 addhealth = 0;
+    int64 addhealth = 0;
 
     // damage == 0 - heal for caster max health
     if (damage == 0)
-        addhealth = m_caster->GetMaxHealth();
+        addhealth = m_caster->GetMaxHealthForCombat() > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(m_caster->GetMaxHealthForCombat());
     else
-        addhealth = unitTarget->GetMaxHealth() - unitTarget->GetHealth();
+        addhealth = unitTarget->GetMaxHealthForCombat() > unitTarget->GetHealthForCombat() ? static_cast<int64>(std::min<uint64>(unitTarget->GetMaxHealthForCombat() - unitTarget->GetHealthForCombat(), static_cast<uint64>(std::numeric_limits<int64>::max()))) : 0;
 
     m_healing += addhealth;
 }
@@ -4666,7 +4672,7 @@ void Spell::EffectResurrect(SpellEffIndex effIndex)
     if (target->isResurrectRequested())       // already have one active request
         return;
 
-    uint32 health = target->CountPctFromMaxHealth(damage);
+    uint64 health = target->CountPctFromMaxHealth(damage);
     uint32 mana   = CalculatePct(target->GetMaxPower(POWER_MANA), damage);
 
     ExecuteLogEffectResurrect(effIndex, target);
@@ -4865,13 +4871,13 @@ void Spell::EffectSelfResurrect(SpellEffIndex effIndex)
     if (!m_caster->IsInWorld())
         return;
 
-    uint32 health = 0;
+    uint64 health = 0;
     uint32 mana = 0;
 
     // flat case
     if (damage < 0)
     {
-        health = uint32(-damage);
+        health = static_cast<uint64>(-static_cast<int64>(damage));
         mana = m_spellInfo->Effects[effIndex].MiscValue;
     }
     // percent case
@@ -4885,7 +4891,8 @@ void Spell::EffectSelfResurrect(SpellEffIndex effIndex)
     Player* player = m_caster->ToPlayer();
     player->ResurrectPlayer(0.0f);
 
-    player->SetHealth(health);
+    player->SetExtendedHealth(health);
+    player->SyncClientHealthFromExtended();
     player->SetPower(POWER_MANA, mana);
     player->SetPower(POWER_RAGE, 0);
     player->SetPower(POWER_ENERGY, player->GetMaxPower(POWER_ENERGY));

@@ -38,6 +38,7 @@
 #include "Util.h"
 #include "Vehicle.h"
 #include "WorldPacket.h"
+#include <limits>
 
 /// @todo: this import is not necessary for compilation and marked as unused by the IDE
 //  however, for some reasons removing it would cause a damn linking issue
@@ -6269,7 +6270,7 @@ void AuraEffect::HandlePeriodicDummyAuraTick(Unit* target, Unit* caster) const
             switch (GetId())
             {
                 case 49016: // Hysteria
-                    uint32 damage = uint32(target->CountPctFromMaxHealth(1));
+                    uint64 damage = target->CountPctFromMaxHealth(1);
                     Unit::DealDamage(target, target, damage, nullptr, NODAMAGE, SPELL_SCHOOL_MASK_NORMAL, nullptr, false);
                     break;
             }
@@ -6330,7 +6331,7 @@ void AuraEffect::HandlePeriodicTriggerSpellAuraTick(Unit* target, Unit* caster) 
                             {
                                 if (caster)
                                 {
-                                    int32 heal = caster->CountPctFromMaxHealth(10);
+                                    uint64 heal = caster->CountPctFromMaxHealth(10);
                                     HealInfo healInfo(caster, target, heal, auraSpellInfo, auraSpellInfo->GetSchoolMask());
                                     caster->HealBySpell(healInfo);
 
@@ -6356,7 +6357,8 @@ void AuraEffect::HandlePeriodicTriggerSpellAuraTick(Unit* target, Unit* caster) 
                         case 27808:
                             if (caster)
                             {
-                                caster->CastCustomSpell(29879, SPELLVALUE_BASE_POINT0, int32(target->CountPctFromMaxHealth(21)), target, true, nullptr, this);
+                                uint64 damage = target->CountPctFromMaxHealth(21);
+                                caster->CastCustomSpell(29879, SPELLVALUE_BASE_POINT0, damage > static_cast<uint64>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(damage), target, true, nullptr, this);
                                 if (GetTickNumber() == 1)
                                     caster->CastSpell(target, 27808, true);
                             }
@@ -6643,21 +6645,27 @@ void AuraEffect::HandlePeriodicDamageAurasTick(Unit* target, Unit* caster) const
     CleanDamage cleanDamage = CleanDamage(0, 0, BASE_ATTACK, MELEE_HIT_NORMAL);
 
     // ignore non positive values (can be result apply spellmods to aura damage
-    uint32 damage = std::max(GetAmount(), 0);
+    uint64 damage = std::max(GetAmount(), 0);
 
     // If the damage is percent-max-health based, calculate damage before the Modify hook
     if (GetAuraType() == SPELL_AURA_PERIODIC_DAMAGE_PERCENT)
     {
         // xinef: ceil obtained value, it may happen that 10 ticks for 10% damage may not kill owner
-        damage = uint32(std::ceil(CalculatePct<float, float>(target->GetMaxHealth(), damage)));
+        damage = static_cast<uint64>(std::ceil(CalculatePct<float, float>(target->GetMaxHealth(), static_cast<float>(damage))));
     }
 
     // Script Hook For HandlePeriodicDamageAurasTick -- Allow scripts to change the Damage pre class mitigation calculations
-    sScriptMgr->ModifyPeriodicDamageAurasTick(target, caster, damage, GetSpellInfo());
+    uint32 scriptDamage = damage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(damage);
+    sScriptMgr->ModifyPeriodicDamageAurasTick(target, caster, scriptDamage, GetSpellInfo());
+    if (scriptDamage != (damage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(damage)))
+        damage = scriptDamage;
 
     if (target->GetAI())
     {
-        target->GetAI()->OnCalculatePeriodicTickReceived(damage, caster);
+        uint32 aiDamage = damage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(damage);
+        target->GetAI()->OnCalculatePeriodicTickReceived(aiDamage, caster);
+        if (aiDamage != (damage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(damage)))
+            damage = aiDamage;
     }
 
     if (GetAuraType() == SPELL_AURA_PERIODIC_DAMAGE)
@@ -6670,7 +6678,7 @@ void AuraEffect::HandlePeriodicDamageAurasTick(Unit* target, Unit* caster) const
         // Calculate armor mitigation
         if (Unit::IsDamageReducedByArmor(GetSpellInfo()->GetSchoolMask(), GetSpellInfo(), GetEffIndex()))
         {
-            uint32 damageReductedArmor = Unit::CalcArmorReducedDamage(caster, target, damage, GetSpellInfo(), GetCasterLevel());
+            uint64 damageReductedArmor = Unit::CalcArmorReducedDamage(caster, target, damage, GetSpellInfo(), GetCasterLevel());
             cleanDamage.mitigated_damage += damage - damageReductedArmor;
             damage = damageReductedArmor;
         }
@@ -6708,31 +6716,36 @@ void AuraEffect::HandlePeriodicDamageAurasTick(Unit* target, Unit* caster) const
         }
     }
 
-    int32 dmg = damage;
-    int32 mitigatedDamage = cleanDamage.mitigated_damage;
+    int64 dmg = static_cast<int64>(std::min<uint64>(damage, static_cast<uint64>(std::numeric_limits<int64>::max())));
+    int64 mitigatedDamage = static_cast<int64>(std::min<uint64>(cleanDamage.mitigated_damage, static_cast<uint64>(std::numeric_limits<int64>::max())));
     if (CanApplyResilience())
     {
-        int32 resilienceReduction = dmg;
-        Unit::ApplyResilience(target, nullptr, &resilienceReduction, crit, CR_CRIT_TAKEN_SPELL);
+        int32 resilienceDamage = int32(std::min<uint64>(damage, static_cast<uint64>(std::numeric_limits<int32>::max())));
+        int32 originalResilienceDamage = resilienceDamage;
+        Unit::ApplyResilience(target, nullptr, &resilienceDamage, crit, CR_CRIT_TAKEN_SPELL);
 
-        resilienceReduction = dmg - resilienceReduction;
-        dmg -= resilienceReduction;
-        mitigatedDamage += resilienceReduction;
+        if (originalResilienceDamage > 0)
+        {
+            long double reductionRatio = static_cast<long double>(originalResilienceDamage - resilienceDamage) / static_cast<long double>(originalResilienceDamage);
+            int64 resilienceReduction = std::max<int64>(0, static_cast<int64>(static_cast<long double>(dmg) * reductionRatio));
+            dmg -= resilienceReduction;
+            mitigatedDamage += resilienceReduction;
+        }
     }
 
-    damage = std::max(0, dmg);
-    cleanDamage.mitigated_damage = std::max(0, mitigatedDamage);
+    damage = static_cast<uint64>(std::max<int64>(0, dmg));
+    cleanDamage.mitigated_damage = static_cast<uint64>(std::max<int64>(0, mitigatedDamage));
 
     DamageInfo dmgInfo(caster, target, damage, GetSpellInfo(), GetSpellInfo()->GetSchoolMask(), DOT, cleanDamage.mitigated_damage);
     Unit::CalcAbsorbResist(dmgInfo);
 
-    uint32 absorb = dmgInfo.GetAbsorb();
-    uint32 resist = dmgInfo.GetResist();
-    damage = dmgInfo.GetDamage();
+    uint64 absorb = dmgInfo.GetAbsorb();
+    uint64 resist = dmgInfo.GetResist();
+    uint64 tickDamage = dmgInfo.GetDamage();
 
     LOG_DEBUG("spells.aura.effect", "PeriodicTick: {} attacked {} for {} dmg inflicted by {} abs is {}",
-                    GetCasterGUID().ToString(), target->GetGUID().ToString(), damage, GetId(), absorb);
-    Unit::DealDamageMods(target, damage, &absorb);
+                    GetCasterGUID().ToString(), target->GetGUID().ToString(), tickDamage, GetId(), absorb);
+    Unit::DealDamageMods(target, tickDamage, &absorb);
 
     // Set trigger flag
     uint32 procAttacker = PROC_FLAG_DONE_PERIODIC;
@@ -6741,19 +6754,24 @@ void AuraEffect::HandlePeriodicDamageAurasTick(Unit* target, Unit* caster) const
     if (absorb > 0)
         procEx |= PROC_EX_ABSORB;
 
-    if (damage)
+    if (tickDamage)
         procVictim |= PROC_FLAG_TAKEN_DAMAGE;
 
-    int32 overkill = damage - target->GetHealth();
+    uint64 targetHealth = target->GetHealthForCombat();
+    int64 overkill = int64(std::min<uint64>(tickDamage, static_cast<uint64>(std::numeric_limits<int64>::max()))) - int64(std::min<uint64>(targetHealth, static_cast<uint64>(std::numeric_limits<int64>::max())));
     if (overkill < 0)
         overkill = 0;
 
-    SpellPeriodicAuraLogInfo pInfo(this, damage, overkill, absorb, resist, 0.0f, crit);
+    uint32 damage32 = tickDamage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(tickDamage);
+    uint32 absorb32 = absorb > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(absorb);
+    uint32 resist32 = resist > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(resist);
+
+    SpellPeriodicAuraLogInfo pInfo(this, damage32, uint32(std::min<int64>(overkill, std::numeric_limits<uint32>::max())), absorb32, resist32, 0.0f, crit);
     target->SendPeriodicAuraLog(&pInfo);
 
-    Unit::DealDamage(caster, target, damage, &cleanDamage, DOT, GetSpellInfo()->GetSchoolMask(), GetSpellInfo(), true);
+    Unit::DealDamage(caster, target, tickDamage, &cleanDamage, DOT, GetSpellInfo()->GetSchoolMask(), GetSpellInfo(), true);
 
-    Unit::ProcDamageAndSpell(caster, target, caster ? procAttacker : 0, procVictim, procEx, damage, BASE_ATTACK, GetSpellInfo(), nullptr, GetEffIndex(), nullptr, &dmgInfo);
+    Unit::ProcDamageAndSpell(caster, target, caster ? procAttacker : 0, procVictim, procEx, damage32, BASE_ATTACK, GetSpellInfo(), nullptr, GetEffIndex(), nullptr, &dmgInfo);
 }
 
 void AuraEffect::HandlePeriodicHealthLeechAuraTick(Unit* target, Unit* caster) const
@@ -6773,14 +6791,20 @@ void AuraEffect::HandlePeriodicHealthLeechAuraTick(Unit* target, Unit* caster) c
 
     CleanDamage cleanDamage = CleanDamage(0, 0, BASE_ATTACK, MELEE_HIT_NORMAL);
 
-    uint32 damage = std::max(GetAmount(), 0);
+    uint64 damage = std::max(GetAmount(), 0);
 
     // Script Hook For HandlePeriodicHealthLeechAurasTick -- Allow scripts to change the Damage pre class mitigation calculations
-    sScriptMgr->ModifyPeriodicDamageAurasTick(target, caster, damage, GetSpellInfo());
+    uint32 scriptDamage = damage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(damage);
+    sScriptMgr->ModifyPeriodicDamageAurasTick(target, caster, scriptDamage, GetSpellInfo());
+    if (scriptDamage != (damage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(damage)))
+        damage = scriptDamage;
 
     if (target->GetAI())
     {
-        target->GetAI()->OnCalculatePeriodicTickReceived(damage, caster);
+        uint32 aiDamage = damage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(damage);
+        target->GetAI()->OnCalculatePeriodicTickReceived(aiDamage, caster);
+        if (aiDamage != (damage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(damage)))
+            damage = aiDamage;
     }
 
     if (GetBase()->GetType() == DYNOBJ_AURA_TYPE)
@@ -6794,32 +6818,37 @@ void AuraEffect::HandlePeriodicHealthLeechAuraTick(Unit* target, Unit* caster) c
     // Calculate armor mitigation
     if (Unit::IsDamageReducedByArmor(GetSpellInfo()->GetSchoolMask(), GetSpellInfo(), m_effIndex))
     {
-        uint32 damageReductedArmor = Unit::CalcArmorReducedDamage(caster, target, damage, GetSpellInfo(), GetCasterLevel());
+        uint64 damageReductedArmor = Unit::CalcArmorReducedDamage(caster, target, damage, GetSpellInfo(), GetCasterLevel());
         cleanDamage.mitigated_damage += damage - damageReductedArmor;
         damage = damageReductedArmor;
     }
 
-    int32 dmg = damage;
-    int32 cleanDamageAmount = cleanDamage.mitigated_damage;
+    int64 dmg = static_cast<int64>(std::min<uint64>(damage, static_cast<uint64>(std::numeric_limits<int64>::max())));
+    int64 cleanDamageAmount = static_cast<int64>(std::min<uint64>(cleanDamage.mitigated_damage, static_cast<uint64>(std::numeric_limits<int64>::max())));
     if (CanApplyResilience())
     {
-        int32 resilienceReduction = dmg;
-        Unit::ApplyResilience(target, nullptr, &resilienceReduction, crit, CR_CRIT_TAKEN_SPELL);
+        int32 resilienceDamage = int32(std::min<uint64>(damage, static_cast<uint64>(std::numeric_limits<int32>::max())));
+        int32 originalResilienceDamage = resilienceDamage;
+        Unit::ApplyResilience(target, nullptr, &resilienceDamage, crit, CR_CRIT_TAKEN_SPELL);
 
-        resilienceReduction = dmg - resilienceReduction;
-        dmg -= resilienceReduction;
-        cleanDamageAmount += resilienceReduction;
+        if (originalResilienceDamage > 0)
+        {
+            long double reductionRatio = static_cast<long double>(originalResilienceDamage - resilienceDamage) / static_cast<long double>(originalResilienceDamage);
+            int64 resilienceReduction = std::max<int64>(0, static_cast<int64>(static_cast<long double>(dmg) * reductionRatio));
+            dmg -= resilienceReduction;
+            cleanDamageAmount += resilienceReduction;
+        }
     }
 
-    damage = std::max(0, dmg);
-    cleanDamage.mitigated_damage = std::max(0, cleanDamageAmount);
+    damage = static_cast<uint64>(std::max<int64>(0, dmg));
+    cleanDamage.mitigated_damage = static_cast<uint64>(std::max<int64>(0, cleanDamageAmount));
 
     DamageInfo dmgInfo(caster, target, damage, GetSpellInfo(), GetSpellInfo()->GetSchoolMask(), DOT, cleanDamage.mitigated_damage);
     Unit::CalcAbsorbResist(dmgInfo);
 
-    uint32 absorb = dmgInfo.GetAbsorb();
-    uint32 resist = dmgInfo.GetResist();
-    damage = dmgInfo.GetDamage();
+    uint64 absorb = dmgInfo.GetAbsorb();
+    uint64 resist = dmgInfo.GetResist();
+    uint64 tickDamage = dmgInfo.GetDamage();
 
     // Set trigger flag
     uint32 procAttacker = PROC_FLAG_DONE_PERIODIC;
@@ -6831,34 +6860,37 @@ void AuraEffect::HandlePeriodicHealthLeechAuraTick(Unit* target, Unit* caster) c
     if (dmgInfo.GetDamage())
         procVictim |= PROC_FLAG_TAKEN_DAMAGE;
 
-    if (target->GetHealth() < dmgInfo.GetDamage())
+    if (target->GetHealthForCombat() < dmgInfo.GetDamage())
     {
-        dmgInfo.ModifyDamage(dmgInfo.GetDamage() - target->GetHealth());
+        uint64 damageDelta = dmgInfo.GetDamage() - target->GetHealthForCombat();
+        dmgInfo.ModifyDamage(damageDelta > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(damageDelta));
     }
 
-    damage = dmgInfo.GetDamage();
+    tickDamage = dmgInfo.GetDamage();
+    uint32 damage32 = tickDamage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(tickDamage);
+    uint32 absorb32 = absorb > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(absorb);
+    uint32 resist32 = resist > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(resist);
 
     LOG_DEBUG("spells.aura.effect", "PeriodicTick: {} health leech of {} for {} dmg inflicted by {} abs is {}",
-                    GetCasterGUID().ToString(), target->GetGUID().ToString(), damage, GetId(), absorb);
+                    GetCasterGUID().ToString(), target->GetGUID().ToString(), tickDamage, GetId(), absorb);
     if (caster)
-        caster->SendSpellNonMeleeDamageLog(target, GetSpellInfo(), damage, GetSpellInfo()->GetSchoolMask(), absorb, resist, false, 0, crit);
+        caster->SendSpellNonMeleeDamageLog(target, GetSpellInfo(), damage32, GetSpellInfo()->GetSchoolMask(), absorb32, resist32, false, 0, crit);
 
-    int32 new_damage;
+    uint64 new_damage = Unit::DealDamage(caster, target, tickDamage, &cleanDamage, DOT, GetSpellInfo()->GetSchoolMask(), GetSpellInfo(), false);
 
-    new_damage = Unit::DealDamage(caster, target, damage, &cleanDamage, DOT, GetSpellInfo()->GetSchoolMask(), GetSpellInfo(), false);
-
-    Unit::ProcDamageAndSpell(caster, target, caster ? procAttacker : 0, procVictim, procEx, damage, BASE_ATTACK, GetSpellInfo(), nullptr, GetEffIndex(), nullptr, &dmgInfo);
+    Unit::ProcDamageAndSpell(caster, target, caster ? procAttacker : 0, procVictim, procEx, damage32, BASE_ATTACK, GetSpellInfo(), nullptr, GetEffIndex(), nullptr, &dmgInfo);
 
     if (!caster || !caster->IsAlive())
         return;
 
     float gainMultiplier = GetSpellInfo()->Effects[GetEffIndex()].CalcValueMultiplier(caster);
 
-    uint32 heal = uint32(caster->SpellHealingBonusDone(caster, GetSpellInfo(), uint32(new_damage * gainMultiplier), DOT, GetEffIndex(), 0.0f, GetBase()->GetStackAmount()));
-    heal = uint32(caster->SpellHealingBonusTaken(caster, GetSpellInfo(), heal, DOT, GetBase()->GetStackAmount()));
+    uint64 leechHealBase = static_cast<uint64>(static_cast<long double>(new_damage) * static_cast<long double>(gainMultiplier));
+    uint64 heal = caster->SpellHealingBonusDone(caster, GetSpellInfo(), leechHealBase, DOT, GetEffIndex(), 0.0f, GetBase()->GetStackAmount());
+    heal = caster->SpellHealingBonusTaken(caster, GetSpellInfo(), heal, DOT, GetBase()->GetStackAmount());
 
     HealInfo healInfo(caster, caster, heal, GetSpellInfo(), GetSpellInfo()->GetSchoolMask());
-    int32 gain = caster->HealBySpell(healInfo);
+    int64 gain = caster->HealBySpell(healInfo);
     caster->getHostileRefMgr().threatAssist(caster, gain * 0.5f, GetSpellInfo());
 }
 
@@ -6873,19 +6905,20 @@ void AuraEffect::HandlePeriodicHealthFunnelAuraTick(Unit* target, Unit* caster) 
         return;
     }
 
-    uint32 damage = std::max(GetAmount(), 0);
+    uint64 damage = std::max(GetAmount(), 0);
     // do not kill health donator
-    if (caster->GetHealth() < damage)
-        damage = caster->GetHealth() - 1;
+    if (caster->GetHealthForCombat() <= damage)
+        damage = caster->GetHealthForCombat() > 0 ? caster->GetHealthForCombat() - 1 : 0;
     if (!damage)
         return;
 
-    caster->ModifyHealth(-(int32)damage);
+    caster->ModifyHealth(-(damage > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(damage)));
     LOG_DEBUG("spells.aura", "PeriodicTick: donator {} target {} damage {}.", caster->GetEntry(), target->GetEntry(), damage);
 
     float gainMultiplier = GetSpellInfo()->Effects[GetEffIndex()].CalcValueMultiplier(caster);
 
-    damage = int32(damage * gainMultiplier);
+    long double scaledDamage = static_cast<long double>(damage) * static_cast<long double>(gainMultiplier);
+    damage = scaledDamage > 0.0L ? static_cast<uint64>(scaledDamage) : 0;
 
     HealInfo healInfo(caster, target, damage, GetSpellInfo(), GetSpellInfo()->GetSchoolMask());
     caster->HealBySpell(healInfo);
@@ -6911,7 +6944,7 @@ void AuraEffect::HandlePeriodicHealAurasTick(Unit* target, Unit* caster) const
         return;
 
     // ignore negative values (can be result apply spellmods to aura damage
-    int32 damage = std::max(m_amount, 0);
+    int64 damage = std::max(m_amount, 0);
 
     if (GetAuraType() == SPELL_AURA_OBS_MOD_HEALTH)
     {
@@ -6953,8 +6986,8 @@ void AuraEffect::HandlePeriodicHealAurasTick(Unit* target, Unit* caster) const
             if (AuraEffect* aurEff = caster->GetAuraEffect(SPELL_AURA_ADD_PCT_MODIFIER, SPELLFAMILY_WARLOCK, 89, 0))
                 AddPct(TakenTotalMod, aurEff->GetAmount());
 
-        damage = uint32(target->CountPctFromMaxHealth(damage));
-        damage = uint32(damage * TakenTotalMod);
+        damage = static_cast<int64>(target->CountPctFromMaxHealth(static_cast<int32>(std::min<int64>(damage, std::numeric_limits<int32>::max()))));
+        damage = static_cast<int64>(static_cast<long double>(damage) * static_cast<long double>(TakenTotalMod));
     }
     else
     {
@@ -6986,20 +7019,22 @@ void AuraEffect::HandlePeriodicHealAurasTick(Unit* target, Unit* caster) const
     LOG_DEBUG("spells.aura.effect", "PeriodicTick: {} heal of {} for {} health inflicted by {}",
                     GetCasterGUID().ToString(), target->GetGUID().ToString(), damage, GetId());
 
-    uint32 heal = uint32(damage);
+    uint64 heal = damage > 0 ? static_cast<uint64>(damage) : 0;
+    uint32 scriptHeal = heal > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(heal);
 
     // Script Hook For HandlePeriodicDamageAurasTick -- Allow scripts to change the Damage pre class mitigation calculations
-    sScriptMgr->ModifyPeriodicDamageAurasTick(target, caster, heal, GetSpellInfo());
-    sScriptMgr->ModifyHealReceived(target, caster, heal, GetSpellInfo());
+    sScriptMgr->ModifyPeriodicDamageAurasTick(target, caster, scriptHeal, GetSpellInfo());
+    sScriptMgr->ModifyHealReceived(target, caster, scriptHeal, GetSpellInfo());
+    heal = heal > std::numeric_limits<uint32>::max() && scriptHeal == std::numeric_limits<uint32>::max() ? heal : scriptHeal;
 
     if (target->GetAI())
     {
-        target->GetAI()->OnCalculatePeriodicTickReceived(heal, caster);
+        target->GetAI()->OnCalculatePeriodicTickReceived(scriptHeal, caster);
     }
 
     HealInfo healInfo(caster, target, heal, GetSpellInfo(), GetSpellInfo()->GetSchoolMask());
     Unit::CalcHealAbsorb(healInfo);
-    int32 gain = Unit::DealHeal(caster, target, healInfo.GetHeal());
+    int64 gain = Unit::DealHeal(caster, target, healInfo.GetHeal());
     healInfo.SetEffectiveHeal(gain);
 
     SpellPeriodicAuraLogInfo pInfo(this, healInfo.GetHeal(), healInfo.GetHeal() - healInfo.GetEffectiveHeal(), healInfo.GetAbsorb(), 0, 0.0f, crit);
@@ -7208,7 +7243,7 @@ void AuraEffect::HandlePeriodicPowerBurnAuraTick(Unit* target, Unit* caster) con
     // maybe has to be sent different to client, but not by SMSG_PERIODICAURALOG
     SpellNonMeleeDamage damageInfo(caster, target, spellProto, spellProto->SchoolMask);
     // no SpellDamageBonus for burn mana
-    caster->CalculateSpellDamageTaken(&damageInfo, int32(gain * dmgMultiplier), spellProto);
+    caster->CalculateSpellDamageTaken(&damageInfo, int64(static_cast<long double>(gain) * static_cast<long double>(dmgMultiplier)), spellProto);
 
     Unit::DealDamageMods(damageInfo.target, damageInfo.damage, &damageInfo.absorb);
 

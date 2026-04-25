@@ -21,6 +21,7 @@
 #include <thread>
 #include <chrono>
 #include <set>
+#include <iomanip>
 
 // 模块集成 - 自动检测可用的模块并定义宏
 // 使用 __has_include 检测头文件是否存在，避免依赖CMake宏定义
@@ -106,6 +107,63 @@ namespace
         if (mode == '-')
             return false;
         return mode == '+' ? value > 0 : value > 1;
+    }
+
+    std::string FormatTemplateDouble(double value)
+    {
+        std::ostringstream oss;
+        oss << std::setprecision(15) << value;
+        return oss.str();
+    }
+
+    std::string BuildTemplateStatsData(uint32 itemID)
+    {
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemID);
+        if (!proto)
+            return "";
+
+        std::ostringstream stats;
+        bool hasStats = false;
+
+        for (uint32 i = 0; i < proto->StatsCount && i < MAX_ITEM_PROTO_STATS; ++i)
+        {
+            if (!proto->ItemStat[i].ItemStatValue)
+                continue;
+
+            if (hasStats)
+                stats << ",";
+
+            hasStats = true;
+            stats << proto->ItemStat[i].ItemStatType << " " << proto->ItemStat[i].ItemStatValue;
+        }
+
+        std::ostringstream damage;
+        bool hasDamage = false;
+
+        for (uint32 i = 0; i < MAX_ITEM_PROTO_DAMAGES; ++i)
+        {
+            if (proto->Damage[i].DamageMin == 0.0 && proto->Damage[i].DamageMax == 0.0)
+                continue;
+
+            if (hasDamage)
+                damage << ",";
+
+            hasDamage = true;
+            damage << FormatTemplateDouble(proto->Damage[i].DamageMin) << " "
+                   << FormatTemplateDouble(proto->Damage[i].DamageMax) << " "
+                   << proto->Damage[i].DamageType;
+        }
+
+        if (!hasStats && !proto->Armor && !hasDamage)
+            return "";
+
+        std::ostringstream data;
+        data << "TPL64|" << stats.str() << "|";
+        if (proto->Armor)
+            data << proto->Armor;
+        data << "|" << damage.str();
+
+        return data.str();
     }
 }
 
@@ -2562,7 +2620,7 @@ public:
     }
 
     // 通过钩子在应用物品基础属性前扩展逻辑（当前仅保留验收点，不再屏蔽官方五维属性）
-    void OnPlayerApplyItemModsBefore(Player* player, uint8 slot, bool /*apply*/, uint8 /*itemProtoStatNumber*/, uint32 /*statType*/, int32& val) override
+    void OnPlayerApplyItemModsBefore(Player* player, uint8 slot, bool /*apply*/, uint8 /*itemProtoStatNumber*/, uint32 /*statType*/, int64& val) override
     {
         if (!player || val == 0)
             return;
@@ -3228,7 +3286,7 @@ private:
         }
 
         // 构建Addon响应消息
-        // 【修改】新格式：ALL_MODULE_DATA:bag:slot:itemID:guid:base:additional:identDisplay:growth:enhancement:skills:magic:rune:set:huanjing
+        // 【修改】新格式：ALL_MODULE_DATA:bag:slot:itemID:guid:base:additional:identDisplay:growth:enhancement:skills:magic:rune:set:huanjing:templateStats
         // 添加bag:slot用于客户端精确匹配响应到正确的pending记录
         std::ostringstream response;
         response << "ALL_MODULE_DATA:" << bag << ":" << static_cast<uint32>(slot) << ":" << itemID << ":" << guid << ":"
@@ -3241,7 +3299,8 @@ private:
                  << moduleData.magicHitData << ":"
                  << moduleData.runeData << ":"
                  << moduleData.setData << ":"
-                 << moduleData.huanjingData;  // 新增幻境数据字段
+                 << moduleData.huanjingData << ":"
+                 << moduleData.templateStatsData;
 
         std::string responseStr = response.str();
 
@@ -3924,6 +3983,9 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
     AllModuleData result;
     result.identificationDisplayData = "IDDISP|||||";
     result.hasData = false;
+    result.templateStatsData = BuildTemplateStatsData(itemID);
+    if (!result.templateStatsData.empty())
+        result.hasData = true;
 
     // 【修复】不再依赖内存缓存判断是否鉴定，直接查询数据库
     // 原因：内存缓存可能在鉴定后没有正确更新，导致已鉴定物品被判定为未鉴定
@@ -4558,7 +4620,8 @@ void ItemIdentificationSystem::SendAllModuleDataAddon(Player* player, uint32 ite
              << data.magicHitData << ":"
              << data.runeData << ":"
              << data.setData << ":"
-             << data.huanjingData;  // 新增幻境数据字段
+             << data.huanjingData << ":"
+             << data.templateStatsData;
 
     std::string responseStr = response.str();
 
@@ -4636,7 +4699,7 @@ void ItemIdentificationSystem::HandleBatchQueryCommand(Player* player, uint32 it
         DebugLog("[批量查询缓存] 新数据已缓存: itemID={}, guid={}", itemID, guid);
     }
 
-    // 新格式消息：ALL_MODULE_DATA:itemID:guid:base:additional:identDisplay:growth:enhancement:skills:magic:rune:set:huanjing
+    // 新格式消息：ALL_MODULE_DATA:itemID:guid:base:additional:identDisplay:growth:enhancement:skills:magic:rune:set:huanjing:templateStats
     std::ostringstream response;
     response << "ALL_MODULE_DATA:" << itemID << ":" << guid << ":"
              << data.baseAttributes << ":"
@@ -4648,7 +4711,8 @@ void ItemIdentificationSystem::HandleBatchQueryCommand(Player* player, uint32 it
              << data.magicHitData << ":"
              << data.runeData << ":"
              << data.setData << ":"
-             << data.huanjingData;
+             << data.huanjingData << ":"
+             << data.templateStatsData;
 
     // 发送前记录完整消息内容
     DebugLog("[批量查询命令] 准备发送完整消息: [{}]", response.str());
@@ -4662,6 +4726,7 @@ void ItemIdentificationSystem::HandleBatchQueryCommand(Player* player, uint32 it
     DebugLog("  - 魔次数据: [{}]", data.magicHitData);
     DebugLog("  - 符文数据: [{}]", data.runeData);
     DebugLog("  - 套装数据: [{}]", data.setData);
+    DebugLog("  - 模板属性: [{}]", data.templateStatsData);
 
     // 发送到客户端
     ChatHandler(player->GetSession()).PSendSysMessage(response.str().c_str());

@@ -1029,7 +1029,14 @@ class spell_item_blood_draining_enchant : public AuraScript
     void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
     {
         PreventDefaultAction();
-        if (!eventInfo.GetActionTarget() || !eventInfo.GetDamageInfo() || (eventInfo.GetActionTarget()->GetHealth() - eventInfo.GetDamageInfo()->GetDamage()) >= eventInfo.GetActionTarget()->CountPctFromMaxHealth(35))
+        Unit* target = eventInfo.GetActionTarget();
+        DamageInfo* damageInfo = eventInfo.GetDamageInfo();
+        if (!target || !damageInfo)
+            return;
+
+        uint64 targetHealth = target->GetHealthForCombat();
+        uint64 remainingHealth = targetHealth > damageInfo->GetDamage() ? targetHealth - damageInfo->GetDamage() : 0;
+        if (remainingHealth >= target->CountPctFromMaxHealth(35))
         {
             return;
         }
@@ -1037,8 +1044,8 @@ class spell_item_blood_draining_enchant : public AuraScript
         if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(64569 /*SPELL_BLOOD_RESERVE*/))
         {
             int32 basepoints = spellInfo->Effects[EFFECT_0].CalcValue() * this->GetStackAmount();
-            eventInfo.GetActionTarget()->CastCustomSpell(spellInfo->Id, SPELLVALUE_BASE_POINT0, basepoints, eventInfo.GetActionTarget(), true);
-            eventInfo.GetActionTarget()->RemoveAurasDueToSpell(GetSpellInfo()->Id); // Remove rest auras
+            target->CastCustomSpell(spellInfo->Id, SPELLVALUE_BASE_POINT0, basepoints, target, true);
+            target->RemoveAurasDueToSpell(GetSpellInfo()->Id); // Remove rest auras
         }
 
         SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(64569 /*SPELL_BLOOD_RESERVE*/);

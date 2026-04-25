@@ -205,7 +205,7 @@ struct CreatureTemplate
     float   scale;
     uint32  rank;
     uint32  dmgschool;
-    float   DamageModifier;
+    double  DamageModifier;
     uint32  BaseAttackTime;
     uint32  RangeAttackTime;
     float   BaseVariance;
@@ -228,16 +228,16 @@ struct CreatureTemplate
     uint32  spells[MAX_CREATURE_SPELLS];
     uint32  PetSpellDataId;
     uint32  VehicleId;
-    uint32  mingold;
-    uint32  maxgold;
+    uint64  mingold;
+    uint64  maxgold;
     std::string AIName;
     uint32  MovementType;
     CreatureMovementData  Movement;
     float   HoverHeight;
-    float   ModHealth;
-    float   ModMana;
-    float   ModArmor;
-    float   ModExperience;
+    double  ModHealth;
+    double  ModMana;
+    double  ModArmor;
+    double  ModExperience;
     bool    RacialLeader;
     uint32  movementId;
     bool    RegenHealth;
@@ -301,35 +301,35 @@ typedef std::unordered_map<uint32, CreatureTemplate> CreatureTemplateContainer;
 // Defines base stats for creatures (used to calculate HP/mana/armor/attackpower/rangedattackpower/all damage).
 struct CreatureBaseStats
 {
-    uint32 BaseHealth[MAX_EXPANSIONS];
-    uint32 BaseMana;
-    float  BaseArmor;
-    uint32 AttackPower;
-    uint32 RangedAttackPower;
-    float BaseDamage[MAX_EXPANSIONS];
+    uint64 BaseHealth[MAX_EXPANSIONS];
+    uint64 BaseMana;
+    double BaseArmor;
+    uint64 AttackPower;
+    uint64 RangedAttackPower;
+    double BaseDamage[MAX_EXPANSIONS];
 
     // Helpers
 
-    uint32 GenerateHealth(CreatureTemplate const* info) const
+    uint64 GenerateHealth(CreatureTemplate const* info) const
     {
-        return uint32(std::ceil(BaseHealth[info->expansion] * info->ModHealth));
+        return uint64(std::ceil(static_cast<long double>(BaseHealth[info->expansion]) * static_cast<long double>(info->ModHealth)));
     }
 
-    uint32 GenerateMana(CreatureTemplate const* info) const
+    uint64 GenerateMana(CreatureTemplate const* info) const
     {
         // Mana can be 0.
         if (!BaseMana)
             return 0;
 
-        return uint32(std::ceil(BaseMana * info->ModMana));
+        return uint64(std::ceil(static_cast<long double>(BaseMana) * static_cast<long double>(info->ModMana)));
     }
 
-    float GenerateArmor(CreatureTemplate const* info) const
+    double GenerateArmor(CreatureTemplate const* info) const
     {
-        return std::ceil(BaseArmor * info->ModArmor);
+        return std::ceil(static_cast<long double>(BaseArmor) * static_cast<long double>(info->ModArmor));
     }
 
-    float GenerateBaseDamage(CreatureTemplate const* info) const
+    double GenerateBaseDamage(CreatureTemplate const* info) const
     {
         return BaseDamage[info->expansion];
     }

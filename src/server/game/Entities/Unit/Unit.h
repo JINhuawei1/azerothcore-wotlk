@@ -313,11 +313,11 @@ private:
 
 struct CleanDamage
 {
-    CleanDamage(uint32 mitigated, uint32 absorbed, WeaponAttackType _attackType, MeleeHitOutcome _hitOutCome) :
+    CleanDamage(uint64 mitigated, uint64 absorbed, WeaponAttackType _attackType, MeleeHitOutcome _hitOutCome) :
         absorbed_damage(absorbed), mitigated_damage(mitigated), attackType(_attackType), hitOutCome(_hitOutCome) {}
 
-    uint32 absorbed_damage;
-    uint32 mitigated_damage;
+    uint64 absorbed_damage;
+    uint64 mitigated_damage;
 
     WeaponAttackType attackType;
     MeleeHitOutcome hitOutCome;
@@ -331,29 +331,29 @@ class DamageInfo
 private:
     Unit* const m_attacker;
     Unit* const m_victim;
-    uint32 m_damage;
+    uint64 m_damage;
     SpellInfo const* const m_spellInfo;
     SpellSchoolMask const m_schoolMask;
     DamageEffectType const m_damageType;
     WeaponAttackType m_attackType;
-    uint32 m_absorb;
-    uint32 m_resist;
-    uint32 m_block;
-    uint32 m_cleanDamage;
+    uint64 m_absorb;
+    uint64 m_resist;
+    uint64 m_block;
+    uint64 m_cleanDamage;
 
     // amalgamation constructor (used for proc)
     DamageInfo(DamageInfo const& dmg1, DamageInfo const& dmg2);
 
 public:
-    explicit DamageInfo(Unit* _attacker, Unit* _victim, uint32 _damage, SpellInfo const* _spellInfo, SpellSchoolMask _schoolMask, DamageEffectType _damageType, uint32 cleanDamage = 0);
+    explicit DamageInfo(Unit* _attacker, Unit* _victim, uint64 _damage, SpellInfo const* _spellInfo, SpellSchoolMask _schoolMask, DamageEffectType _damageType, uint64 cleanDamage = 0);
     explicit DamageInfo(CalcDamageInfo const& dmgInfo); // amalgamation wrapper
     DamageInfo(CalcDamageInfo const& dmgInfo, uint8 damageIndex);
     DamageInfo(SpellNonMeleeDamage const& spellNonMeleeDamage, DamageEffectType damageType);
 
-    void ModifyDamage(int32 amount);
-    void AbsorbDamage(uint32 amount);
-    void ResistDamage(uint32 amount);
-    void BlockDamage(uint32 amount);
+    void ModifyDamage(int64 amount);
+    void AbsorbDamage(uint64 amount);
+    void ResistDamage(uint64 amount);
+    void BlockDamage(uint64 amount);
 
     [[nodiscard]] Unit* GetAttacker() const { return m_attacker; };
     [[nodiscard]] Unit* GetVictim() const { return m_victim; };
@@ -361,12 +361,12 @@ public:
     [[nodiscard]] SpellSchoolMask GetSchoolMask() const { return m_schoolMask; };
     [[nodiscard]] DamageEffectType GetDamageType() const { return m_damageType; };
     [[nodiscard]] WeaponAttackType GetAttackType() const { return m_attackType; };
-    [[nodiscard]] uint32 GetDamage() const { return m_damage; };
-    [[nodiscard]] uint32 GetAbsorb() const { return m_absorb; };
-    [[nodiscard]] uint32 GetResist() const { return m_resist; };
-    [[nodiscard]] uint32 GetBlock() const { return m_block; };
+    [[nodiscard]] uint64 GetDamage() const { return m_damage; };
+    [[nodiscard]] uint64 GetAbsorb() const { return m_absorb; };
+    [[nodiscard]] uint64 GetResist() const { return m_resist; };
+    [[nodiscard]] uint64 GetBlock() const { return m_block; };
 
-    [[nodiscard]] uint32 GetUnmitigatedDamage() const;
+    [[nodiscard]] uint64 GetUnmitigatedDamage() const;
 };
 
 class HealInfo
@@ -374,20 +374,20 @@ class HealInfo
 private:
     Unit* const m_healer;
     Unit* const m_target;
-    uint32 m_heal;
-    uint32 m_effectiveHeal;
-    uint32 m_absorb;
+    uint64 m_heal;
+    uint64 m_effectiveHeal;
+    uint64 m_absorb;
     SpellInfo const* const m_spellInfo;
     SpellSchoolMask const m_schoolMask;
 public:
-    explicit HealInfo(Unit* _healer, Unit* _target, uint32 _heal, SpellInfo const* _spellInfo, SpellSchoolMask _schoolMask)
+    explicit HealInfo(Unit* _healer, Unit* _target, uint64 _heal, SpellInfo const* _spellInfo, SpellSchoolMask _schoolMask)
         : m_healer(_healer), m_target(_target), m_heal(_heal), m_spellInfo(_spellInfo), m_schoolMask(_schoolMask)
     {
         m_absorb = 0;
         m_effectiveHeal = 0;
     }
 
-    void AbsorbHeal(uint32 amount)
+    void AbsorbHeal(uint64 amount)
     {
         amount = std::min(amount, GetHeal());
         m_absorb += amount;
@@ -397,21 +397,21 @@ public:
         m_effectiveHeal -= amount;
     }
 
-    void SetHeal(uint32 amount)
+    void SetHeal(uint64 amount)
     {
         m_heal = amount;
     }
 
-    void SetEffectiveHeal(uint32 amount)
+    void SetEffectiveHeal(uint64 amount)
     {
         m_effectiveHeal = amount;
     }
 
     [[nodiscard]] Unit* GetHealer() const { return m_healer; }
     [[nodiscard]] Unit* GetTarget() const { return m_target; }
-    [[nodiscard]] uint32 GetHeal() const { return m_heal; }
-    [[nodiscard]] uint32 GetEffectiveHeal() const { return m_effectiveHeal; }
-    [[nodiscard]] uint32 GetAbsorb() const { return m_absorb; }
+    [[nodiscard]] uint64 GetHeal() const { return m_heal; }
+    [[nodiscard]] uint64 GetEffectiveHeal() const { return m_effectiveHeal; }
+    [[nodiscard]] uint64 GetAbsorb() const { return m_absorb; }
     [[nodiscard]] SpellInfo const* GetSpellInfo() const { return m_spellInfo; };
     [[nodiscard]] SpellSchoolMask GetSchoolMask() const { return m_schoolMask; };
 };
@@ -467,12 +467,12 @@ struct CalcDamageInfo
     struct
     {
         uint32 damageSchoolMask;
-        uint32 damage;
-        uint32 absorb;
-        uint32 resist;
+        uint64 damage;
+        uint64 absorb;
+        uint64 resist;
     } damages[MAX_ITEM_PROTO_DAMAGES];
 
-    uint32 blocked_amount;
+    uint64 blocked_amount;
     uint32 HitInfo;
     uint32 TargetState;
     // Helper
@@ -480,7 +480,7 @@ struct CalcDamageInfo
     uint32 procAttacker;
     uint32 procVictim;
     uint32 procEx;
-    uint32 cleanDamage;          // Used only for rage calculation
+    uint64 cleanDamage;          // Used only for rage calculation
     MeleeHitOutcome hitOutCome;  /// @todo: remove this field (need use TargetState)
 };
 
@@ -495,17 +495,17 @@ struct SpellNonMeleeDamage
     Unit* target;
     Unit* attacker;
     SpellInfo const* spellInfo;
-    uint32 damage;
-    uint32 overkill;
+    uint64 damage;
+    uint64 overkill;
     uint32 schoolMask;
-    uint32 absorb;
-    uint32 resist;
+    uint64 absorb;
+    uint64 resist;
     bool physicalLog;
     bool unused;
-    uint32 blocked;
+    uint64 blocked;
     uint32 HitInfo;
     // Used for help
-    uint32 cleanDamage;
+    uint64 cleanDamage;
 };
 
 struct SpellPeriodicAuraLogInfo
@@ -1050,24 +1050,26 @@ public:
     // Health methods
     [[nodiscard]] uint32 GetHealth()    const { return GetUInt32Value(UNIT_FIELD_HEALTH); }
     [[nodiscard]] uint32 GetMaxHealth() const { return GetUInt32Value(UNIT_FIELD_MAXHEALTH); }
-    [[nodiscard]] float GetHealthPct() const { return GetMaxHealth() ? 100.f * GetHealth() / GetMaxHealth() : 0.0f; }
-    int32 GetHealthGain(int32 dVal);
+    [[nodiscard]] virtual uint64 GetHealthForCombat() const { return GetHealth(); }
+    [[nodiscard]] virtual uint64 GetMaxHealthForCombat() const { return GetMaxHealth(); }
+    [[nodiscard]] float GetHealthPct() const { return GetMaxHealthForCombat() ? float(100.0L * static_cast<long double>(GetHealthForCombat()) / static_cast<long double>(GetMaxHealthForCombat())) : 0.0f; }
+    int64 GetHealthGain(int64 dVal);
     [[nodiscard]] uint32 GetCreateHealth() const { return GetUInt32Value(UNIT_FIELD_BASE_HEALTH); }
 
-    [[nodiscard]] bool IsFullHealth() const { return GetHealth() == GetMaxHealth(); }
+    [[nodiscard]] bool IsFullHealth() const { return GetHealthForCombat() >= GetMaxHealthForCombat(); }
 
-    [[nodiscard]] bool HealthBelowPct(int32 pct) const { return GetHealth() < CountPctFromMaxHealth(pct); }
-    [[nodiscard]] bool HealthBelowPctDamaged(int32 pct, uint32 damage) const { return int64(GetHealth()) - int64(damage) < int64(CountPctFromMaxHealth(pct)); }
-    [[nodiscard]] bool HealthAbovePct(int32 pct) const { return GetHealth() > CountPctFromMaxHealth(pct); }
-    [[nodiscard]] bool HealthAbovePctHealed(int32 pct, uint32 heal) const { return uint64(GetHealth()) + uint64(heal) > CountPctFromMaxHealth(pct); }
+    [[nodiscard]] bool HealthBelowPct(int32 pct) const { return GetHealthForCombat() < CountPctFromMaxHealth(pct); }
+    [[nodiscard]] bool HealthBelowPctDamaged(int32 pct, uint64 damage) const { uint64 health = GetHealthForCombat(); return health <= damage || health - damage < CountPctFromMaxHealth(pct); }
+    [[nodiscard]] bool HealthAbovePct(int32 pct) const { return GetHealthForCombat() > CountPctFromMaxHealth(pct); }
+    [[nodiscard]] bool HealthAbovePctHealed(int32 pct, uint64 heal) const { uint64 health = GetHealthForCombat(); uint64 threshold = CountPctFromMaxHealth(pct); return health > threshold || heal > threshold - health; }
 
-    [[nodiscard]] uint32 CountPctFromMaxHealth(int32 pct) const { return CalculatePct(GetMaxHealth(), pct); }
-    [[nodiscard]] uint32 CountPctFromCurHealth(int32 pct) const { return CalculatePct(GetHealth(), pct); }
+    [[nodiscard]] uint64 CountPctFromMaxHealth(int32 pct) const { return uint64(static_cast<long double>(GetMaxHealthForCombat()) * static_cast<long double>(pct) / 100.0L); }
+    [[nodiscard]] uint64 CountPctFromCurHealth(int32 pct) const { return uint64(static_cast<long double>(GetHealthForCombat()) * static_cast<long double>(pct) / 100.0L); }
 
     void SetHealth(uint32 val);
     void SetMaxHealth(uint32 val);
     inline void SetFullHealth() { SetHealth(GetMaxHealth()); }
-    int32 ModifyHealth(int32 val);
+    int64 ModifyHealth(int64 val);
     void SetCreateHealth(uint32 val) { SetUInt32Value(UNIT_FIELD_BASE_HEALTH, val); }
 
     // Power methods
@@ -1172,39 +1174,40 @@ public:
     /*********************************************************/
     /***       METHODS RELATED TO DAMAGE CACULATIONS       ***/
     /*********************************************************/
-    static uint32 DealDamage(Unit* attacker, Unit* victim, uint32 damage, CleanDamage const* cleanDamage = nullptr, DamageEffectType damagetype = DIRECT_DAMAGE, SpellSchoolMask damageSchoolMask = SPELL_SCHOOL_MASK_NORMAL, SpellInfo const* spellProto = nullptr, bool durabilityLoss = true, bool allowGM = false, Spell const* spell = nullptr);
+    static uint64 DealDamage(Unit* attacker, Unit* victim, uint64 damage, CleanDamage const* cleanDamage = nullptr, DamageEffectType damagetype = DIRECT_DAMAGE, SpellSchoolMask damageSchoolMask = SPELL_SCHOOL_MASK_NORMAL, SpellInfo const* spellProto = nullptr, bool durabilityLoss = true, bool allowGM = false, Spell const* spell = nullptr);
     void DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss);
     void DealSpellDamage(SpellNonMeleeDamage* damageInfo, bool durabilityLoss, Spell const* spell = nullptr);
+    static void DealDamageMods(Unit const* victim, uint64& damage, uint64* absorb);
     static void DealDamageMods(Unit const* victim, uint32& damage, uint32* absorb);
 
     static void Kill(Unit* killer, Unit* victim, bool durabilityLoss = true, WeaponAttackType attackType = BASE_ATTACK, SpellInfo const* spellProto = nullptr, Spell const* spell = nullptr);
     void KillSelf(bool durabilityLoss = true, WeaponAttackType attackType = BASE_ATTACK, SpellInfo const* spellProto = nullptr, Spell const* spell = nullptr) { Kill(this, this, durabilityLoss, attackType, spellProto, spell); };
 
     // Calculate methods
-    uint32 CalculateDamage(WeaponAttackType attType, bool normalized, bool addTotalPct, uint8 itemDamagesMask = 0);
+    uint64 CalculateDamage(WeaponAttackType attType, bool normalized, bool addTotalPct, uint8 itemDamagesMask = 0);
     virtual void CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bool addTotalPct, float& minDamage, float& maxDamage, uint8 damageIndex = 0) = 0;
     void CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, WeaponAttackType attackType = BASE_ATTACK, const bool sittingVictim = false);
-    void CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 damage, SpellInfo const* spellInfo, WeaponAttackType attackType = BASE_ATTACK, bool crit = false);
+    void CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int64 damage, SpellInfo const* spellInfo, WeaponAttackType attackType = BASE_ATTACK, bool crit = false);
     int32 CalculateSpellDamage(Unit const* target, SpellInfo const* spellProto, uint8 effect_index, int32 const* basePoints = nullptr) const;
     float CalculateDefaultCoefficient(SpellInfo const* spellInfo, DamageEffectType damagetype) const;
 
     // Melee damage bonus
-    uint32 MeleeDamageBonusDone(Unit* pVictim, uint32 damage, WeaponAttackType attType, SpellInfo const* spellProto = nullptr, SpellSchoolMask damageSchoolMask = SPELL_SCHOOL_MASK_NORMAL);
-    uint32 MeleeDamageBonusTaken(Unit* attacker, uint32 pdamage, WeaponAttackType attType, SpellInfo const* spellProto = nullptr, SpellSchoolMask damageSchoolMask = SPELL_SCHOOL_MASK_NORMAL);
+    uint64 MeleeDamageBonusDone(Unit* pVictim, uint64 damage, WeaponAttackType attType, SpellInfo const* spellProto = nullptr, SpellSchoolMask damageSchoolMask = SPELL_SCHOOL_MASK_NORMAL);
+    uint64 MeleeDamageBonusTaken(Unit* attacker, uint64 pdamage, WeaponAttackType attType, SpellInfo const* spellProto = nullptr, SpellSchoolMask damageSchoolMask = SPELL_SCHOOL_MASK_NORMAL);
 
     // Spell damage bonus
     int32 SpellBaseDamageBonusDone(SpellSchoolMask schoolMask);
     int32 SpellBaseDamageBonusTaken(SpellSchoolMask schoolMask, bool isDoT = false);
     float SpellPctDamageModsDone(Unit* victim, SpellInfo const* spellProto, DamageEffectType damagetype);
-    uint32 SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, uint32 pdamage, DamageEffectType damagetype, uint8 effIndex, float TotalMod = 0.0f, uint32 stack = 1);
-    uint32 SpellDamageBonusTaken(Unit* caster, SpellInfo const* spellProto, uint32 pdamage, DamageEffectType damagetype, uint32 stack = 1);
+    uint64 SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, uint64 pdamage, DamageEffectType damagetype, uint8 effIndex, float TotalMod = 0.0f, uint32 stack = 1);
+    uint64 SpellDamageBonusTaken(Unit* caster, SpellInfo const* spellProto, uint64 pdamage, DamageEffectType damagetype, uint32 stack = 1);
 
     // AOE damages
-    int32 CalculateAOEDamageReduction(int32 damage, uint32 schoolMask, bool npcCaster) const;
+    int64 CalculateAOEDamageReduction(int64 damage, uint32 schoolMask, bool npcCaster) const;
 
     // Armor reduction
     static bool IsDamageReducedByArmor(SpellSchoolMask damageSchoolMask, SpellInfo const* spellInfo = nullptr, uint8 effIndex = MAX_SPELL_EFFECTS);
-    static uint32 CalcArmorReducedDamage(Unit const* attacker, Unit const* victim, const uint32 damage, SpellInfo const* spellInfo, uint8 attackerLevel = 0, WeaponAttackType attackType = MAX_ATTACK);
+    static uint64 CalcArmorReducedDamage(Unit const* attacker, Unit const* victim, uint64 damage, SpellInfo const* spellInfo, uint8 attackerLevel = 0, WeaponAttackType attackType = MAX_ATTACK);
 
     // Resilience reduction - player or player's pet resilience (-1%), cap 100%
     [[nodiscard]] uint32 GetMeleeDamageReduction(uint32 damage) const { return GetCombatRatingDamageReduction(CR_CRIT_TAKEN_MELEE, 2.0f, 100.0f, damage); }
@@ -1212,7 +1215,7 @@ public:
     [[nodiscard]] uint32 GetSpellDamageReduction(uint32 damage) const { return GetCombatRatingDamageReduction(CR_CRIT_TAKEN_SPELL, 2.0f, 100.0f, damage); }
 
     // Critic damages - For resilience: player or player's pet resilience (-1%)
-    static uint32 SpellCriticalDamageBonus(Unit const* caster, SpellInfo const* spellProto, uint32 damage, Unit const* victim);
+    static uint64 SpellCriticalDamageBonus(Unit const* caster, SpellInfo const* spellProto, uint64 damage, Unit const* victim);
 
     [[nodiscard]] float GetMeleeCritChanceReduction() const { return GetCombatRatingReduction(CR_CRIT_TAKEN_MELEE); }
     [[nodiscard]] float GetRangedCritChanceReduction() const { return GetCombatRatingReduction(CR_CRIT_TAKEN_RANGED); }
@@ -1555,16 +1558,16 @@ public:
     [[nodiscard]] SpellMissInfo SpellHitResult(Unit* victim, Spell const* spell, bool canReflect = false);
 
     // Healling spells
-    static int32 DealHeal(Unit* healer, Unit* victim, uint32 addhealth);
+    static int64 DealHeal(Unit* healer, Unit* victim, uint64 addhealth);
     void SendHealSpellLog(HealInfo const& healInfo, bool critical = false);
-    int32 HealBySpell(HealInfo& healInfo, bool critical = false);
+    int64 HealBySpell(HealInfo& healInfo, bool critical = false);
 
     int32 SpellBaseHealingBonusDone(SpellSchoolMask schoolMask);
     int32 SpellBaseHealingBonusTaken(SpellSchoolMask schoolMask);
     float SpellPctHealingModsDone(Unit* victim, SpellInfo const* spellProto, DamageEffectType damagetype);
-    uint32 SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, uint32 healamount, DamageEffectType damagetype, uint8 effIndex, float TotalMod = 0.0f, uint32 stack = 1);
-    uint32 SpellHealingBonusTaken(Unit* caster, SpellInfo const* spellProto, uint32 healamount, DamageEffectType damagetype, uint32 stack = 1);
-    static uint32 SpellCriticalHealingBonus(Unit const* caster, SpellInfo const* spellProto, uint32 damage, Unit const* victim);
+    uint64 SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, uint64 healamount, DamageEffectType damagetype, uint8 effIndex, float TotalMod = 0.0f, uint32 stack = 1);
+    uint64 SpellHealingBonusTaken(Unit* caster, SpellInfo const* spellProto, uint64 healamount, DamageEffectType damagetype, uint32 stack = 1);
+    static uint64 SpellCriticalHealingBonus(Unit const* caster, SpellInfo const* spellProto, uint64 damage, Unit const* victim);
 
     static void CalcAbsorbResist(DamageInfo& dmgInfo, bool Splited = false);
     static void CalcHealAbsorb(HealInfo& healInfo);
@@ -2228,15 +2231,15 @@ namespace Acore
         {
             Unit const* a = objA->ToUnit();
             Unit const* b = objB->ToUnit();
-            float rA = (a && a->GetMaxHealth()) ? float(a->GetHealth()) / float(a->GetMaxHealth()) : 0.0f;
-            float rB = (b && b->GetMaxHealth()) ? float(b->GetHealth()) / float(b->GetMaxHealth()) : 0.0f;
+            float rA = (a && a->GetMaxHealthForCombat()) ? float(static_cast<long double>(a->GetHealthForCombat()) / static_cast<long double>(a->GetMaxHealthForCombat())) : 0.0f;
+            float rB = (b && b->GetMaxHealthForCombat()) ? float(static_cast<long double>(b->GetHealthForCombat()) / static_cast<long double>(b->GetMaxHealthForCombat())) : 0.0f;
             return _ascending ? rA < rB : rA > rB;
         }
 
         bool operator() (Unit const* a, Unit const* b) const
         {
-            float rA = a->GetMaxHealth() ? float(a->GetHealth()) / float(a->GetMaxHealth()) : 0.0f;
-            float rB = b->GetMaxHealth() ? float(b->GetHealth()) / float(b->GetMaxHealth()) : 0.0f;
+            float rA = a->GetMaxHealthForCombat() ? float(static_cast<long double>(a->GetHealthForCombat()) / static_cast<long double>(a->GetMaxHealthForCombat())) : 0.0f;
+            float rB = b->GetMaxHealthForCombat() ? float(static_cast<long double>(b->GetHealthForCombat()) / static_cast<long double>(b->GetMaxHealthForCombat())) : 0.0f;
             return _ascending ? rA < rB : rA > rB;
         }
 

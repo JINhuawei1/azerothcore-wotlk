@@ -81,8 +81,8 @@ bool Bag::Create(ObjectGuid::LowType guidlow, uint32 itemid, Player const* owner
     SetGuidValue(ITEM_FIELD_OWNER, owner ? owner->GetGUID() : ObjectGuid::Empty);
     SetGuidValue(ITEM_FIELD_CONTAINED, owner ? owner->GetGUID() : ObjectGuid::Empty);
 
-    SetUInt32Value(ITEM_FIELD_MAXDURABILITY, itemProto->MaxDurability);
-    SetUInt32Value(ITEM_FIELD_DURABILITY, itemProto->MaxDurability);
+    SetUInt32Value(ITEM_FIELD_MAXDURABILITY, itemProto->GetMaxDurabilityForUpdateField());
+    SetUInt32Value(ITEM_FIELD_DURABILITY, itemProto->GetMaxDurabilityForUpdateField());
     SetUInt32Value(ITEM_FIELD_STACK_COUNT, 1);
 
     // Setting the number of Slots the Container has

@@ -99,11 +99,11 @@ public:
             {
                 Field* fields = result->Fetch();
                 uint32 MaxHealth = fields[0].Get<uint32>();
-                uint32 Strength = fields[1].Get<uint32>();
-                uint32 Agility = fields[2].Get<uint32>();
-                uint32 Stamina = fields[3].Get<uint32>();
-                uint32 Intellect = fields[4].Get<uint32>();
-                uint32 Spirit = fields[5].Get<uint32>();
+                uint64 Strength = fields[1].Get<uint64>();
+                uint64 Agility = fields[2].Get<uint64>();
+                uint64 Stamina = fields[3].Get<uint64>();
+                uint64 Intellect = fields[4].Get<uint64>();
+                uint64 Spirit = fields[5].Get<uint64>();
                 uint32 Armor = fields[6].Get<uint32>();
                 uint32 AttackPower = fields[7].Get<uint32>();
                 uint32 SpellPower = fields[8].Get<uint32>();

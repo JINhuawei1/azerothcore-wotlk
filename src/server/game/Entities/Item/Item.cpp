@@ -313,8 +313,8 @@ bool Item::Create(ObjectGuid::LowType guidlow, uint32 itemid, Player const* owne
         return false;
 
     SetUInt32Value(ITEM_FIELD_STACK_COUNT, 1);
-    SetUInt32Value(ITEM_FIELD_MAXDURABILITY, itemProto->MaxDurability);
-    SetUInt32Value(ITEM_FIELD_DURABILITY, itemProto->MaxDurability);
+    SetUInt32Value(ITEM_FIELD_MAXDURABILITY, itemProto->GetMaxDurabilityForUpdateField());
+    SetUInt32Value(ITEM_FIELD_DURABILITY, itemProto->GetMaxDurabilityForUpdateField());
 
     for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
         SetSpellCharges(i, itemProto->Spells[i].SpellCharges);
@@ -526,10 +526,10 @@ bool Item::LoadFromDB(ObjectGuid::LowType guid, ObjectGuid owner_guid, Field* fi
 
     // update max durability (and durability) if need
     // xinef: do not overwrite durability for wrapped items!!
-    SetUInt32Value(ITEM_FIELD_MAXDURABILITY, proto->MaxDurability);
+    SetUInt32Value(ITEM_FIELD_MAXDURABILITY, proto->GetMaxDurabilityForUpdateField());
     if (durability > proto->MaxDurability && !IsWrapped())
     {
-        SetUInt32Value(ITEM_FIELD_DURABILITY, proto->MaxDurability);
+        SetUInt32Value(ITEM_FIELD_DURABILITY, proto->GetMaxDurabilityForUpdateField());
         need_save = true;
     }
 

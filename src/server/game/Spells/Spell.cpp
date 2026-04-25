@@ -48,6 +48,7 @@
 #include "TemporarySummon.h"
 #include "Unit.h"
 #include "Util.h"
+#include <limits>
 #include "VMapFactory.h"
 #include "Vehicle.h"
 #include "World.h"
@@ -2259,12 +2260,14 @@ void Spell::SearchChainTargets(std::list<WorldObject*>& targets, uint32 chainTar
         // get unit with highest hp deficit in dist
         if (isChainHeal)
         {
-            uint32 maxHPDeficit = 0;
+            uint64 maxHPDeficit = 0;
             for (std::list<WorldObject*>::iterator itr = tempTargets.begin(); itr != tempTargets.end(); ++itr)
             {
                 if (Unit* unit = (*itr)->ToUnit())
                 {
-                    uint32 deficit = unit->GetMaxHealth() - unit->GetHealth();
+                    uint64 const maxHealth = unit->GetMaxHealthForCombat();
+                    uint64 const curHealth = unit->GetHealthForCombat();
+                    uint64 deficit = maxHealth > curHealth ? maxHealth - curHealth : 0;
                     if (deficit > maxHPDeficit && target->IsWithinDist(unit, jumpRadius) && target->IsWithinLOSInMap(unit, VMAP::ModelIgnoreFlags::M2))
                     {
                         foundItr = itr;
@@ -2788,7 +2791,7 @@ void Spell::DoAllEffectOnTarget(TargetInfo* target)
     if (m_healing > 0)
     {
         bool crit = target->crit;
-        uint32 addhealth = m_healing;
+        uint64 addhealth = static_cast<uint64>(m_healing);
 
         if (crit)
         {
@@ -2807,7 +2810,7 @@ void Spell::DoAllEffectOnTarget(TargetInfo* target)
             procEx |= PROC_EX_CRITICAL_HIT;
         }
 
-        int32 gain = caster->HealBySpell(healInfo, crit);
+        int64 gain = caster->HealBySpell(healInfo, crit);
         unitTarget->getHostileRefMgr().threatAssist(caster, float(gain) * 0.5f, m_spellInfo);
         m_healing = gain;
 
@@ -2817,7 +2820,7 @@ void Spell::DoAllEffectOnTarget(TargetInfo* target)
 
         // Do triggers for unit (reflect triggers passed on hit phase for correct drop charge)
         if (canEffectTrigger)
-            Unit::ProcDamageAndSpell(caster, unitTarget, procAttacker, procVictim, procEx, addhealth, m_attackType, m_spellInfo, m_triggeredByAuraSpell.spellInfo,
+            Unit::ProcDamageAndSpell(caster, unitTarget, procAttacker, procVictim, procEx, uint32(std::min<uint64>(addhealth, std::numeric_limits<uint32>::max())), m_attackType, m_spellInfo, m_triggeredByAuraSpell.spellInfo,
                 m_triggeredByAuraSpell.effectIndex, this, nullptr, &healInfo);
     }
     // Do damage and triggers
@@ -2866,7 +2869,8 @@ void Spell::DoAllEffectOnTarget(TargetInfo* target)
             float healMultiplier = m_spellInfo->Effects[effIndex].CalcValueMultiplier(m_originalCaster, this);
 
             // get max possible damage, don't count overkill for heal
-            uint32 healthGain = uint32(-unitTarget->GetHealthGain(-int32(damageInfo.damage)) * healMultiplier);
+            int64 leechDamage = damageInfo.damage > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(damageInfo.damage);
+            uint64 healthGain = static_cast<uint64>(static_cast<long double>(-unitTarget->GetHealthGain(-leechDamage)) * static_cast<long double>(healMultiplier));
 
             if (m_caster->IsAlive())
             {
@@ -7191,7 +7195,7 @@ SpellCastResult Spell::CheckPower()
     // health as power used - need check health amount
     if (m_spellInfo->PowerType == POWER_HEALTH)
     {
-        if (int32(m_caster->GetHealth()) <= m_powerCost)
+        if (m_caster->GetHealthForCombat() <= static_cast<uint64>(m_powerCost > 0 ? m_powerCost : 0))
             return SPELL_FAILED_CASTER_AURASTATE;
         return SPELL_CAST_OK;
     }
@@ -8392,7 +8396,15 @@ void Spell::DoAllEffectOnLaunchTarget(TargetInfo& targetInfo, float* multiplier)
 
             if (m_applyMultiplierMask & (1 << i))
             {
-                m_damage = int32(m_damage * m_damageMultipliers[i]);
+                long double scaledDamage = static_cast<long double>(m_damage) * static_cast<long double>(m_damageMultipliers[i]);
+                if (std::isnan(static_cast<double>(scaledDamage)))
+                    m_damage = 0;
+                else if (scaledDamage > static_cast<long double>(std::numeric_limits<int64>::max()))
+                    m_damage = std::numeric_limits<int64>::max();
+                else if (scaledDamage < static_cast<long double>(std::numeric_limits<int64>::min()))
+                    m_damage = std::numeric_limits<int64>::min();
+                else
+                    m_damage = static_cast<int64>(scaledDamage);
                 m_damageMultipliers[i] *= multiplier[i];
             }
             targetInfo.damage += m_damage;

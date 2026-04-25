@@ -23,16 +23,16 @@ DROP TABLE IF EXISTS `creature_classlevelstats`;
 CREATE TABLE `creature_classlevelstats` (
   `level` tinyint unsigned NOT NULL,
   `class` tinyint unsigned NOT NULL,
-  `basehp0` int unsigned NOT NULL DEFAULT '1',
-  `basehp1` int unsigned NOT NULL DEFAULT '1',
-  `basehp2` int unsigned NOT NULL DEFAULT '1',
-  `basemana` int unsigned NOT NULL DEFAULT '0',
-  `basearmor` int unsigned NOT NULL DEFAULT '1',
-  `attackpower` int unsigned NOT NULL DEFAULT '0',
-  `rangedattackpower` int unsigned NOT NULL DEFAULT '0',
-  `damage_base` float NOT NULL DEFAULT '0',
-  `damage_exp1` float NOT NULL DEFAULT '0',
-  `damage_exp2` float NOT NULL DEFAULT '0',
+  `basehp0` bigint unsigned NOT NULL DEFAULT '1',
+  `basehp1` bigint unsigned NOT NULL DEFAULT '1',
+  `basehp2` bigint unsigned NOT NULL DEFAULT '1',
+  `basemana` bigint unsigned NOT NULL DEFAULT '0',
+  `basearmor` double NOT NULL DEFAULT '1',
+  `attackpower` bigint unsigned NOT NULL DEFAULT '0',
+  `rangedattackpower` bigint unsigned NOT NULL DEFAULT '0',
+  `damage_base` double NOT NULL DEFAULT '0',
+  `damage_exp1` double NOT NULL DEFAULT '0',
+  `damage_exp2` double NOT NULL DEFAULT '0',
   `comment` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
   PRIMARY KEY (`level`,`class`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -457,4 +457,3 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2024-12-17 22:33:32
-

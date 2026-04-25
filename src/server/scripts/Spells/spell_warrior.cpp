@@ -260,7 +260,7 @@ class spell_warr_deep_wounds : public SpellScript
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
-        int32 damage = std::max(GetEffectValue(), 0);
+        int32 damage = std::max<int32>(GetEffectValue(), 0);
         Unit* caster = GetCaster();
         if (Unit* target = GetHitUnit())
         {

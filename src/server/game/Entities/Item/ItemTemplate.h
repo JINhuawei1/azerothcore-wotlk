@@ -20,6 +20,7 @@
 
 #include "SharedDefines.h"
 #include "WorldPacket.h"
+#include <limits>
 #include <unordered_map>
 
 enum ItemModType
@@ -576,15 +577,15 @@ inline uint8 ItemSubClassToDurabilityMultiplierId(uint32 ItemClass, uint32 ItemS
 
 struct _Damage
 {
-    float   DamageMin;
-    float   DamageMax;
+    double  DamageMin;
+    double  DamageMax;
     uint32  DamageType;                                     // id from Resistances.dbc
 };
 
 struct _ItemStat
 {
     uint32  ItemStatType;
-    int32   ItemStatValue;
+    int64   ItemStatValue;
 };
 struct _Spell
 {
@@ -627,8 +628,8 @@ struct ItemTemplate
     ItemFlags  Flags;
     ItemFlags2 Flags2;
     uint32 BuyCount;
-    int32  BuyPrice;
-    uint32 SellPrice;
+    int64  BuyPrice;
+    uint64 SellPrice;
     uint32 InventoryType;
     uint32 AllowableClass;
     uint32 AllowableRace;
@@ -647,9 +648,9 @@ struct ItemTemplate
     uint32 StatsCount;
     _ItemStat ItemStat[MAX_ITEM_PROTO_STATS];
     uint32 ScalingStatDistribution;                         // id from ScalingStatDistribution.dbc
-    uint32 ScalingStatValue;                                // mask for selecting column in ScalingStatValues.dbc
+    uint64 ScalingStatValue;                                // mask for selecting column in ScalingStatValues.dbc
     _Damage Damage[MAX_ITEM_PROTO_DAMAGES];
-    uint32 Armor;
+    uint64 Armor;
     int32 HolyRes;
     int32 FireRes;
     int32 NatureRes;
@@ -673,7 +674,7 @@ struct ItemTemplate
     int32  RandomSuffix;                                    // id from ItemRandomSuffix.dbc
     uint32 Block;
     uint32 ItemSet;                                         // id from ItemSet.dbc
-    uint32 MaxDurability;
+    uint64 MaxDurability;
     uint32 Area;                                            // id from AreaTable.dbc
     uint32 Map;                                             // id from Map.dbc
     uint32 BagFamily;                                       // bit mask (1 << id from ItemBagFamily.dbc)
@@ -682,19 +683,23 @@ struct ItemTemplate
     uint32 socketBonus;                                     // id from SpellItemEnchantment.dbc
     uint32 GemProperties;                                   // id from GemProperties.dbc
     uint32 RequiredDisenchantSkill;
-    float  ArmorDamageModifier;
+    double ArmorDamageModifier;
     uint32  Duration;
     uint32 ItemLimitCategory;                               // id from ItemLimitCategory.dbc
     uint32 HolidayId;                                       // id from Holidays.dbc
     uint32 ScriptId;
     uint32 DisenchantID;
     uint32 FoodType;
-    uint32 MinMoneyLoot;
-    uint32 MaxMoneyLoot;
+    uint64 MinMoneyLoot;
+    uint64 MaxMoneyLoot;
     ItemFlagsCustom FlagsCu;
     WorldPacket queryData;                                  // pussywizard
 
     // helpers
+    [[nodiscard]] uint32 GetMaxDurabilityForUpdateField() const
+    {
+        return MaxDurability > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(MaxDurability);
+    }
     [[nodiscard]] bool HasSignature() const
     {
         return GetMaxStackSize() == 1 &&

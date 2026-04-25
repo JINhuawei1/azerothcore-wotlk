@@ -48,6 +48,7 @@
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSessionMgr.h"
+#include <limits>
 
 /// @todo: this import is not necessary for compilation and marked as unused by the IDE
 //  however, for some reasons removing it would cause a damn linking issue
@@ -58,6 +59,14 @@
 CreatureMovementData::CreatureMovementData() : Ground(CreatureGroundMovementType::Run), Flight(CreatureFlightMovementType::None),
                                                Swim(true), Rooted(false), Chase(CreatureChaseMovementType::Run),
                                                Random(CreatureRandomMovementType::Walk), InteractionPauseTimer(sWorld->getIntConfig(CONFIG_CREATURE_STOP_FOR_PLAYER)) {}
+
+namespace
+{
+uint32 ToCreatureUpdateFieldValue(uint64 value)
+{
+    return value > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(value);
+}
+}
 
 std::string CreatureMovementData::ToString() const
 {
@@ -599,7 +608,7 @@ bool Creature::UpdateEntry(uint32 Entry, const CreatureData* data, bool changele
 
     SetMeleeDamageSchool(SpellSchools(cInfo->dmgschool));
     CreatureBaseStats const* stats = sObjectMgr->GetCreatureBaseStats(GetLevel(), cInfo->unit_class);
-    float armor = stats->GenerateArmor(cInfo);
+    double armor = stats->GenerateArmor(cInfo);
     SetModifierValue(UNIT_MOD_ARMOR,             BASE_VALUE, armor);
     SetModifierValue(UNIT_MOD_RESISTANCE_HOLY,   BASE_VALUE, float(cInfo->resistance[SPELL_SCHOOL_HOLY]));
     SetModifierValue(UNIT_MOD_RESISTANCE_FIRE,   BASE_VALUE, float(cInfo->resistance[SPELL_SCHOOL_FIRE]));
@@ -1542,8 +1551,9 @@ void Creature::SelectLevel(bool changelevel)
     // health
     float healthmod = _GetHealthMod(rank);
 
-    uint32 basehp = std::max<uint32>(1, stats->GenerateHealth(cInfo));
-    uint32 health = uint32(basehp * healthmod);
+    uint64 basehp = std::max<uint64>(1, stats->GenerateHealth(cInfo));
+    uint64 health64 = uint64(static_cast<long double>(basehp) * static_cast<long double>(healthmod));
+    uint32 health = ToCreatureUpdateFieldValue(health64);
 
     SetCreateHealth(health);
     SetMaxHealth(health);
@@ -1551,7 +1561,7 @@ void Creature::SelectLevel(bool changelevel)
     ResetPlayerDamageReq();
 
     // mana
-    uint32 mana = stats->GenerateMana(cInfo);
+    uint32 mana = ToCreatureUpdateFieldValue(stats->GenerateMana(cInfo));
 
     SetCreateMana(mana);
     SetMaxPower(POWER_MANA, mana);                          //MAX Mana

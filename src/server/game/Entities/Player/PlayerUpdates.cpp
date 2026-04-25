@@ -81,6 +81,7 @@ void Player::Update(uint32 p_time)
     SetMustDelayTeleport(true);
     ProcessSpellQueue();
     Unit::Update(p_time);
+    ApplyPendingClientHealthSync();
     SetMustDelayTeleport(false);
 
     time_t now = GameTime::GetGameTime().count();
@@ -609,7 +610,18 @@ void Player::UpdateDefense()
 
 void Player::UpdateRating(CombatRating cr)
 {
-    int32 amount = m_baseRatingValue[cr];
+    auto clampClientRating = [](int64 value) -> int32
+    {
+        constexpr int32 MAX_SAFE_RATING = 2000000000;
+        if (value <= 0)
+            return 0;
+        if (value > MAX_SAFE_RATING)
+            return MAX_SAFE_RATING;
+        return static_cast<int32>(value);
+    };
+
+    int32 amount = clampClientRating(m_baseRatingValue[cr]);
+    int64 extendedAmount = _extendedBaseRatingValue[cr] > 0 ? _extendedBaseRatingValue[cr] : m_baseRatingValue[cr];
     // Apply bonus from SPELL_AURA_MOD_RATING_FROM_STAT
     // stat used stored in miscValueB for this aura
     AuraEffectList const& modRatingFromStat =
@@ -617,13 +629,36 @@ void Player::UpdateRating(CombatRating cr)
     for (AuraEffectList::const_iterator i = modRatingFromStat.begin();
          i != modRatingFromStat.end(); ++i)
         if ((*i)->GetMiscValue() & (1 << cr))
-            amount += int32(CalculatePct(GetStat(Stats((*i)->GetMiscValueB())),
-                                         (*i)->GetAmount()));
+        {
+            int64 extendedStatValue = GetExtendedStat(Stats((*i)->GetMiscValueB()));
+            if (extendedStatValue == 0)
+            {
+                int32 displayStatValue = GetStat(Stats((*i)->GetMiscValueB()));
+                if (displayStatValue > 0)
+                    extendedStatValue = static_cast<int64>(displayStatValue);
+            }
+
+            int64 displayRatingBonus = static_cast<int64>(
+                static_cast<long double>(std::max<int32>(GetStat(Stats((*i)->GetMiscValueB())), 0)) *
+                static_cast<long double>((*i)->GetAmount()) / 100.0L);
+            amount = clampClientRating(static_cast<int64>(amount) + displayRatingBonus);
+            extendedAmount += static_cast<int64>(
+                static_cast<long double>(extendedStatValue) *
+                static_cast<long double>((*i)->GetAmount()) / 100.0L);
+        }
     if (amount < 0)
         amount = 0;
+    if (extendedAmount < 0)
+        extendedAmount = 0;
 
     // 调用钩子允许模块修改评级值
+    int32 preHookAmount = amount;
     sScriptMgr->OnPlayerAfterUpdateRating(this, cr, amount);
+    if (extendedAmount > 0 && preHookAmount > 0 && amount != preHookAmount)
+        extendedAmount = static_cast<int64>(static_cast<long double>(extendedAmount) * static_cast<long double>(amount) / static_cast<long double>(preHookAmount));
+    else if (extendedAmount == 0 && amount > 0)
+        extendedAmount = amount;
+    amount = clampClientRating(amount);
 
     // 【重要】在钩子之后应用评级上限限制，防止溢出
     // 从数据库读取对应类型的上限
@@ -633,11 +668,26 @@ void Player::UpdateRating(CombatRating cr)
         if (result)
         {
             Field* fields = result->Fetch();
-            uint32 hitLimit = fields[0].Get<uint32>();
-            if (hitLimit > 0 && amount > static_cast<int32>(hitLimit))
+            int64 hitLimit = fields[0].Get<int64>();
+            if (hitLimit > 0 && amount > clampClientRating(static_cast<int64>(hitLimit)))
             {
-                amount = static_cast<int32>(hitLimit);
+                amount = clampClientRating(static_cast<int64>(hitLimit));
             }
+            if (hitLimit > 0 && extendedAmount > static_cast<int64>(hitLimit))
+                extendedAmount = static_cast<int64>(hitLimit);
+        }
+    }
+    else if (cr == CR_HIT_SPELL)
+    {
+        QueryResult result = WorldDatabase.Query("SELECT `法术命中上限` FROM `_属性调整_职业` WHERE (`class_` = {} OR `class_` = 0) AND `启用` = 1 ORDER BY `class_` DESC LIMIT 1", getClass());
+        if (result)
+        {
+            Field* fields = result->Fetch();
+            int64 hitLimit = fields[0].Get<int64>();
+            if (hitLimit > 0 && amount > clampClientRating(static_cast<int64>(hitLimit)))
+                amount = clampClientRating(static_cast<int64>(hitLimit));
+            if (hitLimit > 0 && extendedAmount > static_cast<int64>(hitLimit))
+                extendedAmount = static_cast<int64>(hitLimit);
         }
     }
     else if (cr == CR_CRIT_TAKEN_MELEE || cr == CR_CRIT_TAKEN_RANGED || cr == CR_CRIT_TAKEN_SPELL)
@@ -647,11 +697,13 @@ void Player::UpdateRating(CombatRating cr)
         if (result)
         {
             Field* fields = result->Fetch();
-            uint32 limit = fields[0].Get<uint32>();
-            if (limit > 0 && amount > static_cast<int32>(limit))
+            int64 limit = fields[0].Get<int64>();
+            if (limit > 0 && amount > clampClientRating(static_cast<int64>(limit)))
             {
-                amount = static_cast<int32>(limit);
+                amount = clampClientRating(static_cast<int64>(limit));
             }
+            if (limit > 0 && extendedAmount > static_cast<int64>(limit))
+                extendedAmount = static_cast<int64>(limit);
         }
     }
     else if (cr == CR_HASTE_MELEE || cr == CR_HASTE_RANGED || cr == CR_HASTE_SPELL)
@@ -661,11 +713,13 @@ void Player::UpdateRating(CombatRating cr)
         if (result)
         {
             Field* fields = result->Fetch();
-            uint32 limit = fields[0].Get<uint32>();
-            if (limit > 0 && amount > static_cast<int32>(limit))
+            int64 limit = fields[0].Get<int64>();
+            if (limit > 0 && amount > clampClientRating(static_cast<int64>(limit)))
             {
-                amount = static_cast<int32>(limit);
+                amount = clampClientRating(static_cast<int64>(limit));
             }
+            if (limit > 0 && extendedAmount > static_cast<int64>(limit))
+                extendedAmount = static_cast<int64>(limit);
         }
     }
     else if (cr == CR_EXPERTISE)
@@ -675,19 +729,17 @@ void Player::UpdateRating(CombatRating cr)
         if (result)
         {
             Field* fields = result->Fetch();
-            uint32 limit = fields[0].Get<uint32>();
-            if (limit > 0 && amount > static_cast<int32>(limit))
+            int64 limit = fields[0].Get<int64>();
+            if (limit > 0 && amount > clampClientRating(static_cast<int64>(limit)))
             {
-                amount = static_cast<int32>(limit);
+                amount = clampClientRating(static_cast<int64>(limit));
             }
+            if (limit > 0 && extendedAmount > static_cast<int64>(limit))
+                extendedAmount = static_cast<int64>(limit);
         }
     }
 
-    // 通用安全上限：防止所有评级溢出（最大 20 亿）
-    constexpr int32 MAX_SAFE_RATING = 2000000000;
-    if (amount > MAX_SAFE_RATING)
-        amount = MAX_SAFE_RATING;
-
+    _extendedCombatRatings[cr] = extendedAmount > 0 ? extendedAmount : 0;
     SetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + static_cast<uint16>(cr), uint32(amount));
 
     bool affectStats = CanModifyStats();
@@ -2040,7 +2092,7 @@ void Player::UpdateCharmedAI()
             if ((*iter)->GetCasterGUID() == charmer->GetGUID() &&
                 (*iter)->GetBase()->IsPermanent())
             {
-                Unit::DealDamage(charmer, this, GetHealth(), nullptr,
+                Unit::DealDamage(charmer, this, GetHealthForCombat(), nullptr,
                                  DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL,
                                  nullptr, false);
                 return;

@@ -22,6 +22,7 @@
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
 #include "UnitAI.h"
+#include <limits>
 /*
  * Scripts for spells with SPELLFAMILY_PALADIN and SPELLFAMILY_GENERIC spells used by paladin players.
  * Ordered alphabetically using scriptname.
@@ -341,13 +342,15 @@ private:
     void Absorb(AuraEffect* aurEff, DamageInfo& dmgInfo, uint32& absorbAmount)
     {
         Unit* victim = GetTarget();
-        int32 remainingHealth = victim->GetHealth() - dmgInfo.GetDamage();
-        uint32 allowedHealth = victim->CountPctFromMaxHealth(35);
+        uint64 victimHealth = victim->GetHealthForCombat();
+        uint64 remainingHealth = victimHealth > dmgInfo.GetDamage() ? victimHealth - dmgInfo.GetDamage() : 0;
+        uint64 allowedHealth = victim->CountPctFromMaxHealth(35);
         // If damage kills us
-        if (remainingHealth <= 0 && !victim->ToPlayer()->HasAura(PAL_SPELL_ARDENT_DEFENDER_DEBUFF))
+        if (!remainingHealth && !victim->ToPlayer()->HasAura(PAL_SPELL_ARDENT_DEFENDER_DEBUFF))
         {
             // Cast healing spell, completely avoid damage
-            absorbAmount = dmgInfo.GetDamage();
+            dmgInfo.AbsorbDamage(dmgInfo.GetDamage());
+            absorbAmount = 0;
 
             uint32 defenseSkillValue = victim->GetDefenseSkillValue();
             // Max heal when defense skill denies critical hits from raid bosses
@@ -357,16 +360,25 @@ private:
                                     ? 1.0f
                                     : float(defenseSkillValue) / float(reqDefForMaxHeal);
 
-            int32 healAmount = int32(victim->CountPctFromMaxHealth(uint32(healPct * pctFromDefense)));
+            uint64 healAmount64 = victim->CountPctFromMaxHealth(uint32(healPct * pctFromDefense));
+            int32 healAmount = healAmount64 > static_cast<uint64>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(healAmount64);
             victim->CastCustomSpell(PAL_SPELL_ARDENT_DEFENDER_HEAL, SPELLVALUE_BASE_POINT0, healAmount, victim, true, nullptr, aurEff);
+            if (Player* player = victim->ToPlayer())
+                if (player->GetExtendedMaxHealth() > player->GetMaxHealth() && player->GetExtendedHealth() < healAmount64)
+                {
+                    player->SetExtendedHealth(healAmount64);
+                    player->SyncClientHealthFromExtended();
+                }
         }
-        else if (remainingHealth < int32(allowedHealth))
+        else if (remainingHealth < allowedHealth)
         {
             // Reduce damage that brings us under 35% (or full damage if we are already under 35%) by x%
-            uint32 damageToReduce = (victim->GetHealth() < allowedHealth)
+            uint64 damageToReduce = (victimHealth < allowedHealth)
                                     ? dmgInfo.GetDamage()
                                     : allowedHealth - remainingHealth;
-            absorbAmount = CalculatePct(damageToReduce, absorbPct);
+            uint64 amountToAbsorb = CalculatePct(damageToReduce, absorbPct);
+            dmgInfo.AbsorbDamage(amountToAbsorb);
+            absorbAmount = 0;
         }
     }
 

@@ -48,6 +48,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "OutdoorPvP.h"
+#include <limits>
 #include "PassiveAI.h"
 #include "Pet.h"
 #include "PetAI.h"
@@ -109,7 +110,55 @@ static bool isAlwaysTriggeredAura[TOTAL_AURAS];
 // Prepare lists
 static bool procPrepared = InitTriggerAuraData();
 
-DamageInfo::DamageInfo(Unit* _attacker, Unit* _victim, uint32 _damage, SpellInfo const* _spellInfo, SpellSchoolMask _schoolMask, DamageEffectType _damageType, uint32 cleanDamage)
+namespace
+{
+    constexpr char PlayerAttributePanelAddonPrefix[] = "PATTRPANEL";
+
+    uint32 ToUInt32Damage(uint64 damage)
+    {
+        return damage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(damage);
+    }
+
+    int32 ToInt32Damage(uint64 damage)
+    {
+        return damage > static_cast<uint64>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(damage);
+    }
+
+    uint64 ToUInt64Damage(long double damage)
+    {
+        if (damage <= 0.0L || std::isnan(static_cast<double>(damage)))
+            return 0;
+
+        if (damage > static_cast<long double>(std::numeric_limits<uint64>::max()))
+            return std::numeric_limits<uint64>::max();
+
+        return static_cast<uint64>(damage);
+    }
+
+    void SendPlayerAttributePanelDamage(Unit* attacker, Unit* victim, uint64 damage, DamageEffectType damageType, SpellSchoolMask schoolMask, SpellInfo const* spellInfo, CleanDamage const* cleanDamage)
+    {
+        if (!attacker || !victim || attacker == victim || !damage || damageType == NODAMAGE || damageType == SELF_DAMAGE)
+            return;
+
+        Player* player = attacker->GetCharmerOrOwnerPlayerOrPlayerItself();
+        if (!player || !player->GetSession())
+            return;
+
+        bool critical = cleanDamage && cleanDamage->hitOutCome == MELEE_HIT_CRIT;
+        uint32 spellId = spellInfo ? spellInfo->Id : 0;
+
+        std::string payload = "DMG:" + std::to_string(damage) + ":" + (critical ? "1" : "0") + ":" +
+            std::to_string(static_cast<uint32>(schoolMask)) + ":" + std::to_string(spellId) + ":" +
+            std::to_string(static_cast<uint32>(damageType));
+        std::string fullMessage = std::string(PlayerAttributePanelAddonPrefix) + '\t' + payload;
+
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
+        player->SendDirectMessage(&data);
+    }
+}
+
+DamageInfo::DamageInfo(Unit* _attacker, Unit* _victim, uint64 _damage, SpellInfo const* _spellInfo, SpellSchoolMask _schoolMask, DamageEffectType _damageType, uint64 cleanDamage)
     : m_attacker(_attacker), m_victim(_victim), m_damage(_damage), m_spellInfo(_spellInfo), m_schoolMask(_schoolMask),
       m_damageType(_damageType), m_attackType(BASE_ATTACK), m_cleanDamage(cleanDamage)
 {
@@ -123,9 +172,13 @@ DamageInfo::DamageInfo(CalcDamageInfo const& dmgInfo) : DamageInfo(DamageInfo(dm
 }
 
 DamageInfo::DamageInfo(DamageInfo const& dmg1, DamageInfo const& dmg2)
-    : m_attacker(dmg1.m_attacker), m_victim(dmg1.m_victim), m_damage(dmg1.m_damage + dmg2.m_damage), m_spellInfo(dmg1.m_spellInfo), m_schoolMask(SpellSchoolMask(dmg1.m_schoolMask | dmg2.m_schoolMask)),
-    m_damageType(dmg1.m_damageType), m_attackType(dmg1.m_attackType), m_absorb(dmg1.m_absorb + dmg2.m_absorb), m_resist(dmg1.m_resist + dmg2.m_resist), m_block(dmg1.m_block),
-    m_cleanDamage(dmg1.m_cleanDamage + dmg1.m_cleanDamage)
+    : m_attacker(dmg1.m_attacker), m_victim(dmg1.m_victim),
+    m_damage(dmg2.m_damage > std::numeric_limits<uint64>::max() - dmg1.m_damage ? std::numeric_limits<uint64>::max() : dmg1.m_damage + dmg2.m_damage),
+    m_spellInfo(dmg1.m_spellInfo), m_schoolMask(SpellSchoolMask(dmg1.m_schoolMask | dmg2.m_schoolMask)),
+    m_damageType(dmg1.m_damageType), m_attackType(dmg1.m_attackType),
+    m_absorb(dmg2.m_absorb > std::numeric_limits<uint64>::max() - dmg1.m_absorb ? std::numeric_limits<uint64>::max() : dmg1.m_absorb + dmg2.m_absorb),
+    m_resist(dmg2.m_resist > std::numeric_limits<uint64>::max() - dmg1.m_resist ? std::numeric_limits<uint64>::max() : dmg1.m_resist + dmg2.m_resist), m_block(dmg1.m_block),
+    m_cleanDamage(dmg2.m_cleanDamage > std::numeric_limits<uint64>::max() - dmg1.m_cleanDamage ? std::numeric_limits<uint64>::max() : dmg1.m_cleanDamage + dmg2.m_cleanDamage)
 {
 }
 
@@ -144,36 +197,46 @@ DamageInfo::DamageInfo(SpellNonMeleeDamage const& spellNonMeleeDamage, DamageEff
 {
 }
 
-void DamageInfo::ModifyDamage(int32 amount)
+void DamageInfo::ModifyDamage(int64 amount)
 {
-    amount = std::min(amount, int32(GetDamage()));
-    m_damage += amount;
+    if (amount < 0)
+    {
+        uint64 reduction = amount == std::numeric_limits<int64>::min() ? static_cast<uint64>(std::numeric_limits<int64>::max()) + 1 : static_cast<uint64>(-amount);
+        m_damage = reduction > m_damage ? 0 : m_damage - reduction;
+        return;
+    }
+
+    uint64 addAmount = static_cast<uint64>(amount);
+    m_damage = addAmount > std::numeric_limits<uint64>::max() - m_damage ? std::numeric_limits<uint64>::max() : m_damage + addAmount;
 }
 
-void DamageInfo::AbsorbDamage(uint32 amount)
+void DamageInfo::AbsorbDamage(uint64 amount)
 {
     amount = std::min(amount, GetDamage());
-    m_absorb += amount;
+    m_absorb = amount > std::numeric_limits<uint64>::max() - m_absorb ? std::numeric_limits<uint64>::max() : m_absorb + amount;
     m_damage -= amount;
 }
 
-void DamageInfo::ResistDamage(uint32 amount)
+void DamageInfo::ResistDamage(uint64 amount)
 {
     amount = std::min(amount, GetDamage());
-    m_resist += amount;
+    m_resist = amount > std::numeric_limits<uint64>::max() - m_resist ? std::numeric_limits<uint64>::max() : m_resist + amount;
     m_damage -= amount;
 }
 
-void DamageInfo::BlockDamage(uint32 amount)
+void DamageInfo::BlockDamage(uint64 amount)
 {
     amount = std::min(amount, GetDamage());
-    m_block += amount;
+    m_block = amount > std::numeric_limits<uint64>::max() - m_block ? std::numeric_limits<uint64>::max() : m_block + amount;
     m_damage -= amount;
 }
 
-uint32 DamageInfo::GetUnmitigatedDamage() const
+uint64 DamageInfo::GetUnmitigatedDamage() const
 {
-    return m_damage + m_cleanDamage + m_absorb + m_resist;
+    uint64 value = m_damage;
+    value = m_cleanDamage > std::numeric_limits<uint64>::max() - value ? std::numeric_limits<uint64>::max() : value + m_cleanDamage;
+    value = m_absorb > std::numeric_limits<uint64>::max() - value ? std::numeric_limits<uint64>::max() : value + m_absorb;
+    return m_resist > std::numeric_limits<uint64>::max() - value ? std::numeric_limits<uint64>::max() : value + m_resist;
 }
 
 ProcEventInfo::ProcEventInfo(Unit* actor, Unit* actionTarget, Unit* procTarget, uint32 typeMask, uint32 spellTypeMask, uint32 spellPhaseMask, uint32 hitMask, Spell const* spell, DamageInfo* damageInfo, HealInfo* healInfo, SpellInfo const* triggeredByAuraSpell, int8 procAuraEffectIndex)
@@ -799,7 +862,7 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
                || HasBreakableByDamageAuraType(SPELL_AURA_TRANSFORM, excludeAura));
 }
 
-void Unit::DealDamageMods(Unit const* victim, uint32& damage, uint32* absorb)
+void Unit::DealDamageMods(Unit const* victim, uint64& damage, uint64* absorb)
 {
     if (!victim || !victim->IsAlive() || victim->IsInFlight() || (victim->IsCreature() && victim->ToCreature()->IsEvadingAttacks()))
     {
@@ -809,23 +872,37 @@ void Unit::DealDamageMods(Unit const* victim, uint32& damage, uint32* absorb)
     }
 }
 
-uint32 Unit::DealDamage(Unit* attacker, Unit* victim, uint32 damage, CleanDamage const* cleanDamage, DamageEffectType damagetype, SpellSchoolMask damageSchoolMask, SpellInfo const* spellProto, bool durabilityLoss, bool /*allowGM*/, Spell const* damageSpell /*= nullptr*/)
+void Unit::DealDamageMods(Unit const* victim, uint32& damage, uint32* absorb)
+{
+    uint64 wideDamage = damage;
+    uint64 wideAbsorb = absorb ? *absorb : 0;
+    Unit::DealDamageMods(victim, wideDamage, absorb ? &wideAbsorb : nullptr);
+    damage = ToUInt32Damage(wideDamage);
+    if (absorb)
+        *absorb = ToUInt32Damage(wideAbsorb);
+}
+
+uint64 Unit::DealDamage(Unit* attacker, Unit* victim, uint64 damage, CleanDamage const* cleanDamage, DamageEffectType damagetype, SpellSchoolMask damageSchoolMask, SpellInfo const* spellProto, bool durabilityLoss, bool /*allowGM*/, Spell const* damageSpell /*= nullptr*/)
 {
     // Xinef: initialize damage done for rage calculations
     // Xinef: its rare to modify damage in hooks, however training dummy's sets damage to 0
-    uint32 rage_damage = damage + ((cleanDamage != nullptr) ? cleanDamage->absorbed_damage : 0);
+    uint64 absorbedDamage = cleanDamage ? cleanDamage->absorbed_damage : 0;
+    uint64 rage_damage = absorbedDamage > std::numeric_limits<uint64>::max() - damage ? std::numeric_limits<uint64>::max() : damage + absorbedDamage;
+    uint32 scriptDamage = ToUInt32Damage(damage);
 
     //if (attacker)
     {
         if (victim->IsAIEnabled)
-            victim->GetAI()->DamageTaken(attacker, damage, damagetype, damageSchoolMask);
+            victim->GetAI()->DamageTaken(attacker, scriptDamage, damagetype, damageSchoolMask);
 
         if (attacker && attacker->IsAIEnabled)
-            attacker->GetAI()->DamageDealt(victim, damage, damagetype, damageSchoolMask);
+            attacker->GetAI()->DamageDealt(victim, scriptDamage, damagetype, damageSchoolMask);
     }
 
     // Hook for OnDamage Event
-    sScriptMgr->OnDamage(attacker, victim, damage);
+    sScriptMgr->OnDamage(attacker, victim, scriptDamage);
+    if (scriptDamage != ToUInt32Damage(damage))
+        damage = scriptDamage;
 
     if (victim->IsPlayer() && attacker != victim)
     {
@@ -897,10 +974,10 @@ uint32 Unit::DealDamage(Unit* attacker, Unit* victim, uint32 damage, CleanDamage
                 continue;
             SpellInfo const* spell = (*i)->GetSpellInfo();
 
-            uint32 shareDamage = CalculatePct(damage, (*i)->GetAmount());
+            uint64 shareDamage = CalculatePct(damage, (*i)->GetAmount());
 
-            uint32 shareAbsorb = 0;
-            uint32 shareResist = 0;
+            uint64 shareAbsorb = 0;
+            uint64 shareResist = 0;
 
             if (shareDamageTarget->IsImmunedToDamageOrSchool(damageSchoolMask))
             {
@@ -919,7 +996,7 @@ uint32 Unit::DealDamage(Unit* attacker, Unit* victim, uint32 damage, CleanDamage
 
             if (attacker && shareDamageTarget->IsPlayer())
             {
-                attacker->SendSpellNonMeleeDamageLog(shareDamageTarget, spell, shareDamage, damageSchoolMask, shareAbsorb, shareResist, damagetype == DIRECT_DAMAGE, 0, false, true);
+                attacker->SendSpellNonMeleeDamageLog(shareDamageTarget, spell, ToUInt32Damage(shareDamage), damageSchoolMask, ToUInt32Damage(shareAbsorb), ToUInt32Damage(shareResist), damagetype == DIRECT_DAMAGE, 0, false, true);
             }
 
             Unit::DealDamage(attacker, shareDamageTarget, shareDamage, cleanDamage, NODAMAGE, damageSchoolMask, spellProto, false, false, damageSpell);
@@ -940,7 +1017,7 @@ uint32 Unit::DealDamage(Unit* attacker, Unit* victim, uint32 damage, CleanDamage
                     if (cleanDamage->hitOutCome == MELEE_HIT_CRIT)
                         weaponSpeedHitFactor *= 2;
 
-                    attacker->RewardRage(rage_damage, weaponSpeedHitFactor, true);
+                    attacker->RewardRage(ToUInt32Damage(rage_damage), weaponSpeedHitFactor, true);
                     break;
                 }
             case RANGED_ATTACK:
@@ -956,10 +1033,10 @@ uint32 Unit::DealDamage(Unit* attacker, Unit* victim, uint32 damage, CleanDamage
         if (cleanDamage && cleanDamage->absorbed_damage)
         {
             if (victim->HasActivePowerType(POWER_RAGE))
-                victim->RewardRage(cleanDamage->absorbed_damage, 0, false);
+                victim->RewardRage(ToUInt32Damage(cleanDamage->absorbed_damage), 0, false);
 
             if (attacker && attacker->HasActivePowerType(POWER_RAGE))
-                attacker->RewardRage(cleanDamage->absorbed_damage, 0, true);
+                attacker->RewardRage(ToUInt32Damage(cleanDamage->absorbed_damage), 0, true);
         }
 
         return 0;
@@ -968,20 +1045,23 @@ uint32 Unit::DealDamage(Unit* attacker, Unit* victim, uint32 damage, CleanDamage
     LOG_DEBUG("entities.unit", "DealDamageStart");
 
     uint32 health = victim->GetHealth();
-    LOG_DEBUG("entities.unit", "deal dmg:{} to health:{} ", damage, health);
+    Player* victimPlayer = victim->ToPlayer();
+    bool victimUsesExtendedHealth = victimPlayer && victimPlayer->GetExtendedMaxHealth() > victim->GetMaxHealth();
+    uint64 effectiveHealth = victimUsesExtendedHealth ? victimPlayer->GetExtendedHealth() : health;
+    LOG_DEBUG("entities.unit", "deal dmg:{} to health:{} ", damage, effectiveHealth);
 
     // duel ends when player has 1 or less hp
     bool duel_hasEnded = false;
     bool duel_wasMounted = false;
-    if (victim->IsPlayer() && victim->ToPlayer()->duel && damage >= (health - 1))
+    if (victimPlayer && victimPlayer->duel && effectiveHealth > 1 && damage >= (effectiveHealth - 1))
     {
         // xinef: situation not possible earlier, just return silently.
         if (!attacker)
             return 0;
 
         // prevent kill only if killed in duel and killed by opponent or opponent controlled creature
-        if (victim->ToPlayer()->duel->Opponent == attacker || victim->ToPlayer()->duel->Opponent->GetGUID() == attacker->GetOwnerGUID())
-            damage = health - 1;
+        if (victimPlayer->duel->Opponent == attacker || victimPlayer->duel->Opponent->GetGUID() == attacker->GetOwnerGUID())
+            damage = effectiveHealth - 1;
 
         duel_hasEnded = true;
     }
@@ -1013,8 +1093,8 @@ uint32 Unit::DealDamage(Unit* attacker, Unit* victim, uint32 damage, CleanDamage
 
             if (Battleground* bg = killer->GetBattleground())
             {
-                bg->UpdatePlayerScore(killer, SCORE_DAMAGE_DONE, damage);
-                killer->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_DAMAGE_DONE, damage, 0, victim); // pussywizard: InBattleground() optimization
+                bg->UpdatePlayerScore(killer, SCORE_DAMAGE_DONE, ToUInt32Damage(damage));
+                killer->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_DAMAGE_DONE, ToUInt32Damage(damage), 0, victim); // pussywizard: InBattleground() optimization
             }
             //killer->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HIT_DEALT, damage); // pussywizard: optimization
         }
@@ -1028,7 +1108,7 @@ uint32 Unit::DealDamage(Unit* attacker, Unit* victim, uint32 damage, CleanDamage
 
         if (!attacker || attacker->IsControlledByPlayer() || attacker->IsCreatedByPlayer())
         {
-            uint32 unDamage = health < damage ? health : damage;
+            uint32 unDamage = health < damage ? health : ToUInt32Damage(damage);
             bool damagedByPlayer = unDamage && attacker && (attacker->IsPlayer() || attacker->m_movedByPlayer != nullptr);
             victim->ToCreature()->LowerPlayerDamageReq(unDamage, damagedByPlayer);
         }
@@ -1041,11 +1121,11 @@ uint32 Unit::DealDamage(Unit* attacker, Unit* victim, uint32 damage, CleanDamage
             damage = 0;
 
         uint32 sparringHealth = victim->GetHealth() * (victim->ToCreature()->GetSparringPct() / 100);
-        if (victim->GetHealth() - damage <= sparringHealth)
+        if (static_cast<uint64>(victim->GetHealth()) <= damage + sparringHealth)
             damage = 0;
     }
 
-    if (health <= damage)
+    if (effectiveHealth <= damage)
     {
         LOG_DEBUG("entities.unit", "DealDamage: victim just died");
 
@@ -1060,7 +1140,13 @@ uint32 Unit::DealDamage(Unit* attacker, Unit* victim, uint32 damage, CleanDamage
         //if (victim->IsPlayer())
         //    victim->ToPlayer()->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_TOTAL_DAMAGE_RECEIVED, damage); // pussywizard: optimization
 
-        victim->ModifyHealth(- (int32)damage);
+        if (victimUsesExtendedHealth)
+        {
+            victimPlayer->SetExtendedHealth(effectiveHealth - damage);
+            victimPlayer->SyncClientHealthFromExtended();
+        }
+        else
+            victim->SetHealth(health - ToUInt32Damage(damage));
 
         if (damagetype == DIRECT_DAMAGE || damagetype == SPELL_DIRECT_DAMAGE)
             victim->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_DIRECT_DAMAGE, spellProto ? spellProto->Id : 0);
@@ -1094,7 +1180,9 @@ uint32 Unit::DealDamage(Unit* attacker, Unit* victim, uint32 damage, CleanDamage
         // Rage from damage received
         if (attacker != victim && victim->HasActivePowerType(POWER_RAGE))
         {
-            uint32 rageDamage = damage + (cleanDamage ? cleanDamage->absorbed_damage : 0);
+            uint64 absorbed = cleanDamage ? cleanDamage->absorbed_damage : 0;
+            uint64 rageDamageWide = absorbed > std::numeric_limits<uint64>::max() - damage ? std::numeric_limits<uint64>::max() : damage + absorbed;
+            uint32 rageDamage = ToUInt32Damage(rageDamageWide);
             victim->RewardRage(rageDamage, 0, false);
         }
 
@@ -1152,7 +1240,10 @@ uint32 Unit::DealDamage(Unit* attacker, Unit* victim, uint32 damage, CleanDamage
             if (duel_wasMounted) // In this case victim==mount
                 victim->SetHealth(1);
             else
-                he->SetHealth(1);
+            {
+                he->SetExtendedHealth(1);
+                he->SyncClientHealthFromExtended();
+            }
 
             he->duel->Opponent->CombatStopWithPets(true);
             he->CombatStopWithPets(true);
@@ -1161,6 +1252,8 @@ uint32 Unit::DealDamage(Unit* attacker, Unit* victim, uint32 damage, CleanDamage
             he->DuelComplete(DUEL_WON);
         }
     }
+
+    SendPlayerAttributePanelDamage(attacker, victim, damage, damagetype, damageSchoolMask, spellProto, cleanDamage);
 
     LOG_DEBUG("entities.unit", "DealDamageEnd returned {} damage", damage);
 
@@ -1305,9 +1398,9 @@ SpellCastResult Unit::CastSpell(GameObject* go, uint32 spellId, bool triggered, 
     return CastSpell(targets, spellInfo, nullptr, triggered ? TRIGGERED_FULL_MASK : TRIGGERED_NONE, castItem, triggeredByAura, originalCaster);
 }
 
-void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 damage, SpellInfo const* spellInfo, WeaponAttackType attackType, bool crit)
+void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int64 damage, SpellInfo const* spellInfo, WeaponAttackType attackType, bool crit)
 {
-    if (damage < 0)
+    if (damage <= 0)
         return;
 
     Unit* victim = damageInfo->target;
@@ -1317,19 +1410,27 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 dama
     SpellSchoolMask damageSchoolMask = SpellSchoolMask(damageInfo->schoolMask);
     uint32 crTypeMask = victim->GetCreatureTypeMask();
 
-     // Script Hook For CalculateSpellDamageTaken -- Allow scripts to change the Damage post class mitigation calculations
-    sScriptMgr->ModifySpellDamageTaken(damageInfo->target, damageInfo->attacker, damage, spellInfo);
+    // Script hooks still expose int32 damage, so keep the widened value unless the hook explicitly overrides it.
+    int32 scriptDamage = int32(std::min<int64>(damage, std::numeric_limits<int32>::max()));
+    int32 originalScriptDamage = scriptDamage;
+    sScriptMgr->ModifySpellDamageTaken(damageInfo->target, damageInfo->attacker, scriptDamage, spellInfo);
+    if (scriptDamage != originalScriptDamage)
+        damage = std::max<int64>(0, scriptDamage);
 
     if (victim->GetAI())
     {
-        victim->GetAI()->OnCalculateSpellDamageReceived(damage, this);
+        int32 aiDamage = int32(std::min<int64>(damage, std::numeric_limits<int32>::max()));
+        int32 originalAiDamage = aiDamage;
+        victim->GetAI()->OnCalculateSpellDamageReceived(aiDamage, this);
+        if (aiDamage != originalAiDamage)
+            damage = std::max<int64>(0, aiDamage);
     }
 
-    int32 cleanDamage = 0;
+    int64 cleanDamage = 0;
     if (Unit::IsDamageReducedByArmor(damageSchoolMask, spellInfo))
     {
-        int32 oldDamage = damage;
-        damage = Unit::CalcArmorReducedDamage(this, victim, damage, spellInfo, 0, attackType);
+        int64 oldDamage = damage;
+        damage = static_cast<int64>(std::min<uint64>(Unit::CalcArmorReducedDamage(this, victim, static_cast<uint64>(damage), spellInfo, 0, attackType), static_cast<uint64>(std::numeric_limits<int64>::max())));
         cleanDamage = oldDamage - damage;
     }
 
@@ -1353,11 +1454,11 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 dama
                     damageInfo->HitInfo |= SPELL_HIT_TYPE_CRIT;
 
                     // Calculate crit bonus
-                    uint32 crit_bonus = damage;
+                    long double crit_bonus = static_cast<long double>(damage);
                     // Apply crit_damage bonus for melee spells
                     if (Player* modOwner = GetSpellModOwner())
                         modOwner->ApplySpellMod(spellInfo->Id, SPELLMOD_CRIT_DAMAGE_BONUS, crit_bonus);
-                    damage += crit_bonus;
+                    damage = static_cast<int64>(std::min<long double>(static_cast<long double>(std::numeric_limits<int64>::max()), static_cast<long double>(damage) + crit_bonus));
 
                     // Apply SPELL_AURA_MOD_ATTACKER_RANGED_CRIT_DAMAGE or SPELL_AURA_MOD_ATTACKER_MELEE_CRIT_DAMAGE
                     float critPctDamageMod = 0.0f;
@@ -1383,29 +1484,34 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 dama
                     // double blocked amount if block is critical
                     if (victim->isBlockCritical())
                         damageInfo->blocked *= 2;
-                    if (damage < int32(damageInfo->blocked))
-                        damageInfo->blocked = uint32(damage);
+                    if (damage < int64(damageInfo->blocked))
+                        damageInfo->blocked = static_cast<uint64>(damage);
 
                     damage -= damageInfo->blocked;
                     cleanDamage += damageInfo->blocked;
                 }
 
-                int32 resilienceReduction = damage;
+                int32 resilienceDamage = int32(std::min<int64>(damage, std::numeric_limits<int32>::max()));
+                int32 originalResilienceDamage = resilienceDamage;
                 if (CanApplyResilience())
                 {
                     if (attackType != RANGED_ATTACK)
                     {
-                        Unit::ApplyResilience(victim, nullptr, &resilienceReduction, crit, CR_CRIT_TAKEN_MELEE);
+                        Unit::ApplyResilience(victim, nullptr, &resilienceDamage, crit, CR_CRIT_TAKEN_MELEE);
                     }
                     else
                     {
-                        Unit::ApplyResilience(victim, nullptr, &resilienceReduction, crit, CR_CRIT_TAKEN_RANGED);
+                        Unit::ApplyResilience(victim, nullptr, &resilienceDamage, crit, CR_CRIT_TAKEN_RANGED);
                     }
                 }
 
-                resilienceReduction = damage - resilienceReduction;
-                damage -= resilienceReduction;
-                cleanDamage += resilienceReduction;
+                if (originalResilienceDamage > 0)
+                {
+                    long double reductionRatio = static_cast<long double>(originalResilienceDamage - resilienceDamage) / static_cast<long double>(originalResilienceDamage);
+                    int64 resilienceReduction = std::max<int64>(0, static_cast<int64>(static_cast<long double>(damage) * reductionRatio));
+                    damage -= resilienceReduction;
+                    cleanDamage += resilienceReduction;
+                }
                 break;
             }
         // Magical Attacks
@@ -1416,26 +1522,31 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 dama
                 if (crit)
                 {
                     damageInfo->HitInfo |= SPELL_HIT_TYPE_CRIT;
-                    damage = Unit::SpellCriticalDamageBonus(this, spellInfo, damage, victim);
+                    damage = static_cast<int64>(std::min<uint64>(Unit::SpellCriticalDamageBonus(this, spellInfo, static_cast<uint64>(damage), victim), static_cast<uint64>(std::numeric_limits<int64>::max())));
                 }
 
-                int32 resilienceReduction = damage;
+                int32 resilienceDamage = int32(std::min<int64>(damage, std::numeric_limits<int32>::max()));
+                int32 originalResilienceDamage = resilienceDamage;
                 if (CanApplyResilience())
                 {
-                    Unit::ApplyResilience(victim, nullptr, &resilienceReduction, crit, CR_CRIT_TAKEN_SPELL);
+                    Unit::ApplyResilience(victim, nullptr, &resilienceDamage, crit, CR_CRIT_TAKEN_SPELL);
                 }
 
-                resilienceReduction = damage - resilienceReduction;
-                damage -= resilienceReduction;
-                cleanDamage += resilienceReduction;
+                if (originalResilienceDamage > 0)
+                {
+                    long double reductionRatio = static_cast<long double>(originalResilienceDamage - resilienceDamage) / static_cast<long double>(originalResilienceDamage);
+                    int64 resilienceReduction = std::max<int64>(0, static_cast<int64>(static_cast<long double>(damage) * reductionRatio));
+                    damage -= resilienceReduction;
+                    cleanDamage += resilienceReduction;
+                }
                 break;
             }
         default:
             break;
     }
 
-    damageInfo->cleanDamage = std::max(0, cleanDamage);
-    damageInfo->damage = std::max(0, damage);
+    damageInfo->cleanDamage = static_cast<uint64>(std::max<int64>(0, cleanDamage));
+    damageInfo->damage = static_cast<uint64>(std::max<int64>(0, damage));
 
     // Calculate absorb resist
     if (damageInfo->damage > 0)
@@ -1469,7 +1580,7 @@ void Unit::DealSpellDamage(SpellNonMeleeDamage* damageInfo, bool durabilityLoss,
     }
 
     // Call default DealDamage
-    CleanDamage cleanDamage(damageInfo->cleanDamage, damageInfo->absorb, BASE_ATTACK, MELEE_HIT_NORMAL);
+    CleanDamage cleanDamage(damageInfo->cleanDamage, damageInfo->absorb, BASE_ATTACK, (damageInfo->HitInfo & SPELL_HIT_TYPE_CRIT) ? MELEE_HIT_CRIT : MELEE_HIT_NORMAL);
     Unit::DealDamage(this, victim, damageInfo->damage, &cleanDamage, SPELL_DIRECT_DAMAGE, SpellSchoolMask(damageInfo->schoolMask), spellProto, durabilityLoss, false, spell);
 }
 
@@ -1564,7 +1675,7 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
         SpellSchoolMask schoolMask = SpellSchoolMask(damageInfo->damages[i].damageSchoolMask);
         bool const addPctMods = (schoolMask & SPELL_SCHOOL_MASK_NORMAL);
 
-        uint32 damage = 0;
+        uint64 damage = 0;
         uint8 itemDamagesMask = (IsPlayer()) ? (1 << i) : 0;
 
         damage += CalculateDamage(damageInfo->attackType, false, addPctMods, itemDamagesMask);
@@ -1573,11 +1684,17 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
         damage = damageInfo->target->MeleeDamageBonusTaken(this, damage, damageInfo->attackType, nullptr, schoolMask);
 
         // Script Hook For CalculateMeleeDamage -- Allow scripts to change the Damage pre class mitigation calculations
-        sScriptMgr->ModifyMeleeDamage(damageInfo->target, damageInfo->attacker, damage);
+        uint32 scriptDamage = ToUInt32Damage(damage);
+        sScriptMgr->ModifyMeleeDamage(damageInfo->target, damageInfo->attacker, scriptDamage);
+        if (scriptDamage != ToUInt32Damage(damage))
+            damage = scriptDamage;
 
         if (victim->GetAI())
         {
-            victim->GetAI()->OnCalculateMeleeDamageReceived(damage, this);
+            uint32 aiDamage = ToUInt32Damage(damage);
+            victim->GetAI()->OnCalculateMeleeDamageReceived(aiDamage, this);
+            if (aiDamage != ToUInt32Damage(damage))
+                damage = aiDamage;
         }
 
         // Calculate armor reduction
@@ -1696,7 +1813,7 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
             if (damageInfo->target->isBlockCritical())
                 damageInfo->blocked_amount += damageInfo->blocked_amount;
 
-            uint32 remainingBlock = damageInfo->blocked_amount;
+            uint64 remainingBlock = damageInfo->blocked_amount;
             uint8 fullBlockMask = 0;
             for (uint8 i = 0; i < MAX_ITEM_PROTO_DAMAGES; ++i)
             {
@@ -1737,7 +1854,7 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
 
             for (uint8 i = 0; i < MAX_ITEM_PROTO_DAMAGES; ++i)
             {
-                uint32 reducedDamage = uint32(reducePercent * damageInfo->damages[i].damage);
+                uint64 reducedDamage = ToUInt64Damage(static_cast<long double>(reducePercent) * static_cast<long double>(damageInfo->damages[i].damage));
                 damageInfo->cleanDamage += damageInfo->damages[i].damage - reducedDamage;
                 damageInfo->damages[i].damage = reducedDamage;
             }
@@ -1766,21 +1883,26 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
 
     for (uint8 i = 0; i < MAX_ITEM_PROTO_DAMAGES; ++i)
     {
-        int32 dmg = damageInfo->damages[i].damage;
-        int32 cleanDamage = damageInfo->cleanDamage;
+        int64 dmg = static_cast<int64>(std::min<uint64>(damageInfo->damages[i].damage, static_cast<uint64>(std::numeric_limits<int64>::max())));
+        int64 cleanDamage = static_cast<int64>(std::min<uint64>(damageInfo->cleanDamage, static_cast<uint64>(std::numeric_limits<int64>::max())));
         // attackType is checked already for BASE_ATTACK or OFF_ATTACK so it can't be RANGED_ATTACK here
         if (CanApplyResilience())
         {
-            int32 resilienceReduction = damageInfo->damages[i].damage;
-            Unit::ApplyResilience(victim, nullptr, &resilienceReduction, (damageInfo->hitOutCome == MELEE_HIT_CRIT), CR_CRIT_TAKEN_MELEE);
+            int32 resilienceDamage = ToInt32Damage(damageInfo->damages[i].damage);
+            int32 originalResilienceDamage = resilienceDamage;
+            Unit::ApplyResilience(victim, nullptr, &resilienceDamage, (damageInfo->hitOutCome == MELEE_HIT_CRIT), CR_CRIT_TAKEN_MELEE);
 
-            resilienceReduction = damageInfo->damages[i].damage - resilienceReduction;
-            dmg -= resilienceReduction;
-            cleanDamage += resilienceReduction;
+            if (originalResilienceDamage > 0)
+            {
+                long double reductionRatio = static_cast<long double>(originalResilienceDamage - resilienceDamage) / static_cast<long double>(originalResilienceDamage);
+                int64 resilienceReduction = std::max<int64>(0, static_cast<int64>(static_cast<long double>(dmg) * reductionRatio));
+                dmg -= resilienceReduction;
+                cleanDamage += resilienceReduction;
+            }
         }
 
-        damageInfo->damages[i].damage = std::max(0, dmg);
-        damageInfo->cleanDamage = std::max(0, cleanDamage);
+        damageInfo->damages[i].damage = static_cast<uint64>(std::max<int64>(0, dmg));
+        damageInfo->cleanDamage = static_cast<uint64>(std::max<int64>(0, cleanDamage));
 
         // Calculate absorb resist
         if (damageInfo->damages[i].damage > 0)
@@ -1915,7 +2037,7 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
             case OFF_ATTACK:
             {
                 uint32 weaponSpeedHitFactor = uint32(GetAttackTime(damageInfo->attackType) / 1000.0f * (damageInfo->attackType == BASE_ATTACK ? 3.5f : 1.75f));
-                RewardRage(damageInfo->cleanDamage, weaponSpeedHitFactor, true);
+                RewardRage(ToUInt32Damage(damageInfo->cleanDamage), weaponSpeedHitFactor, true);
                 break;
             }
             default:
@@ -1977,7 +2099,7 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
                 continue;
             }
 
-            uint32 damage = uint32(std::max(0, (*dmgShieldItr)->GetAmount())); // xinef: done calculated at amount calculation
+            uint64 damage = uint32(std::max(0, (*dmgShieldItr)->GetAmount())); // xinef: done calculated at amount calculation
 
             if (Unit* caster = (*dmgShieldItr)->GetCaster())
             {
@@ -1985,7 +2107,7 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
                 damage = this->SpellDamageBonusTaken(caster, i_spellProto, damage, SPELL_DIRECT_DAMAGE);
             }
 
-            uint32 absorb = 0;
+            uint64 absorb = 0;
 
             DamageInfo dmgInfo(victim, this, damage, i_spellProto, i_spellProto->GetSchoolMask(), SPELL_DIRECT_DAMAGE);
             Unit::CalcAbsorbResist(dmgInfo);
@@ -1999,9 +2121,9 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
             data << victim->GetGUID();
             data << GetGUID();
             data << uint32(i_spellProto->Id);
-            data << uint32(damage);                  // Damage
-            int32 overkill = int32(damage) - int32(GetHealth());
-            data << uint32(overkill > 0 ? overkill : 0); // Overkill
+            data << uint32(ToUInt32Damage(damage));  // Damage
+            int64 overkill = int64(std::min<uint64>(damage, static_cast<uint64>(std::numeric_limits<int64>::max()))) - int64(GetHealth());
+            data << uint32(overkill > 0 ? std::min<int64>(overkill, std::numeric_limits<uint32>::max()) : 0); // Overkill
             data << uint32(i_spellProto->GetSchoolMask());
             victim->SendMessageToSet(&data, true);
 
@@ -2041,9 +2163,9 @@ bool Unit::IsDamageReducedByArmor(SpellSchoolMask schoolMask, SpellInfo const* s
     return true;
 }
 
-uint32 Unit::CalcArmorReducedDamage(Unit const* attacker, Unit const* victim, const uint32 damage, SpellInfo const* spellInfo, uint8 attackerLevel, WeaponAttackType /*attackType*/)
+uint64 Unit::CalcArmorReducedDamage(Unit const* attacker, Unit const* victim, uint64 damage, SpellInfo const* spellInfo, uint8 attackerLevel, WeaponAttackType /*attackType*/)
 {
-    float armor = float(victim->GetArmor());
+    double armor = victim->IsPlayer() ? static_cast<double>(victim->ToPlayer()->GetExtendedArmor()) : static_cast<double>(victim->GetArmor());
 
     // Ignore enemy armor by SPELL_AURA_MOD_TARGET_RESISTANCE aura
     if (attacker)
@@ -2052,7 +2174,11 @@ uint32 Unit::CalcArmorReducedDamage(Unit const* attacker, Unit const* victim, co
 
         if (spellInfo)
             if (Player* modOwner = attacker->GetSpellModOwner())
-                modOwner->ApplySpellMod(spellInfo->Id, SPELLMOD_IGNORE_ARMOR, armor);
+            {
+                float armorMod = armor > static_cast<double>(std::numeric_limits<float>::max()) ? std::numeric_limits<float>::max() : static_cast<float>(armor);
+                modOwner->ApplySpellMod(spellInfo->Id, SPELLMOD_IGNORE_ARMOR, armorMod);
+                armor = static_cast<double>(armorMod);
+            }
 
         AuraEffectList const& ResIgnoreAurasAb = attacker->GetAuraEffectsByType(SPELL_AURA_MOD_ABILITY_IGNORE_TARGET_RESIST);
         for (AuraEffectList::const_iterator j = ResIgnoreAurasAb.begin(); j != ResIgnoreAurasAb.end(); ++j)
@@ -2090,37 +2216,37 @@ uint32 Unit::CalcArmorReducedDamage(Unit const* attacker, Unit const* victim, co
                 }
             }
 
-            float maxArmorPen = 0;
+            double maxArmorPen = 0.0;
             if (victim->GetLevel() < 60)
-                maxArmorPen = float(400 + 85 * victim->GetLevel());
+                maxArmorPen = static_cast<double>(400 + 85 * victim->GetLevel());
             else
-                maxArmorPen = 400 + 85 * victim->GetLevel() + 4.5f * 85 * (victim->GetLevel() - 59);
+                maxArmorPen = 400.0 + 85.0 * static_cast<double>(victim->GetLevel()) + 4.5 * 85.0 * static_cast<double>(victim->GetLevel() - 59);
 
             // Cap armor penetration to this number
             maxArmorPen = std::min((armor + maxArmorPen) / 3, armor);
             // Figure out how much armor do we ignore
-            float armorPen = CalculatePct(maxArmorPen, bonusPct + attacker->ToPlayer()->GetRatingBonusValue(CR_ARMOR_PENETRATION));
+            double armorPen = maxArmorPen * static_cast<double>(bonusPct + attacker->ToPlayer()->GetRatingBonusValue(CR_ARMOR_PENETRATION)) / 100.0;
             // Got the value, apply it
             armor -= std::min(armorPen, maxArmorPen);
         }
     }
 
-    if (armor < 0.0f)
-        armor = 0.0f;
+    if (armor < 0.0 || std::isnan(armor))
+        armor = 0.0;
 
-    float levelModifier = attacker ? attacker->GetLevel() : attackerLevel;
+    double levelModifier = attacker ? attacker->GetLevel() : attackerLevel;
     if (levelModifier > 59)
-        levelModifier = levelModifier + (4.5f * (levelModifier - 59));
+        levelModifier = levelModifier + (4.5 * (levelModifier - 59));
 
-    float tmpvalue = 0.1f * armor / (8.5f * levelModifier + 40);
-    tmpvalue = tmpvalue / (1.0f + tmpvalue);
+    double tmpvalue = 0.1 * armor / (8.5 * levelModifier + 40.0);
+    tmpvalue = tmpvalue / (1.0 + tmpvalue);
 
-    if (tmpvalue < 0.0f)
-        tmpvalue = 0.0f;
-    if (tmpvalue > 0.75f)
-        tmpvalue = 0.75f;
+    if (tmpvalue < 0.0 || std::isnan(tmpvalue))
+        tmpvalue = 0.0;
+    if (std::isinf(tmpvalue) || tmpvalue > 0.75)
+        tmpvalue = 0.75;
 
-    return uint32(std::ceil(std::max(damage * (1.0f - tmpvalue), 0.0f)));
+    return ToUInt64Damage(std::ceil(std::max(static_cast<long double>(damage) * (1.0L - static_cast<long double>(tmpvalue)), 0.0L)));
 }
 
 float Unit::GetEffectiveResistChance(Unit const* owner, SpellSchoolMask schoolMask, Unit const* victim)
@@ -2161,7 +2287,7 @@ void Unit::CalcAbsorbResist(DamageInfo& dmgInfo, bool Splited)
 {
     Unit* victim = dmgInfo.GetVictim();
     Unit* attacker = dmgInfo.GetAttacker();
-    uint32 damage = dmgInfo.GetDamage();
+    uint64 damage = dmgInfo.GetDamage();
     SpellSchoolMask schoolMask = dmgInfo.GetSchoolMask();
     SpellInfo const* spellInfo = dmgInfo.GetSpellInfo();
 
@@ -2197,7 +2323,7 @@ void Unit::CalcAbsorbResist(DamageInfo& dmgInfo, bool Splited)
         while (r >= probabilitySum && i < 10)
             probabilitySum += discreteResistProbability[++i];
 
-        float damageResisted = float(damage * i / 10);
+        long double damageResisted = static_cast<long double>(damage) * static_cast<long double>(i) / 10.0L;
 
         if (damageResisted) // if equal to 0, checking these is pointless
         {
@@ -2217,14 +2343,14 @@ void Unit::CalcAbsorbResist(DamageInfo& dmgInfo, bool Splited)
             // pussywizard:
             if (spellInfo && spellInfo->HasAttribute(SPELL_ATTR0_CU_SCHOOLMASK_NORMAL_WITH_MAGIC))
             {
-                uint32 damageAfterArmor = Unit::CalcArmorReducedDamage(attacker, victim, damage, spellInfo, 0, BASE_ATTACK);
-                uint32 armorReduction = damage - damageAfterArmor;
+                uint64 damageAfterArmor = Unit::CalcArmorReducedDamage(attacker, victim, damage, spellInfo, 0, BASE_ATTACK);
+                uint64 armorReduction = damage - damageAfterArmor;
                 if (armorReduction < damageResisted) // pick the lower one, the weakest resistance counts
                     damageResisted = armorReduction;
             }
         }
 
-        dmgInfo.ResistDamage(uint32(damageResisted));
+        dmgInfo.ResistDamage(ToUInt64Damage(damageResisted));
     }
 
     // Ignore Absorption Auras
@@ -2270,12 +2396,10 @@ void Unit::CalcAbsorbResist(DamageInfo& dmgInfo, bool Splited)
             continue;
 
         // get amount which can be still absorbed by the aura
-        int32 currentAbsorb = absorbAurEff->GetAmount();
+        int32 auraAbsorbAmount = absorbAurEff->GetAmount();
+        uint64 currentAbsorb = auraAbsorbAmount > 0 ? static_cast<uint64>(auraAbsorbAmount) : 0;
         // aura with infinite absorb amount - let the scripts handle absorbtion amount, set here to 0 for safety
-        if (currentAbsorb < 0)
-            currentAbsorb = 0;
-
-        uint32 tempAbsorb = uint32(currentAbsorb);
+        uint32 tempAbsorb = ToUInt32Damage(currentAbsorb);
 
         bool defaultPrevented = false;
 
@@ -2286,21 +2410,21 @@ void Unit::CalcAbsorbResist(DamageInfo& dmgInfo, bool Splited)
             continue;
 
         // absorb must be smaller than the damage itself
-        currentAbsorb = RoundToInterval(currentAbsorb, 0, int32(dmgInfo.GetDamage()));
+        currentAbsorb = std::min(currentAbsorb, dmgInfo.GetDamage());
 
         // xinef: do this after absorb is rounded to damage...
         AddPct(currentAbsorb, -auraAbsorbMod);
 
         dmgInfo.AbsorbDamage(currentAbsorb);
 
-        tempAbsorb = currentAbsorb;
+        tempAbsorb = ToUInt32Damage(currentAbsorb);
         absorbAurEff->GetBase()->CallScriptEffectAfterAbsorbHandlers(absorbAurEff, aurApp, dmgInfo, tempAbsorb);
 
         // Check if our aura is using amount to count damage
         if (absorbAurEff->GetAmount() >= 0)
         {
             // Reduce shield amount
-            absorbAurEff->SetAmount(absorbAurEff->GetAmount() - currentAbsorb);
+            absorbAurEff->SetAmount(absorbAurEff->GetAmount() - ToInt32Damage(currentAbsorb));
             // Aura cannot absorb anything more - remove it
             if (absorbAurEff->GetAmount() <= 0)
                 absorbAurEff->GetBase()->Remove(AURA_REMOVE_BY_ENEMY_SPELL);
@@ -2337,7 +2461,7 @@ void Unit::CalcAbsorbResist(DamageInfo& dmgInfo, bool Splited)
             continue;
 
         // absorb must be smaller than the damage itself
-        currentAbsorb = RoundToInterval(currentAbsorb, 0, int32(dmgInfo.GetDamage()));
+        currentAbsorb = RoundToInterval(currentAbsorb, 0, ToInt32Damage(dmgInfo.GetDamage()));
 
         // xinef: do this after absorb is rounded to damage...
         AddPct(currentAbsorb, -auraAbsorbMod);
@@ -2398,13 +2522,13 @@ void Unit::CalcAbsorbResist(DamageInfo& dmgInfo, bool Splited)
             int32 splitDamage = (*itr)->GetAmount();
 
             // absorb must be smaller than the damage itself
-            splitDamage = RoundToInterval(splitDamage, 0, int32(dmgInfo.GetDamage()));
+            splitDamage = RoundToInterval(splitDamage, 0, ToInt32Damage(dmgInfo.GetDamage()));
 
             dmgInfo.AbsorbDamage(splitDamage);
 
-            uint32 splitted = splitDamage;
-            uint32 splitted_absorb = 0;
-            uint32 splitted_resist = 0;
+            uint64 splitted = splitDamage;
+            uint64 splitted_absorb = 0;
+            uint64 splitted_resist = 0;
 
             uint32 procAttacker = 0, procVictim = 0, procEx = PROC_EX_NORMAL_HIT;
             DamageInfo splittedDmgInfo(attacker, caster, splitted, spellInfo, schoolMask, dmgInfo.GetDamageType());
@@ -2425,11 +2549,11 @@ void Unit::CalcAbsorbResist(DamageInfo& dmgInfo, bool Splited)
 
             // create procs
             createProcFlags(spellInfo, BASE_ATTACK, false, procAttacker, procVictim);
-            caster->ProcDamageAndSpellFor(true, attacker, procVictim, procEx, BASE_ATTACK, spellInfo, splitted, nullptr, -1, nullptr, &splittedDmgInfo);
+            caster->ProcDamageAndSpellFor(true, attacker, procVictim, procEx, BASE_ATTACK, spellInfo, ToUInt32Damage(splitted), nullptr, -1, nullptr, &splittedDmgInfo);
 
             if (attacker)
             {
-                attacker->SendSpellNonMeleeDamageLog(caster, (*itr)->GetSpellInfo(), splitted, schoolMask, splitted_absorb, splitted_resist, false, 0, false, true);
+                attacker->SendSpellNonMeleeDamageLog(caster, (*itr)->GetSpellInfo(), ToUInt32Damage(splitted), schoolMask, ToUInt32Damage(splitted_absorb), ToUInt32Damage(splitted_resist), false, 0, false, true);
             }
 
             CleanDamage cleanDamage = CleanDamage(splitted, 0, BASE_ATTACK, MELEE_HIT_NORMAL);
@@ -2462,13 +2586,16 @@ void Unit::CalcAbsorbResist(DamageInfo& dmgInfo, bool Splited)
                 if (!caster->IsWithinDist(victim, splitSpellInfo->GetMaxRange(splitSpellInfo->IsPositive(), caster)))
                     continue;
 
-            uint32 splitDamage = CalculatePct(dmgInfo.GetDamage(), (*itr)->GetAmount());
+            uint64 splitDamage = CalculatePct(dmgInfo.GetDamage(), (*itr)->GetAmount());
             SpellSchoolMask splitSchoolMask  = schoolMask;
 
-            (*itr)->GetBase()->CallScriptEffectSplitHandlers(*itr, aurApp, dmgInfo, splitDamage);
+            uint32 scriptSplitDamage = ToUInt32Damage(splitDamage);
+            (*itr)->GetBase()->CallScriptEffectSplitHandlers(*itr, aurApp, dmgInfo, scriptSplitDamage);
+            if (scriptSplitDamage != ToUInt32Damage(splitDamage))
+                splitDamage = scriptSplitDamage;
 
             // absorb must be smaller than the damage itself
-            splitDamage = RoundToInterval(splitDamage, uint32(0), uint32(dmgInfo.GetDamage()));
+            splitDamage = std::min<uint64>(splitDamage, dmgInfo.GetDamage());
 
             // Roar of Sacrifice, dont absorb it
             if (splitSpellInfo->Id != 53480)
@@ -2476,9 +2603,9 @@ void Unit::CalcAbsorbResist(DamageInfo& dmgInfo, bool Splited)
             else
                 splitSchoolMask = SPELL_SCHOOL_MASK_NATURE;
 
-            uint32 splitted = splitDamage;
-            uint32 splitted_absorb = 0;
-            uint32 splitted_resist = 0;
+            uint64 splitted = splitDamage;
+            uint64 splitted_absorb = 0;
+            uint64 splitted_resist = 0;
 
             uint32 procAttacker = 0, procVictim = 0, procEx = PROC_EX_NORMAL_HIT;
             DamageInfo splittedDmgInfo(attacker, caster, splitted, spellInfo, splitSchoolMask, dmgInfo.GetDamageType());
@@ -2499,11 +2626,11 @@ void Unit::CalcAbsorbResist(DamageInfo& dmgInfo, bool Splited)
 
             // create procs
             createProcFlags(spellInfo, BASE_ATTACK, false, procAttacker, procVictim);
-            caster->ProcDamageAndSpellFor(true, attacker, procVictim, procEx, BASE_ATTACK, spellInfo, splitted);
+            caster->ProcDamageAndSpellFor(true, attacker, procVictim, procEx, BASE_ATTACK, spellInfo, ToUInt32Damage(splitted));
 
             if (attacker)
             {
-                attacker->SendSpellNonMeleeDamageLog(caster, splitSpellInfo, splitted, splitSchoolMask, splitted_absorb, splitted_resist, false, 0, false, true);
+                attacker->SendSpellNonMeleeDamageLog(caster, splitSpellInfo, ToUInt32Damage(splitted), splitSchoolMask, ToUInt32Damage(splitted_absorb), ToUInt32Damage(splitted_resist), false, 0, false, true);
             }
 
             CleanDamage cleanDamage = CleanDamage(splitted, 0, BASE_ATTACK, MELEE_HIT_NORMAL);
@@ -2517,8 +2644,8 @@ void Unit::CalcHealAbsorb(HealInfo& healInfo)
     if (!healInfo.GetHeal())
         return;
 
-    int32 const healing = static_cast<int32>(healInfo.GetHeal());
-    int32 absorbAmount = 0;
+    int64 const healing = healInfo.GetHeal() > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(healInfo.GetHeal());
+    int64 absorbAmount = 0;
 
     // Need remove expired auras after
     bool existExpired = false;
@@ -2531,7 +2658,7 @@ void Unit::CalcHealAbsorb(HealInfo& healInfo)
             continue;
 
         // Max Amount can be absorbed by this aura
-        int32 currentAbsorb = (*i)->GetAmount();
+        int64 currentAbsorb = (*i)->GetAmount();
 
         // Found empty aura (impossible but..)
         if (currentAbsorb <= 0)
@@ -2548,7 +2675,7 @@ void Unit::CalcHealAbsorb(HealInfo& healInfo)
         absorbAmount += currentAbsorb;
 
         // Reduce shield amount
-        (*i)->SetAmount((*i)->GetAmount() - currentAbsorb);
+        (*i)->SetAmount((*i)->GetAmount() - static_cast<int32>(currentAbsorb));
         // Need remove it later
         if ((*i)->GetAmount() <= 0)
             existExpired = true;
@@ -2661,7 +2788,7 @@ void Unit::AttackerStateUpdate(Unit* victim, WeaponAttackType attType /*= BASE_A
         DealMeleeDamage(&damageInfo, true);
 
         DamageInfo dmgInfo(damageInfo);
-        Unit::ProcDamageAndSpell(damageInfo.attacker, damageInfo.target, damageInfo.procAttacker, damageInfo.procVictim, damageInfo.procEx, dmgInfo.GetDamage(),
+        Unit::ProcDamageAndSpell(damageInfo.attacker, damageInfo.target, damageInfo.procAttacker, damageInfo.procVictim, damageInfo.procEx, ToUInt32Damage(dmgInfo.GetDamage()),
             damageInfo.attackType, nullptr, nullptr, -1, nullptr, &dmgInfo);
 
         if (IsPlayer())
@@ -2829,7 +2956,7 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
     int32 victimMaxSkillValueForLevel = victim->GetMaxSkillValueForLevel(this);
 
     int32 attackerWeaponSkill = GetWeaponSkillValue(attType, victim);
-    int32 victimDefenseSkill = victim->GetDefenseSkillValue(this);
+    int32 victimDefenseSkill = victim->IsPlayer() ? static_cast<int32>(std::min<uint64>(victim->ToPlayer()->GetExtendedDefenseSkillValue(this), static_cast<uint64>(std::numeric_limits<int32>::max()))) : static_cast<int32>(victim->GetDefenseSkillValue(this));
 
     sScriptMgr->OnBeforeRollMeleeOutcomeAgainst(this, victim, attType, attackerMaxSkillValueForLevel, victimMaxSkillValueForLevel, attackerWeaponSkill, victimDefenseSkill, crit_chance, miss_chance, dodge_chance, parry_chance, block_chance);
 
@@ -2996,7 +3123,7 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
     return MELEE_HIT_NORMAL;
 }
 
-uint32 Unit::CalculateDamage(WeaponAttackType attType, bool normalized, bool addTotalPct, uint8 itemDamagesMask /*= 0*/)
+uint64 Unit::CalculateDamage(WeaponAttackType attType, bool normalized, bool addTotalPct, uint8 itemDamagesMask /*= 0*/)
 {
     float minDamage = 0.0f;
     float maxDamage = 0.0f;
@@ -3049,7 +3176,28 @@ uint32 Unit::CalculateDamage(WeaponAttackType attType, bool normalized, bool add
         std::swap(minDamage, maxDamage);
     }
 
-    return urand(uint32(minDamage), uint32(maxDamage));
+    long double minDamageValue = static_cast<long double>(minDamage);
+    long double maxDamageValue = static_cast<long double>(maxDamage);
+    long double maxSupportedDamage = static_cast<long double>(std::numeric_limits<uint64>::max());
+
+    if (minDamageValue < 0.0L || std::isnan(minDamage) || std::isinf(minDamage))
+        minDamageValue = 0.0L;
+    else if (minDamageValue > maxSupportedDamage)
+        minDamageValue = maxSupportedDamage;
+
+    if (maxDamageValue < 0.0L || std::isnan(maxDamage) || std::isinf(maxDamage))
+        maxDamageValue = 0.0L;
+    else if (maxDamageValue > maxSupportedDamage)
+        maxDamageValue = maxSupportedDamage;
+
+    if (minDamageValue > maxDamageValue)
+        std::swap(minDamageValue, maxDamageValue);
+
+    if (maxDamageValue <= minDamageValue)
+        return ToUInt64Damage(minDamageValue);
+
+    long double roll = minDamageValue + ((maxDamageValue - minDamageValue) * static_cast<long double>(rand_norm()));
+    return ToUInt64Damage(roll);
 }
 
 float Unit::CalculateLevelPenalty(SpellInfo const* spellProto) const
@@ -3644,11 +3792,11 @@ uint32 Unit::GetDefenseSkillValue(Unit const* target) const
     if (IsPlayer())
     {
         // in PvP use full skill instead current skill value
-        uint32 value = (target && target->IsPlayer())
-                       ? ToPlayer()->GetMaxSkillValue(SKILL_DEFENSE)
-                       : ToPlayer()->GetSkillValue(SKILL_DEFENSE);
-        value += uint32(ToPlayer()->GetRatingBonusValue(CR_DEFENSE_SKILL));
-        return value;
+        uint64 value = ToPlayer()->GetExtendedDefenseSkillValue(target);
+        if (value > std::numeric_limits<uint32>::max())
+            return std::numeric_limits<uint32>::max();
+
+        return static_cast<uint32>(value);
     }
     else
         return GetUnitMeleeSkill(target);
@@ -3794,7 +3942,8 @@ float Unit::GetUnitCriticalChance(WeaponAttackType attackType, Unit const* victi
         Unit::ApplyResilience(victim, &crit, nullptr, false, CR_CRIT_TAKEN_RANGED);
 
     // Apply crit chance from defence skill
-    crit += (int32(GetMaxSkillValueForLevel(victim)) - int32(victim->GetDefenseSkillValue(this))) * 0.04f;
+    double victimDefenseSkill = victim->IsPlayer() ? static_cast<double>(victim->ToPlayer()->GetExtendedDefenseSkillValue(this)) : static_cast<double>(victim->GetDefenseSkillValue(this));
+    crit += static_cast<float>((static_cast<double>(GetMaxSkillValueForLevel(victim)) - victimDefenseSkill) * 0.04);
 
     // xinef: SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE should be calculated at the end
     crit += victim->GetTotalAuraModifier(SPELL_AURA_MOD_ATTACKER_SPELL_AND_WEAPON_CRIT_CHANCE);
@@ -6342,8 +6491,8 @@ void Unit::SendSpellNonMeleeReflectLog(SpellNonMeleeDamage* log, Unit* attacker)
 
     WorldPacket data(SMSG_SPELLNONMELEEDAMAGELOG, (16 + 4 + 4 + 4 + 1 + 4 + 4 + 1 + 1 + 4 + 4 + 1)); // we guess size
     // If we are in cheat mode we swap absorb with damage and set damage to 0, this way we can still debug damage but our HP bar will not drop
-    uint32 damage = log->damage;
-    uint32 absorb = log->absorb;
+    uint32 damage = ToUInt32Damage(log->damage);
+    uint32 absorb = ToUInt32Damage(log->absorb);
     if (log->target->IsPlayer() && log->target->ToPlayer()->GetCommandStatus(CHEAT_GOD))
     {
         absorb = damage;
@@ -6353,14 +6502,14 @@ void Unit::SendSpellNonMeleeReflectLog(SpellNonMeleeDamage* log, Unit* attacker)
     data << attacker->GetPackGUID();
     data << uint32(log->spellInfo->Id);
     data << uint32(damage);                                 // damage amount
-    int32 overkill = damage - log->target->GetHealth();
-    data << uint32(overkill > 0 ? overkill : 0);            // overkill
+    int64 overkill = int64(damage) - int64(log->target->GetHealth());
+    data << uint32(overkill > 0 ? std::min<int64>(overkill, std::numeric_limits<uint32>::max()) : 0); // overkill
     data << uint8 (log->schoolMask);                        // damage school
     data << uint32(absorb);                                 // AbsorbedDamage
-    data << uint32(log->resist);                            // resist
+    data << uint32(ToUInt32Damage(log->resist));            // resist
     data << uint8 (log->physicalLog);                       // if 1, then client show spell name (example: %s's ranged shot hit %s for %u school or %s suffers %u school damage from %s's spell_name
     data << uint8 (log->unused);                            // unused
-    data << uint32(log->blocked);                           // blocked
+    data << uint32(ToUInt32Damage(log->blocked));           // blocked
     data << uint32(log->HitInfo);
     data << uint8 (0);                                      // flag to use extend data
     ToPlayer()->SendDirectMessage(&data);
@@ -6370,8 +6519,8 @@ void Unit::SendSpellNonMeleeDamageLog(SpellNonMeleeDamage* log)
 {
     WorldPacket data(SMSG_SPELLNONMELEEDAMAGELOG, (16 + 4 + 4 + 4 + 1 + 4 + 4 + 1 + 1 + 4 + 4 + 1)); // we guess size
     //IF we are in cheat mode we swap absorb with damage and set damage to 0, this way we can still debug damage but our hp bar will not drop
-    uint32 damage = log->damage;
-    uint32 absorb = log->absorb;
+    uint32 damage = ToUInt32Damage(log->damage);
+    uint32 absorb = ToUInt32Damage(log->absorb);
     if (log->target->IsPlayer() && log->target->ToPlayer()->GetCommandStatus(CHEAT_GOD))
     {
         absorb = damage;
@@ -6381,14 +6530,14 @@ void Unit::SendSpellNonMeleeDamageLog(SpellNonMeleeDamage* log)
     data << log->attacker->GetPackGUID();
     data << uint32(log->spellInfo->Id);
     data << uint32(damage);                                 // damage amount
-    int32 overkill = damage - log->target->GetHealth();
-    data << uint32(overkill > 0 ? overkill : 0);            // overkill
+    int64 overkill = int64(damage) - int64(log->target->GetHealth());
+    data << uint32(overkill > 0 ? std::min<int64>(overkill, std::numeric_limits<uint32>::max()) : 0); // overkill
     data << uint8 (log->schoolMask);                        // damage school
     data << uint32(absorb);                                 // AbsorbedDamage
-    data << uint32(log->resist);                            // resist
+    data << uint32(ToUInt32Damage(log->resist));            // resist
     data << uint8 (log->physicalLog);                       // if 1, then client show spell name (example: %s's ranged shot hit %s for %u school or %s suffers %u school damage from %s's spell_name
     data << uint8 (log->unused);                            // unused
-    data << uint32(log->blocked);                           // blocked
+    data << uint32(ToUInt32Damage(log->blocked));           // blocked
     data << uint32(log->HitInfo);
     data << uint32(log->HitInfo);
     data << uint8(log->HitInfo & (SPELL_HIT_TYPE_CRIT_DEBUG | SPELL_HIT_TYPE_HIT_DEBUG | SPELL_HIT_TYPE_ATTACK_TABLE_DEBUG));
@@ -6544,8 +6693,8 @@ void Unit::SendAttackStateUpdate(CalcDamageInfo* damageInfo)
     for (uint8 i = 0; i < MAX_ITEM_PROTO_DAMAGES; ++i)
     {
         //IF we are in cheat mode we swap absorb with damage and set damage to 0, this way we can still debug damage but our hp bar will not drop
-        tmpDamage[i] = damageInfo->damages[i].damage;
-        tmpAbsorb[i] = damageInfo->damages[i].absorb;
+        tmpDamage[i] = ToUInt32Damage(damageInfo->damages[i].damage);
+        tmpAbsorb[i] = ToUInt32Damage(damageInfo->damages[i].absorb);
         if (damageInfo->target->IsPlayer() && damageInfo->target->ToPlayer()->GetCommandStatus(CHEAT_GOD))
         {
             tmpAbsorb[i] = tmpDamage[i];
@@ -6564,9 +6713,10 @@ void Unit::SendAttackStateUpdate(CalcDamageInfo* damageInfo)
     data << uint32(damageInfo->HitInfo);
     data << damageInfo->attacker->GetPackGUID();
     data << damageInfo->target->GetPackGUID();
-    data << uint32(tmpDamage[0] + tmpDamage[1]);                    // Full damage
-    int32 overkill = tmpDamage[0] + tmpDamage[1] - damageInfo->target->GetHealth();
-    data << uint32(overkill < 0 ? 0 : overkill);                    // Overkill
+    uint64 totalDamage = uint64(tmpDamage[0]) + uint64(tmpDamage[1]);
+    data << uint32(std::min<uint64>(totalDamage, std::numeric_limits<uint32>::max())); // Full damage
+    int64 overkill = int64(totalDamage) - int64(damageInfo->target->GetHealth());
+    data << uint32(overkill < 0 ? 0 : std::min<int64>(overkill, std::numeric_limits<uint32>::max())); // Overkill
     data << uint8(count);                                           // Sub damage count
 
     for (uint32 i = 0; i < count; ++i)
@@ -6588,7 +6738,7 @@ void Unit::SendAttackStateUpdate(CalcDamageInfo* damageInfo)
     {
         for (uint32 i = 0; i < count; ++i)
         {
-            data << uint32(damageInfo->damages[i].resist);          // Resist
+            data << uint32(ToUInt32Damage(damageInfo->damages[i].resist)); // Resist
         }
     }
 
@@ -6597,7 +6747,7 @@ void Unit::SendAttackStateUpdate(CalcDamageInfo* damageInfo)
     data << uint32(0);  // Melee spellid
 
     if (damageInfo->HitInfo & HITINFO_BLOCK)
-        data << uint32(damageInfo->blocked_amount);
+        data << uint32(ToUInt32Damage(damageInfo->blocked_amount));
 
     if (damageInfo->HitInfo & HITINFO_RAGE_GAIN)
         data << uint32(0);
@@ -7969,11 +8119,12 @@ bool Unit::HandleDummyAuraProc(Unit* victim, uint32 damage, AuraEffect* triggere
                                 return false;
                             }
 
-                            uint32 effectiveHeal = healInfo->GetEffectiveHeal();
+                            uint64 effectiveHeal = healInfo->GetEffectiveHeal();
                             if (effectiveHeal)
                             {
                                 // heal amount
-                                basepoints0 = int32(CalculatePct(effectiveHeal, triggerAmount));
+                                uint64 triggeredHeal = CalculatePct(effectiveHeal, triggerAmount);
+                                basepoints0 = triggeredHeal > static_cast<uint64>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(triggeredHeal);
                                 target = this;
 
                                 if (basepoints0)
@@ -10997,24 +11148,27 @@ void Unit::SetCharm(Unit* charm, bool apply)
     }
 }
 
-int32 Unit::DealHeal(Unit* healer, Unit* victim, uint32 addhealth)
+int64 Unit::DealHeal(Unit* healer, Unit* victim, uint64 addhealth)
 {
-    int32 gain = 0;
+    int64 gain = 0;
 
     if (healer)
     {
+        uint32 aiHeal = ToUInt32Damage(addhealth);
+
         if (victim->IsAIEnabled)
-            victim->GetAI()->HealReceived(healer, addhealth);
+            victim->GetAI()->HealReceived(healer, aiHeal);
 
         if (healer->IsAIEnabled)
-            healer->GetAI()->HealDone(victim, addhealth);
+            healer->GetAI()->HealDone(victim, aiHeal);
     }
 
     if (addhealth)
-        gain = victim->ModifyHealth(int32(addhealth));
+        gain = victim->ModifyHealth(addhealth > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(addhealth));
 
     // Hook for OnHeal Event
-    sScriptMgr->OnHeal(healer, victim, (uint32&)gain);
+    uint32 scriptGain = gain > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(std::max<int64>(gain, 0));
+    sScriptMgr->OnHeal(healer, victim, scriptGain);
 
     Unit* unit = healer;
 
@@ -11027,11 +11181,11 @@ int32 Unit::DealHeal(Unit* healer, Unit* victim, uint32 addhealth)
     if (Player* player = unit->ToPlayer())
     {
         if (Battleground* bg = player->GetBattleground())
-            bg->UpdatePlayerScore(player, SCORE_HEALING_DONE, gain);
+            bg->UpdatePlayerScore(player, SCORE_HEALING_DONE, ToUInt32Damage(gain));
 
         // use the actual gain, as the overheal shall not be counted, skip gain 0 (it ignored anyway in to criteria)
         if (gain && player->InBattleground()) // pussywizard: InBattleground() optimization
-            player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_HEALING_DONE, gain, 0, victim);
+            player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_HEALING_DONE, ToUInt32Damage(gain), 0, victim);
 
         //player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HEAL_CASTED, addhealth); // pussywizard: optimization
     }
@@ -11275,31 +11429,32 @@ void Unit::UnsummonAllTotems(bool onDeath /*= false*/)
 
 void Unit::SendHealSpellLog(HealInfo const& healInfo, bool critical)
 {
-    uint32 overheal = healInfo.GetHeal() - healInfo.GetEffectiveHeal();
+    uint64 overheal = healInfo.GetHeal() - healInfo.GetEffectiveHeal();
 
     // we guess size
     WorldPacket data(SMSG_SPELLHEALLOG, (8 + 8 + 4 + 4 + 4 + 4 + 1 + 1));
     data << healInfo.GetTarget()->GetPackGUID();
     data << GetPackGUID();
     data << uint32(healInfo.GetSpellInfo()->Id);
-    data << uint32(healInfo.GetHeal());
-    data << uint32(overheal);
-    data << uint32(healInfo.GetAbsorb()); // Absorb amount
+    data << uint32(ToUInt32Damage(healInfo.GetHeal()));
+    data << uint32(ToUInt32Damage(overheal));
+    data << uint32(ToUInt32Damage(healInfo.GetAbsorb())); // Absorb amount
     data << uint8(critical ? 1 : 0);
     data << uint8(0); // unused
     SendMessageToSet(&data, true);
 }
 
-int32 Unit::HealBySpell(HealInfo& healInfo, bool critical)
+int64 Unit::HealBySpell(HealInfo& healInfo, bool critical)
 {
-    uint32 heal = healInfo.GetHeal();
-    sScriptMgr->ModifyHealReceived(this, healInfo.GetTarget(), heal, healInfo.GetSpellInfo());
-    healInfo.SetHeal(heal);
+    uint64 heal = healInfo.GetHeal();
+    uint32 scriptHeal = ToUInt32Damage(heal);
+    sScriptMgr->ModifyHealReceived(this, healInfo.GetTarget(), scriptHeal, healInfo.GetSpellInfo());
+    healInfo.SetHeal(heal > std::numeric_limits<uint32>::max() && scriptHeal == std::numeric_limits<uint32>::max() ? heal : scriptHeal);
 
     // calculate heal absorb and reduce healing
     CalcHealAbsorb(healInfo);
 
-    int32 gain = Unit::DealHeal(healInfo.GetHealer(), healInfo.GetTarget(), healInfo.GetHeal());
+    int64 gain = Unit::DealHeal(healInfo.GetHealer(), healInfo.GetTarget(), healInfo.GetHeal());
     healInfo.SetEffectiveHeal(gain);
 
     SendHealSpellLog(healInfo, critical);
@@ -11661,7 +11816,7 @@ float Unit::SpellPctDamageModsDone(Unit* victim, SpellInfo const* spellProto, Da
     return DoneTotalMod;
 }
 
-uint32 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, uint32 pdamage, DamageEffectType damagetype, uint8 effIndex, float TotalMod, uint32 stack)
+uint64 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, uint64 pdamage, DamageEffectType damagetype, uint8 effIndex, float TotalMod, uint32 stack)
 {
     if (!spellProto || !victim || damagetype == DIRECT_DAMAGE)
         return pdamage;
@@ -11682,13 +11837,13 @@ uint32 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, uin
         else if (GetEntry() == 27893)
         {
             if (Unit* owner = GetOwner())
-                return owner->SpellDamageBonusDone(victim, spellProto, pdamage, damagetype, TotalMod, stack) / 2;
+                return owner->SpellDamageBonusDone(victim, spellProto, pdamage, damagetype, effIndex, TotalMod, stack) / 2;
         }
     }
 
     // Done total percent damage auras
     float ApCoeffMod = 1.0f;
-    int32 DoneTotal = 0;
+    long double DoneTotal = 0.0L;
     float DoneTotalMod = TotalMod ? TotalMod : SpellPctDamageModsDone(victim, spellProto, damagetype);
 
     // Config : RATE_CREATURE_X_SPELLDAMAGE & Do Not Modify Pet/Guardian/Mind Controled Damage
@@ -11705,7 +11860,7 @@ uint32 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, uin
 
     // done scripted mod (take it from owner)
     Unit* owner = GetOwner() ? GetOwner() : this;
-    int32 DoneAdvertisedBenefit = 0;
+    long double DoneAdvertisedBenefit = 0.0L;
     AuraEffectList const& mOverrideClassScript = owner->GetAuraEffectsByType(SPELL_AURA_OVERRIDE_CLASS_SCRIPTS);
     for (AuraEffectList::const_iterator i = mOverrideClassScript.begin(); i != mOverrideClassScript.end(); ++i)
     {
@@ -11798,7 +11953,7 @@ uint32 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, uin
                 WeaponAttackType attType = (spellProto->IsRangedWeaponSpell() && spellProto->DmgClass != SPELL_DAMAGE_CLASS_MELEE) ? RANGED_ATTACK : BASE_ATTACK;
                 float APbonus = float(victim->GetTotalAuraModifier(attType == BASE_ATTACK ? SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS : SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS));
                 APbonus += GetTotalAttackPowerValue(attType);
-                DoneTotal += int32(bonus->ap_dot_bonus * stack * ApCoeffMod * APbonus);
+                DoneTotal += static_cast<long double>(bonus->ap_dot_bonus) * stack * ApCoeffMod * APbonus;
             }
         }
         else
@@ -11809,7 +11964,7 @@ uint32 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, uin
                 WeaponAttackType attType = (spellProto->IsRangedWeaponSpell() && spellProto->DmgClass != SPELL_DAMAGE_CLASS_MELEE) ? RANGED_ATTACK : BASE_ATTACK;
                 float APbonus = float(victim->GetTotalAuraModifier(attType == BASE_ATTACK ? SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS : SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS));
                 APbonus += GetTotalAttackPowerValue(attType);
-                DoneTotal += int32(bonus->ap_bonus * stack * ApCoeffMod * APbonus);
+                DoneTotal += static_cast<long double>(bonus->ap_bonus) * stack * ApCoeffMod * APbonus;
             }
         }
     }
@@ -11826,23 +11981,23 @@ uint32 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, uin
             coeff /= 100.0f;
         }
 
-        DoneTotal += int32(DoneAdvertisedBenefit * coeff * factorMod);
+        DoneTotal += DoneAdvertisedBenefit * coeff * factorMod;
     }
 
-    float tmpDamage = (float(pdamage) + DoneTotal) * DoneTotalMod;
+    long double tmpDamage = (static_cast<long double>(pdamage) + DoneTotal) * static_cast<long double>(DoneTotalMod);
     // apply spellmod to Done damage (flat and pct)
     if (Player* modOwner = GetSpellModOwner())
         modOwner->ApplySpellMod(spellProto->Id, damagetype == DOT ? SPELLMOD_DOT : SPELLMOD_DAMAGE, tmpDamage);
 
-    return uint32(std::max(tmpDamage, 0.0f));
+    return ToUInt64Damage(tmpDamage);
 }
 
-uint32 Unit::SpellDamageBonusTaken(Unit* caster, SpellInfo const* spellProto, uint32 pdamage, DamageEffectType damagetype, uint32 stack)
+uint64 Unit::SpellDamageBonusTaken(Unit* caster, SpellInfo const* spellProto, uint64 pdamage, DamageEffectType damagetype, uint32 stack)
 {
     if (!spellProto || damagetype == DIRECT_DAMAGE)
         return pdamage;
 
-    int32 TakenTotal = 0;
+    long double TakenTotal = 0.0L;
     float TakenTotalMod = 1.0f;
 
     // from positive and negative SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN
@@ -11916,7 +12071,7 @@ uint32 Unit::SpellDamageBonusTaken(Unit* caster, SpellInfo const* spellProto, ui
         }
 
         float factorMod = CalculateLevelPenalty(spellProto) * stack;
-        TakenTotal += int32(TakenAdvertisedBenefit * coeff * factorMod);
+        TakenTotal += static_cast<long double>(TakenAdvertisedBenefit) * coeff * factorMod;
     }
 
     // No positive taken bonus, custom attr
@@ -11943,9 +12098,9 @@ uint32 Unit::SpellDamageBonusTaken(Unit* caster, SpellInfo const* spellProto, ui
             TakenTotalMod += ignoreModifier;
     }
 
-    float tmpDamage = (float(pdamage) + TakenTotal) * TakenTotalMod;
+    long double tmpDamage = (static_cast<long double>(pdamage) + TakenTotal) * static_cast<long double>(TakenTotalMod);
 
-    return uint32(std::max(tmpDamage, 0.0f));
+    return ToUInt64Damage(tmpDamage);
 }
 
 float Unit::processDummyAuras(float TakenTotalMod) const
@@ -12311,7 +12466,10 @@ float Unit::SpellTakenCritChance(Unit const* caster, SpellInfo const* spellProto
 
                 // Apply crit chance from defence skill
                 if (caster)
-                    crit_chance += (int32(caster->GetMaxSkillValueForLevel(this)) - int32(GetDefenseSkillValue(caster))) * 0.04f;
+                {
+                    double defenseSkill = IsPlayer() ? static_cast<double>(ToPlayer()->GetExtendedDefenseSkillValue(caster)) : static_cast<double>(GetDefenseSkillValue(caster));
+                    crit_chance += static_cast<float>((static_cast<double>(caster->GetMaxSkillValueForLevel(this)) - defenseSkill) * 0.04);
+                }
 
                 break;
             }
@@ -12342,10 +12500,10 @@ float Unit::SpellTakenCritChance(Unit const* caster, SpellInfo const* spellProto
     return crit_chance;
 }
 
-uint32 Unit::SpellCriticalDamageBonus(Unit const* caster, SpellInfo const* spellProto, uint32 damage, Unit const* victim)
+uint64 Unit::SpellCriticalDamageBonus(Unit const* caster, SpellInfo const* spellProto, uint64 damage, Unit const* victim)
 {
     // Calculate critical bonus
-    int32 crit_bonus = damage;
+    long double crit_bonus = static_cast<long double>(damage);
     float crit_mod = 0.0f;
 
     switch (spellProto->DmgClass)
@@ -12353,10 +12511,10 @@ uint32 Unit::SpellCriticalDamageBonus(Unit const* caster, SpellInfo const* spell
         case SPELL_DAMAGE_CLASS_MELEE:                      // for melee based spells is 100%
         case SPELL_DAMAGE_CLASS_RANGED:
             /// @todo: write here full calculation for melee/ranged spells
-            crit_bonus += damage;
+            crit_bonus += static_cast<long double>(damage);
             break;
         default:
-            crit_bonus += damage / 2;                       // for spells is 50%
+            crit_bonus += static_cast<long double>(damage) / 2.0L;                       // for spells is 50%
             break;
     }
 
@@ -12370,22 +12528,26 @@ uint32 Unit::SpellCriticalDamageBonus(Unit const* caster, SpellInfo const* spell
         if (crit_bonus != 0 && crit_mod != 0.0f)
             AddPct(crit_bonus, crit_mod);
 
-        crit_bonus -= damage;
+        crit_bonus -= static_cast<long double>(damage);
 
         // adds additional damage to critBonus (from talents)
         if (Player* modOwner = caster->GetSpellModOwner())
-            modOwner->ApplySpellMod(spellProto->Id, SPELLMOD_CRIT_DAMAGE_BONUS, crit_bonus);
+        {
+            long double critBonusForSpellMod = crit_bonus;
+            modOwner->ApplySpellMod(spellProto->Id, SPELLMOD_CRIT_DAMAGE_BONUS, critBonusForSpellMod);
+            crit_bonus = critBonusForSpellMod;
+        }
 
-        crit_bonus += damage;
+        crit_bonus += static_cast<long double>(damage);
     }
 
-    return crit_bonus;
+    return ToUInt64Damage(crit_bonus);
 }
 
-uint32 Unit::SpellCriticalHealingBonus(Unit const* caster, SpellInfo const* spellProto, uint32 damage, Unit const* victim)
+uint64 Unit::SpellCriticalHealingBonus(Unit const* caster, SpellInfo const* spellProto, uint64 damage, Unit const* victim)
 {
     // Calculate critical bonus
-    int32 crit_bonus;
+    int64 crit_bonus;
     switch (spellProto->DmgClass)
     {
         case SPELL_DAMAGE_CLASS_MELEE:                      // for melee based spells is 100%
@@ -12403,20 +12565,35 @@ uint32 Unit::SpellCriticalHealingBonus(Unit const* caster, SpellInfo const* spel
         if (victim)
         {
             uint32 creatureTypeMask = victim->GetCreatureTypeMask();
-            crit_bonus = int32(crit_bonus * caster->GetTotalAuraMultiplierByMiscMask(SPELL_AURA_MOD_CRIT_PERCENT_VERSUS, creatureTypeMask));
+            crit_bonus = static_cast<int64>(static_cast<long double>(crit_bonus) * static_cast<long double>(caster->GetTotalAuraMultiplierByMiscMask(SPELL_AURA_MOD_CRIT_PERCENT_VERSUS, creatureTypeMask)));
         }
 
         // adds additional damage to critBonus (from talents)
         // xinef: used for death knight death coil
         if (Player* modOwner = caster->GetSpellModOwner())
-            modOwner->ApplySpellMod(spellProto->Id, SPELLMOD_CRIT_DAMAGE_BONUS, crit_bonus);
+        {
+            int32 critBonusForSpellMod = static_cast<int32>(std::clamp<int64>(crit_bonus, std::numeric_limits<int32>::min(), std::numeric_limits<int32>::max()));
+            modOwner->ApplySpellMod(spellProto->Id, SPELLMOD_CRIT_DAMAGE_BONUS, critBonusForSpellMod);
+            crit_bonus = critBonusForSpellMod;
+        }
     }
 
     if (crit_bonus > 0)
-        damage += crit_bonus;
+    {
+        uint64 totalDamage = static_cast<uint64>(damage) + static_cast<uint64>(crit_bonus);
+        damage = totalDamage;
+    }
 
     if (caster)
-        damage = int32(float(damage) * caster->GetTotalAuraMultiplier(SPELL_AURA_MOD_CRITICAL_HEALING_AMOUNT));
+    {
+        long double scaledDamage = static_cast<long double>(damage) * static_cast<long double>(caster->GetTotalAuraMultiplier(SPELL_AURA_MOD_CRITICAL_HEALING_AMOUNT));
+        if (scaledDamage < 0.0L || std::isnan(static_cast<double>(scaledDamage)))
+            damage = 0;
+        else if (scaledDamage > static_cast<long double>(std::numeric_limits<uint64>::max()))
+            damage = std::numeric_limits<uint64>::max();
+        else
+            damage = static_cast<uint64>(scaledDamage);
+    }
 
     return damage;
 }
@@ -12513,7 +12690,7 @@ float Unit::SpellPctHealingModsDone(Unit* victim, SpellInfo const* spellProto, D
     return DoneTotalMod;
 }
 
-uint32 Unit::SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, uint32 healamount, DamageEffectType damagetype, uint8 effIndex, float TotalMod, uint32 stack)
+uint64 Unit::SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, uint64 healamount, DamageEffectType damagetype, uint8 effIndex, float TotalMod, uint32 stack)
 {
     // For totems get healing bonus from owner (statue isn't totem in fact)
     if (IsCreature() && IsTotem())
@@ -12622,16 +12799,25 @@ uint32 Unit::SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, ui
     }
 
     // use float as more appropriate for negative values and percent applying
-    float heal = float(int32(healamount) + DoneTotal) * DoneTotalMod;
+    long double heal = (static_cast<long double>(healamount) + static_cast<long double>(DoneTotal)) * static_cast<long double>(DoneTotalMod);
     // apply spellmod to Done amount
 
     if (Player* modOwner = GetSpellModOwner())
-        modOwner->ApplySpellMod(spellProto->Id, damagetype == DOT ? SPELLMOD_DOT : SPELLMOD_DAMAGE, heal);
+    {
+        float spellModHeal = heal > static_cast<long double>(std::numeric_limits<float>::max()) ? std::numeric_limits<float>::max() : static_cast<float>(heal);
+        modOwner->ApplySpellMod(spellProto->Id, damagetype == DOT ? SPELLMOD_DOT : SPELLMOD_DAMAGE, spellModHeal);
+        heal = spellModHeal;
+    }
 
-    return uint32(std::max(heal, 0.0f));
+    if (heal <= 0.0L || std::isnan(static_cast<double>(heal)))
+        return 0;
+    if (heal >= static_cast<long double>(std::numeric_limits<uint64>::max()))
+        return std::numeric_limits<uint64>::max();
+
+    return static_cast<uint64>(heal);
 }
 
-uint32 Unit::SpellHealingBonusTaken(Unit* caster, SpellInfo const* spellProto, uint32 healamount, DamageEffectType damagetype, uint32 stack)
+uint64 Unit::SpellHealingBonusTaken(Unit* caster, SpellInfo const* spellProto, uint64 healamount, DamageEffectType damagetype, uint32 stack)
 {
     float TakenTotalMod = 1.0f;
     float minval = 0.0f;
@@ -12706,8 +12892,12 @@ uint32 Unit::SpellHealingBonusTaken(Unit* caster, SpellInfo const* spellProto, u
         // No bonus healing for SPELL_DAMAGE_CLASS_NONE class spells by default
         if (spellProto->DmgClass == SPELL_DAMAGE_CLASS_NONE)
         {
-            healamount = uint32(std::max((float(healamount) * TakenTotalMod), 0.0f));
-            return healamount;
+            long double rawHeal = static_cast<long double>(healamount) * static_cast<long double>(TakenTotalMod);
+            if (rawHeal <= 0.0L || std::isnan(static_cast<double>(rawHeal)))
+                return 0;
+            if (rawHeal >= static_cast<long double>(std::numeric_limits<uint64>::max()))
+                return std::numeric_limits<uint64>::max();
+            return static_cast<uint64>(rawHeal);
         }
     }
 
@@ -12758,9 +12948,14 @@ uint32 Unit::SpellHealingBonusTaken(Unit* caster, SpellInfo const* spellProto, u
         TakenTotalMod = 1.0f;
     }
 
-    float heal = float(int32(healamount) + TakenTotal) * TakenTotalMod;
+    long double heal = (static_cast<long double>(healamount) + static_cast<long double>(TakenTotal)) * static_cast<long double>(TakenTotalMod);
 
-    return uint32(std::max(heal, 0.0f));
+    if (heal <= 0.0L || std::isnan(static_cast<double>(heal)))
+        return 0;
+    if (heal >= static_cast<long double>(std::numeric_limits<uint64>::max()))
+        return std::numeric_limits<uint64>::max();
+
+    return static_cast<uint64>(heal);
 }
 
 int32 Unit::SpellBaseHealingBonusDone(SpellSchoolMask schoolMask)
@@ -13150,7 +13345,7 @@ bool Unit::IsImmunedToSpellEffect(SpellInfo const* spellInfo, uint32 index) cons
     return false;
 }
 
-uint32 Unit::MeleeDamageBonusDone(Unit* victim, uint32 pdamage, WeaponAttackType attType, SpellInfo const* spellProto, SpellSchoolMask damageSchoolMask /*= SPELL_SCHOOL_MASK_NORMAL*/)
+uint64 Unit::MeleeDamageBonusDone(Unit* victim, uint64 pdamage, WeaponAttackType attType, SpellInfo const* spellProto, SpellSchoolMask damageSchoolMask /*= SPELL_SCHOOL_MASK_NORMAL*/)
 {
     if (!victim || pdamage == 0)
         return 0;
@@ -13168,7 +13363,7 @@ uint32 Unit::MeleeDamageBonusDone(Unit* victim, uint32 pdamage, WeaponAttackType
     uint32 creatureTypeMask = victim->GetCreatureTypeMask();
 
     // Done fixed damage bonus auras
-    int32 DoneFlatBenefit = 0;
+    int64 DoneFlatBenefit = 0;
 
     // ..done
     AuraEffectList const& mDamageDoneCreature = GetAuraEffectsByType(SPELL_AURA_MOD_DAMAGE_DONE_CREATURE);
@@ -13180,7 +13375,7 @@ uint32 Unit::MeleeDamageBonusDone(Unit* victim, uint32 pdamage, WeaponAttackType
     // SPELL_AURA_MOD_DAMAGE_DONE included in weapon damage
 
     // ..done (base at attack power for marked target and base at attack power for creature type)
-    int32 APbonus = 0;
+    int64 APbonus = 0;
 
     if (attType == RANGED_ATTACK)
     {
@@ -13213,7 +13408,7 @@ uint32 Unit::MeleeDamageBonusDone(Unit* victim, uint32 pdamage, WeaponAttackType
                     normalized = true;
                     break;
                 }
-        DoneFlatBenefit += int32(APbonus / 14.0f * GetAPMultiplier(attType, normalized));
+        DoneFlatBenefit += static_cast<int64>(static_cast<long double>(APbonus) / 14.0L * static_cast<long double>(GetAPMultiplier(attType, normalized)));
     }
 
     // Done total percent damage auras
@@ -13341,7 +13536,7 @@ uint32 Unit::MeleeDamageBonusDone(Unit* victim, uint32 pdamage, WeaponAttackType
             DoneTotalMod = 1.0f;
         }
 
-    float tmpDamage = float(int32(pdamage) + DoneFlatBenefit) * DoneTotalMod;
+    long double tmpDamage = (static_cast<long double>(pdamage) + static_cast<long double>(DoneFlatBenefit)) * static_cast<long double>(DoneTotalMod);
 
     // apply spellmod to Done damage
     if (spellProto)
@@ -13349,15 +13544,18 @@ uint32 Unit::MeleeDamageBonusDone(Unit* victim, uint32 pdamage, WeaponAttackType
             modOwner->ApplySpellMod(spellProto->Id, SPELLMOD_DAMAGE, tmpDamage);
 
     // bonus result can be negative
-    return uint32(std::max(tmpDamage, 0.0f));
+    if (tmpDamage <= 0.0L || std::isnan(static_cast<double>(tmpDamage)))
+        return 0;
+
+    return ToUInt64Damage(tmpDamage);
 }
 
-uint32 Unit::MeleeDamageBonusTaken(Unit* attacker, uint32 pdamage, WeaponAttackType attType, SpellInfo const* spellProto/*= nullptr*/, SpellSchoolMask damageSchoolMask /*= SPELL_SCHOOL_MASK_NORMAL*/)
+uint64 Unit::MeleeDamageBonusTaken(Unit* attacker, uint64 pdamage, WeaponAttackType attType, SpellInfo const* spellProto/*= nullptr*/, SpellSchoolMask damageSchoolMask /*= SPELL_SCHOOL_MASK_NORMAL*/)
 {
     if (pdamage == 0)
         return 0;
 
-    int32 TakenFlatBenefit = 0;
+    int64 TakenFlatBenefit = 0;
 
     // ..taken
     AuraEffectList const& mDamageTaken = GetAuraEffectsByType(SPELL_AURA_MOD_DAMAGE_TAKEN);
@@ -13449,10 +13647,13 @@ uint32 Unit::MeleeDamageBonusTaken(Unit* attacker, uint32 pdamage, WeaponAttackT
             TakenTotalMod += ignoreModifier;
     }
 
-    float tmpDamage = (float(pdamage) + TakenFlatBenefit) * TakenTotalMod;
+    long double tmpDamage = (static_cast<long double>(pdamage) + static_cast<long double>(TakenFlatBenefit)) * static_cast<long double>(TakenTotalMod);
 
     // bonus result can be negative
-    return uint32(std::max(tmpDamage, 0.0f));
+    if (tmpDamage <= 0.0L || std::isnan(static_cast<double>(tmpDamage)))
+        return 0;
+
+    return ToUInt64Damage(tmpDamage);
 }
 
 class spellIdImmunityPredicate
@@ -14174,22 +14375,54 @@ bool Unit::_IsValidAssistTarget(Unit const* target, SpellInfo const* bySpell) co
     return true;
 }
 
-int32 Unit::ModifyHealth(int32 dVal)
+int64 Unit::ModifyHealth(int64 dVal)
 {
-    int32 gain = 0;
+    int64 gain = 0;
 
     if (dVal == 0)
         return 0;
 
-    int32 curHealth = (int32)GetHealth();
-    int32 maxHealth = (int32)GetMaxHealth();
+    if (Player* player = ToPlayer())
+    {
+        if (player->GetExtendedMaxHealth() > GetMaxHealth())
+        {
+            uint64 curHealth = player->GetExtendedHealth();
+            uint64 maxHealth = player->GetExtendedMaxHealth();
+            if (dVal > 0)
+            {
+                uint64 headroom = curHealth < maxHealth ? maxHealth - curHealth : 0;
+                uint64 applied = static_cast<uint64>(dVal) > headroom ? headroom : static_cast<uint64>(dVal);
+                if (!applied)
+                    return 0;
+
+                player->SetExtendedHealth(curHealth + applied);
+                player->SyncClientHealthFromExtended();
+                return applied > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(applied);
+            }
+
+            uint64 damage = static_cast<uint64>(-dVal);
+            if (damage >= curHealth)
+            {
+                player->SetExtendedHealth(0);
+                player->SyncClientHealthFromExtended();
+                return curHealth > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::min() : -static_cast<int64>(curHealth);
+            }
+
+            player->SetExtendedHealth(curHealth - damage);
+            player->SyncClientHealthFromExtended();
+            return dVal;
+        }
+    }
+
+    int64 curHealth = static_cast<int64>(GetHealth());
+    int64 maxHealth = static_cast<int64>(GetMaxHealth());
 
     // 【溢出保护】防止治疗时整数溢出导致死亡
     // 当 curHealth + dVal 可能超过 INT32_MAX 时，限制治疗量
     if (dVal > 0)
     {
         // 计算距离最大血量还能加多少
-        int32 headroom = maxHealth - curHealth;
+        int64 headroom = maxHealth - curHealth;
         if (headroom < 0)
             headroom = 0;
 
@@ -14202,7 +14435,7 @@ int32 Unit::ModifyHealth(int32 dVal)
             return 0;
     }
 
-    int32 val = dVal + curHealth;
+    int64 val = dVal + curHealth;
     if (val <= 0)
     {
         SetHealth(0);
@@ -14211,32 +14444,32 @@ int32 Unit::ModifyHealth(int32 dVal)
 
     if (val < maxHealth)
     {
-        SetHealth(val);
+        SetHealth(static_cast<uint32>(val));
         gain = val - curHealth;
     }
     else if (curHealth != maxHealth)
     {
-        SetHealth(maxHealth);
+        SetHealth(static_cast<uint32>(maxHealth));
         gain = maxHealth - curHealth;
     }
 
     return gain;
 }
 
-int32 Unit::GetHealthGain(int32 dVal)
+int64 Unit::GetHealthGain(int64 dVal)
 {
-    int32 gain = 0;
+    int64 gain = 0;
 
     if (dVal == 0)
         return 0;
 
-    int32 curHealth = (int32)GetHealth();
-    int32 maxHealth = (int32)GetMaxHealth();
+    int64 curHealth = static_cast<int64>(GetHealthForCombat() > static_cast<uint64>(std::numeric_limits<int64>::max()) ? static_cast<uint64>(std::numeric_limits<int64>::max()) : GetHealthForCombat());
+    int64 maxHealth = static_cast<int64>(GetMaxHealthForCombat() > static_cast<uint64>(std::numeric_limits<int64>::max()) ? static_cast<uint64>(std::numeric_limits<int64>::max()) : GetMaxHealthForCombat());
 
     // 【溢出保护】防止治疗预估时整数溢出
     if (dVal > 0)
     {
-        int32 headroom = maxHealth - curHealth;
+        int64 headroom = maxHealth - curHealth;
         if (headroom < 0)
             headroom = 0;
         if (dVal > headroom)
@@ -14245,7 +14478,7 @@ int32 Unit::GetHealthGain(int32 dVal)
             return 0;
     }
 
-    int32 val = dVal + curHealth;
+    int64 val = dVal + curHealth;
     if (val <= 0)
     {
         return -curHealth;
@@ -15552,6 +15785,44 @@ Powers Unit::GetPowerTypeByAuraGroup(UnitMods unitMod) const
 
 float Unit::GetTotalAttackPowerValue(WeaponAttackType attType, Unit* victim) const
 {
+    if (IsPlayer())
+    {
+        double extendedAttackPower = ToPlayer()->GetExtendedAttackPowerValue(attType);
+        if (extendedAttackPower > 0.0)
+        {
+            if (attType == RANGED_ATTACK)
+            {
+                if (victim)
+                    extendedAttackPower += victim->GetTotalAuraModifier(SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS);
+
+                double multiplier = 1.0 + static_cast<double>(GetFloatValue(UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER));
+                double result = extendedAttackPower * multiplier;
+                if (result < 0.0 || std::isnan(result))
+                    return 0.0f;
+
+                constexpr double MAX_SERVER_AP = static_cast<double>(std::numeric_limits<float>::max());
+                if (std::isinf(result) || result > MAX_SERVER_AP)
+                    result = MAX_SERVER_AP;
+
+                return static_cast<float>(result);
+            }
+
+            if (victim)
+                extendedAttackPower += victim->GetTotalAuraModifier(SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS);
+
+            double multiplier = 1.0 + static_cast<double>(GetFloatValue(UNIT_FIELD_ATTACK_POWER_MULTIPLIER));
+            double result = extendedAttackPower * multiplier;
+            if (result < 0.0 || std::isnan(result))
+                return 0.0f;
+
+            constexpr double MAX_SERVER_AP = static_cast<double>(std::numeric_limits<float>::max());
+            if (std::isinf(result) || result > MAX_SERVER_AP)
+                result = MAX_SERVER_AP;
+
+            return static_cast<float>(result);
+        }
+    }
+
     // 安全上限，防止溢出导致负数
     constexpr float MAX_SAFE_AP = 2000000000.0f;
 
@@ -15629,6 +15900,8 @@ void Unit::SetLevel(uint8 lvl, bool showLevelChange)
 
 void Unit::SetHealth(uint32 val)
 {
+    Player* player = IsPlayer() ? ToPlayer() : nullptr;
+
     if (getDeathState() == DeathState::JustDied)
         val = 0;
     else if (IsPlayer() && getDeathState() == DeathState::Dead)
@@ -15637,6 +15910,9 @@ void Unit::SetHealth(uint32 val)
     {
         uint32 maxHealth = GetMaxHealth();
         if (maxHealth < val)
+            val = maxHealth;
+
+        if (player && !player->IsSyncingClientHealthFromExtended() && player->GetExtendedMaxHealth() > maxHealth && player->GetExtendedHealth() > maxHealth && val > 0)
             val = maxHealth;
     }
 
@@ -15653,7 +15929,9 @@ void Unit::SetHealth(uint32 val)
     // group update
     if (IsPlayer())
     {
-        Player* player = ToPlayer();
+        if (!player->IsSyncingClientHealthFromExtended() && !(player->GetExtendedMaxHealth() > GetMaxHealth() && player->GetExtendedHealth() > GetMaxHealth() && val == GetMaxHealth()))
+            player->SetExtendedHealthFromClientHealth(val);
+
         if (player->NeedSendSpectatorData())
             ArenaSpectator::SendCommand_UInt32Value(FindMap(), GetGUID(), "CHP", val);
 
@@ -20535,13 +20813,19 @@ void Unit::PetSpellFail(SpellInfo const* spellInfo, Unit* target, uint32 result)
     }
 }
 
-int32 Unit::CalculateAOEDamageReduction(int32 damage, uint32 schoolMask, bool npcCaster) const
+int64 Unit::CalculateAOEDamageReduction(int64 damage, uint32 schoolMask, bool npcCaster) const
 {
-    damage = int32(float(damage) * GetTotalAuraMultiplierByMiscMask(SPELL_AURA_MOD_AOE_DAMAGE_AVOIDANCE, schoolMask));
+    long double reducedDamage = static_cast<long double>(damage) * static_cast<long double>(GetTotalAuraMultiplierByMiscMask(SPELL_AURA_MOD_AOE_DAMAGE_AVOIDANCE, schoolMask));
     if (npcCaster)
-        damage = int32(float(damage) * GetTotalAuraMultiplierByMiscMask(SPELL_AURA_MOD_CREATURE_AOE_DAMAGE_AVOIDANCE, schoolMask));
+        reducedDamage *= static_cast<long double>(GetTotalAuraMultiplierByMiscMask(SPELL_AURA_MOD_CREATURE_AOE_DAMAGE_AVOIDANCE, schoolMask));
 
-    return damage;
+    if (reducedDamage <= 0.0L || std::isnan(static_cast<double>(reducedDamage)))
+        return 0;
+
+    if (reducedDamage > static_cast<long double>(std::numeric_limits<int64>::max()))
+        return std::numeric_limits<int64>::max();
+
+    return static_cast<int64>(reducedDamage);
 }
 
 void Unit::ExecuteDelayedUnitRelocationEvent()

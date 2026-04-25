@@ -52,6 +52,7 @@
 #include "Vehicle.h"
 #include "World.h"
 #include <boost/algorithm/string.hpp>
+#include <limits>
 #include <numeric>
 
 #include "ItemEnchantmentMgr.h"
@@ -59,6 +60,33 @@
 ScriptMapMap sSpellScripts;
 ScriptMapMap sEventScripts;
 ScriptMapMap sWaypointScripts;
+
+namespace
+{
+int64 ApplyRateToInt64(int64 value, float rate)
+{
+    long double scaled = static_cast<long double>(value) * static_cast<long double>(rate);
+    if (scaled > static_cast<long double>(std::numeric_limits<int64>::max()))
+        return std::numeric_limits<int64>::max();
+
+    if (scaled < static_cast<long double>(std::numeric_limits<int64>::min()))
+        return std::numeric_limits<int64>::min();
+
+    return static_cast<int64>(scaled);
+}
+
+uint64 ApplyRateToUInt64(uint64 value, float rate)
+{
+    long double scaled = static_cast<long double>(value) * static_cast<long double>(rate);
+    if (scaled <= 0.0L)
+        return 0;
+
+    if (scaled > static_cast<long double>(std::numeric_limits<uint64>::max()))
+        return std::numeric_limits<uint64>::max();
+
+    return static_cast<uint64>(scaled);
+}
+}
 
 std::string GetScriptsTableNameByType(ScriptsType type)
 {
@@ -625,7 +653,7 @@ void ObjectMgr::LoadCreatureTemplate(Field* fields, bool triggerHook)
     creatureTemplate.scale            = fields[20].Get<float>();
     creatureTemplate.rank             = uint32(fields[21].Get<uint8>());
     creatureTemplate.dmgschool        = uint32(fields[22].Get<int8>());
-    creatureTemplate.DamageModifier   = fields[23].Get<float>();
+    creatureTemplate.DamageModifier   = fields[23].Get<double>();
     creatureTemplate.BaseAttackTime   = fields[24].Get<uint32>();
     creatureTemplate.RangeAttackTime  = fields[25].Get<uint32>();
     creatureTemplate.BaseVariance     = fields[26].Get<float>();
@@ -657,8 +685,8 @@ void ObjectMgr::LoadCreatureTemplate(Field* fields, bool triggerHook)
 
     creatureTemplate.PetSpellDataId = fields[42].Get<uint32>();
     creatureTemplate.VehicleId      = fields[43].Get<uint32>();
-    creatureTemplate.mingold        = fields[44].Get<uint32>();
-    creatureTemplate.maxgold        = fields[45].Get<uint32>();
+    creatureTemplate.mingold        = fields[44].Get<uint64>();
+    creatureTemplate.maxgold        = fields[45].Get<uint64>();
     creatureTemplate.AIName         = fields[46].Get<std::string>(); // stopped here, fix it
     creatureTemplate.MovementType   = uint32(fields[47].Get<uint8>());
     if (!fields[48].IsNull())
@@ -687,10 +715,10 @@ void ObjectMgr::LoadCreatureTemplate(Field* fields, bool triggerHook)
     }
 
     creatureTemplate.HoverHeight           = fields[55].Get<float>();
-    creatureTemplate.ModHealth             = fields[56].Get<float>();
-    creatureTemplate.ModMana               = fields[57].Get<float>();
-    creatureTemplate.ModArmor              = fields[58].Get<float>();
-    creatureTemplate.ModExperience         = fields[59].Get<float>();
+    creatureTemplate.ModHealth             = fields[56].Get<double>();
+    creatureTemplate.ModMana               = fields[57].Get<double>();
+    creatureTemplate.ModArmor              = fields[58].Get<double>();
+    creatureTemplate.ModExperience         = fields[59].Get<double>();
     creatureTemplate.RacialLeader          = fields[60].Get<bool>();
     creatureTemplate.movementId            = fields[61].Get<uint32>();
     creatureTemplate.RegenHealth           = fields[62].Get<bool>();
@@ -2760,8 +2788,8 @@ void ObjectMgr::LoadItemTemplates()
         itemTemplate.Flags                     = ItemFlags(fields[7].Get<uint32>());
         itemTemplate.Flags2                    = ItemFlags2(fields[8].Get<uint32>());
         itemTemplate.BuyCount                  = uint32(fields[9].Get<uint8>());
-        itemTemplate.BuyPrice                  = int32(fields[10].Get<int64>() * sWorld->getRate((Rates)(RATE_BUYVALUE_ITEM_POOR + itemTemplate.Quality)));
-        itemTemplate.SellPrice                 = uint32(fields[11].Get<uint32>() * sWorld->getRate((Rates)(RATE_SELLVALUE_ITEM_POOR + itemTemplate.Quality)));
+        itemTemplate.BuyPrice                  = ApplyRateToInt64(fields[10].Get<int64>(), sWorld->getRate((Rates)(RATE_BUYVALUE_ITEM_POOR + itemTemplate.Quality)));
+        itemTemplate.SellPrice                 = ApplyRateToUInt64(fields[11].Get<uint64>(), sWorld->getRate((Rates)(RATE_SELLVALUE_ITEM_POOR + itemTemplate.Quality)));
         itemTemplate.InventoryType             = uint32(fields[12].Get<uint8>());
         itemTemplate.AllowableClass            = fields[13].Get<int32>();
         itemTemplate.AllowableRace             = fields[14].Get<int32>();
@@ -2782,20 +2810,20 @@ void ObjectMgr::LoadItemTemplates()
         for (uint8 i = 0; i < itemTemplate.StatsCount; ++i)
         {
             itemTemplate.ItemStat[i].ItemStatType  = uint32(fields[28 + i * 2].Get<uint8>());
-            itemTemplate.ItemStat[i].ItemStatValue = fields[29 + i * 2].Get<int32>();
+            itemTemplate.ItemStat[i].ItemStatValue = fields[29 + i * 2].Get<int64>();
         }
 
         itemTemplate.ScalingStatDistribution = uint32(fields[48].Get<uint16>());
-        itemTemplate.ScalingStatValue        = fields[49].Get<int32>();
+        itemTemplate.ScalingStatValue        = fields[49].Get<uint64>();
 
         for (uint8 i = 0; i < MAX_ITEM_PROTO_DAMAGES; ++i)
         {
-            itemTemplate.Damage[i].DamageMin  = fields[50 + i * 3].Get<float>();
-            itemTemplate.Damage[i].DamageMax  = fields[51 + i * 3].Get<float>();
+            itemTemplate.Damage[i].DamageMin  = fields[50 + i * 3].Get<double>();
+            itemTemplate.Damage[i].DamageMax  = fields[51 + i * 3].Get<double>();
             itemTemplate.Damage[i].DamageType = uint32(fields[52 + i * 3].Get<uint8>());
         }
 
-        itemTemplate.Armor          = fields[56].Get<uint32>();
+        itemTemplate.Armor          = fields[56].Get<uint64>();
         itemTemplate.HolyRes        = fields[57].Get<int32>();
         itemTemplate.FireRes        = fields[58].Get<int32>();
         itemTemplate.NatureRes      = fields[59].Get<int32>();
@@ -2830,7 +2858,7 @@ void ObjectMgr::LoadItemTemplates()
         itemTemplate.RandomSuffix   = fields[111].Get<int32>();
         itemTemplate.Block          = fields[112].Get<uint32>();
         itemTemplate.ItemSet        = fields[113].Get<uint32>();
-        itemTemplate.MaxDurability  = uint32(fields[114].Get<uint16>());
+        itemTemplate.MaxDurability  = fields[114].Get<uint64>();
         itemTemplate.Area           = fields[115].Get<uint32>();
         itemTemplate.Map            = uint32(fields[116].Get<uint16>());
         itemTemplate.BagFamily      = fields[117].Get<uint32>();
@@ -2845,15 +2873,15 @@ void ObjectMgr::LoadItemTemplates()
         itemTemplate.socketBonus             = fields[125].Get<uint32>();
         itemTemplate.GemProperties           = fields[126].Get<uint32>();
         itemTemplate.RequiredDisenchantSkill = uint32(fields[127].Get<int16>());
-        itemTemplate.ArmorDamageModifier     = fields[128].Get<float>();
+        itemTemplate.ArmorDamageModifier     = fields[128].Get<double>();
         itemTemplate.Duration                = fields[129].Get<uint32>();
         itemTemplate.ItemLimitCategory       = uint32(fields[130].Get<int16>());
         itemTemplate.HolidayId               = fields[131].Get<uint32>();
         itemTemplate.ScriptId                = sObjectMgr->GetScriptId(fields[132].Get<std::string>());
         itemTemplate.DisenchantID            = fields[133].Get<uint32>();
         itemTemplate.FoodType                = uint32(fields[134].Get<uint8>());
-        itemTemplate.MinMoneyLoot            = fields[135].Get<uint32>();
-        itemTemplate.MaxMoneyLoot            = fields[136].Get<uint32>();
+        itemTemplate.MinMoneyLoot            = fields[135].Get<uint64>();
+        itemTemplate.MaxMoneyLoot            = fields[136].Get<uint64>();
         itemTemplate.FlagsCu                 = ItemFlagsCustom(fields[137].Get<uint32>());
 
         // Checks
@@ -9793,7 +9821,7 @@ CreatureBaseStats const* ObjectMgr::GetCreatureBaseStats(uint8 level, uint8 unit
             for (uint8 j = 0; j < MAX_EXPANSIONS; ++j)
             {
                 BaseHealth[j] = 1;
-                BaseDamage[j] = 0.0f;
+                BaseDamage[j] = 0.0;
             }
             BaseMana = 0;
             AttackPower = 0;
@@ -9832,7 +9860,7 @@ void ObjectMgr::LoadCreatureClassLevelStats()
 
         for (uint8 i = 0; i < MAX_EXPANSIONS; ++i)
         {
-            stats.BaseHealth[i] = fields[2 + i].Get<uint32>();
+            stats.BaseHealth[i] = fields[2 + i].Get<uint64>();
 
             if (stats.BaseHealth[i] == 0)
             {
@@ -9854,19 +9882,19 @@ void ObjectMgr::LoadCreatureClassLevelStats()
                 }
             }
 
-            stats.BaseDamage[i] = fields[9 + i].Get<float>();
-            if (stats.BaseDamage[i] < 0.0f)
+            stats.BaseDamage[i] = fields[9 + i].Get<double>();
+            if (stats.BaseDamage[i] < 0.0)
             {
                 LOG_ERROR("sql.sql", "Creature base stats for class {}, level {} has invalid negative base damage[{}] - set to 0.0", Class, Level, i);
-                stats.BaseDamage[i] = 0.0f;
+                stats.BaseDamage[i] = 0.0;
             }
         }
 
-        stats.BaseMana = fields[5].Get<uint32>();
-        stats.BaseArmor = fields[6].Get<uint32>();
+        stats.BaseMana = fields[5].Get<uint64>();
+        stats.BaseArmor = fields[6].Get<double>();
 
-        stats.AttackPower = fields[7].Get<uint32>();
-        stats.RangedAttackPower = fields[8].Get<uint32>();
+        stats.AttackPower = fields[7].Get<uint64>();
+        stats.RangedAttackPower = fields[8].Get<uint64>();
 
         _creatureBaseStatsStore[MAKE_PAIR16(Level, Class)] = stats;
 

@@ -26,7 +26,8 @@ local DEFAULTS = {
         runes = true,           -- 符文系统
         enhancement = true,     -- 强化系统
         identification = true,  -- 鉴定系统
-        sets = true            -- 套装系统
+        sets = true,            -- 套装系统
+        templateStats = true    -- 物品模板64位基础属性
     },
 
     -- 颜色配置
@@ -50,6 +51,12 @@ for k, v in pairs(DEFAULTS) do
             end
         else
             UnifiedItemTooltipDB[k] = v
+        end
+    elseif type(v) == "table" and type(UnifiedItemTooltipDB[k]) == "table" then
+        for k2, v2 in pairs(v) do
+            if UnifiedItemTooltipDB[k][k2] == nil then
+                UnifiedItemTooltipDB[k][k2] = v2
+            end
         end
     end
 end
@@ -79,11 +86,16 @@ local ATTR_NAMES = {
     [0] = "法力值", [1] = "生命值", [3] = "敏捷", [4] = "力量",
     [5] = "智力", [6] = "精神", [7] = "耐力", [12] = "防御等级",
     [13] = "躲闪等级", [14] = "招架等级", [15] = "格挡等级",
-    [31] = "命中等级", [32] = "暴击等级", [35] = "韧性等级",
+    [16] = "近战命中等级", [17] = "远程命中等级", [18] = "法术命中等级",
+    [19] = "近战暴击等级", [20] = "远程暴击等级", [21] = "法术暴击等级",
+    [22] = "近战命中躲避等级", [23] = "远程命中躲避等级", [24] = "法术命中躲避等级",
+    [25] = "近战暴击躲避等级", [26] = "远程暴击躲避等级", [27] = "法术暴击躲避等级",
+    [28] = "近战急速等级", [29] = "远程急速等级", [30] = "法术急速等级",
+    [31] = "命中等级", [32] = "暴击等级", [33] = "命中躲避等级", [34] = "暴击躲避等级", [35] = "韧性等级",
     [36] = "急速等级", [37] = "精准等级", [38] = "攻击强度",
-    [39] = "远程强度", [43] = "法术穿透", [44] = "护甲穿透",
-    [45] = "法术强度", [46] = "冰霜抗性", [47] = "火焰抗性",
-    [48] = "自然抗性", [49] = "暗影抗性", [50] = "神圣抗性"
+    [39] = "远程强度", [43] = "法力回复", [44] = "护甲穿透",
+    [45] = "法术强度", [46] = "生命回复", [47] = "法术穿透",
+    [48] = "格挡值"
 }
 
 -- 颜色常量：粉色/红色/重置
@@ -1696,11 +1708,17 @@ function Parsers.BatchQuery(message)
     local setDataStartIndex = dataStartIndex + (hasDisplayData and 8 or 7)
     local setData = ""
     local huanjingData = ""
+    local templateStatsData = ""
     local tailEndIndex = #parts
 
-    if #parts >= setDataStartIndex and parts[#parts] and parts[#parts]:match("^IDDISP|") then
-        identificationDisplayData = parts[#parts]
-        tailEndIndex = #parts - 1
+    if tailEndIndex >= setDataStartIndex and parts[tailEndIndex] and parts[tailEndIndex]:match("^TPL64|") then
+        templateStatsData = parts[tailEndIndex]
+        tailEndIndex = tailEndIndex - 1
+    end
+
+    if tailEndIndex >= setDataStartIndex and parts[tailEndIndex] and parts[tailEndIndex]:match("^IDDISP|") then
+        identificationDisplayData = parts[tailEndIndex]
+        tailEndIndex = tailEndIndex - 1
     end
 
     if tailEndIndex >= setDataStartIndex then
@@ -1734,6 +1752,48 @@ function Parsers.BatchQuery(message)
         slot = slot,    -- 【新增】用于精确匹配pending记录
         systems = {}
     }
+
+    if templateStatsData ~= "" then
+        local tplParts = { strsplit("|", templateStatsData) }
+        local templateAttrs = {}
+        local templateDamages = {}
+
+        if tplParts[2] and tplParts[2] ~= "" then
+            for pair in string.gmatch(tplParts[2], "([^,]+)") do
+                local attrType, value = pair:match("(%d+)%s+([%-]?%d+)")
+                if attrType and value then
+                    table.insert(templateAttrs, {
+                        type = tonumber(attrType),
+                        value = value
+                    })
+                end
+            end
+        end
+
+        if tplParts[4] and tplParts[4] ~= "" then
+            for pair in string.gmatch(tplParts[4], "([^,]+)") do
+                local minValue, maxValue, damageType = pair:match("([%-]?[%d%.]+)%s+([%-]?[%d%.]+)%s+(%d+)")
+                if minValue and maxValue and damageType then
+                    table.insert(templateDamages, {
+                        min = minValue,
+                        max = maxValue,
+                        type = tonumber(damageType)
+                    })
+                end
+            end
+        end
+
+        if #templateAttrs > 0 or (tplParts[3] and tplParts[3] ~= "") or #templateDamages > 0 then
+            result.systems.templateStats = {
+                type = "templateStats",
+                itemID = itemID,
+                guid = guid,
+                attributes = templateAttrs,
+                armor = tplParts[3],
+                damages = templateDamages
+            }
+        end
+    end
 
     -- 【临时调试 - 已关闭】输出解析的各部分数据
     -- print(string.format("|cffff8800[解析调试]|r 字段数量: %d", #parts))
@@ -2137,13 +2197,64 @@ end
 -- 渲染器 - 统一的渲染逻辑
 -- ============================================================================
 
+local function FormatCompactNumber(value)
+    local rawText = tostring(value or "0")
+    local sign = ""
+
+    if rawText:sub(1, 1) == "-" then
+        sign = "-"
+        rawText = rawText:sub(2)
+    end
+
+    local numericValue = tonumber(rawText)
+    if not numericValue then
+        return sign .. rawText
+    end
+
+    local units = {
+        { value = 10000000000000000, suffix = "京" },
+        { value = 1000000000000, suffix = "兆" },
+        { value = 100000000, suffix = "亿" },
+        { value = 10000, suffix = "万" },
+        { value = 1000, suffix = "千" },
+        { value = 100, suffix = "百" },
+    }
+
+    for _, unit in ipairs(units) do
+        if numericValue >= unit.value then
+            local scaled = numericValue / unit.value
+            local text
+            if scaled >= 100 then
+                text = string.format("%.0f", math.floor(scaled))
+            elseif scaled >= 10 then
+                text = string.format("%.1f", math.floor(scaled * 10) / 10)
+            else
+                text = string.format("%.2f", math.floor(scaled * 100) / 100)
+            end
+
+            text = text:gsub("%.0$", ""):gsub("(%..-)0+$", "%1"):gsub("%.$", "")
+            return sign .. text .. unit.suffix
+        end
+    end
+
+    return sign .. rawText
+end
+
 local function FormatSignedValue(value)
+    local rawText = tostring(value or "0")
+    if rawText:match("^%-?%d+$") then
+        if rawText:sub(1, 1) == "-" then
+            return "- " .. FormatCompactNumber(rawText:sub(2))
+        end
+        return "+ " .. FormatCompactNumber(rawText)
+    end
+
     local numericValue = tonumber(value) or 0
     local absValue = math.abs(numericValue)
     if numericValue < 0 then
-        return string.format("- %d", absValue)
+        return "- " .. FormatCompactNumber(absValue)
     end
-    return string.format("+ %d", absValue)
+    return "+ " .. FormatCompactNumber(absValue)
 end
 
 NormalizeHuanJingMode = function(mode)
@@ -2282,6 +2393,123 @@ local function IsOfficialStatLine(text)
     end
 
     return false
+end
+
+local function EscapePattern(text)
+    return tostring(text or ""):gsub("([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1")
+end
+
+local function FormatOfficialSignedStatLine(name, value)
+    local rawText = tostring(value or "0")
+    if rawText:sub(1, 1) == "-" then
+        return string.format("-%s %s", FormatCompactNumber(rawText:sub(2)), name)
+    end
+    return string.format("+%s %s", FormatCompactNumber(rawText), name)
+end
+
+local function ReplaceFirstNumber(text, value)
+    local replacement = FormatCompactNumber(value)
+    local replaced = false
+    local result = tostring(text or ""):gsub("%d+", function()
+        if replaced then
+            return nil
+        end
+        replaced = true
+        return replacement
+    end, 1)
+    return result, replaced
+end
+
+local function FindUnusedTemplateAttr(templateData, usedAttrs, predicate)
+    if not templateData or not templateData.attributes then
+        return nil, nil
+    end
+
+    for index, attr in ipairs(templateData.attributes) do
+        if not usedAttrs[index] and predicate(attr) then
+            return index, attr
+        end
+    end
+
+    return nil, nil
+end
+
+local function ApplyTemplateStatsToOfficialLines(tooltip, templateData)
+    local usedAttrs = {}
+    local usedArmor = false
+    local usedDamage = {}
+
+    if not tooltip or not templateData then
+        return usedAttrs, usedArmor, usedDamage
+    end
+
+    local tooltipName = tooltip:GetName()
+    if not tooltipName then
+        return usedAttrs, usedArmor, usedDamage
+    end
+
+    for i = 1, tooltip:NumLines() do
+        local leftText = _G[tooltipName .. "TextLeft" .. i]
+        if leftText then
+            local text = leftText:GetText()
+            local clean = StripColorCodes(text or "")
+            if clean and clean ~= "" then
+                local replaced = false
+
+                local primaryIndex, primaryAttr = FindUnusedTemplateAttr(templateData, usedAttrs, function(attr)
+                    local name = ATTR_NAMES[attr.type] or ("属性" .. tostring(attr.type))
+                    local escapedName = EscapePattern(name)
+                    return clean:match("^[%+%-]?%s*%d+%s*" .. escapedName .. "%s*$") ~= nil
+                        or clean:match("^" .. escapedName .. "%s*[%+%-]?%s*%d+%s*$") ~= nil
+                end)
+
+                if primaryAttr then
+                    local name = ATTR_NAMES[primaryAttr.type] or ("属性" .. tostring(primaryAttr.type))
+                    leftText:SetText(FormatOfficialSignedStatLine(name, primaryAttr.value))
+                    usedAttrs[primaryIndex] = true
+                    replaced = true
+                end
+
+                if not replaced then
+                    local equipIndex, equipAttr = FindUnusedTemplateAttr(templateData, usedAttrs, function(attr)
+                        local name = ATTR_NAMES[attr.type] or ("属性" .. tostring(attr.type))
+                        return clean:find(name, 1, true) and (clean:find("装备", 1, true) or clean:find("提高", 1, true))
+                    end)
+
+                    if equipAttr then
+                        local newText, didReplace = ReplaceFirstNumber(clean, equipAttr.value)
+                        if didReplace then
+                            leftText:SetText(newText)
+                            usedAttrs[equipIndex] = true
+                            replaced = true
+                        end
+                    end
+                end
+
+                if not replaced and templateData.armor and templateData.armor ~= "" and not usedArmor then
+                    if clean:match("^%d+%s*护甲%s*$")
+                        or clean:match("^[%+%-]%s*%d+%s*护甲%s*$")
+                        or clean:match("^护甲%s*[%+%-]?%s*%d+%s*$") then
+                        leftText:SetText(FormatCompactNumber(templateData.armor) .. " 护甲")
+                        usedArmor = true
+                        replaced = true
+                    end
+                end
+
+                if not replaced and templateData.damages then
+                    for damageIndex, damage in ipairs(templateData.damages) do
+                        if not usedDamage[damageIndex] and clean:match("^%d+%s*%-%s*%d+%s*伤害") then
+                            leftText:SetText(string.format("%s - %s伤害", FormatCompactNumber(damage.min), FormatCompactNumber(damage.max)))
+                            usedDamage[damageIndex] = true
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return usedAttrs, usedArmor, usedDamage
 end
 
 -- 渲染鉴定基础属性
@@ -2954,15 +3182,20 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
     local identData = cached.systems.identification
     local enhanceData = cached.systems.enhancement
     local growthData = cached.systems.growth
+    local templateData = cached.systems.templateStats
 
     -- 如果三个系统都没有数据，则不渲染
-    if not identData and not enhanceData and not growthData then
+    if not identData and not enhanceData and not growthData and not templateData then
         return
     end
 
     -- 只收集鉴定系统的属性（不混入强化和成长）
     local baseAttributes = {}
     local additionalAttributes = {}
+
+    if templateData and not templateData.isEmpty then
+        ApplyTemplateStatsToOfficialLines(tooltip, templateData)
+    end
 
     -- 官方基础属性（如力量/敏捷/智力/耐力/精神），用于和幻境倍率一起显示
     local officialBaseAttributes = {}
@@ -3191,6 +3424,7 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
     meta.rendered.identification = true
     meta.rendered.enhancement = true
     meta.rendered.growth = true
+    meta.rendered.templateStats = true
 
     tooltip:Show()
 end
@@ -5864,7 +6098,7 @@ local function OnTooltipSetItem(tooltip)
                     print(string.format("|cffff8800[聊天框链接]|r 无有效GUID，跳过查询 key=%s", key))
                 end
             end
-        elseif not isPendingIdentify then
+        elseif not isPendingIdentify or (DB.systems.templateStats and bagNum ~= nil and slotNum ~= nil) then
             -- 【关键修复】检测是否正在观察其他玩家
             -- 如果是观察其他玩家，需要使用GUID格式查询（服务器无法访问其他玩家的背包）
             local isInspectOther = inspectUnit and UnitExists(inspectUnit) and not UnitIsUnit(inspectUnit, "player")
@@ -5949,6 +6183,7 @@ local function OnTooltipSetItem(tooltip)
         or tooltipMeta.rendered.runes
         or tooltipMeta.rendered.sets
         or tooltipMeta.rendered.magic
+        or tooltipMeta.rendered.templateStats
     )
 
     local cacheKey = nil

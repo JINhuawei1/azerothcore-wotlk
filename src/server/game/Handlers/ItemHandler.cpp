@@ -28,6 +28,27 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include <cmath>
+#include <limits>
+
+namespace
+{
+int32 ToClientInt32(int64 value)
+{
+    if (value > std::numeric_limits<int32>::max())
+        return std::numeric_limits<int32>::max();
+
+    if (value < std::numeric_limits<int32>::min())
+        return std::numeric_limits<int32>::min();
+
+    return static_cast<int32>(value);
+}
+
+uint32 ToClientUInt32(uint64 value)
+{
+    return value > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(value);
+}
+
+}
 
 void WorldSession::HandleSplitItemOpcode(WorldPacket& recvData)
 {
@@ -419,8 +440,8 @@ void ItemTemplate::InitializeQueryData()
     queryData << Quality;
     queryData << Flags;
     queryData << Flags2;
-    queryData << BuyPrice;
-    queryData << SellPrice;
+    queryData << ToClientInt32(BuyPrice);
+    queryData << ToClientUInt32(SellPrice);
     queryData << InventoryType;
     queryData << AllowableClass;
     queryData << AllowableRace;
@@ -440,19 +461,19 @@ void ItemTemplate::InitializeQueryData()
     for (uint32 i = 0; i < StatsCount; ++i)
     {
         queryData << ItemStat[i].ItemStatType;
-        queryData << ItemStat[i].ItemStatValue;
+        queryData << ToClientInt32(ItemStat[i].ItemStatValue);
     }
     queryData << ScalingStatDistribution;            // scaling stats distribution
-    queryData << ScalingStatValue;                   // some kind of flags used to determine stat values column
+    queryData << ToClientUInt32(ScalingStatValue);   // some kind of flags used to determine stat values column
     for (int i = 0; i < MAX_ITEM_PROTO_DAMAGES; ++i)
     {
-        queryData << Damage[i].DamageMin;
-        queryData << Damage[i].DamageMax;
+        queryData << float(Damage[i].DamageMin);
+        queryData << float(Damage[i].DamageMax);
         queryData << Damage[i].DamageType;
     }
 
     // resistances (7)
-    queryData << Armor;
+    queryData << ToClientUInt32(Armor);
     queryData << HolyRes;
     queryData << FireRes;
     queryData << NatureRes;
@@ -513,7 +534,7 @@ void ItemTemplate::InitializeQueryData()
     queryData << RandomSuffix;
     queryData << Block;
     queryData << ItemSet;
-    queryData << MaxDurability;
+    queryData << ToClientUInt32(MaxDurability);
     queryData << Area;
     queryData << Map;                                // Added in 1.12.x & 2.0.1 client branch
     queryData << BagFamily;
@@ -526,7 +547,7 @@ void ItemTemplate::InitializeQueryData()
     queryData << socketBonus;
     queryData << GemProperties;
     queryData << RequiredDisenchantSkill;
-    queryData << ArmorDamageModifier;
+    queryData << float(ArmorDamageModifier);
     queryData << Duration;                           // added in 2.4.2.8209, duration (seconds)
     queryData << ItemLimitCategory;                  // WotLK, ItemLimitCategory
     queryData << HolidayId;                          // Holiday.dbc?
@@ -570,8 +591,8 @@ void WorldSession::HandleItemQuerySingleOpcode(WorldPacket& recvData)
         queryData << pProto->Quality;
         queryData << pProto->Flags;
         queryData << pProto->Flags2;
-        queryData << pProto->BuyPrice;
-        queryData << pProto->SellPrice;
+        queryData << ToClientInt32(pProto->BuyPrice);
+        queryData << ToClientUInt32(pProto->SellPrice);
         queryData << pProto->InventoryType;
         queryData << pProto->AllowableClass;
         queryData << pProto->AllowableRace;
@@ -591,19 +612,19 @@ void WorldSession::HandleItemQuerySingleOpcode(WorldPacket& recvData)
         for (uint32 i = 0; i < pProto->StatsCount; ++i)
         {
             queryData << pProto->ItemStat[i].ItemStatType;
-            queryData << pProto->ItemStat[i].ItemStatValue;
+            queryData << ToClientInt32(pProto->ItemStat[i].ItemStatValue);
         }
         queryData << pProto->ScalingStatDistribution;            // scaling stats distribution
-        queryData << pProto->ScalingStatValue;                   // some kind of flags used to determine stat values column
+        queryData << ToClientUInt32(pProto->ScalingStatValue);   // some kind of flags used to determine stat values column
         for (int i = 0; i < MAX_ITEM_PROTO_DAMAGES; ++i)
         {
-            queryData << pProto->Damage[i].DamageMin;
-            queryData << pProto->Damage[i].DamageMax;
+            queryData << float(pProto->Damage[i].DamageMin);
+            queryData << float(pProto->Damage[i].DamageMax);
             queryData << pProto->Damage[i].DamageType;
         }
 
         // resistances (7)
-        queryData << pProto->Armor;
+        queryData << ToClientUInt32(pProto->Armor);
         queryData << pProto->HolyRes;
         queryData << pProto->FireRes;
         queryData << pProto->NatureRes;
@@ -664,7 +685,7 @@ void WorldSession::HandleItemQuerySingleOpcode(WorldPacket& recvData)
         queryData << pProto->RandomSuffix;
         queryData << pProto->Block;
         queryData << pProto->ItemSet;
-        queryData << pProto->MaxDurability;
+        queryData << ToClientUInt32(pProto->MaxDurability);
         queryData << pProto->Area;
         queryData << pProto->Map;                                // Added in 1.12.x & 2.0.1 client branch
         queryData << pProto->BagFamily;
@@ -677,7 +698,7 @@ void WorldSession::HandleItemQuerySingleOpcode(WorldPacket& recvData)
         queryData << pProto->socketBonus;
         queryData << pProto->GemProperties;
         queryData << pProto->RequiredDisenchantSkill;
-        queryData << pProto->ArmorDamageModifier;
+        queryData << float(pProto->ArmorDamageModifier);
         queryData << pProto->Duration;                           // added in 2.4.2.8209, duration (seconds)
         queryData << pProto->ItemLimitCategory;                  // WotLK, ItemLimitCategory
         queryData << pProto->HolidayId;                          // Holiday.dbc?
@@ -1113,14 +1134,15 @@ void WorldSession::SendListInventory(ObjectGuid vendorGuid, uint32 vendorEntry)
                 }
 
                 // reputation discount
-                int32 price = item->IsGoldRequired(itemTemplate) ? uint32(std::floor(itemTemplate->BuyPrice * discountMod)) : 0;
+                int64 rawPrice = item->IsGoldRequired(itemTemplate) ? static_cast<int64>(std::floor(static_cast<long double>(itemTemplate->BuyPrice) * static_cast<long double>(discountMod))) : 0;
+                uint32 price = rawPrice <= 0 ? 0 : ToClientUInt32(static_cast<uint64>(rawPrice));
 
                 data << uint32(slot + 1);       // client expects counting to start at 1
                 data << uint32(item->item);
                 data << uint32(itemTemplate->DisplayInfoID);
                 data << int32(leftInStock);
                 data << uint32(price);
-                data << uint32(itemTemplate->MaxDurability);
+                data << uint32(itemTemplate->GetMaxDurabilityForUpdateField());
                 data << uint32(itemTemplate->BuyCount);
                 data << uint32(item->ExtendedCost);
 

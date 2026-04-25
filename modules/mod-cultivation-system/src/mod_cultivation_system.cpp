@@ -1652,27 +1652,35 @@ static void GetHostileUnitsInRange(Unit* caster, std::list<Unit*>& targets, floa
 // 工具函数：获取玩家攻击力或法强中较高者
 // ============================================
 
-static float GetPlayerHighestDamageValue(Unit* caster)
+static double GetPlayerHighestDamageValue(Unit* caster)
 {
     if (!caster)
         return 0.0f;
 
-    float ap = caster->GetTotalAttackPowerValue(BASE_ATTACK);
-    float sp = 0.0f;
+    double ap = caster->GetTotalAttackPowerValue(BASE_ATTACK);
+    double sp = 0.0f;
 
     if (Player* player = caster->ToPlayer())
     {
-        float rangedAP = player->GetTotalAttackPowerValue(RANGED_ATTACK);
+        ap = player->GetExtendedTotalAttackPowerValue(BASE_ATTACK);
+        double rangedAP = player->GetExtendedTotalAttackPowerValue(RANGED_ATTACK);
         if (rangedAP > ap) ap = rangedAP;
 
-        for (int i = 1; i < 7; ++i)
-        {
-            float schoolSP = static_cast<float>(player->GetUInt32Value(PLAYER_FIELD_MOD_DAMAGE_DONE_POS + i));
-            if (schoolSP > sp) sp = schoolSP;
-        }
+        sp = player->GetExtendedSpellDamageBonus();
     }
 
     return std::max(ap, sp);
+}
+
+static double GetCultivationAttackPower(Unit* caster)
+{
+    if (!caster)
+        return 0.0;
+
+    if (Player* player = caster->ToPlayer())
+        return player->GetExtendedTotalAttackPowerValue(BASE_ATTACK);
+
+    return caster->GetTotalAttackPowerValue(BASE_ATTACK);
 }
 
 static void SetShunyingControlImmunity(Unit* unit, bool apply)
@@ -1723,8 +1731,8 @@ class spell_cultivation_lingren : public SpellScript
         if (!caster || !target)
             return;
 
-        float highValue = GetPlayerHighestDamageValue(caster);
-        int32 damage = static_cast<int32>(highValue * 1.5f);
+        double highValue = GetPlayerHighestDamageValue(caster);
+        int64 damage = static_cast<int64>(highValue * 1.5);
         if (damage < 1) damage = 1;
         SetHitDamage(damage);
     }
@@ -1737,8 +1745,8 @@ class spell_cultivation_lingren : public SpellScript
             return;
 
         float angle = caster->GetAngle(target);
-        float highValue = GetPlayerHighestDamageValue(caster);
-        int32 damage = static_cast<int32>(highValue * 1.5f);
+        double highValue = GetPlayerHighestDamageValue(caster);
+        int64 damage = static_cast<int64>(highValue * 1.5);
         if (damage < 1) damage = 1;
 
         std::list<Unit*> targets;
@@ -1784,8 +1792,8 @@ class spell_cultivation_jindanbao : public SpellScript
         if (!caster || !target)
             return;
 
-        float ap = caster->GetTotalAttackPowerValue(BASE_ATTACK);
-        int32 damage = static_cast<int32>(ap * 2.0f);
+        double ap = GetCultivationAttackPower(caster);
+        int64 damage = static_cast<int64>(ap * 2.0);
         if (damage < 1) damage = 1;
         SetHitDamage(damage);
 
@@ -1908,8 +1916,8 @@ class spell_cultivation_tianlei : public SpellScript
         if (!caster || !target)
             return;
 
-        float highValue = GetPlayerHighestDamageValue(caster);
-        int32 damage = static_cast<int32>(highValue * 2.5f);
+        double highValue = GetPlayerHighestDamageValue(caster);
+        int64 damage = static_cast<int64>(highValue * 2.5);
         if (damage < 1) damage = 1;
         SetHitDamage(damage);
 
@@ -1973,8 +1981,8 @@ class spell_cultivation_wanjian_aura : public AuraScript
         if (!caster)
             return;
 
-        float ap = caster->GetTotalAttackPowerValue(BASE_ATTACK);
-        int32 damage = static_cast<int32>(ap * 1.2f);
+        double ap = GetCultivationAttackPower(caster);
+        int64 damage = static_cast<int64>(ap * 1.2);
         if (damage < 1) damage = 1;
 
         std::list<Unit*> targets;
@@ -2002,7 +2010,7 @@ class spell_cultivation_tuntian : public SpellScript
 {
     PrepareSpellScript(spell_cultivation_tuntian);
 
-    int32 _totalDamage = 0;
+    int64 _totalDamage = 0;
 
     void FilterTargets(std::list<WorldObject*>& targets)
     {
@@ -2029,8 +2037,8 @@ class spell_cultivation_tuntian : public SpellScript
             return;
         }
 
-        float highValue = GetPlayerHighestDamageValue(caster);
-        int32 damage = static_cast<int32>(highValue * 3.5f);
+        double highValue = GetPlayerHighestDamageValue(caster);
+        int64 damage = static_cast<int64>(highValue * 3.5);
         if (damage < 1) damage = 1;
         SetHitDamage(damage);
         _totalDamage += damage;
@@ -2044,13 +2052,10 @@ class spell_cultivation_tuntian : public SpellScript
             return;
 
         // 吸血20%
-        int32 healAmount = _totalDamage / 5;
+        int64 healAmount = _totalDamage / 5;
         if (healAmount > 0)
         {
-            uint32 newHealth = caster->GetHealth() + healAmount;
-            if (newHealth > caster->GetMaxHealth())
-                newHealth = caster->GetMaxHealth();
-            caster->SetHealth(newHealth);
+            caster->ModifyHealth(healAmount);
 
             if (Player* player = caster->ToPlayer())
             {
@@ -2083,8 +2088,8 @@ class spell_cultivation_jiutian_aura : public AuraScript
         if (!caster)
             return;
 
-        float highValue = GetPlayerHighestDamageValue(caster);
-        int32 damage = static_cast<int32>(highValue * 2.0f);
+        double highValue = GetPlayerHighestDamageValue(caster);
+        int64 damage = static_cast<int64>(highValue * 2.0);
         if (damage < 1) damage = 1;
 
         std::list<Unit*> targets;
@@ -2119,14 +2124,9 @@ class spell_cultivation_xianshen_aura : public AuraScript
             return;
 
         // 每秒回复5%最大生命值
-        uint32 healAmount = target->GetMaxHealth() / 20;
+        int64 healAmount = target->CountPctFromMaxHealth(5);
         if (healAmount > 0)
-        {
-            uint32 newHealth = target->GetHealth() + healAmount;
-            if (newHealth > target->GetMaxHealth())
-                newHealth = target->GetMaxHealth();
-            target->SetHealth(newHealth);
-        }
+            target->ModifyHealth(healAmount);
     }
 
     void OnApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
@@ -2138,7 +2138,7 @@ class spell_cultivation_xianshen_aura : public AuraScript
         if (Player* player = target->ToPlayer())
         {
             player->UpdateAllStats();
-            player->SetHealth(player->GetMaxHealth());
+            player->SetFullHealth();
 
             ChatHandler(player->GetSession()).PSendSysMessage(
                 "|cffffd700[仙神降世]|r 仙神附体！全属性翻倍，生命瞬间回满，免疫控制，每秒回血！");
