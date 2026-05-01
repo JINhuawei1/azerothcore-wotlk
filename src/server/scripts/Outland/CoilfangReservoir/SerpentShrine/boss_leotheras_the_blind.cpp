@@ -295,7 +295,7 @@ struct npc_inner_demon : public ScriptedAI
         }
     }
 
-    void OnCalculateSpellDamageReceived(int32& damage, Unit* attacker) override
+    void OnCalculateSpellDamageReceived(int64& damage, Unit* attacker) override
     {
         if (!CanReceiveDamage(attacker))
         {

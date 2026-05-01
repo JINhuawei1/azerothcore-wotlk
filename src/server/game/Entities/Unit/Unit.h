@@ -510,14 +510,14 @@ struct SpellNonMeleeDamage
 
 struct SpellPeriodicAuraLogInfo
 {
-    SpellPeriodicAuraLogInfo(AuraEffect const* _auraEff, uint32 _damage, uint32 _overDamage, uint32 _absorb, uint32 _resist, float _multiplier, bool _critical)
+    SpellPeriodicAuraLogInfo(AuraEffect const* _auraEff, uint64 _damage, uint64 _overDamage, uint64 _absorb, uint64 _resist, float _multiplier, bool _critical)
         : auraEff(_auraEff), damage(_damage), overDamage(_overDamage), absorb(_absorb), resist(_resist), multiplier(_multiplier), critical(_critical) {}
 
     AuraEffect const* auraEff;
-    uint32 damage;
-    uint32 overDamage;                                      // overkill/overheal
-    uint32 absorb;
-    uint32 resist;
+    uint64 damage;
+    uint64 overDamage;                                      // overkill/overheal
+    uint64 absorb;
+    uint64 resist;
     float  multiplier;
     bool   critical;
 };
@@ -1014,8 +1014,8 @@ public:
     // GetStatUInt32：直接返回 uint32，避免 float 精度损失，用于大数值比较
     [[nodiscard]] uint32 GetStatUInt32(Stats stat) const { return GetUInt32Value(static_cast<uint16>(UNIT_FIELD_STAT0) + stat); }
     // 支持 uint32 类型以避免大数值溢出（超过 21.47 亿）
-    void SetStat(Stats stat, uint32 val) { SetUInt32Value(static_cast<uint16>(UNIT_FIELD_STAT0) + stat, val); }
-    void SetStat(Stats stat, int32 val) { SetUInt32Value(static_cast<uint16>(UNIT_FIELD_STAT0) + stat, val > 0 ? uint32(val) : 0); }
+    void SetStat(Stats stat, uint32 val) { SetUInt32Value(static_cast<uint16>(UNIT_FIELD_STAT0) + stat, val > 2000000000u ? 2000000000u : val); }
+    void SetStat(Stats stat, int32 val) { SetUInt32Value(static_cast<uint16>(UNIT_FIELD_STAT0) + stat, val > 0 ? (uint32(val) > 2000000000u ? 2000000000u : uint32(val)) : 0); }
 
     [[nodiscard]] Stats GetStatByAuraGroup(UnitMods unitMod) const;
 
@@ -1039,7 +1039,15 @@ public:
     void SetCanModifyStats(bool modifyStats) { m_canModifyStats = modifyStats; }
     [[nodiscard]] bool CanModifyStats() const { return m_canModifyStats; }
 
-    void ApplyStatBuffMod(Stats stat, float val, bool apply) { ApplyModSignedFloatValue((val > 0 ? static_cast<uint16>(UNIT_FIELD_POSSTAT0) +  stat : static_cast<uint16>(UNIT_FIELD_NEGSTAT0) +  stat), val, apply); }
+    void ApplyStatBuffMod(Stats stat, float val, bool apply)
+    {
+        if (val > 2000000000.0f)
+            val = 2000000000.0f;
+        else if (val < -2000000000.0f)
+            val = -2000000000.0f;
+
+        ApplyModSignedFloatValue((val > 0 ? static_cast<uint16>(UNIT_FIELD_POSSTAT0) +  stat : static_cast<uint16>(UNIT_FIELD_NEGSTAT0) +  stat), val, apply);
+    }
     void ApplyStatPercentBuffMod(Stats stat, float val, bool apply);
 
     // Unit level methods
@@ -1055,6 +1063,7 @@ public:
     [[nodiscard]] float GetHealthPct() const { return GetMaxHealthForCombat() ? float(100.0L * static_cast<long double>(GetHealthForCombat()) / static_cast<long double>(GetMaxHealthForCombat())) : 0.0f; }
     int64 GetHealthGain(int64 dVal);
     [[nodiscard]] uint32 GetCreateHealth() const { return GetUInt32Value(UNIT_FIELD_BASE_HEALTH); }
+    [[nodiscard]] virtual uint64 GetCreateHealthForCombat() const { return GetCreateHealth(); }
 
     [[nodiscard]] bool IsFullHealth() const { return GetHealthForCombat() >= GetMaxHealthForCombat(); }
 
@@ -1067,8 +1076,9 @@ public:
     [[nodiscard]] uint64 CountPctFromCurHealth(int32 pct) const { return uint64(static_cast<long double>(GetHealthForCombat()) * static_cast<long double>(pct) / 100.0L); }
 
     void SetHealth(uint32 val);
+    void SetHealthForCombat(uint64 value);
     void SetMaxHealth(uint32 val);
-    inline void SetFullHealth() { SetHealth(GetMaxHealth()); }
+    void SetFullHealth();
     int64 ModifyHealth(int64 val);
     void SetCreateHealth(uint32 val) { SetUInt32Value(UNIT_FIELD_BASE_HEALTH, val); }
 
@@ -1079,19 +1089,25 @@ public:
 
     [[nodiscard]] uint32 GetPower(Powers power) const { return GetUInt32Value(static_cast<uint16>(UNIT_FIELD_POWER1) + power); }
     [[nodiscard]] uint32 GetMaxPower(Powers power) const { return GetUInt32Value(static_cast<uint16>(UNIT_FIELD_MAXPOWER1) + power); }
-    [[nodiscard]] float GetPowerPct(Powers power) const { return GetMaxPower(power) ? 100.f * GetPower(power) / GetMaxPower(power) : 0.0f; }
+    [[nodiscard]] virtual uint64 GetPowerForCombat(Powers power) const { return GetPower(power); }
+    [[nodiscard]] virtual uint64 GetMaxPowerForCombat(Powers power) const { return GetMaxPower(power); }
+    [[nodiscard]] float GetPowerPct(Powers power) const { return GetMaxPowerForCombat(power) ? float(100.0L * static_cast<long double>(GetPowerForCombat(power)) / static_cast<long double>(GetMaxPowerForCombat(power))) : 0.0f; }
     [[nodiscard]] uint32 GetCreatePowers(Powers power) const;
+    [[nodiscard]] virtual uint64 GetCreatePowerForCombat(Powers power) const { return GetCreatePowers(power); }
 
     void setPowerType(Powers power);
     void SetPower(Powers power, uint32 val, bool withPowerUpdate = true, bool fromRegenerate = false);
+    void SetPowerForCombat(Powers power, uint64 value, bool withPowerUpdate = true);
     void SetMaxPower(Powers power, uint32 val);
 
     int32 ModifyPower(Powers power, int32 val, bool withPowerUpdate = true);
+    int64 ModifyPower64(Powers power, int64 val, bool withPowerUpdate = true);
     int32 ModifyPowerPct(Powers power, float pct, bool apply = true);
 
     void RewardRage(uint32 damage, uint32 weaponSpeedHitFactor, bool attacker);
 
     [[nodiscard]] uint32 GetCreateMana() const { return GetUInt32Value(UNIT_FIELD_BASE_MANA); }
+    [[nodiscard]] virtual uint64 GetCreateManaForCombat() const { return GetCreateMana(); }
     void SetCreateMana(uint32 val) { SetUInt32Value(UNIT_FIELD_BASE_MANA, val); }
     [[nodiscard]] bool CanRestoreMana(SpellInfo const* spellInfo) const;
     void SetLastManaUse(uint32 spellCastTime) { m_lastManaUse = spellCastTime; }
@@ -1499,8 +1515,8 @@ public:
     bool CanProc() { return !m_procDeep; }
     void SetCantProc(bool apply);
 
-    static void ProcDamageAndSpell(Unit* actor, Unit* victim, uint32 procAttacker, uint32 procVictim, uint32 procEx, uint32 amount, WeaponAttackType attType = BASE_ATTACK, SpellInfo const* procSpellInfo = nullptr, SpellInfo const* procAura = nullptr, int8 procAuraEffectIndex = -1, Spell const* procSpell = nullptr, DamageInfo* damageInfo = nullptr, HealInfo* healInfo = nullptr, uint32 procPhase = 2 /*PROC_SPELL_PHASE_HIT*/);
-    void ProcDamageAndSpellFor(bool isVictim, Unit* target, uint32 procFlag, uint32 procExtra, WeaponAttackType attType, SpellInfo const* procSpellInfo, uint32 damage, SpellInfo const* procAura = nullptr, int8 procAuraEffectIndex = -1, Spell const* procSpell = nullptr, DamageInfo* damageInfo = nullptr, HealInfo* healInfo = nullptr, uint32 procPhase = 2 /*PROC_SPELL_PHASE_HIT*/);
+    static void ProcDamageAndSpell(Unit* actor, Unit* victim, uint32 procAttacker, uint32 procVictim, uint32 procEx, uint64 amount, WeaponAttackType attType = BASE_ATTACK, SpellInfo const* procSpellInfo = nullptr, SpellInfo const* procAura = nullptr, int8 procAuraEffectIndex = -1, Spell const* procSpell = nullptr, DamageInfo* damageInfo = nullptr, HealInfo* healInfo = nullptr, uint32 procPhase = 2 /*PROC_SPELL_PHASE_HIT*/);
+    void ProcDamageAndSpellFor(bool isVictim, Unit* target, uint32 procFlag, uint32 procExtra, WeaponAttackType attType, SpellInfo const* procSpellInfo, uint64 damage, SpellInfo const* procAura = nullptr, int8 procAuraEffectIndex = -1, Spell const* procSpell = nullptr, DamageInfo* damageInfo = nullptr, HealInfo* healInfo = nullptr, uint32 procPhase = 2 /*PROC_SPELL_PHASE_HIT*/);
 
     void GetProcAurasTriggeredOnEvent(std::list<AuraApplication*>& aurasTriggeringProc, std::list<AuraApplication*>* procAuras, ProcEventInfo eventInfo);
 
@@ -1573,8 +1589,8 @@ public:
     static void CalcHealAbsorb(HealInfo& healInfo);
 
     // Energize spells
-    void SendEnergizeSpellLog(Unit* victim, uint32 SpellID, uint32 Damage, Powers powertype);
-    void EnergizeBySpell(Unit* victim, uint32 SpellID, uint32 Damage, Powers powertype);
+    void SendEnergizeSpellLog(Unit* victim, uint32 SpellID, uint64 Damage, Powers powertype, uint64 effectiveGain = 0);
+    void EnergizeBySpell(Unit* victim, uint32 SpellID, uint64 Damage, Powers powertype);
 
     // Spells immunities
     void ApplySpellImmune(uint32 spellId, uint32 op, uint32 type, bool apply, SpellImmuneBlockType blockType = SPELL_BLOCK_TYPE_ALL);
@@ -2204,15 +2220,19 @@ namespace Acore
         {
             Unit const* a = objA->ToUnit();
             Unit const* b = objB->ToUnit();
-            float rA = (a && a->GetMaxPower(_power)) ? float(a->GetPower(_power)) / float(a->GetMaxPower(_power)) : 0.0f;
-            float rB = (b && b->GetMaxPower(_power)) ? float(b->GetPower(_power)) / float(b->GetMaxPower(_power)) : 0.0f;
+            uint64 maxPowerA = a ? a->GetMaxPowerForCombat(_power) : 0;
+            uint64 maxPowerB = b ? b->GetMaxPowerForCombat(_power) : 0;
+            long double rA = maxPowerA ? static_cast<long double>(a->GetPowerForCombat(_power)) / static_cast<long double>(maxPowerA) : 0.0L;
+            long double rB = maxPowerB ? static_cast<long double>(b->GetPowerForCombat(_power)) / static_cast<long double>(maxPowerB) : 0.0L;
             return _ascending ? rA < rB : rA > rB;
         }
 
         bool operator()(Unit const* a, Unit const* b) const
         {
-            float rA = a->GetMaxPower(_power) ? float(a->GetPower(_power)) / float(a->GetMaxPower(_power)) : 0.0f;
-            float rB = b->GetMaxPower(_power) ? float(b->GetPower(_power)) / float(b->GetMaxPower(_power)) : 0.0f;
+            uint64 maxPowerA = a->GetMaxPowerForCombat(_power);
+            uint64 maxPowerB = b->GetMaxPowerForCombat(_power);
+            long double rA = maxPowerA ? static_cast<long double>(a->GetPowerForCombat(_power)) / static_cast<long double>(maxPowerA) : 0.0L;
+            long double rB = maxPowerB ? static_cast<long double>(b->GetPowerForCombat(_power)) / static_cast<long double>(maxPowerB) : 0.0L;
             return _ascending ? rA < rB : rA > rB;
         }
 

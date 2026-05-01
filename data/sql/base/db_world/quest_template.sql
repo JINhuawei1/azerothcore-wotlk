@@ -34,8 +34,8 @@ CREATE TABLE `quest_template` (
   `RequiredFactionValue2` int NOT NULL DEFAULT '0',
   `RewardNextQuest` int unsigned NOT NULL DEFAULT '0',
   `RewardXPDifficulty` tinyint unsigned NOT NULL DEFAULT '0',
-  `RewardMoney` int NOT NULL DEFAULT '0',
-  `RewardMoneyDifficulty` int unsigned NOT NULL DEFAULT '0',
+  `RewardMoney` bigint NOT NULL DEFAULT '0',
+  `RewardMoneyDifficulty` bigint unsigned NOT NULL DEFAULT '0',
   `RewardDisplaySpell` int unsigned NOT NULL DEFAULT '0',
   `RewardSpell` int NOT NULL DEFAULT '0',
   `RewardHonor` int NOT NULL DEFAULT '0',
@@ -9627,4 +9627,3 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2024-12-17 22:34:25
-

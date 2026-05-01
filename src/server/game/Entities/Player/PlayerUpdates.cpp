@@ -620,6 +620,18 @@ void Player::UpdateRating(CombatRating cr)
         return static_cast<int32>(value);
     };
 
+    if (!CanModifyStats())
+    {
+        int32 amount = clampClientRating(m_baseRatingValue[cr]);
+        int64 extendedAmount = _extendedBaseRatingValue[cr] > 0 ? _extendedBaseRatingValue[cr] : m_baseRatingValue[cr];
+        if (extendedAmount < 0)
+            extendedAmount = 0;
+
+        _extendedCombatRatings[cr] = extendedAmount > 0 ? extendedAmount : 0;
+        SetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + static_cast<uint16>(cr), uint32(amount));
+        return;
+    }
+
     int32 amount = clampClientRating(m_baseRatingValue[cr]);
     int64 extendedAmount = _extendedBaseRatingValue[cr] > 0 ? _extendedBaseRatingValue[cr] : m_baseRatingValue[cr];
     // Apply bonus from SPELL_AURA_MOD_RATING_FROM_STAT
@@ -2166,7 +2178,7 @@ void Player::UpdateCharmedAI()
 
         if (Mages)
         {
-            if ((GetPower(POWER_MANA) * 100 / GetMaxPower(POWER_MANA)) < 10)
+            if (GetPowerPct(POWER_MANA) < 10.0f)
             {
                 GetMotionMaster()->MoveChase(target, 4);
                 return;

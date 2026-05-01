@@ -24,9 +24,11 @@
 #include "SkillDiscovery.h"
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
+#include "SpellScriptCombatValue.h"
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
 #include "WorldSession.h"
+#include <limits>
 /*
  * Scripts for spells with SPELLFAMILY_GENERIC spells used by items.
  * Ordered alphabetically using scriptname.
@@ -572,7 +574,8 @@ class spell_item_skull_of_impeding_doom : public AuraScript
         if (!GetCaster())
             return;
 
-        amount = GetCaster()->GetMaxHealth() * 0.12f; // 5 ticks which reduce health by 60%
+        uint64 damage = CalculatePct(GetCaster()->GetMaxHealthForCombat(), 12);
+        amount = damage > static_cast<uint64>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(damage); // 5 ticks which reduce health by 60%
     }
 
     void CalculateManaLeechAmount(AuraEffect const* /*aurEff*/, int32& amount, bool& /*canBeRecalculated*/)
@@ -580,7 +583,8 @@ class spell_item_skull_of_impeding_doom : public AuraScript
         if (!GetCaster() || !GetCaster()->HasActivePowerType(POWER_MANA))
             return;
 
-        amount = GetCaster()->GetMaxPower(POWER_MANA) * 0.12f; // 5 ticks which reduce health by 60%
+        uint64 mana = CalculatePct(GetCaster()->GetMaxPowerForCombat(POWER_MANA), 12);
+        amount = mana > static_cast<uint64>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(mana); // 5 ticks which reduce mana by 60%
     }
 
     void Register() override
@@ -954,7 +958,8 @@ class spell_item_oracle_ablutions : public SpellScript
                 break;
             case POWER_MANA:
                 {
-                    int32 mana = CalculatePct(caster->GetMaxPower(POWER_MANA), 5.0f);
+                    long double manaValue = static_cast<long double>(caster->GetMaxPowerForCombat(POWER_MANA)) * 5.0L / 100.0L;
+                    int32 mana = manaValue >= static_cast<long double>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(manaValue);
                     caster->CastCustomSpell(SPELL_ABLUTION_MANA, SPELLVALUE_BASE_POINT0, mana, caster, true);
                     break;
                 }
@@ -1477,7 +1482,7 @@ class spell_item_blessing_of_ancient_kings : public AuraScript
             return;
         }
 
-        int32 absorb = int32(CalculatePct(healInfo->GetHeal(), 15.0f));
+        int32 absorb = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(static_cast<long double>(healInfo->GetHeal()), 15.0L));
         // xinef: all heals contribute to one bubble
         if (AuraEffect* protEff = eventInfo.GetProcTarget()->GetAuraEffect(SPELL_PROTECTION_OF_ANCIENT_KINGS, 0/*, eventInfo.GetActor()->GetGUID()*/))
         {
@@ -1970,7 +1975,7 @@ class spell_item_necrotic_touch : public AuraScript
             return;
         }
 
-        int32 bp = CalculatePct(static_cast<int32>(damageInfo->GetDamage()), aurEff->GetAmount());
+        int32 bp = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(static_cast<long double>(damageInfo->GetDamage()), aurEff->GetAmount()));
         GetTarget()->CastCustomSpell(SPELL_ITEM_NECROTIC_TOUCH_PROC, SPELLVALUE_BASE_POINT0, bp, eventInfo.GetProcTarget(), true, nullptr, aurEff);
     }
 
@@ -3135,7 +3140,7 @@ class spell_item_impale_leviroth : public SpellScript
                 target->CastSpell(target, SPELL_LEVIROTH_SELF_IMPALE, true);
                 target->SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, 150);
                 target->SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, 200);
-                target->LowerPlayerDamageReq(target->GetMaxHealth());
+                target->LowerPlayerDamageReq(target->GetMaxHealthForCombat());
             }
     }
 
@@ -3335,7 +3340,7 @@ class spell_item_healing_injector : public SpellScript
     {
         if (Player* caster = GetCaster()->ToPlayer())
             if (caster->HasSkill(SKILL_ENGINEERING))
-                SetHitHeal(GetHitHeal() * 1.25f);
+                SetHitHeal(SpellScriptCombat::ToInt64Saturated(static_cast<long double>(GetHitHeal()) * 1.25L));
     }
 
     void Register() override
@@ -3359,7 +3364,7 @@ class spell_item_mana_injector : public SpellScript
         {
             if (caster->HasSkill(SKILL_ENGINEERING))
             {
-                SetEffectValue(GetEffectValue() * 1.25f);
+                SetEffectValue(SpellScriptCombat::ToInt64Saturated(static_cast<long double>(GetEffectValue()) * 1.25L));
             }
         }
     }
@@ -3686,8 +3691,8 @@ class spell_item_wraith_scythe_drain_life : public SpellScript
         Unit* caster = GetCaster();
         if (target && caster)
         {
-            uint32 sp = caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_ALL);
-            SetHitDamage(GetHitDamage() + sp);
+            int64 damage = SpellScriptCombat::ToInt64Saturated(static_cast<long double>(GetHitDamage()) + SpellScriptCombat::GetSpellDamageBonus(caster, SPELL_SCHOOL_MASK_ALL));
+            SetHitDamage(damage);
         }
     }
 

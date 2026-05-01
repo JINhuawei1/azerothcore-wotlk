@@ -543,7 +543,7 @@ private:
         return std::max<int64>(1, static_cast<int64>(entry.healValue));
     }
 
-    int32 CalculateSecondaryTickAmount(HealRuneEntry const& entry, uint32 maxValue, Powers powerType) const
+    int64 CalculateSecondaryTickAmount(HealRuneEntry const& entry, uint64 maxValue, Powers powerType) const
     {
         if (maxValue == 0)
             return 0;
@@ -554,7 +554,11 @@ private:
             if (percent == 0)
                 return 0;
 
-            return std::max<int32>(1, static_cast<int32>(std::ceil(static_cast<double>(maxValue) * static_cast<double>(percent) / 100.0)));
+            long double amount = std::ceil(static_cast<long double>(maxValue) * static_cast<long double>(percent) / 100.0L);
+            if (amount >= static_cast<long double>(std::numeric_limits<int64>::max()))
+                return std::numeric_limits<int64>::max();
+
+            return std::max<int64>(1, static_cast<int64>(amount));
         }
 
         uint32 displayValue = GetSecondaryDisplayValue(entry.healValue);
@@ -562,22 +566,52 @@ private:
             return 0;
 
         if (powerType == POWER_RAGE || powerType == POWER_RUNIC_POWER)
-            return static_cast<int32>(displayValue * 10);
+            return static_cast<int64>(displayValue) * 10;
 
-        return static_cast<int32>(displayValue);
+        return static_cast<int64>(displayValue);
     }
 
-    void TryRestorePower(Player* player, Powers powerType, int32 amount, bool& applied) const
+    uint64 ClampRestoreAmount(int64 amount, uint64 currentValue, uint64 maxValue) const
+    {
+        if (amount <= 0 || currentValue >= maxValue)
+            return 0;
+
+        uint64 missingValue = maxValue - currentValue;
+        uint64 restoreAmount = static_cast<uint64>(amount);
+        return restoreAmount > missingValue ? missingValue : restoreAmount;
+    }
+
+    void TryRestoreHealth(Player* player, int64 amount, bool& applied) const
     {
         if (!player || amount <= 0)
             return;
 
-        uint32 maxPower = player->GetMaxPower(powerType);
-        uint32 currentPower = player->GetPower(powerType);
-        if (maxPower == 0 || currentPower >= maxPower)
+        uint64 maxHealth = player->GetMaxHealthForCombat();
+        uint64 currentHealth = player->GetHealthForCombat();
+        uint64 restoreAmount = ClampRestoreAmount(amount, currentHealth, maxHealth);
+        if (!restoreAmount)
             return;
 
-        player->ModifyPower(powerType, amount);
+        player->SetHealthForCombat(currentHealth + restoreAmount);
+        applied = true;
+    }
+
+    void TryRestorePower(Player* player, Powers powerType, int64 amount, bool& applied) const
+    {
+        if (!player || amount <= 0)
+            return;
+
+        if (powerType != POWER_MANA && !player->HasActivePowerType(powerType))
+            return;
+
+        uint64 maxPower = player->GetMaxPowerForCombat(powerType);
+        uint64 currentPower = player->GetPowerForCombat(powerType);
+        uint64 restoreAmount = ClampRestoreAmount(amount, currentPower, maxPower);
+        if (!restoreAmount)
+            return;
+
+        player->SetPowerForCombat(powerType, currentPower + restoreAmount);
+
         applied = true;
     }
 
@@ -585,33 +619,13 @@ private:
     {
         bool applied = false;
 
-        uint64 maxHealth = player->GetMaxHealthForCombat();
-        uint64 currentHealth = player->GetHealthForCombat();
-        if (maxHealth > currentHealth)
-        {
-            int64 healAmount = CalculateTickAmount(entry, maxHealth);
-            if (healAmount > 0)
-            {
-                player->ModifyHealth(healAmount);
-                applied = true;
-            }
-        }
+        TryRestoreHealth(player, CalculateTickAmount(entry, player->GetMaxHealthForCombat()), applied);
 
-        uint32 maxMana = player->GetMaxPower(POWER_MANA);
-        uint32 currentMana = player->GetPower(POWER_MANA);
-        if (maxMana > 0 && maxMana > currentMana)
-        {
-            int32 manaAmount = static_cast<int32>(std::min<int64>(CalculateTickAmount(entry, maxMana), std::numeric_limits<int32>::max()));
-            if (manaAmount > 0)
-            {
-                player->ModifyPower(POWER_MANA, manaAmount);
-                applied = true;
-            }
-        }
+        TryRestorePower(player, POWER_MANA, CalculateTickAmount(entry, player->GetMaxPowerForCombat(POWER_MANA)), applied);
 
-        TryRestorePower(player, POWER_ENERGY, CalculateSecondaryTickAmount(entry, player->GetMaxPower(POWER_ENERGY), POWER_ENERGY), applied);
-        TryRestorePower(player, POWER_RAGE, CalculateSecondaryTickAmount(entry, player->GetMaxPower(POWER_RAGE), POWER_RAGE), applied);
-        TryRestorePower(player, POWER_RUNIC_POWER, CalculateSecondaryTickAmount(entry, player->GetMaxPower(POWER_RUNIC_POWER), POWER_RUNIC_POWER), applied);
+        TryRestorePower(player, POWER_ENERGY, CalculateSecondaryTickAmount(entry, player->GetMaxPowerForCombat(POWER_ENERGY), POWER_ENERGY), applied);
+        TryRestorePower(player, POWER_RAGE, CalculateSecondaryTickAmount(entry, player->GetMaxPowerForCombat(POWER_RAGE), POWER_RAGE), applied);
+        TryRestorePower(player, POWER_RUNIC_POWER, CalculateSecondaryTickAmount(entry, player->GetMaxPowerForCombat(POWER_RUNIC_POWER), POWER_RUNIC_POWER), applied);
 
         if (applied && IsDebugEnabled())
         {

@@ -24,7 +24,16 @@
 #include "SpellInfo.h"
 #include "SpellScriptLoader.h"
 #include "icecrown_citadel.h"
+#include <limits>
 #include <random>
+
+namespace
+{
+    int64 ToPositiveInt64(uint64 value)
+    {
+        return value > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(value);
+    }
+}
 
 enum ScriptTexts
 {
@@ -254,7 +263,7 @@ public:
             _darnavanGUID.Clear();
             _waveCounter = 0;
             _Reset();
-            me->SetPower(POWER_MANA, me->GetMaxPower(POWER_MANA));
+            me->SetPowerForCombat(POWER_MANA, me->GetMaxPowerForCombat(POWER_MANA));
             events.SetPhase(PHASE_ONE);
             me->CastSpell(me, SPELL_SHADOW_CHANNELING, false);
             me->ApplySpellImmune(0, IMMUNITY_STATE, SPELL_AURA_MOD_TAUNT, false);
@@ -1129,9 +1138,11 @@ class spell_deathwhisper_mana_barrier_aura : public AuraScript
         PreventDefaultAction();
         if (Unit* caster = GetCaster())
         {
-            int32 missingHealth = int32(caster->GetMaxHealth() - caster->GetHealth());
-            caster->ModifyHealth(missingHealth);
-            caster->ModifyPower(POWER_MANA, -missingHealth);
+            uint64 maxHealth = caster->GetMaxHealthForCombat();
+            uint64 currentHealth = caster->GetHealthForCombat();
+            uint64 missingHealth = maxHealth > currentHealth ? maxHealth - currentHealth : 0;
+            caster->ModifyHealth(ToPositiveInt64(missingHealth));
+            caster->ModifyPower64(POWER_MANA, -ToPositiveInt64(missingHealth));
         }
     }
 

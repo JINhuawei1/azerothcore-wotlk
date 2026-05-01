@@ -1229,7 +1229,7 @@ public:
                     break;
             }
 
-            if (!_isCaster || (me->GetPower(POWER_MANA) * 100 / me->GetMaxPower(POWER_MANA) < 10))
+            if (!_isCaster || me->GetPowerPct(POWER_MANA) < 10.0f)
                 DoMeleeAttackIfReady();
         }
     };
@@ -1336,7 +1336,7 @@ public:
                     break;
             }
 
-            if (!_isCaster || (me->GetPower(POWER_MANA) * 100 / me->GetMaxPower(POWER_MANA) < 10))
+            if (!_isCaster || me->GetPowerPct(POWER_MANA) < 10.0f)
                 DoMeleeAttackIfReady();
         }
     };
@@ -1708,7 +1708,7 @@ public:
                     break;
             }
 
-            if (!_isCaster || (me->GetPower(POWER_MANA) * 100 / me->GetMaxPower(POWER_MANA) < 10))
+            if (!_isCaster || me->GetPowerPct(POWER_MANA) < 10.0f)
                 DoMeleeAttackIfReady();
         }
     };

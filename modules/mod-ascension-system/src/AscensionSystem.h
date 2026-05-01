@@ -79,7 +79,7 @@ struct AscensionSlotData
 struct AppliedStatEffect
 {
     uint32 statType;
-    int32 statValue;
+    int64 statValue;
 };
 
 // 玩家飞升状态
@@ -90,6 +90,7 @@ struct PlayerAscensionStatus
     std::set<uint8> unlockedSlots;                       // 已解锁的槽位
     std::map<uint8, std::vector<AppliedStatEffect>> slotStats;   // 【修复】按槽位记录已应用的属性
     std::map<uint8, std::vector<uint32>> slotSpells;     // 【修复】按槽位记录已应用的法术
+    std::map<uint32, uint32> itemSetCounts;                // ItemSetID -> 已贡献到原生 ItemSet 的飞升装备件数
 };
 
 //=============================================================================
@@ -174,9 +175,13 @@ public:
     void SendAscensionDataToClient(Player* player);
 
 private:
-    void ApplyItemEffect(Player* player, uint32 itemId, uint8 slot, bool apply);
-    void ApplyEnchantStatMod(Player* player, uint32 statType, int32 amount, bool apply);
-    void RemoveStatEffect(Player* player, uint32 statType, int32 statValue);
+    void ApplyItemEffect(Player* player, uint32 itemId, uint8 slot, bool apply, bool updateStats = true);
+    void ApplyAscensionItemSets(Player* player);
+    void RemoveAscensionItemSets(Player* player);
+    bool ApplyAscensionItemSet(Player* player, uint32 itemSetId, uint32 itemCount);
+    void RemoveAscensionItemSet(Player* player, uint32 itemSetId, uint32 itemCount);
+    void ApplyEnchantStatMod(Player* player, uint32 statType, int64 amount, bool apply);
+    void RemoveStatEffect(Player* player, uint32 statType, int64 statValue);
     void UpdatePlayerStats(Player* player);
     Item* FindItemInBags(Player* player, uint32 itemGuid);
 

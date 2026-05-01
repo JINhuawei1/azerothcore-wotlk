@@ -794,15 +794,12 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recvData)
 
         auto loginTotalEnd = std::chrono::high_resolution_clock::now();
         auto totalMs = std::chrono::duration_cast<std::chrono::milliseconds>(loginTotalEnd - loginTotalStart).count();
-        LOG_INFO("server.loading", "[性能监控-登录总耗时] 账号={} 角色GUID={} 总耗时: {}ms", GetAccountId(), playerGuid.ToString(), totalMs);
+        LOG_INFO("server.loading", "[性能监控-登录总耗时] 账号={} 角色GUID={} 总耗时: {}ms", GetAccountId(), playerGuid.GetCounter(), totalMs);
     });
 }
 
 void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
 {
-    using namespace std::chrono;
-    auto handleStart = high_resolution_clock::now();
-
     ObjectGuid playerGuid = holder.GetGuid();
 
     Player* pCurrChar = new Player(this);
@@ -1141,17 +1138,6 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     {
         pCurrChar->RemoveAtLoginFlag(AT_LOGIN_FIRST);
         sScriptMgr->OnPlayerFirstLogin(pCurrChar);
-    }
-
-    auto handleMs = duration_cast<milliseconds>(high_resolution_clock::now() - handleStart).count();
-    if (handleMs >= 10)
-    {
-        LOG_INFO("server.loading",
-            "[性能监控-登录阶段总耗时] 账号={} 角色={} GUID={} HandlePlayerLoginFromDB={}ms",
-            GetAccountId(),
-            pCurrChar->GetName(),
-            playerGuid.ToString(),
-            handleMs);
     }
 
     METRIC_EVENT("player_events", "Login", pCurrChar->GetName());
@@ -1578,7 +1564,7 @@ void WorldSession::HandleAlterAppearance(WorldPacket& recvData)
         SendPacket(&data);
     }
 
-    _player->ModifyMoney(-int32(cost));                     // it isn't free
+    _player->ModifyMoney(-static_cast<int64>(cost));        // it isn't free
     _player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_AT_BARBER, cost);
 
     _player->SetByteValue(PLAYER_BYTES, 2, uint8(bs_hair->hair_id));
@@ -1996,7 +1982,7 @@ void WorldSession::HandleCharFactionOrRaceChangeCallback(std::shared_ptr<Charact
     Field* fields = result->Fetch();
     uint32 atLoginFlags = fields[0].Get<uint16>();
     std::string knownTitlesStr = fields[1].Get<std::string>();
-    uint32 money = fields[2].Get<uint32>();
+    uint64 money = fields[2].Get<uint64>();
 
     uint32 usedLoginFlag = (factionChangeInfo->FactionChange ? AT_LOGIN_CHANGE_FACTION : AT_LOGIN_CHANGE_RACE);
     if (!(atLoginFlags & usedLoginFlag))

@@ -532,8 +532,8 @@ struct PetLevelInfo
     }
 
     std::array<uint32, MAX_STATS> stats = { };
-    uint32 health{0};
-    uint32 mana{0};
+    uint64 health{0};
+    uint64 mana{0};
     uint32 armor{0};
     uint32 min_dmg{0};
     uint32 max_dmg{0};
@@ -614,7 +614,7 @@ struct GossipMenuItems
     uint32          ActionMenuID;
     uint32          ActionPoiID;
     bool            BoxCoded;
-    uint32          BoxMoney;
+    uint64          BoxMoney;
     std::string     BoxText;
     ConditionList   Conditions;
     uint32          BoxBroadcastTextID;
@@ -712,7 +712,7 @@ typedef std::list<DungeonEncounter const*> DungeonEncounterList;
 typedef std::unordered_map<uint32, DungeonEncounterList> DungeonEncounterContainer;
 
 static constexpr uint32 MAX_QUEST_MONEY_REWARDS = 10;
-typedef std::array<uint32, MAX_QUEST_MONEY_REWARDS> QuestMoneyRewardArray;
+typedef std::array<uint64, MAX_QUEST_MONEY_REWARDS> QuestMoneyRewardArray;
 typedef std::unordered_map<uint32, QuestMoneyRewardArray> QuestMoneyRewardStore;
 
 class PlayerDumpReader;
@@ -1444,7 +1444,7 @@ public:
         return &itr->second;
     }
 
-    [[nodiscard]] uint32 GetQuestMoneyReward(uint8 level, uint32 questMoneyDifficulty) const;
+    [[nodiscard]] uint64 GetQuestMoneyReward(uint8 level, uint64 questMoneyDifficulty) const;
 private:
     // first free id for selected id type
     uint32 _auctionId; // pussywizard: accessed by a single thread

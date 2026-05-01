@@ -23,8 +23,8 @@ DROP TABLE IF EXISTS `pet_levelstats`;
 CREATE TABLE `pet_levelstats` (
   `creature_entry` int unsigned NOT NULL,
   `level` tinyint unsigned NOT NULL,
-  `hp` int unsigned NOT NULL DEFAULT '0',
-  `mana` int unsigned NOT NULL DEFAULT '0',
+  `hp` bigint unsigned NOT NULL DEFAULT '0',
+  `mana` bigint unsigned NOT NULL DEFAULT '0',
   `armor` int unsigned NOT NULL DEFAULT '0',
   `str` int unsigned NOT NULL DEFAULT '0',
   `agi` int unsigned NOT NULL DEFAULT '0',
@@ -2856,4 +2856,3 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2024-12-17 22:34:14
-

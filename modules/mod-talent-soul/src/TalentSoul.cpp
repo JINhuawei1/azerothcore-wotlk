@@ -660,7 +660,7 @@ void TalentSoulMgr::ApplyCooldownReduction(Player* player, uint32 spellId, int32
     }
 }
 
-void TalentSoulMgr::ApplyCostReduction(Player* player, uint32 spellId, int32& cost) const
+void TalentSoulMgr::ApplyCostReduction(Player* player, uint32 spellId, int64& cost) const
 {
     if (!player || cost <= 0)
         return;
@@ -668,8 +668,8 @@ void TalentSoulMgr::ApplyCostReduction(Player* player, uint32 spellId, int32& co
     float reductionPercent = GetPlayerCostReduction(player->GetGUID().GetCounter(), spellId);
     if (reductionPercent > 0)
     {
-        int32 originalCost = cost;
-        int32 reducedAmount = static_cast<int32>(cost * reductionPercent / 100.0f);
+        int64 originalCost = cost;
+        int64 reducedAmount = static_cast<int64>(static_cast<long double>(cost) * static_cast<long double>(reductionPercent) / 100.0L);
         cost -= reducedAmount;
 
         if (cost < 0)
@@ -677,7 +677,7 @@ void TalentSoulMgr::ApplyCostReduction(Player* player, uint32 spellId, int32& co
     }
 }
 
-void TalentSoulMgr::ApplyDamageBonus(Unit* attacker, uint32 spellId, int32& damage) const
+void TalentSoulMgr::ApplyDamageBonus(Unit* attacker, uint32 spellId, int64& damage) const
 {
     if (!attacker || damage <= 0)
         return;
@@ -689,7 +689,10 @@ void TalentSoulMgr::ApplyDamageBonus(Unit* attacker, uint32 spellId, int32& dama
     float bonusPercent = GetPlayerDamageBonus(player->GetGUID().GetCounter(), spellId);
     if (bonusPercent > 0)
     {
-        int32 bonusAmount = static_cast<int32>(damage * bonusPercent / 100.0f);
-        damage += bonusAmount;
+        long double bonusAmount = static_cast<long double>(damage) * static_cast<long double>(bonusPercent) / 100.0L;
+        if (bonusAmount > static_cast<long double>(std::numeric_limits<int64>::max() - damage))
+            damage = std::numeric_limits<int64>::max();
+        else
+            damage += static_cast<int64>(bonusAmount);
     }
 }

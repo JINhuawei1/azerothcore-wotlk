@@ -29,6 +29,31 @@
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
+#include <limits>
+
+namespace
+{
+    uint32 ToClientMoney(uint64 money)
+    {
+        return money > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(money);
+    }
+
+    bool TakeMoney64(Player* player, uint64 amount)
+    {
+        if (amount > static_cast<uint64>(std::numeric_limits<int64>::max()))
+            return false;
+
+        return player->ModifyMoney(-static_cast<int64>(amount));
+    }
+
+    bool AddMoney64(Player* player, uint64 amount)
+    {
+        if (amount > static_cast<uint64>(std::numeric_limits<int64>::max()))
+            return false;
+
+        return player->ModifyMoney(static_cast<int64>(amount));
+    }
+}
 
 void WorldSession::SendTradeStatus(TradeStatus status)
 {
@@ -87,7 +112,7 @@ void WorldSession::SendUpdateTrade(bool trader_data /*= true*/)
     data << uint32(0);                                      // added in 2.4.0, this value must be equal to value from TRADE_STATUS_OPEN_WINDOW status packet (different value for different players to block multiple trades?)
     data << uint32(TRADE_SLOT_COUNT);                       // trade slots count/number?, = next field in most cases
     data << uint32(TRADE_SLOT_COUNT);                       // trade slots count/number?, = prev field in most cases
-    data << uint32(view_trade->GetMoney());                 // trader gold
+    data << ToClientMoney(view_trade->GetMoney());          // trader gold
     data << uint32(view_trade->GetSpell());                 // spell casted on lowest slot item
 
     for (uint8 i = 0; i < TRADE_SLOT_COUNT; ++i)
@@ -276,14 +301,28 @@ void WorldSession::HandleAcceptTradeOpcode(WorldPacket& /*recvPacket*/)
         return;
     }
 
-    if (_player->GetMoney() >= uint64(MAX_MONEY_AMOUNT) - his_trade->GetMoney())
+    if (my_trade->GetMoney() > static_cast<uint64>(std::numeric_limits<int64>::max()))
+    {
+        ChatHandler(this).SendNotification(LANG_NOT_ENOUGH_GOLD);
+        my_trade->SetAccepted(false, true);
+        return;
+    }
+
+    if (his_trade->GetMoney() > static_cast<uint64>(std::numeric_limits<int64>::max()))
+    {
+        ChatHandler(trader->GetSession()).SendNotification(LANG_NOT_ENOUGH_GOLD);
+        his_trade->SetAccepted(false, true);
+        return;
+    }
+
+    if (his_trade->GetMoney() && _player->GetMoney() > uint64(MAX_MONEY_AMOUNT) - his_trade->GetMoney())
     {
         _player->SendEquipError(EQUIP_ERR_TOO_MUCH_GOLD, nullptr, nullptr);
         my_trade->SetAccepted(false, true);
         return;
     }
 
-    if (trader->GetMoney() >= uint64(MAX_MONEY_AMOUNT) - my_trade->GetMoney())
+    if (my_trade->GetMoney() && trader->GetMoney() > uint64(MAX_MONEY_AMOUNT) - my_trade->GetMoney())
     {
         trader->SendEquipError(EQUIP_ERR_TOO_MUCH_GOLD, nullptr, nullptr);
         his_trade->SetAccepted(false, true);
@@ -472,10 +511,10 @@ void WorldSession::HandleAcceptTradeOpcode(WorldPacket& /*recvPacket*/)
         }
 
         // update money
-        _player->ModifyMoney(-int32(my_trade->GetMoney()));
-        _player->ModifyMoney(his_trade->GetMoney());
-        trader->ModifyMoney(-int32(his_trade->GetMoney()));
-        trader->ModifyMoney(my_trade->GetMoney());
+        TakeMoney64(_player, my_trade->GetMoney());
+        AddMoney64(_player, his_trade->GetMoney());
+        TakeMoney64(trader, his_trade->GetMoney());
+        AddMoney64(trader, my_trade->GetMoney());
 
         if (my_spell)
             my_spell->prepare(&my_targets);

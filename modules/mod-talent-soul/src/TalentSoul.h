@@ -134,8 +134,8 @@ public:
     // 应用效果
     void ApplyGCDReduction(Player* player, uint32 spellId, int32& gcd) const;
     void ApplyCooldownReduction(Player* player, uint32 spellId, int32& cooldown) const;
-    void ApplyCostReduction(Player* player, uint32 spellId, int32& cost) const;
-    void ApplyDamageBonus(Unit* attacker, uint32 spellId, int32& damage) const;
+    void ApplyCostReduction(Player* player, uint32 spellId, int64& cost) const;
+    void ApplyDamageBonus(Unit* attacker, uint32 spellId, int64& damage) const;
 
     uint32 GetDataCount() const { return static_cast<uint32>(_talentSoulData.size()); }
 

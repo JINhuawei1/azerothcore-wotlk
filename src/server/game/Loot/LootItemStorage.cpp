@@ -21,6 +21,7 @@
 #include "PreparedStatement.h"
 #include "QueryResult.h"
 #include "Timer.h"
+#include <limits>
 
 LootItemStorage::LootItemStorage()
 {
@@ -56,7 +57,7 @@ void LootItemStorage::LoadStorageFromDB()
         Field* fields = result->Fetch();
 
         StoredLootItemList& itemList = lootItemStore[ObjectGuid::Create<HighGuid::Item>(fields[0].Get<uint32>())];
-        itemList.emplace_back(fields[1].Get<uint32>(), fields[2].Get<uint32>(), fields[3].Get<uint32>(), fields[4].Get<int32>(), fields[5].Get<uint32>(), fields[6].Get<bool>(),
+        itemList.emplace_back(fields[1].Get<uint32>(), fields[2].Get<uint32>(), fields[3].Get<uint64>(), fields[4].Get<int32>(), fields[5].Get<uint32>(), fields[6].Get<bool>(),
             fields[7].Get<bool>(), fields[8].Get<bool>(), fields[9].Get<bool>(), fields[10].Get<bool>(), fields[11].Get<bool>(), fields[12].Get<uint32>());
 
         ++count;
@@ -66,7 +67,7 @@ void LootItemStorage::LoadStorageFromDB()
     LOG_INFO("server.loading", " ");
 }
 
-void LootItemStorage::RemoveEntryFromDB(ObjectGuid containerGUID, uint32 itemid, uint32 count, uint32 itemIndex)
+void LootItemStorage::RemoveEntryFromDB(ObjectGuid containerGUID, uint32 itemid, uint64 count, uint32 itemIndex)
 {
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
 
@@ -188,7 +189,7 @@ bool LootItemStorage::LoadStoredLoot(Item* item, Player* player)
             LootItem li;
             li.itemid = it2->itemid;
             li.itemIndex = it2->itemIndex;
-            li.count = it2->count;
+            li.count = it2->count > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(it2->count);
             li.follow_loot_rules = it2->follow_loot_rules;
             li.freeforall = it2->freeforall;
             li.is_blocked = it2->is_blocked;

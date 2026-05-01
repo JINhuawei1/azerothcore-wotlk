@@ -31,6 +31,37 @@
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
 #include "WorldSession.h"
+#include <limits>
+
+namespace
+{
+uint64 RequiredQuestMoney(int64 money)
+{
+    if (money >= 0)
+        return 0;
+
+    return money == std::numeric_limits<int64>::min() ? static_cast<uint64>(std::numeric_limits<int64>::max()) + 1 : static_cast<uint64>(-money);
+}
+
+int64 SaturatingQuestMoneyAdd(int64 left, int64 right)
+{
+    if (right > 0 && left > std::numeric_limits<int64>::max() - right)
+        return std::numeric_limits<int64>::max();
+
+    if (right < 0 && left < std::numeric_limits<int64>::min() - right)
+        return std::numeric_limits<int64>::min();
+
+    return left + right;
+}
+
+uint32 ToClientQuestMoney(int64 money)
+{
+    if (money <= 0)
+        return 0;
+
+    return money > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(money);
+}
+}
 
 /*********************************************************/
 /***                    QUEST SYSTEM                   ***/
@@ -347,9 +378,10 @@ bool Player::CanCompleteQuest(uint32 quest_id, const QuestStatusData* q_savedSta
             if (qInfo->HasSpecialFlag(QUEST_SPECIAL_FLAGS_TIMED) && q_status.Timer == 0)
                 return false;
 
-            if (qInfo->GetRewOrReqMoney() < 0)
+            int64 rewOrReqMoney = qInfo->GetRewOrReqMoney();
+            if (rewOrReqMoney < 0)
             {
-                if (!HasEnoughMoney(-qInfo->GetRewOrReqMoney()))
+                if (!HasEnoughMoney(RequiredQuestMoney(rewOrReqMoney)))
                     return false;
             }
 
@@ -412,7 +444,8 @@ bool Player::CanRewardQuest(Quest const* quest, bool msg)
     }
 
     // prevent receive reward with low money and GetRewOrReqMoney() < 0
-    if (quest->GetRewOrReqMoney() < 0 && !HasEnoughMoney(-quest->GetRewOrReqMoney()))
+    int64 rewOrReqMoney = quest->GetRewOrReqMoney();
+    if (rewOrReqMoney < 0 && !HasEnoughMoney(RequiredQuestMoney(rewOrReqMoney)))
         return false;
 
     return true;
@@ -746,7 +779,7 @@ void Player::RewardQuest(Quest const* quest, uint32 reward, Object* questGiver, 
     uint32 XP = rewarded ? 0 : CalculateQuestRewardXP(quest);
 
     sScriptMgr->OnPlayerQuestComputeXP(this, quest, XP);
-    int32 moneyRew = 0;
+    int64 moneyRew = 0;
     if (GetLevel() >= sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL) || sScriptMgr->OnPlayerShouldBeRewardedWithMoneyInsteadOfExp(this))
     {
         moneyRew = quest->GetRewMoneyMaxLevel();
@@ -758,9 +791,9 @@ void Player::RewardQuest(Quest const* quest, uint32 reward, Object* questGiver, 
     }
 
     // Give player extra money if GetRewOrReqMoney > 0 and get ReqMoney if negative
-    if (int32 rewOrReqMoney = quest->GetRewOrReqMoney(GetLevel()))
+    if (int64 rewOrReqMoney = quest->GetRewOrReqMoney(GetLevel()))
     {
-        moneyRew += rewOrReqMoney;
+        moneyRew = SaturatingQuestMoneyAdd(moneyRew, rewOrReqMoney);
     }
 
     if (moneyRew)
@@ -768,7 +801,7 @@ void Player::RewardQuest(Quest const* quest, uint32 reward, Object* questGiver, 
         ModifyMoney(moneyRew);
 
         if (moneyRew > 0)
-            UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_MONEY_FROM_QUEST_REWARD, uint32(moneyRew));
+            UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_MONEY_FROM_QUEST_REWARD, ToClientQuestMoney(moneyRew));
     }
 
     // honor reward
@@ -2168,7 +2201,7 @@ void Player::TalkedToCreature(uint32 entry, ObjectGuid guid)
     }
 }
 
-void Player::MoneyChanged(uint32 count)
+void Player::MoneyChanged(uint64 count)
 {
     for (uint8 i = 0; i < MAX_QUEST_LOG_SIZE; ++i)
     {
@@ -2178,14 +2211,14 @@ void Player::MoneyChanged(uint32 count)
 
         if (Quest const* qInfo = sObjectMgr->GetQuestTemplate(questid))
         {
-            int32 rewOrReqMoney = qInfo->GetRewOrReqMoney();
+            int64 rewOrReqMoney = qInfo->GetRewOrReqMoney();
             if (rewOrReqMoney < 0)
             {
                 QuestStatusData& q_status = m_QuestStatus[questid];
 
                 if (q_status.Status == QUEST_STATUS_INCOMPLETE)
                 {
-                    if (int32(count) >= -rewOrReqMoney)
+                    if (uint64(count) >= RequiredQuestMoney(rewOrReqMoney))
                     {
                         if (CanCompleteQuest(questid))
                         {
@@ -2195,7 +2228,7 @@ void Player::MoneyChanged(uint32 count)
                 }
                 else if (q_status.Status == QUEST_STATUS_COMPLETE)
                 {
-                    if (int32(count) < -rewOrReqMoney)
+                    if (count < RequiredQuestMoney(rewOrReqMoney))
                     {
                         IncompleteQuest(questid);
                     }
@@ -2365,12 +2398,12 @@ void Player::SendQuestReward(Quest const* quest, uint32 XP)
     if (!IsMaxLevel())
     {
         data << uint32(XP);
-        data << uint32(quest->GetRewOrReqMoney(GetLevel()));
+        data << ToClientQuestMoney(quest->GetRewOrReqMoney(GetLevel()));
     }
     else
     {
         data << uint32(0);
-        data << uint32(quest->GetRewOrReqMoney(GetLevel()) + quest->GetRewMoneyMaxLevel());
+        data << ToClientQuestMoney(SaturatingQuestMoneyAdd(quest->GetRewOrReqMoney(GetLevel()), quest->GetRewMoneyMaxLevel()));
     }
 
     data << uint32(10 * quest->CalculateHonorGain(GetQuestLevel(quest)));

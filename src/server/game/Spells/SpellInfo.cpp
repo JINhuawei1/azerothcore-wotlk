@@ -27,6 +27,39 @@
 #include "SpellAuraDefines.h"
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
+#include <limits>
+
+namespace
+{
+    int64 ToInt64Saturated(long double value)
+    {
+        if (value >= static_cast<long double>(std::numeric_limits<int64>::max()))
+            return std::numeric_limits<int64>::max();
+
+        if (value <= static_cast<long double>(std::numeric_limits<int64>::min()))
+            return std::numeric_limits<int64>::min();
+
+        return static_cast<int64>(value);
+    }
+
+    int64 CalculatePctInt64Saturated(uint64 base, float pct)
+    {
+        if (!base || pct <= 0.0f)
+            return 0;
+
+        long double value = static_cast<long double>(base) * static_cast<long double>(pct) / 100.0L;
+        return ToInt64Saturated(value);
+    }
+
+    void AddPowerCostPct(int64& powerCost, uint64 base, float pct)
+    {
+        int64 pctCost = CalculatePctInt64Saturated(base, pct);
+        if (pctCost > 0 && powerCost > std::numeric_limits<int64>::max() - pctCost)
+            powerCost = std::numeric_limits<int64>::max();
+        else
+            powerCost += pctCost;
+    }
+}
 
 uint32 GetTargetFlagMask(SpellTargetObjectTypes objType)
 {
@@ -2418,23 +2451,23 @@ uint32 SpellInfo::GetRecoveryTime() const
     return RecoveryTime > CategoryRecoveryTime ? RecoveryTime : CategoryRecoveryTime;
 }
 
-int32 SpellInfo::CalcPowerCost(Unit const* caster, SpellSchoolMask schoolMask, Spell* spell) const
+int64 SpellInfo::CalcPowerCost(Unit const* caster, SpellSchoolMask schoolMask, Spell* spell) const
 {
     // Spell drain all exist power on cast (Only paladin lay of Hands)
     if (AttributesEx & SPELL_ATTR1_USE_ALL_MANA)
     {
         // If power type - health drain all
         if (PowerType == POWER_HEALTH)
-            return caster->GetHealth();
+            return ToInt64Saturated(static_cast<long double>(caster->GetHealthForCombat()));
         // Else drain all power
         if (PowerType < MAX_POWERS)
-            return caster->GetPower(Powers(PowerType));
+            return ToInt64Saturated(static_cast<long double>(caster->GetPowerForCombat(Powers(PowerType))));
         LOG_ERROR("spells", "SpellInfo::CalcPowerCost: Unknown power type '{}' in spell {}", PowerType, Id);
         return 0;
     }
 
     // Base powerCost
-    int32 powerCost = ManaCost;
+    int64 powerCost = ManaCost;
     // PCT cost from total amount
     if (ManaCostPercentage)
     {
@@ -2442,16 +2475,16 @@ int32 SpellInfo::CalcPowerCost(Unit const* caster, SpellSchoolMask schoolMask, S
         {
             // health as power used
             case POWER_HEALTH:
-                powerCost += int32(CalculatePct(caster->GetCreateHealth(), ManaCostPercentage));
+                AddPowerCostPct(powerCost, caster->GetCreateHealthForCombat(), ManaCostPercentage);
                 break;
             case POWER_MANA:
-                powerCost += int32(CalculatePct(caster->GetCreateMana(), ManaCostPercentage));
+                AddPowerCostPct(powerCost, caster->GetCreatePowerForCombat(POWER_MANA), ManaCostPercentage);
                 break;
             case POWER_RAGE:
             case POWER_FOCUS:
             case POWER_ENERGY:
             case POWER_HAPPINESS:
-                powerCost += int32(CalculatePct(caster->GetMaxPower(Powers(PowerType)), ManaCostPercentage));
+                AddPowerCostPct(powerCost, caster->GetMaxPowerForCombat(Powers(PowerType)), ManaCostPercentage);
                 break;
             case POWER_RUNE:
             case POWER_RUNIC_POWER:
@@ -2495,12 +2528,12 @@ int32 SpellInfo::CalcPowerCost(Unit const* caster, SpellSchoolMask schoolMask, S
             GtNPCManaCostScalerEntry const* spellScaler = sGtNPCManaCostScalerStore.LookupEntry(SpellLevel - 1);
             GtNPCManaCostScalerEntry const* casterScaler = sGtNPCManaCostScalerStore.LookupEntry(caster->GetLevel() - 1);
             if (spellScaler && casterScaler)
-                powerCost *= casterScaler->ratio / spellScaler->ratio;
+                powerCost = ToInt64Saturated(static_cast<long double>(powerCost) * static_cast<long double>(casterScaler->ratio / spellScaler->ratio));
         }
     }
 
     // PCT mod from user auras by school
-    powerCost = int32(powerCost * (1.0f + caster->GetFloatValue(static_cast<uint16>(UNIT_FIELD_POWER_COST_MULTIPLIER) + school)));
+    powerCost = ToInt64Saturated(static_cast<long double>(powerCost) * (1.0L + static_cast<long double>(caster->GetFloatValue(static_cast<uint16>(UNIT_FIELD_POWER_COST_MULTIPLIER) + school))));
     if (powerCost < 0)
         powerCost = 0;
     return powerCost;

@@ -101,25 +101,25 @@ struct AuctionEntry
     uint32 item_template;
     uint32 itemCount;
     ObjectGuid owner;
-    uint32 startbid;                                        //maybe useless
-    uint32 bid;
-    uint32 buyout;
+    uint64 startbid;                                        //maybe useless
+    uint64 bid;
+    uint64 buyout;
     time_t expire_time;
     ObjectGuid bidder;
-    uint32 deposit;                                         //deposit can be calculated only when creating auction
+    uint64 deposit;                                         //deposit can be calculated only when creating auction
     AuctionHouseEntry const* auctionHouseEntry;             // in AuctionHouse.dbc
 
     // helpers
     [[nodiscard]] AuctionHouseId GetHouseId() const { return houseId; }
     [[nodiscard]] AuctionHouseFaction GetFactionId() const;
-    [[nodiscard]] uint32 GetAuctionCut() const;
-    [[nodiscard]] uint32 GetAuctionOutBid() const;
-    [[nodiscard]] static uint32 CalculateAuctionOutBid(uint32 bid);
+    [[nodiscard]] uint64 GetAuctionCut() const;
+    [[nodiscard]] uint64 GetAuctionOutBid() const;
+    [[nodiscard]] static uint64 CalculateAuctionOutBid(uint64 bid);
     void DeleteFromDB(CharacterDatabaseTransaction trans) const;
     void SaveToDB(CharacterDatabaseTransaction trans) const;
     bool LoadFromDB(Field* fields);
     [[nodiscard]] std::string BuildAuctionMailSubject(MailAuctionAnswers response) const;
-    static std::string BuildAuctionMailBody(ObjectGuid guid, uint32 bid, uint32 buyout, uint32 deposit = 0, uint32 cut = 0, uint32 moneyDelay = 0, uint32 eta = 0);
+    static std::string BuildAuctionMailBody(ObjectGuid guid, uint64 bid, uint64 buyout, uint64 deposit = 0, uint64 cut = 0, uint32 moneyDelay = 0, uint32 eta = 0);
 };
 
 //this class is used as auctionhouse instance
@@ -189,10 +189,10 @@ public:
     void SendAuctionSalePendingMail(AuctionEntry* auction, CharacterDatabaseTransaction trans, bool sendMail = true);
     void SendAuctionSuccessfulMail(AuctionEntry* auction, CharacterDatabaseTransaction trans, bool sendNotification = true, bool updateAchievementCriteria = true, bool sendMail = true);
     void SendAuctionExpiredMail(AuctionEntry* auction, CharacterDatabaseTransaction trans, bool sendNotification = true, bool sendMail = true);
-    void SendAuctionOutbiddedMail(AuctionEntry* auction, uint32 newPrice, Player* newBidder, CharacterDatabaseTransaction trans, bool sendNotification = true, bool sendMail = true);
+    void SendAuctionOutbiddedMail(AuctionEntry* auction, uint64 newPrice, Player* newBidder, CharacterDatabaseTransaction trans, bool sendNotification = true, bool sendMail = true);
     void SendAuctionCancelledToBidderMail(AuctionEntry* auction, CharacterDatabaseTransaction trans, bool sendMail = true);
 
-    static uint32 GetAuctionDeposit(AuctionHouseEntry const* entry, uint32 time, Item* pItem, uint32 count);
+    static uint64 GetAuctionDeposit(AuctionHouseEntry const* entry, uint32 time, Item* pItem, uint32 count);
     static AuctionHouseFaction GetAuctionHouseFactionFromHouseId(AuctionHouseId ahHouseId);
     static AuctionHouseEntry const* GetAuctionHouseEntryFromFactionTemplate(uint32 factionTemplateId);
     static AuctionHouseEntry const* GetAuctionHouseEntryFromHouse(AuctionHouseId ahHouseId);

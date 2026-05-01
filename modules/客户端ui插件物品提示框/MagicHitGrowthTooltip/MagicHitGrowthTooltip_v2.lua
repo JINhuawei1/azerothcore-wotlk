@@ -16,7 +16,7 @@ local DEFAULTS = {
     queryInterval = 1,      -- 查询间隔（秒）- 只在所有数据齐全时生效
     timeout = 15,           -- 查询超时（秒）- 增加到15秒以应对服务器延迟
     emptyCooldown = 30,     -- 无数据冷却时间（秒）
-    cacheExpiration = 300,  -- 缓存有效期（秒）- 默认5分钟
+    cacheExpiration = 0,    -- 缓存有效期（秒，0=本次登录不过期）
 
     -- 各系统开关
     systems = {
@@ -62,6 +62,10 @@ for k, v in pairs(DEFAULTS) do
 end
 
 local DB = UnifiedItemTooltipDB
+if (not DB.cachePersistenceVersion or DB.cachePersistenceVersion < 1) and (not DB.cacheExpiration or DB.cacheExpiration <= 300) then
+    DB.cacheExpiration = 0
+    DB.cachePersistenceVersion = 1
+end
 local IsTooltipFromChat
 
 -- ============================================================================
@@ -422,7 +426,7 @@ local HuanJingState = {
     cache = {},   -- key -> { itemID, guid, multiplier, attributeData, identificationData, timestamp }
     pending = {}, -- key -> lastQueryTime
     COOLDOWN = 1, -- 查询冷却（秒）- 降低到1秒加快响应
-    EXPIRE = 300  -- 缓存有效期（秒）- 增加到5分钟
+    EXPIRE = 0    -- 缓存有效期（秒，0=本次登录不过期）
 }
 
 -- 【新增】待鉴定物品状态缓存
@@ -645,7 +649,8 @@ local function HuanJingGetData(key)
     if not data then return nil end
 
     local now = GetTime()
-    if not data.timestamp or (now - data.timestamp) > HuanJingState.EXPIRE then
+    if HuanJingState.EXPIRE and HuanJingState.EXPIRE > 0
+        and (not data.timestamp or (now - data.timestamp) > HuanJingState.EXPIRE) then
         HuanJingState.cache[key] = nil
         return nil
     end
@@ -1709,10 +1714,24 @@ function Parsers.BatchQuery(message)
     local setData = ""
     local huanjingData = ""
     local templateStatsData = ""
+    local pendingIdentifyData = ""
     local tailEndIndex = #parts
+
+    while tailEndIndex >= setDataStartIndex and (not parts[tailEndIndex] or parts[tailEndIndex] == "") do
+        tailEndIndex = tailEndIndex - 1
+    end
 
     if tailEndIndex >= setDataStartIndex and parts[tailEndIndex] and parts[tailEndIndex]:match("^TPL64|") then
         templateStatsData = parts[tailEndIndex]
+        tailEndIndex = tailEndIndex - 1
+    end
+
+    if tailEndIndex >= setDataStartIndex and parts[tailEndIndex] and parts[tailEndIndex]:match("^PENDID|") then
+        pendingIdentifyData = parts[tailEndIndex]
+        tailEndIndex = tailEndIndex - 1
+    end
+
+    while tailEndIndex >= setDataStartIndex and (not parts[tailEndIndex] or parts[tailEndIndex] == "") do
         tailEndIndex = tailEndIndex - 1
     end
 
@@ -2179,6 +2198,18 @@ function Parsers.BatchQuery(message)
                 timestamp = GetTime()
             }
         end
+    end
+
+    if pendingIdentifyData ~= "" then
+        local pendingParts = { strsplit("|", pendingIdentifyData) }
+        result.systems.pendingIdentify = {
+            type = "pendingIdentify",
+            itemID = itemID,
+            guid = guid,
+            mode = NormalizeHuanJingMode(pendingParts[2] or "x"),
+            multiplier = tonumber(pendingParts[3]) or 1,
+            groupId = tonumber(pendingParts[4]) or 0
+        }
     end
 
     -- 【临时调试 - 已关闭】统计解析的系统数量
@@ -2887,8 +2918,8 @@ local function ShouldSkipQuery(key)
 
             local cacheAge = State.cacheTime[key] and (now - State.cacheTime[key]) or 999
 
-            -- 如果缓存超过配置的有效期，清除缓存并允许重新查询
-            if cacheAge >= DB.cacheExpiration then
+            -- cacheExpiration=0 表示本次登录不过期；物品移动/强化/鉴定响应仍会主动失效缓存。
+            if DB.cacheExpiration and DB.cacheExpiration > 0 and cacheAge >= DB.cacheExpiration then
                 if DB.debug then
                     print(string.format("|cff00ff00[ShouldSkipQuery]|r %s 缓存过期(%.0fs)，清除并允许查询", key, cacheAge))
                 end
@@ -3115,7 +3146,7 @@ local function SendQuery(itemID, bag, slot, guid, fingerprint, isInspectOther, i
             end
 
             -- 使用GUID格式发送查询（设置isInspectOther=true以使用GUID格式）
-            DoSendQuery(itemID, 0, 0, key, guid, fingerprint, true)
+            DoSendQuery(itemID, nil, nil, key, guid, fingerprint, true)
             return
         end
 
@@ -3429,6 +3460,92 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
     tooltip:Show()
 end
 
+local function TooltipHasPendingIdentifyLine(tooltip)
+    if not tooltip then
+        return false
+    end
+
+    local tooltipName = tooltip:GetName()
+    if not tooltipName then
+        return false
+    end
+
+    for i = 1, tooltip:NumLines() do
+        local leftText = _G[tooltipName .. "TextLeft" .. i]
+        local text = leftText and leftText:GetText()
+        if text and StripColorCodes(text):find("【待鉴定】", 1, true) then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function HideTooltipPendingIdentifyLines(tooltip)
+    if not tooltip or not tooltip.GetName or not tooltip.NumLines then
+        return
+    end
+
+    local tooltipName = tooltip:GetName()
+    if not tooltipName then
+        return
+    end
+
+    for i = 1, tooltip:NumLines() do
+        local leftText = _G[tooltipName .. "TextLeft" .. i]
+        local rightText = _G[tooltipName .. "TextRight" .. i]
+        local text = leftText and leftText:GetText()
+        if text and StripColorCodes(text):find("【待鉴定】", 1, true) then
+            leftText:SetText("")
+            leftText:Hide()
+            if rightText then
+                rightText:SetText("")
+                rightText:Hide()
+            end
+
+            local prevText = _G[tooltipName .. "TextLeft" .. (i - 1)]
+            if prevText and (prevText:GetText() or "") == "" then
+                prevText:Hide()
+            end
+        end
+    end
+end
+
+local function RenderPendingIdentifyStatus(tooltip, pendingData, meta)
+    if not tooltip or not pendingData or pendingData.isEmpty then
+        return
+    end
+
+    if meta and meta.rendered.pendingIdentify then
+        return
+    end
+
+    if TooltipHasPendingIdentifyLine(tooltip) then
+        if meta then
+            meta.rendered.pendingIdentify = true
+        end
+        return
+    end
+
+    local multiplierText = ""
+    if HasHuanJingEffect(pendingData.multiplier, pendingData.mode) then
+        if NormalizeHuanJingMode(pendingData.mode) == "+" then
+            multiplierText = " |cFF00FF00+" .. pendingData.multiplier .. "|r"
+        else
+            multiplierText = " |cFF00FF00x" .. pendingData.multiplier .. "倍率|r"
+        end
+    end
+
+    tooltip:AddLine(" ")
+    tooltip:AddLine("|cFFFF0000【待鉴定】|r" .. multiplierText)
+
+    if meta then
+        meta.rendered.pendingIdentify = true
+    end
+
+    tooltip:Show()
+end
+
 -- 渲染提示框
 -- 注意：此函数仅负责渲染缓存中已有的数据，不发起查询
 -- 查询应该在OnTooltipSetItem中通过SendQuery发起
@@ -3492,6 +3609,12 @@ RenderTooltip = function(tooltip, itemID, guid, bag, slot)
     -- 检查是否正在查询中
     local isPending = State.pending[key] ~= nil
     local hasRealCustomData = false
+    local isPendingIdentifyTooltip = false
+
+    if bag ~= nil and slot ~= nil then
+        local pendingIdentifyInfo = GetPendingIdentifyInfo(bag, slot, itemID)
+        isPendingIdentifyTooltip = pendingIdentifyInfo and pendingIdentifyInfo.isPending
+    end
 
     if cached and cached.systems then
         for _, systemData in pairs(cached.systems) do
@@ -3506,6 +3629,11 @@ RenderTooltip = function(tooltip, itemID, guid, bag, slot)
     if not cached then
         -- 完全没有缓存
         if isPending then
+            if isPendingIdentifyTooltip then
+                tooltip:Show()
+                return
+            end
+
             -- 正在查询中，显示等待时间
             local waitTime = 0
             if State.pending[key] and State.pending[key].queryStartTime then
@@ -3529,7 +3657,7 @@ RenderTooltip = function(tooltip, itemID, guid, bag, slot)
     end
 
     -- 如果正在查询中且缓存不完整，在底部显示提示
-    if isPending and not hasCompleteCache and not hasRealCustomData then
+    if isPending and not hasCompleteCache and not hasRealCustomData and not isPendingIdentifyTooltip then
         local waitTime = 0
         if State.pending[key] and State.pending[key].queryStartTime then
             waitTime = now - State.pending[key].queryStartTime
@@ -3593,6 +3721,7 @@ RenderTooltip = function(tooltip, itemID, guid, bag, slot)
     end
 
     ApplyIdentificationBottomDescription(tooltip, cached, meta)
+    RenderPendingIdentifyStatus(tooltip, cached.systems.pendingIdentify, meta)
 
     tooltip:Show()
 end
@@ -3677,12 +3806,14 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
                 -- 【关键】isInspectOther=true，使用GUID格式查询（服务器无法访问其他玩家背包）
                 if State.pendingInspectTooltips then
                     for tooltip, pendingInfo in pairs(State.pendingInspectTooltips) do
-                        if tooltip:IsShown() and pendingInfo.itemID == itemID then
-                            SendQuery(itemID, 255, slot, guid, nil, true)  -- isInspectOther=true
+                        if tooltip:IsShown() and pendingInfo.itemID == itemID and (not pendingInfo.slot or pendingInfo.slot == slot) then
+                            local guidKey = MakeKey(itemID, guid, nil, nil, false)
+                            GetTooltipMeta(tooltip, guidKey)
+                            SendQuery(itemID, nil, nil, guid, nil, true, true)  -- isInspectOther=true
 
                             C_Timer.After(0.1, function()
                                 if tooltip:IsShown() then
-                                    RenderTooltip(tooltip, itemID, guid, 255, slot)  -- 传递bag和slot参数
+                                    RenderTooltip(tooltip, itemID, guid)
                                 end
                             end)
 
@@ -3698,11 +3829,13 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
                         if itemLink then
                             local tooltipItemID = ExtractItemInfo(itemLink)
                             if tooltipItemID == itemID then
-                                SendQuery(itemID, 255, slot, guid, nil, true)  -- isInspectOther=true
+                                local guidKey = MakeKey(itemID, guid, nil, nil, false)
+                                GetTooltipMeta(tooltip, guidKey)
+                                SendQuery(itemID, nil, nil, guid, nil, true, true)  -- isInspectOther=true
 
                                 C_Timer.After(0.1, function()
                                     if tooltip:IsShown() then
-                                        RenderTooltip(tooltip, itemID, guid, 255, slot)  -- 传递bag和slot参数
+                                        RenderTooltip(tooltip, itemID, guid)
                                     end
                                 end)
                             end
@@ -3899,9 +4032,17 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
                     State.itemIdToKeys[tonumber(itemId)] = nil
                 end
             end
+
+            for tooltip, meta in pairs(State.tooltips) do
+                if meta and meta.key == stateCacheKey then
+                    meta.rendered = meta.rendered or {}
+                    meta.rendered.pendingIdentify = nil
+                    HideTooltipPendingIdentifyLines(tooltip)
+                end
+            end
         end
 
-        -- 【关键】延迟3秒后重新查询待鉴定列表，等待服务器清理数据库记录
+        -- 延迟刷新待鉴定列表，等待服务器清理数据库记录
         -- 使用OnUpdate延迟（兼容WoW 3.3.5）
         local delayFrame = CreateFrame("Frame")
         delayFrame.elapsed = 0
@@ -4065,15 +4206,17 @@ ProcessServerResponse = function(message, receiveTime)
         local function PendingSlotMatches(candidatePending)
             if not candidatePending then return false end
 
+            -- GUID-only queries, such as ascension slot tooltips, do not have a
+            -- real bag/slot position. Match them by GUID instead of rejecting
+            -- the server response's compatibility bag/slot values.
+            if candidatePending.bag == nil or candidatePending.slot == nil then
+                return candidatePending.guid and batchData.guid and candidatePending.guid == batchData.guid
+            end
+
             if batchData.bag ~= nil and batchData.slot ~= nil then
                 if candidatePending.bag ~= batchData.bag or candidatePending.slot ~= batchData.slot then
                     return false
                 end
-            end
-
-            -- ???????????????????
-            if candidatePending.bag == nil or candidatePending.slot == nil then
-                return true
             end
 
             local liveLink = nil
@@ -4224,6 +4367,27 @@ ProcessServerResponse = function(message, receiveTime)
             State.cacheTime[key] = GetTime()
         end
 
+        local pendingBag = pending and pending.bag or batchData.bag
+        local pendingSlot = pending and pending.slot or batchData.slot
+        local responseHasPendingIdentify = batchData.systems and batchData.systems.pendingIdentify ~= nil
+        if pendingBag ~= nil and pendingSlot ~= nil then
+            local pendingIdentifyInfo = GetPendingIdentifyInfo(pendingBag, pendingSlot, batchData.itemID)
+            if responseHasPendingIdentify and pendingIdentifyInfo and pendingIdentifyInfo.isPending
+                and not IsPendingIdentifySuppressed(pendingBag, pendingSlot, batchData.itemID) then
+                State.cache[key].isPendingIdentify = true
+            else
+                State.cache[key].isPendingIdentify = nil
+                local pendingCacheKey = GetPendingIdentifyCacheKey(pendingBag, pendingSlot, batchData.itemID)
+                PendingIdentifyState.cache[pendingCacheKey] = nil
+                if not responseHasPendingIdentify then
+                    SuppressPendingIdentify(pendingBag, pendingSlot, batchData.itemID, 6)
+                end
+            end
+        end
+        if not responseHasPendingIdentify and State.cache[key] and State.cache[key].systems then
+            State.cache[key].systems.pendingIdentify = nil
+        end
+
         -- 记录物品指纹，避免同槽位换装后继续沿用旧数据
         if pending and pending.fingerprint then
             State.cache[key].fingerprint = pending.fingerprint
@@ -4291,6 +4455,11 @@ ProcessServerResponse = function(message, receiveTime)
 
         for tooltip, meta in pairs(State.tooltips) do
             if not tooltip.UIT_IsUnifiedFrame and tooltip:IsShown() and meta.key == key then
+                if not responseHasPendingIdentify then
+                    meta.rendered = meta.rendered or {}
+                    meta.rendered.pendingIdentify = nil
+                    HideTooltipPendingIdentifyLines(tooltip)
+                end
                 RenderTooltip(tooltip, batchData.itemID, batchData.guid)
                 renderCount = renderCount + 1
             end
@@ -5608,6 +5777,7 @@ local function OnTooltipSetItem(tooltip)
 
     -- 检测是否正在检查其他玩家的装备
     local inspectUnit = GetInspectUnit()
+    local isInspectOther = inspectUnit and UnitExists(inspectUnit) and not UnitIsUnit(inspectUnit, "player")
 
     -- 【调试日志】观察/聊天框链接排查
     if DB.debug then
@@ -5688,7 +5858,7 @@ local function OnTooltipSetItem(tooltip)
     -- 【关键修复】首先检查当前位置是否是待鉴定物品
     -- 如果是待鉴定物品，直接使用当前位置，不要再搜索其他位置
     local isPendingIdentifyEarly = false
-    if bagNum ~= nil and slotNum ~= nil and bagNum ~= 255 then
+    if not isInspectOther and bagNum ~= nil and slotNum ~= nil and bagNum ~= 255 then
         local earlyPendingInfo = GetPendingIdentifyInfo(bagNum, slotNum, itemID)
         if earlyPendingInfo and earlyPendingInfo.isPending then
             isPendingIdentifyEarly = true
@@ -5870,6 +6040,7 @@ local function OnTooltipSetItem(tooltip)
             State.pendingInspectTooltips[tooltip] = {
                 itemID = itemID,
                 inspectUnit = inspectUnit,
+                slot = extractedSlot or slotNum,
                 timestamp = GetTime()
             }
             return
@@ -5880,7 +6051,10 @@ local function OnTooltipSetItem(tooltip)
     local key
     local isChatLink = false  -- 标记是否为聊天框链接
     -- 【飞升系统支持】飞升系统的物品强制使用GUID格式
-    if isAscensionItem and guid and guid > 0 then
+    if isInspectOther and guid and guid > 0 then
+        isChatLink = true
+        key = MakeKey(itemID, guid, nil, nil, false)
+    elseif isAscensionItem and guid and guid > 0 then
         isChatLink = true
         key = MakeKey(itemID, guid, nil, nil, false)
     elseif bagNum ~= nil and slotNum ~= nil then
@@ -5908,7 +6082,7 @@ local function OnTooltipSetItem(tooltip)
     TraceLog(itemID, "OnTooltipSetItem tooltip=%s preferEquipped=%s", tostring(tooltipName), tostring(preferEquipped))
 
     -- 【关键修复】本地背包/装备 tooltip 已有位置 key 时，清理不可靠的 GUID 缓存
-    if bagNum ~= nil and slotNum ~= nil and guid and guid > 0 then
+    if not isInspectOther and bagNum ~= nil and slotNum ~= nil and guid and guid > 0 then
         local guidKey = MakeKey(itemID, guid, nil, nil, false)
         if guidKey ~= key and (State.cache[guidKey] or State.pending[guidKey]) then
             TraceLog(itemID, "OnTooltipSetItem purgeGuidCache guidKey=%s positionKey=%s", tostring(guidKey), tostring(key))
@@ -5923,7 +6097,7 @@ local function OnTooltipSetItem(tooltip)
     -- 【关键修复】在查询前主动检查槽位指纹变化
     -- 因为tooltip查询可能发生在BAG_UPDATE事件之前，需要主动检测物品变化
     -- 【注意】装备栏物品(bagNum=255)也需要检查指纹
-    if bagNum ~= nil and slotNum ~= nil then
+    if not isInspectOther and bagNum ~= nil and slotNum ~= nil then
         local slotKey = string.format("%d:%d", bagNum, slotNum)
         local previousFingerprint = SlotFingerprints[slotKey]
 
@@ -5996,7 +6170,7 @@ local function OnTooltipSetItem(tooltip)
         -- 原因：位置键(P:bag:slot:itemID)已经唯一标识物品
         -- GUID比较会因为不同来源的GUID值不一致而导致误清除缓存
         -- 只有当使用GUID键时才比较GUID
-        local isPositionKey = bagNum ~= nil and slotNum ~= nil
+        local isPositionKey = not isInspectOther and bagNum ~= nil and slotNum ~= nil
         local guidMismatch = false
         if not isPositionKey and cached.guid and guid and cached.guid ~= guid then
             guidMismatch = true
@@ -6026,7 +6200,7 @@ local function OnTooltipSetItem(tooltip)
     end
 
     -- 待鉴定物品：重新检查并设置状态（使用之前的early检查结果）
-    if not isPendingIdentify and bagNum ~= nil and slotNum ~= nil and itemID then
+    if not isInspectOther and not isPendingIdentify and bagNum ~= nil and slotNum ~= nil and itemID then
         pendingInfo = GetPendingIdentifyInfo(bagNum, slotNum, itemID)
         if pendingInfo and pendingInfo.isPending then
             isPendingIdentify = true
@@ -6038,10 +6212,25 @@ local function OnTooltipSetItem(tooltip)
         -- 检查缓存是否属于当前槽位（而不是其他同ID物品）
         -- 如果缓存有数据但不是待鉴定状态，说明是其他物品的缓存
         if not cached.isPendingIdentify then
-            -- 清除缓存，避免使用已鉴定物品的数据
-            State.cache[key] = nil
-            State.cacheTime[key] = nil
-            cached = nil
+            local identData = cached.systems and cached.systems.identification
+            local hasIdentData = identData and not identData.isEmpty and (
+                (identData.baseAttributes and #identData.baseAttributes > 0)
+                or (identData.additionalAttributes and #identData.additionalAttributes > 0)
+                or (identData.qualityColor and identData.qualityColor ~= "")
+                or (identData.itemNamePrefix and identData.itemNamePrefix ~= "")
+                or (identData.itemNameSuffix and identData.itemNameSuffix ~= "")
+                or (identData.itemNameColors and identData.itemNameColors ~= "")
+                or (identData.itemBottomDescription and identData.itemBottomDescription ~= "")
+            )
+
+            if hasIdentData then
+                -- 清除缓存，避免使用已鉴定物品的数据
+                State.cache[key] = nil
+                State.cacheTime[key] = nil
+                cached = nil
+            else
+                cached.isPendingIdentify = true
+            end
         end
     end
 
@@ -6101,7 +6290,6 @@ local function OnTooltipSetItem(tooltip)
         elseif not isPendingIdentify or (DB.systems.templateStats and bagNum ~= nil and slotNum ~= nil) then
             -- 【关键修复】检测是否正在观察其他玩家
             -- 如果是观察其他玩家，需要使用GUID格式查询（服务器无法访问其他玩家的背包）
-            local isInspectOther = inspectUnit and UnitExists(inspectUnit) and not UnitIsUnit(inspectUnit, "player")
 
             -- 【调试日志】发送查询
             if DB.debug then
@@ -6172,7 +6360,17 @@ local function OnTooltipSetItem(tooltip)
     end
 
     ClearTooltipMeta(tooltip)
-    RenderTooltip(tooltip, itemID, guid, bagNum, slotNum)
+    local renderBag = bagNum
+    local renderSlot = slotNum
+    if isInspectOther then
+        renderBag = nil
+        renderSlot = nil
+    end
+
+    if key and guid and guid > 0 and (isInspectOther or (renderBag == nil and renderSlot == nil)) then
+        GetTooltipMeta(tooltip, key)
+    end
+    RenderTooltip(tooltip, itemID, guid, renderBag, renderSlot)
 
     local tooltipMeta = State.tooltips[tooltip]
     local hasCustomData = tooltipMeta and tooltipMeta.key == key and (
@@ -6184,6 +6382,7 @@ local function OnTooltipSetItem(tooltip)
         or tooltipMeta.rendered.sets
         or tooltipMeta.rendered.magic
         or tooltipMeta.rendered.templateStats
+        or tooltipMeta.rendered.pendingIdentify
     )
 
     local cacheKey = nil
@@ -6191,24 +6390,29 @@ local function OnTooltipSetItem(tooltip)
         cacheKey = string.format("%d:%d:%d", bagNum, slotNum, itemID)
     end
 
-    if hasCustomData and not isPendingIdentify then
+    if hasCustomData and not isPendingIdentify and not isInspectOther then
         if cacheKey then
             PendingIdentifyState.cache[cacheKey] = nil
             SuppressPendingIdentify(bagNum, slotNum, itemID, 6)
         end
     else
-        local pendingInfo = pendingInfo or GetPendingIdentifyInfo(bagNum, slotNum, itemID)
-        if pendingInfo and pendingInfo.isPending then
-            tooltip:AddLine(" ")
-            local multiplierText = ""
-            if HasHuanJingEffect(pendingInfo.multiplier, pendingInfo.mode) then
-                if NormalizeHuanJingMode(pendingInfo.mode) == "+" then
-                    multiplierText = " |cFF00FF00+" .. pendingInfo.multiplier .. "|r"
-                else
-                    multiplierText = " |cFF00FF00x" .. pendingInfo.multiplier .. "倍率|r"
+        local pendingInfoForDisplay = pendingInfo
+        if not isInspectOther and not pendingInfoForDisplay then
+            pendingInfoForDisplay = GetPendingIdentifyInfo(bagNum, slotNum, itemID)
+        end
+        if pendingInfoForDisplay and pendingInfoForDisplay.isPending then
+            if not TooltipHasPendingIdentifyLine(tooltip) then
+                tooltip:AddLine(" ")
+                local multiplierText = ""
+                if HasHuanJingEffect(pendingInfoForDisplay.multiplier, pendingInfoForDisplay.mode) then
+                    if NormalizeHuanJingMode(pendingInfoForDisplay.mode) == "+" then
+                        multiplierText = " |cFF00FF00+" .. pendingInfoForDisplay.multiplier .. "|r"
+                    else
+                        multiplierText = " |cFF00FF00x" .. pendingInfoForDisplay.multiplier .. "倍率|r"
+                    end
                 end
+                tooltip:AddLine("|cFFFF0000【待鉴定】|r" .. multiplierText)
             end
-            tooltip:AddLine("|cFFFF0000【待鉴定】|r" .. multiplierText)
             tooltip:Show()
         end
     end
@@ -6342,12 +6546,16 @@ SlashCmdList["UNIFIEDTOOLTIP"] = function(msg)
 
     elseif msg:match("^设置有效期%s+") or msg:match("^缓存时间%s+") or msg:match("^expire%s+") then
         local time = tonumber(msg:match("%d+"))
-        if time and time > 0 then
+        if time and time >= 0 then
             DB.cacheExpiration = time
-            print("|cff00ff00[统一提示框]|r 缓存有效期已设置为: " .. time .. " 秒")
+            if time == 0 then
+                print("|cff00ff00[统一提示框]|r 缓存有效期已设置为: 本次登录不过期")
+            else
+                print("|cff00ff00[统一提示框]|r 缓存有效期已设置为: " .. time .. " 秒")
+            end
         else
-            print("|cffff0000[统一提示框]|r 无效的时间值，请输入正整数")
-            print("|cff888888示例: /提示框 设置有效期 300|r （设置为5分钟）")
+            print("|cffff0000[统一提示框]|r 无效的时间值，请输入0或正整数")
+            print("|cff888888示例: /提示框 设置有效期 0|r （本次登录不过期）")
         end
 
     elseif msg == "清除" or msg == "清除缓存" or msg == "clear" then
@@ -6396,7 +6604,11 @@ SlashCmdList["UNIFIEDTOOLTIP"] = function(msg)
         print("  查询中: " .. pendingCount)
         print("  冷却中: " .. cooldownCount)
         print("\n|cff00ff00[统一提示框]|r 性能配置:")
-        print("  缓存有效期: " .. DB.cacheExpiration .. " 秒 (" .. math.floor(DB.cacheExpiration / 60) .. " 分钟)")
+        if DB.cacheExpiration and DB.cacheExpiration > 0 then
+            print("  缓存有效期: " .. DB.cacheExpiration .. " 秒 (" .. math.floor(DB.cacheExpiration / 60) .. " 分钟)")
+        else
+            print("  缓存有效期: 本次登录不过期")
+        end
         print("  查询超时: " .. DB.timeout .. " 秒")
         print("  通信方式: Addon消息（不受聊天速率限制）")
         print("  已注册前缀: " .. ADDON_PREFIX .. ", " .. ADDON_PREFIX_ALT)
@@ -6586,8 +6798,8 @@ SlashCmdList["UNIFIEDTOOLTIP"] = function(msg)
         print("  |cffffcc00/提示框 优化速度|r - 应用快速服务器预设")
         print("  |cffffcc00/提示框 设置超时 <秒数>|r - 设置查询超时时间")
         print("    |cff888888示例: /提示框 设置超时 20|r （20秒）")
-        print("  |cffffcc00/提示框 设置有效期 <秒数>|r - 设置缓存有效期")
-        print("    |cff888888示例: /提示框 设置有效期 600|r （10分钟）")
+        print("  |cffffcc00/提示框 设置有效期 <秒数>|r - 设置缓存有效期，0表示本次登录不过期")
+        print("    |cff888888示例: /提示框 设置有效期 0|r （本次登录不过期）")
         print("\n|cffffcc00其他:|r")
         print("  |cffffcc00/提示框 清除统计|r - 清除性能统计数据")
         print("  |cffffcc00/提示框 链接|r - 显示当前物品的完整链接格式（调试用）")

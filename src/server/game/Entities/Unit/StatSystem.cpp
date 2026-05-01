@@ -18,6 +18,7 @@
 #include "Config.h"
 #include "Creature.h"
 #include "DatabaseEnv.h"
+#include "Log.h"
 #include "Pet.h"
 #include "Player.h"
 #include "ScriptMgr.h"
@@ -25,6 +26,7 @@
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
 #include "Unit.h"
+#include <cmath>
 #include <limits>
 
 inline bool _ModifyUInt32(bool apply, uint32& baseValue, int32& amount)
@@ -182,16 +184,16 @@ bool Player::UpdateStats(Stats stat)
             if (result)
             {
                 Field* fields = result->Fetch();
-                uint32 limitU32 = fields[0].Get<uint32>();
+                uint64 limitU64 = fields[0].Get<uint64>();
                 double valueD = static_cast<double>(value);
-                double limitD = static_cast<double>(limitU32);
+                double limitD = static_cast<double>(limitU64);
 
-                if (limitU32 > 0 && valueD > limitD)
+                if (limitU64 > 0 && valueD > limitD)
                 {
-                    value = static_cast<float>(limitU32);
+                    value = static_cast<float>(limitU64);
                 }
 
-                if (limitU32 > 0 && extendedStatValue > limitD)
+                if (limitU64 > 0 && extendedStatValue > limitD)
                     extendedStatValue = limitD;
             }
         }
@@ -273,10 +275,11 @@ void Player::ApplySpellPowerBonus(int64 amount, bool apply)
 
     if (apply)
     {
-        if (amount > static_cast<int64>(std::numeric_limits<uint64>::max() - m_baseSpellPower))
+        uint64 addAmount = static_cast<uint64>(amount);
+        if (addAmount > std::numeric_limits<uint64>::max() - m_baseSpellPower)
             m_baseSpellPower = std::numeric_limits<uint64>::max();
         else
-            m_baseSpellPower += static_cast<uint64>(amount);
+            m_baseSpellPower += addAmount;
     }
     else
     {
@@ -284,12 +287,39 @@ void Player::ApplySpellPowerBonus(int64 amount, bool apply)
         m_baseSpellPower = removeAmount > m_baseSpellPower ? 0 : m_baseSpellPower - removeAmount;
     }
 
-    int32 displayAmount = amount > std::numeric_limits<int32>::max() ? std::numeric_limits<int32>::max() : static_cast<int32>(amount);
+    constexpr int32 MAX_CLIENT_SPELL_POWER = 2000000000;
+    int32 displayAmount = amount > MAX_CLIENT_SPELL_POWER ? MAX_CLIENT_SPELL_POWER : static_cast<int32>(amount);
+
+    auto applyClientUIntMod = [this, MAX_CLIENT_SPELL_POWER](uint16 index, int32 val, bool add)
+    {
+        int64 current = static_cast<int64>(GetUInt32Value(index));
+        current += add ? val : -val;
+        if (current < 0)
+            current = 0;
+        else if (current > MAX_CLIENT_SPELL_POWER)
+            current = MAX_CLIENT_SPELL_POWER;
+
+        SetUInt32Value(index, static_cast<uint32>(current));
+    };
+
+    auto applyClientIntMod = [this, MAX_CLIENT_SPELL_POWER](uint16 index, int32 val, bool add)
+    {
+        int64 current = static_cast<int64>(GetInt32Value(index));
+        current += add ? val : -val;
+        if (current > MAX_CLIENT_SPELL_POWER)
+            current = MAX_CLIENT_SPELL_POWER;
+        else if (current < -MAX_CLIENT_SPELL_POWER)
+            current = -MAX_CLIENT_SPELL_POWER;
+
+        SetInt32Value(index, static_cast<int32>(current));
+    };
 
     // For speed just update for client
-    ApplyModUInt32Value(PLAYER_FIELD_MOD_HEALING_DONE_POS, displayAmount, apply);
+    applyClientUIntMod(PLAYER_FIELD_MOD_HEALING_DONE_POS, displayAmount, apply);
     for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
-        ApplyModInt32Value(PLAYER_FIELD_MOD_DAMAGE_DONE_POS + i, displayAmount, apply);
+        applyClientIntMod(PLAYER_FIELD_MOD_DAMAGE_DONE_POS + i, displayAmount, apply);
+
+    UpdateSpellDamageAndHealingBonus();
 }
 
 void Player::UpdateSpellDamageAndHealingBonus()
@@ -460,6 +490,9 @@ void Player::UpdateSpellDamageAndHealingBonus()
 
 bool Player::UpdateAllStats()
 {
+    if (!CanModifyStats())
+        return true;
+
     // 【重要】使用 UpdateStats 而非直接 SetStat，确保钩子能修改属性值
     // 转身系统等模块通过 OnPlayerAfterUpdateStat 钩子应用加成
     for (int8 i = STAT_STRENGTH; i < MAX_STATS; ++i)
@@ -651,7 +684,7 @@ void Player::UpdateMaxHealth()
     uint32 oldClientMaxHealth = GetMaxHealth();
     bool wasFullHealth = _extendedHealth ? oldExtendedHealth >= oldExtendedMaxHealth : GetHealth() >= GetMaxHealth();
 
-    float value = GetModifierValue(unitMod, BASE_VALUE) + GetCreateHealth();
+    float value = GetModifierValue(unitMod, BASE_VALUE) + static_cast<float>(GetCreateHealthForCombat());
     value *= GetModifierValue(unitMod, BASE_PCT);
     value += GetModifierValue(unitMod, TOTAL_VALUE) + static_cast<float>(GetHealthBonusFromStamina());
     value *= GetModifierValue(unitMod, TOTAL_PCT);
@@ -681,24 +714,25 @@ void Player::UpdateMaxHealth()
     if (result)
     {
         Field* fields = result->Fetch();
-        uint32 healthLimitU32 = fields[0].Get<uint32>();
+        uint64 healthLimitU64 = fields[0].Get<uint64>();
         double valueD = static_cast<double>(value);
-        double limitD = static_cast<double>(healthLimitU32);
+        double limitD = static_cast<double>(healthLimitU64);
 
-        if (healthLimitU32 > 0 && valueD > limitD)
+        if (healthLimitU64 > 0 && valueD > limitD)
         {
-            value = static_cast<float>(healthLimitU32);
+            value = static_cast<float>(healthLimitU64);
         }
 
-        if (healthLimitU32 > 0 && extendedMaxHealth > limitD)
+        if (healthLimitU64 > 0 && extendedMaxHealth > limitD)
             extendedMaxHealth = limitD;
     }
 
-    _extendedMaxHealth = static_cast<uint64>(extendedMaxHealth);
+    uint64 newExtendedMaxHealth = static_cast<uint64>(extendedMaxHealth);
+    _extendedMaxHealth = newExtendedMaxHealth;
     SetMaxHealth(static_cast<uint32>(value));
     if (wasFullHealth)
         SetExtendedHealth(GetExtendedMaxHealth());
-    else if (oldClientMaxHealth && oldExtendedMaxHealth <= oldClientMaxHealth && oldExtendedHealth <= oldClientMaxHealth && GetExtendedMaxHealth() > GetMaxHealth())
+    else if (oldClientMaxHealth && oldExtendedMaxHealth <= oldClientMaxHealth && oldExtendedHealth <= oldClientMaxHealth && (HasExtendedHealthForCombat() || GetExtendedMaxHealth() > GetMaxHealth()))
         SetExtendedHealthFromClientHealth(static_cast<uint32>(oldExtendedHealth));
     else
         SetExtendedHealth(oldExtendedHealth);
@@ -709,10 +743,15 @@ void Player::UpdateMaxHealth()
 void Player::UpdateMaxPower(Powers power)
 {
     UnitMods unitMod = UnitMods(static_cast<uint16>(UNIT_MOD_POWER_START) + power);
+    uint64 oldExtendedMaxPower = GetExtendedMaxPower(power);
+    uint64 oldExtendedPower = GetPowerForCombat(power);
+    uint32 oldClientMaxPower = GetMaxPower(power);
+    bool wasFullPower = oldExtendedMaxPower ? oldExtendedPower >= oldExtendedMaxPower : GetPower(power) >= GetMaxPower(power);
 
-    float bonusPower = (power == POWER_MANA && GetCreatePowers(power) > 0) ? static_cast<float>(GetManaBonusFromIntellect()) : 0;
+    uint64 createPower = GetCreatePowerForCombat(power);
+    float bonusPower = (power == POWER_MANA && createPower > 0) ? static_cast<float>(GetManaBonusFromIntellect()) : 0;
 
-    float value = GetModifierValue(unitMod, BASE_VALUE) + GetCreatePowers(power);
+    float value = GetModifierValue(unitMod, BASE_VALUE) + static_cast<float>(createPower);
     value *= GetModifierValue(unitMod, BASE_PCT);
     value += GetModifierValue(unitMod, TOTAL_VALUE) +  bonusPower;
     value *= GetModifierValue(unitMod, TOTAL_PCT);
@@ -744,22 +783,30 @@ void Player::UpdateMaxPower(Powers power)
         if (result)
         {
             Field* fields = result->Fetch();
-            uint32 manaLimitU32 = fields[0].Get<uint32>();
+            uint64 manaLimitU64 = fields[0].Get<uint64>();
             double valueD = static_cast<double>(value);
-            double limitD = static_cast<double>(manaLimitU32);
+            double limitD = static_cast<double>(manaLimitU64);
 
-            if (manaLimitU32 > 0 && valueD > limitD)
+            if (manaLimitU64 > 0 && valueD > limitD)
             {
-                value = static_cast<float>(manaLimitU32);
+                value = static_cast<float>(manaLimitU64);
             }
 
-            if (manaLimitU32 > 0 && extendedMaxPower > limitD)
+            if (manaLimitU64 > 0 && extendedMaxPower > limitD)
                 extendedMaxPower = limitD;
         }
     }
 
-    _extendedMaxPowers[power] = static_cast<uint64>(extendedMaxPower);
     SetMaxPower(power, static_cast<uint32>(value));
+    SetExtendedMaxPower(power, static_cast<uint64>(extendedMaxPower));
+    if (wasFullPower)
+        SetExtendedPower(power, GetExtendedMaxPower(power));
+    else if (oldClientMaxPower && oldExtendedMaxPower <= oldClientMaxPower && oldExtendedPower <= oldClientMaxPower && (HasExtendedPowerForCombat(power) || GetExtendedMaxPower(power) > GetMaxPower(power)))
+        SetExtendedPowerFromClientPower(power, static_cast<uint32>(oldExtendedPower));
+    else
+        SetExtendedPower(power, oldExtendedPower);
+
+    SyncClientPowerFromExtended(power, power == POWER_MANA);
 }
 
 void Player::ApplyFeralAPBonus(int32 amount, bool apply)
@@ -1169,7 +1216,7 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
             break;
     }
 
-    float attackSpeedMod = GetAPMultiplier(attType, normalized);
+    double attackSpeedMod = static_cast<double>(GetAPMultiplier(attType, normalized));
 
     // 从数据库获取伤害上限，如果没有配置则使用默认值
     double damageLimit = 0.0;
@@ -1194,41 +1241,41 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
         }
     }
 
-    // 获取攻击强度
-    float attackPower = GetTotalAttackPowerValue(attType);
+    // 获取服务端真实攻击强度，避免客户端 int32/float 显示字段裁剪后影响武器技能伤害
+    double attackPower = GetExtendedTotalAttackPowerValue(attType);
 
     // 如果有配置上限，检查攻击强度是否溢出
     if (damageLimit > 0.0)
     {
-        if (attackPower < 0.0f || static_cast<double>(attackPower) > damageLimit || std::isnan(attackPower) || std::isinf(attackPower))
-            attackPower = static_cast<float>(damageLimit);
+        if (attackPower < 0.0 || attackPower > damageLimit || std::isnan(attackPower) || std::isinf(attackPower))
+            attackPower = damageLimit;
     }
 
-    float baseModValue = GetModifierValue(unitMod, BASE_VALUE);
-    float apContribution = attackPower / 14.0f * attackSpeedMod;
+    double baseModValue = static_cast<double>(GetModifierValue(unitMod, BASE_VALUE));
+    double apContribution = attackPower / 14.0 * attackSpeedMod;
 
     // 如果有配置上限，检查 apContribution 溢出
     if (damageLimit > 0.0)
     {
-        if (apContribution < 0.0f || static_cast<double>(apContribution) > damageLimit || std::isnan(apContribution) || std::isinf(apContribution))
-            apContribution = static_cast<float>(damageLimit);
+        if (apContribution < 0.0 || apContribution > damageLimit || std::isnan(apContribution) || std::isinf(apContribution))
+            apContribution = damageLimit;
     }
 
-    float baseValue = baseModValue + apContribution;
+    double baseValue = baseModValue + apContribution;
 
     // 如果有配置上限，检查 baseValue 溢出
     if (damageLimit > 0.0)
     {
-        if (baseValue < 0.0f || static_cast<double>(baseValue) > damageLimit || std::isnan(baseValue) || std::isinf(baseValue))
-            baseValue = static_cast<float>(damageLimit);
+        if (baseValue < 0.0 || baseValue > damageLimit || std::isnan(baseValue) || std::isinf(baseValue))
+            baseValue = damageLimit;
     }
 
-    float basePct    = GetModifierValue(unitMod, BASE_PCT);
-    float totalValue = GetModifierValue(unitMod, TOTAL_VALUE);
-    float totalPct   = addTotalPct ? GetModifierValue(unitMod, TOTAL_PCT) : 1.0f;
+    double basePct    = static_cast<double>(GetModifierValue(unitMod, BASE_PCT));
+    double totalValue = static_cast<double>(GetModifierValue(unitMod, TOTAL_VALUE));
+    double totalPct   = addTotalPct ? static_cast<double>(GetModifierValue(unitMod, TOTAL_PCT)) : 1.0;
 
-    float weaponMinDamage = GetWeaponDamageRange(attType, MINDAMAGE);
-    float weaponMaxDamage = GetWeaponDamageRange(attType, MAXDAMAGE);
+    double weaponMinDamage = static_cast<double>(GetWeaponDamageRange(attType, MINDAMAGE));
+    double weaponMaxDamage = static_cast<double>(GetWeaponDamageRange(attType, MAXDAMAGE));
 
     if (IsAttackSpeedOverridenShapeShift()) // forms with no override on attack speed use normal weapon damage
     {
@@ -1236,8 +1283,8 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
         if (lvl > 60)
             lvl = 60;
 
-        weaponMinDamage = lvl * 0.85f * attackSpeedMod;
-        weaponMaxDamage = lvl * 1.25f * attackSpeedMod;
+        weaponMinDamage = static_cast<double>(lvl) * 0.85 * attackSpeedMod;
+        weaponMaxDamage = static_cast<double>(lvl) * 1.25 * attackSpeedMod;
     }
     else if (!CanUseAttackType(attType)) // check if player not in form but still can't use (disarm case)
     {
@@ -1253,38 +1300,42 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
     }
     else if (attType == RANGED_ATTACK) // add ammo DPS to ranged damage
     {
-        weaponMinDamage += GetAmmoDPS() * attackSpeedMod;
-        weaponMaxDamage += GetAmmoDPS() * attackSpeedMod;
+        weaponMinDamage += static_cast<double>(GetAmmoDPS()) * attackSpeedMod;
+        weaponMaxDamage += static_cast<double>(GetAmmoDPS()) * attackSpeedMod;
     }
 
-    // 使用 double 进行计算以避免 float 精度溢出
-    double dBaseValue = static_cast<double>(baseValue);
-    double dBasePct = static_cast<double>(basePct);
-    double dTotalValue = static_cast<double>(totalValue);
-    double dTotalPct = static_cast<double>(totalPct);
-    double dWeaponMin = static_cast<double>(weaponMinDamage);
-    double dWeaponMax = static_cast<double>(weaponMaxDamage);
-
-    double dMinDamage = ((dWeaponMin + dBaseValue) * dBasePct + dTotalValue) * dTotalPct;
-    double dMaxDamage = ((dWeaponMax + dBaseValue) * dBasePct + dTotalValue) * dTotalPct;
+    long double dMinDamage = ((static_cast<long double>(weaponMinDamage) + static_cast<long double>(baseValue)) * static_cast<long double>(basePct) + static_cast<long double>(totalValue)) * static_cast<long double>(totalPct);
+    long double dMaxDamage = ((static_cast<long double>(weaponMaxDamage) + static_cast<long double>(baseValue)) * static_cast<long double>(basePct) + static_cast<long double>(totalValue)) * static_cast<long double>(totalPct);
 
     // 如果有配置上限，限制到数据库配置的范围
     if (damageLimit > 0.0)
     {
-        if (dMinDamage < 0.0 || dMinDamage > damageLimit || std::isnan(dMinDamage) || std::isinf(dMinDamage))
-            dMinDamage = damageLimit;
-        if (dMaxDamage < 0.0 || dMaxDamage > damageLimit || std::isnan(dMaxDamage) || std::isinf(dMaxDamage))
-            dMaxDamage = damageLimit;
+        if (dMinDamage < 0.0L || dMinDamage > static_cast<long double>(damageLimit) || !std::isfinite(dMinDamage))
+            dMinDamage = static_cast<long double>(damageLimit);
+        if (dMaxDamage < 0.0L || dMaxDamage > static_cast<long double>(damageLimit) || !std::isfinite(dMaxDamage))
+            dMaxDamage = static_cast<long double>(damageLimit);
     }
     if (dMinDamage > dMaxDamage)
         dMinDamage = dMaxDamage;
 
-    _extendedDamageMin[attType] = dMinDamage > 0.0 ? dMinDamage : 0.0;
-    _extendedDamageMax[attType] = dMaxDamage > 0.0 ? dMaxDamage : 0.0;
+    _extendedDamageMin[attType] = dMinDamage > 0.0L && std::isfinite(dMinDamage) ? static_cast<double>(dMinDamage) : 0.0;
+    _extendedDamageMax[attType] = dMaxDamage > 0.0L && std::isfinite(dMaxDamage) ? static_cast<double>(dMaxDamage) : 0.0;
 
-    // 转换回 float
-    minDamage = static_cast<float>(dMinDamage);
-    maxDamage = static_cast<float>(dMaxDamage);
+    auto toCombatFloat = [](long double value) -> float
+    {
+        if (value <= 0.0L || !std::isfinite(value))
+            return 0.0f;
+
+        constexpr long double MAX_FLOAT_VALUE = static_cast<long double>(std::numeric_limits<float>::max());
+        if (value > MAX_FLOAT_VALUE)
+            return std::numeric_limits<float>::max();
+
+        return static_cast<float>(value);
+    };
+
+    // 兼容旧接口返回 float，但服务端内部不再按 20 亿客户端显示值裁剪
+    minDamage = toCombatFloat(dMinDamage);
+    maxDamage = toCombatFloat(dMaxDamage);
 }
 
 void Player::UpdateDefenseBonusesMod()
@@ -1883,10 +1934,19 @@ void Player::ApplyHealthRegenBonus(int32 amount, bool apply)
 
 void Player::UpdateManaRegen()
 {
+    constexpr uint8 CLIENT_MANA_REGEN_PREDICTION_MASK = 1 << POWER_MANA;
+    bool disableClientManaPrediction = HasExtendedPowerForCombat(POWER_MANA) || GetExtendedMaxPower(POWER_MANA) > 2000000000ULL;
+    if (disableClientManaPrediction)
+        SetByteFlag(PLAYER_FIELD_BYTES2, PLAYER_FIELD_BYTES_2_OFFSET_IGNORE_POWER_REGEN_PREDICTION_MASK, CLIENT_MANA_REGEN_PREDICTION_MASK);
+    else
+        RemoveByteFlag(PLAYER_FIELD_BYTES2, PLAYER_FIELD_BYTES_2_OFFSET_IGNORE_POWER_REGEN_PREDICTION_MASK, CLIENT_MANA_REGEN_PREDICTION_MASK);
+
     if (HasAuraTypeWithMiscvalue(SPELL_AURA_PREVENT_REGENERATE_POWER, POWER_MANA + 1))
     {
         SetStatFloatValue(UNIT_FIELD_POWER_REGEN_INTERRUPTED_FLAT_MODIFIER, 0);
         SetStatFloatValue(UNIT_FIELD_POWER_REGEN_FLAT_MODIFIER, 0);
+        if (disableClientManaPrediction && IsInWorld())
+            SyncClientPowerFromExtended(POWER_MANA, true);
         return;
     }
 
@@ -1910,9 +1970,22 @@ void Player::UpdateManaRegen()
     int32 modManaRegenInterrupt = GetTotalAuraModifier(SPELL_AURA_MOD_MANA_REGEN_INTERRUPT);
     if (modManaRegenInterrupt > 100)
         modManaRegenInterrupt = 100;
-    SetStatFloatValue(UNIT_FIELD_POWER_REGEN_INTERRUPTED_FLAT_MODIFIER + AsUnderlyingType(POWER_MANA), power_regen_mp5 + CalculatePct(power_regen, modManaRegenInterrupt));
+    float interruptedRegen = power_regen_mp5 + CalculatePct(power_regen, modManaRegenInterrupt);
+    float normalRegen = power_regen_mp5 + power_regen;
+    if ((HasExtendedPowerForCombat(POWER_MANA) || GetExtendedMaxPower(POWER_MANA) > GetMaxPower(POWER_MANA)) && (interruptedRegen < 0.0f || normalRegen < 0.0f))
+    {
+        if (interruptedRegen < 0.0f)
+            interruptedRegen = 0.0f;
+        if (normalRegen < 0.0f)
+            normalRegen = 0.0f;
+    }
 
-    SetStatFloatValue(UNIT_FIELD_POWER_REGEN_FLAT_MODIFIER + AsUnderlyingType(POWER_MANA), power_regen_mp5 + power_regen);
+    SetStatFloatValue(UNIT_FIELD_POWER_REGEN_INTERRUPTED_FLAT_MODIFIER + AsUnderlyingType(POWER_MANA), interruptedRegen);
+
+    SetStatFloatValue(UNIT_FIELD_POWER_REGEN_FLAT_MODIFIER + AsUnderlyingType(POWER_MANA), normalRegen);
+
+    if (disableClientManaPrediction && IsInWorld())
+        SyncClientPowerFromExtended(POWER_MANA, true);
 }
 
 void Player::UpdateEnergyRegen()
@@ -2022,16 +2095,73 @@ void Creature::UpdateArmor()
 
 void Creature::UpdateMaxHealth()
 {
+    uint64 oldExtendedMaxHealth = GetExtendedMaxHealth();
+    uint64 oldExtendedHealth = GetHealthForCombat();
+    uint32 oldClientMaxHealth = GetMaxHealth();
+    bool wasFullHealth = oldExtendedMaxHealth ? oldExtendedHealth >= oldExtendedMaxHealth : GetHealth() >= GetMaxHealth();
+
     float value = GetTotalAuraModValue(UNIT_MOD_HEALTH);
+    double extendedMaxHealth = 0.0;
+    constexpr double MAX_EXTENDED_VALUE = static_cast<double>(std::numeric_limits<uint64>::max());
+
+    if (std::isnan(value) || value < 0.0f)
+        extendedMaxHealth = 0.0;
+    else if (std::isinf(value) || static_cast<double>(value) > MAX_EXTENDED_VALUE)
+        extendedMaxHealth = MAX_EXTENDED_VALUE;
+    else
+        extendedMaxHealth = static_cast<double>(value);
+
+    if (value < 0.0f)
+        value = 0.0f;
+    else if (value > 2000000000.0f)
+        value = 2000000000.0f;
+
     SetMaxHealth(uint32(value));
+    SetExtendedMaxHealth(static_cast<uint64>(extendedMaxHealth));
+    if (wasFullHealth)
+        SetExtendedHealth(GetExtendedMaxHealth());
+    else if (oldClientMaxHealth && oldExtendedMaxHealth <= oldClientMaxHealth && oldExtendedHealth <= oldClientMaxHealth && GetExtendedMaxHealth() > GetMaxHealth())
+        SetExtendedHealth(static_cast<uint32>(oldExtendedHealth));
+    else
+        SetExtendedHealth(oldExtendedHealth);
+
+    SyncClientHealthFromExtended();
 }
 
 void Creature::UpdateMaxPower(Powers power)
 {
     UnitMods unitMod = UnitMods(static_cast<uint16>(UNIT_MOD_POWER_START) + power);
+    uint64 oldExtendedMaxPower = GetExtendedMaxPower(power);
+    uint64 oldExtendedPower = GetPowerForCombat(power);
+    uint32 oldClientMaxPower = GetMaxPower(power);
+    bool wasFullPower = oldExtendedMaxPower ? oldExtendedPower >= oldExtendedMaxPower : GetPower(power) >= GetMaxPower(power);
 
     float value  = GetTotalAuraModValue(unitMod);
+    double extendedMaxPower = 0.0;
+    constexpr double MAX_EXTENDED_VALUE = static_cast<double>(std::numeric_limits<uint64>::max());
+
+    if (std::isnan(value) || value < 0.0f)
+        extendedMaxPower = 0.0;
+    else if (std::isinf(value) || static_cast<double>(value) > MAX_EXTENDED_VALUE)
+        extendedMaxPower = MAX_EXTENDED_VALUE;
+    else
+        extendedMaxPower = static_cast<double>(value);
+
+    if (value < 0.0f)
+        value = 0.0f;
+    else if (value > 2000000000.0f)
+        value = 2000000000.0f;
+
     SetMaxPower(power, uint32(value));
+    SetExtendedMaxPower(power, static_cast<uint64>(extendedMaxPower));
+    if (wasFullPower)
+        SetExtendedPower(power, GetExtendedMaxPower(power));
+    else if (oldClientMaxPower && oldExtendedMaxPower <= oldClientMaxPower && oldExtendedPower <= oldClientMaxPower && GetExtendedMaxPower(power) > GetMaxPower(power))
+        SetExtendedPower(power, static_cast<uint32>(oldExtendedPower));
+    else
+        SetExtendedPower(power, oldExtendedPower);
+
+    SyncClientPowerFromExtended(power);
 }
 
 void Creature::UpdateAttackPowerAndDamage(bool ranged)
@@ -2114,37 +2244,46 @@ void Creature::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, 
         return;
     }
 
-    float weaponMinDamage = GetWeaponDamageRange(attType, MINDAMAGE);
-    float weaponMaxDamage = GetWeaponDamageRange(attType, MAXDAMAGE);
+    long double weaponMinDamage = static_cast<long double>(GetWeaponDamageRange(attType, MINDAMAGE));
+    long double weaponMaxDamage = static_cast<long double>(GetWeaponDamageRange(attType, MAXDAMAGE));
 
     // Disarm for creatures
     if (HasWeapon(attType) && !HasWeaponForAttack(attType))
     {
-        minDamage *= 0.5f;
-        maxDamage *= 0.5f;
+        weaponMinDamage *= 0.5L;
+        weaponMaxDamage *= 0.5L;
     }
 
-    float attackPower      = GetTotalAttackPowerValue(attType);
-    float attackSpeedMulti = GetAPMultiplier(attType, normalized);
-    float baseValue        = GetModifierValue(unitMod, BASE_VALUE) + (attackPower / 14.0f) * variance;
-    float basePct          = GetModifierValue(unitMod, BASE_PCT) * attackSpeedMulti;
-    float totalValue       = GetModifierValue(unitMod, TOTAL_VALUE);
-    float totalPct         = addTotalPct ? GetModifierValue(unitMod, TOTAL_PCT) : 1.0f;
-    float dmgMultiplier    = GetCreatureTemplate()->DamageModifier; // = DamageModifier * _GetDamageMod(rank);
+    long double attackPower      = static_cast<long double>(GetTotalAttackPowerValue(attType));
+    long double attackSpeedMulti = static_cast<long double>(GetAPMultiplier(attType, normalized));
+    long double baseValue        = static_cast<long double>(GetModifierValue(unitMod, BASE_VALUE)) + (attackPower / 14.0L) * static_cast<long double>(variance);
+    long double basePct          = static_cast<long double>(GetModifierValue(unitMod, BASE_PCT)) * attackSpeedMulti;
+    long double totalValue       = static_cast<long double>(GetModifierValue(unitMod, TOTAL_VALUE));
+    long double totalPct         = addTotalPct ? static_cast<long double>(GetModifierValue(unitMod, TOTAL_PCT)) : 1.0L;
+    long double dmgMultiplier    = static_cast<long double>(GetCreatureTemplate()->DamageModifier); // = DamageModifier * _GetDamageMod(rank);
 
-    minDamage = ((weaponMinDamage + baseValue) * dmgMultiplier * basePct + totalValue) * totalPct;
-    maxDamage = ((weaponMaxDamage + baseValue) * dmgMultiplier * basePct + totalValue) * totalPct;
+    long double minDamageValue = ((weaponMinDamage + baseValue) * dmgMultiplier * basePct + totalValue) * totalPct;
+    long double maxDamageValue = ((weaponMaxDamage + baseValue) * dmgMultiplier * basePct + totalValue) * totalPct;
 
-    // 限制最终伤害到安全范围，避免转成 uint32 时出现溢出或断言，同时保持超大属性时仍能造成伤害
-    constexpr float MAX_SAFE_DAMAGE = 1000000000.0f;
-    if (minDamage < 0.0f)
-        minDamage = 0.0f;
-    else if (minDamage > MAX_SAFE_DAMAGE)
-        minDamage = MAX_SAFE_DAMAGE;
-    if (maxDamage < 0.0f)
-        maxDamage = 0.0f;
-    else if (maxDamage > MAX_SAFE_DAMAGE)
-        maxDamage = MAX_SAFE_DAMAGE;
+    auto clampDamageToFloat = [](long double value) -> float
+    {
+        constexpr long double MAX_SAFE_DAMAGE = static_cast<long double>(std::numeric_limits<int64>::max());
+
+        if (value <= 0.0L || !std::isfinite(value))
+            return 0.0f;
+
+        if (value > MAX_SAFE_DAMAGE)
+            value = MAX_SAFE_DAMAGE;
+
+        float floatValue = static_cast<float>(value);
+        while (static_cast<long double>(floatValue) > MAX_SAFE_DAMAGE && floatValue > 0.0f)
+            floatValue = std::nextafter(floatValue, 0.0f);
+
+        return floatValue;
+    };
+
+    minDamage = clampDamageToFloat(minDamageValue);
+    maxDamage = clampDamageToFloat(maxDamageValue);
     if (minDamage > maxDamage)
         minDamage = maxDamage;
 }

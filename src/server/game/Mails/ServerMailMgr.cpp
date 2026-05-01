@@ -57,8 +57,8 @@ void ServerMailMgr::LoadMailServerTemplates()
 
         ServerMail& servMail = _serverMailStore[id];
         servMail.id          = id;
-        servMail.moneyA      = fields[1].Get<uint32>();
-        servMail.moneyH      = fields[2].Get<uint32>();
+        servMail.moneyA      = fields[1].Get<uint64>();
+        servMail.moneyH      = fields[2].Get<uint64>();
         servMail.subject     = fields[3].Get<std::string>();
         servMail.body        = fields[4].Get<std::string>();
         servMail.active      = fields[5].Get<uint8>();
@@ -67,11 +67,6 @@ void ServerMailMgr::LoadMailServerTemplates()
         if (!servMail.active)
             continue;
 
-        if (servMail.moneyA > MAX_MONEY_AMOUNT || servMail.moneyH > MAX_MONEY_AMOUNT)
-        {
-            LOG_ERROR("sql.sql", "Table `mail_server_template` has moneyA {} or moneyH {} larger than MAX_MONEY_AMOUNT {} for id {}, skipped.", servMail.moneyA, servMail.moneyH, MAX_MONEY_AMOUNT, servMail.id);
-            continue;
-        }
     } while (result->NextRow());
 
     LoadMailServerTemplatesItems();
@@ -271,7 +266,7 @@ void ServerMailMgr::LoadMailServerTemplatesConditions()
     } while (result->NextRow());
 }
 
-void ServerMailMgr::SendServerMail(Player* player, uint32 id, uint32 money,
+void ServerMailMgr::SendServerMail(Player* player, uint32 id, uint64 money,
     std::vector<ServerMailItems> const& items,
     std::vector<ServerMailCondition> const& conditions,
     std::string const& subject, std::string const& body) const

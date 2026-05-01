@@ -379,7 +379,7 @@ public:
 
     /// @brief Called during damage calculations
     virtual void OnCalculateMeleeDamageReceived(uint32& /*damage*/, Unit* /*attacker*/) {}
-    virtual void OnCalculateSpellDamageReceived(int32& /*damage*/, Unit* /*attacker*/) {}
+    virtual void OnCalculateSpellDamageReceived(int64& /*damage*/, Unit* /*attacker*/) {}
 
     /// @brief Called during calculation when receiving periodic healing or damage (DoT or HoT)
     virtual void OnCalculatePeriodicTickReceived(uint32& /*damage*/, Unit* /*attacker*/) {}

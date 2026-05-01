@@ -20,9 +20,26 @@
 #include "Player.h"
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
+#include "SpellScriptCombatValue.h"
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
 #include "TemporarySummon.h"
+#include <limits>
+
+namespace
+{
+    int32 ToInt32Saturated(long double value)
+    {
+        if (value <= 0.0L)
+            return 0;
+
+        if (value >= static_cast<long double>(std::numeric_limits<int32>::max()))
+            return std::numeric_limits<int32>::max();
+
+        return static_cast<int32>(value);
+    }
+}
+
 /*
  * Scripts for spells with SPELLFAMILY_MAGE and SPELLFAMILY_GENERIC spells used by mage players.
  * Ordered alphabetically using scriptname.
@@ -195,8 +212,8 @@ class spell_mage_burnout : public AuraScript
     {
         PreventDefaultAction();
 
-        int32 mana = int32(eventInfo.GetSpellInfo()->CalcPowerCost(GetTarget(), eventInfo.GetSchoolMask()));
-        mana = CalculatePct(mana, aurEff->GetAmount());
+        int64 powerCost = eventInfo.GetSpellInfo()->CalcPowerCost(GetTarget(), eventInfo.GetSchoolMask());
+        int32 mana = powerCost > 0 ? ToInt32Saturated(static_cast<long double>(powerCost) * static_cast<long double>(aurEff->GetAmount()) / 100.0L) : 0;
 
         GetTarget()->CastCustomSpell(SPELL_MAGE_BURNOUT_TRIGGER, SPELLVALUE_BASE_POINT0, mana, GetTarget(), true, nullptr, aurEff);
     }
@@ -217,7 +234,7 @@ class spell_mage_burnout_trigger : public SpellScript
         PreventHitDefaultEffect(effIndex);
         if (Unit* target = GetHitUnit())
         {
-            int32 newDamage = -(target->ModifyPower(POWER_MANA, -GetEffectValue()));
+            int32 newDamage = SpellScriptCombat::ToPositiveInt32Saturated(static_cast<long double>(-target->ModifyPower64(POWER_MANA, -GetEffectValue())));
             GetSpell()->ExecuteLogEffectTakeTargetPower(effIndex, target, POWER_MANA, newDamage, 0.0f);
         }
     }
@@ -249,7 +266,7 @@ class spell_mage_pet_scaling : public AuraScript
         if (Unit* owner = GetUnitOwner()->GetOwner())
         {
             Stats stat = Stats(aurEff->GetSpellInfo()->Effects[aurEff->GetEffIndex()].MiscValue);
-            amount = CalculatePct(std::max<int32>(0, owner->GetStat(stat)), 30);
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(SpellScriptCombat::GetStat(owner, stat), 30));
         }
     }
 
@@ -263,8 +280,8 @@ class spell_mage_pet_scaling : public AuraScript
         // xinef: mage pet inherits 33% of SP
         if (Unit* owner = GetUnitOwner()->GetOwner())
         {
-            int32 frost = owner->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_FROST);
-            amount = CalculatePct(std::max<int32>(0, frost), 33);
+            long double frost = SpellScriptCombat::GetSpellDamageBonus(owner, SPELL_SCHOOL_MASK_FROST);
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(frost, 33));
 
             // xinef: Update appropriate player field
             if (owner->IsPlayer())
@@ -304,15 +321,15 @@ class spell_mage_pet_scaling : public AuraScript
             {
                 if (aurEff->GetMiscValue() == STAT_STAMINA)
                 {
-                    uint32 actStat = GetUnitOwner()->GetHealth();
+                    uint64 actStat = GetUnitOwner()->GetHealthForCombat();
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetHealth(std::min<uint32>(GetUnitOwner()->GetMaxHealth(), actStat));
+                    GetUnitOwner()->SetHealthForCombat(std::min<uint64>(GetUnitOwner()->GetMaxHealthForCombat(), actStat));
                 }
                 else
                 {
-                    uint32 actStat = GetUnitOwner()->GetPower(POWER_MANA);
+                    uint64 actStat = GetUnitOwner()->GetPowerForCombat(POWER_MANA);
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetPower(POWER_MANA, std::min<uint32>(GetUnitOwner()->GetMaxPower(POWER_MANA), actStat));
+                    GetUnitOwner()->SetPowerForCombat(POWER_MANA, std::min<uint64>(GetUnitOwner()->GetMaxPowerForCombat(POWER_MANA), actStat));
                 }
             }
         }
@@ -417,10 +434,10 @@ public:
 
         if (AuraEffect* talentAurEff = target->GetAuraEffectOfRankedSpell(SPELL_MAGE_INCANTERS_ABSORBTION_R1, EFFECT_0))
         {
-            int32 bp = CalculatePct(absorbAmount, talentAurEff->GetAmount());
+            int32 bp = SpellScriptCombat::CalculatePctClientSpellValue(absorbAmount, talentAurEff->GetAmount());
             if (AuraEffect* currentAura = target->GetAuraEffect(SPELL_AURA_MOD_DAMAGE_DONE, SPELLFAMILY_MAGE, 2941, EFFECT_0))
             {
-                bp += int32(currentAura->GetAmount() * (currentAura->GetBase()->GetDuration() / (float)currentAura->GetBase()->GetMaxDuration()));
+                bp = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(bp) + static_cast<long double>(currentAura->GetAmount()) * (static_cast<long double>(currentAura->GetBase()->GetDuration()) / static_cast<long double>(currentAura->GetBase()->GetMaxDuration())));
                 currentAura->ChangeAmount(bp);
                 currentAura->GetBase()->RefreshDuration();
             }
@@ -505,12 +522,12 @@ class spell_mage_fire_frost_ward : public spell_mage_incanters_absorbtion_base_A
         if (Unit* caster = GetCaster())
         {
             // +80.68% from sp bonus
-            float bonus = 0.8068f;
+            long double bonus = 0.8068L;
 
-            bonus *= caster->SpellBaseDamageBonusDone(GetSpellInfo()->GetSchoolMask());
-            bonus *= caster->CalculateLevelPenalty(GetSpellInfo());
+            bonus *= SpellScriptCombat::GetSpellDamageBonus(caster, GetSpellInfo()->GetSchoolMask());
+            bonus *= static_cast<long double>(caster->CalculateLevelPenalty(GetSpellInfo()));
 
-            amount += int32(bonus);
+            amount = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(amount) + bonus);
         }
     }
 
@@ -523,12 +540,12 @@ class spell_mage_fire_frost_ward : public spell_mage_incanters_absorbtion_base_A
 
             if (roll_chance_i(chance))
             {
-                int32 bp = dmgInfo.GetDamage();
+                int32 bp = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(dmgInfo.GetDamage()));
                 target->CastCustomSpell(target, SPELL_MAGE_FROST_WARDING_TRIGGERED, &bp, nullptr, nullptr, true, nullptr, aurEff);
                 absorbAmount = 0;
 
                 // Xinef: trigger Incanters Absorbtion
-                uint32 damage = dmgInfo.GetDamage();
+                uint32 damage = static_cast<uint32>(SpellScriptCombat::ToPositiveInt32Saturated(static_cast<long double>(dmgInfo.GetDamage())));
                 Trigger(aurEff, dmgInfo, damage);
 
                 // Xinef: hack for chaos bolt
@@ -595,17 +612,17 @@ class spell_mage_ice_barrier_aura : public spell_mage_incanters_absorbtion_base_
     static int32 CalculateSpellAmount(Unit* caster, int32 amount, SpellInfo const* spellInfo, const AuraEffect* aurEff)
     {
         // +80.68% from sp bonus
-        float bonus = 0.8068f;
+        long double bonus = 0.8068L;
 
-        bonus *= caster->SpellBaseDamageBonusDone(spellInfo->GetSchoolMask());
+        bonus *= SpellScriptCombat::GetSpellDamageBonus(caster, spellInfo->GetSchoolMask());
 
         // Glyph of Ice Barrier: its weird having a SPELLMOD_ALL_EFFECTS here but its blizzards doing :)
         // Glyph of Ice Barrier is only applied at the spell damage bonus because it was already applied to the base value in CalculateSpellDamage
-        bonus = caster->ApplyEffectModifiers(spellInfo, aurEff->GetEffIndex(), bonus);
+        bonus = caster->ApplyEffectModifiers(spellInfo, aurEff->GetEffIndex(), static_cast<float>(std::min<long double>(bonus, std::numeric_limits<float>::max())));
 
-        bonus *= caster->CalculateLevelPenalty(spellInfo);
+        bonus *= static_cast<long double>(caster->CalculateLevelPenalty(spellInfo));
 
-        amount += int32(bonus);
+        amount = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(amount) + bonus);
         return amount;
     }
 
@@ -631,17 +648,17 @@ class spell_mage_ice_barrier : public SpellScript
     static int32 CalculateSpellAmount(Unit* caster, int32 amount, SpellInfo const* spellInfo, const AuraEffect* aurEff)
     {
         // +80.68% from sp bonus
-        float bonus = 0.8068f;
+        long double bonus = 0.8068L;
 
-        bonus *= caster->SpellBaseDamageBonusDone(spellInfo->GetSchoolMask());
+        bonus *= SpellScriptCombat::GetSpellDamageBonus(caster, spellInfo->GetSchoolMask());
 
         // Glyph of Ice Barrier: its weird having a SPELLMOD_ALL_EFFECTS here but its blizzards doing :)
         // Glyph of Ice Barrier is only applied at the spell damage bonus because it was already applied to the base value in CalculateSpellDamage
-        bonus = caster->ApplyEffectModifiers(spellInfo, aurEff->GetEffIndex(), bonus);
+        bonus = caster->ApplyEffectModifiers(spellInfo, aurEff->GetEffIndex(), static_cast<float>(std::min<long double>(bonus, std::numeric_limits<float>::max())));
 
-        bonus *= caster->CalculateLevelPenalty(spellInfo);
+        bonus *= static_cast<long double>(caster->CalculateLevelPenalty(spellInfo));
 
-        amount += int32(bonus);
+        amount = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(amount) + bonus);
         return amount;
     }
 
@@ -708,7 +725,7 @@ class spell_mage_ignite : public AuraScript
         SpellInfo const* igniteDot = sSpellMgr->AssertSpellInfo(SPELL_MAGE_IGNITE);
         int32 pct = 8 * GetSpellInfo()->GetRank();
 
-        int32 amount = int32(CalculatePct(eventInfo.GetDamageInfo()->GetDamage(), pct) / igniteDot->GetMaxTicks());
+        int32 amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(static_cast<long double>(eventInfo.GetDamageInfo()->GetDamage()), pct) / static_cast<long double>(igniteDot->GetMaxTicks()));
 
         // Xinef: implement ignite bug
         eventInfo.GetProcTarget()->CastDelayedSpellWithPeriodicAmount(eventInfo.GetActor(), SPELL_MAGE_IGNITE, SPELL_AURA_PERIODIC_DAMAGE, amount);
@@ -761,12 +778,12 @@ class spell_mage_mana_shield : public spell_mage_incanters_absorbtion_base_AuraS
         if (Unit* caster = GetCaster())
         {
             // +80.53% from sp bonus
-            float bonus = 0.8053f;
+            long double bonus = 0.8053L;
 
-            bonus *= caster->SpellBaseDamageBonusDone(GetSpellInfo()->GetSchoolMask());
-            bonus *= caster->CalculateLevelPenalty(GetSpellInfo());
+            bonus *= SpellScriptCombat::GetSpellDamageBonus(caster, GetSpellInfo()->GetSchoolMask());
+            bonus *= static_cast<long double>(caster->CalculateLevelPenalty(GetSpellInfo()));
 
-            amount += int32(bonus);
+            amount = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(amount) + bonus);
         }
     }
 
@@ -838,8 +855,8 @@ class spell_mage_master_of_elements : public AuraScript
 
         if (Unit* target = GetTarget())
         {
-            int32 mana = int32(_spellInfo->CalcPowerCost(target, eventInfo.GetSchoolMask()) / _ticksModifier);
-            mana = CalculatePct(mana, aurEff->GetAmount());
+            int64 powerCost = _spellInfo->CalcPowerCost(target, eventInfo.GetSchoolMask());
+            int32 mana = powerCost > 0 ? ToInt32Saturated((static_cast<long double>(powerCost) / static_cast<long double>(_ticksModifier)) * static_cast<long double>(aurEff->GetAmount()) / 100.0L) : 0;
 
             if (mana > 0)
             {

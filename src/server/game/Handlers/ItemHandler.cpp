@@ -34,11 +34,13 @@ namespace
 {
 int32 ToClientInt32(int64 value)
 {
-    if (value > std::numeric_limits<int32>::max())
-        return std::numeric_limits<int32>::max();
+    constexpr int32 MaxClientIntValue = 2000000000;
 
-    if (value < std::numeric_limits<int32>::min())
-        return std::numeric_limits<int32>::min();
+    if (value > MaxClientIntValue)
+        return MaxClientIntValue;
+
+    if (value < -MaxClientIntValue)
+        return -MaxClientIntValue;
 
     return static_cast<int32>(value);
 }
@@ -46,6 +48,11 @@ int32 ToClientInt32(int64 value)
 uint32 ToClientUInt32(uint64 value)
 {
     return value > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(value);
+}
+
+void AddMoney64(Player* player, uint64 value)
+{
+    player->ModifyMoney(value > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(value));
 }
 
 }
@@ -828,13 +835,6 @@ void WorldSession::HandleSellItemOpcode(WorldPacket& recvData)
             if (pProto->SellPrice > 0)
             {
                 uint64 money = uint64(pProto->SellPrice) * count;
-                if (_player->GetMoney() >= MAX_MONEY_AMOUNT - money)               // prevent exceeding gold limit
-                {
-                    _player->SendEquipError(EQUIP_ERR_TOO_MUCH_GOLD, nullptr, nullptr);
-                    _player->SendSellError(SELL_ERR_UNK, creature, itemguid, 0);
-                    return;
-                }
-
                 if (sWorld->getBoolConfig(CONFIG_ITEMDELETE_VENDOR))
                     recoveryItem(pItem);
 
@@ -914,8 +914,8 @@ void WorldSession::HandleSellItemOpcode(WorldPacket& recvData)
                     _player->UpdateTitansGrip();
                 }
 
-                _player->ModifyMoney(money);
-                _player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_MONEY_FROM_VENDORS, money);
+                AddMoney64(_player, money);
+                _player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_MONEY_FROM_VENDORS, ToClientUInt32(money));
             }
             else
                 _player->SendSellError(SELL_ERR_CANT_SELL_ITEM, creature, itemguid, 0);
@@ -948,7 +948,9 @@ void WorldSession::HandleBuybackItem(WorldPacket& recvData)
     Item* pItem = _player->GetItemFromBuyBackSlot(slot);
     if (pItem)
     {
-        uint32 price = _player->GetUInt32Value(PLAYER_FIELD_BUYBACK_PRICE_1 + slot - BUYBACK_SLOT_START);
+        uint64 price = _player->GetBuybackPrice(slot);
+        if (!price)
+            price = _player->GetUInt32Value(PLAYER_FIELD_BUYBACK_PRICE_1 + slot - BUYBACK_SLOT_START);
         if (!_player->HasEnoughMoney(price))
         {
             _player->SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, creature, pItem->GetEntry(), 0);
@@ -968,7 +970,12 @@ void WorldSession::HandleBuybackItem(WorldPacket& recvData)
                 CharacterDatabase.Execute(stmt);
             }
 
-            _player->ModifyMoney(-(int32)price);
+            if (price > static_cast<uint64>(std::numeric_limits<int64>::max()) || !_player->ModifyMoney(-static_cast<int64>(price)))
+            {
+                _player->SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, creature, pItem->GetEntry(), 0);
+                return;
+            }
+
             _player->RemoveItemFromBuyBackSlot(slot, false);
             _player->ItemAddedQuestCheck(pItem->GetEntry(), pItem->GetCount());
             _player->StoreItem(dest, pItem, true);

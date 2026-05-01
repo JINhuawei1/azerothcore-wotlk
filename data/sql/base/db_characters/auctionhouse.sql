@@ -25,12 +25,12 @@ CREATE TABLE `auctionhouse` (
   `houseid` tinyint unsigned NOT NULL DEFAULT '7',
   `itemguid` int unsigned NOT NULL DEFAULT '0',
   `itemowner` int unsigned NOT NULL DEFAULT '0',
-  `buyoutprice` int unsigned NOT NULL DEFAULT '0',
+  `buyoutprice` bigint unsigned NOT NULL DEFAULT '0',
   `time` int unsigned NOT NULL DEFAULT '0',
   `buyguid` int unsigned NOT NULL DEFAULT '0',
-  `lastbid` int unsigned NOT NULL DEFAULT '0',
-  `startbid` int unsigned NOT NULL DEFAULT '0',
-  `deposit` int unsigned NOT NULL DEFAULT '0',
+  `lastbid` bigint unsigned NOT NULL DEFAULT '0',
+  `startbid` bigint unsigned NOT NULL DEFAULT '0',
+  `deposit` bigint unsigned NOT NULL DEFAULT '0',
   PRIMARY KEY (`id`),
 
   UNIQUE KEY `item_guid` (`itemguid`)
@@ -55,4 +55,3 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2024-12-17 22:32:58
-

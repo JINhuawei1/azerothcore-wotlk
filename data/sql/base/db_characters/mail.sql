@@ -32,8 +32,8 @@ CREATE TABLE `mail` (
   `has_items` tinyint unsigned NOT NULL DEFAULT '0',
   `expire_time` int unsigned NOT NULL DEFAULT '0',
   `deliver_time` int unsigned NOT NULL DEFAULT '0',
-  `money` int unsigned NOT NULL DEFAULT '0',
-  `cod` int unsigned NOT NULL DEFAULT '0',
+  `money` bigint unsigned NOT NULL DEFAULT '0',
+  `cod` bigint unsigned NOT NULL DEFAULT '0',
   `checked` tinyint unsigned NOT NULL DEFAULT '0',
   PRIMARY KEY (`id`),
 
@@ -59,4 +59,3 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2024-12-17 22:33:10
-

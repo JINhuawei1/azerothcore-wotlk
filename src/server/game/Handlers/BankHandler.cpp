@@ -177,7 +177,7 @@ void WorldSession::HandleBuyBankSlotOpcode(WorldPackets::Bank::BuyBankSlot& buyB
     }
 
     _player->SetBankBagSlotCount(slot);
-    _player->ModifyMoney(-int32(price));
+    _player->ModifyMoney(-static_cast<int64>(price));
 
     packet.Result = ERR_BANKSLOT_OK;
     SendPacket(packet.Write());

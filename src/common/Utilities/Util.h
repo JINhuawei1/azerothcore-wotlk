@@ -42,7 +42,7 @@ template<typename T, class S> struct Finder
 
 void stripLineInvisibleChars(std::string& src);
 
-AC_COMMON_API Optional<int32> MoneyStringToMoney(std::string_view moneyString);
+AC_COMMON_API Optional<int64> MoneyStringToMoney(std::string_view moneyString);
 
 std::string secsToTimeString(uint64 timeInSecs, bool shortText = false);
 uint32 TimeStringToSecs(const std::string& timestring);

@@ -31,8 +31,33 @@
 #include "ScriptMgr.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
+#include <limits>
 
 #define MAX_INBOX_CLIENT_CAPACITY 50
+
+namespace
+{
+    uint32 ToClientMoney(uint64 money)
+    {
+        return money > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(money);
+    }
+
+    bool TakeMoney64(Player* player, uint64 amount)
+    {
+        if (amount > static_cast<uint64>(std::numeric_limits<int64>::max()))
+            return false;
+
+        return player->ModifyMoney(-static_cast<int64>(amount));
+    }
+
+    bool AddMoney64(Player* player, uint64 amount, bool sendError = true)
+    {
+        if (amount > static_cast<uint64>(std::numeric_limits<int64>::max()))
+            return false;
+
+        return player->ModifyMoney(static_cast<int64>(amount), sendError);
+    }
+}
 
 bool WorldSession::CanOpenMailBox(ObjectGuid guid)
 {
@@ -154,14 +179,7 @@ void WorldSession::HandleSendMail(WorldPacket& recvData)
 
     uint32 cost = items_count ? 30 * items_count : 30; // price hardcoded in client
 
-    uint32 reqmoney = cost + money;
-
-    // Check for overflow
-    if (reqmoney < money)
-    {
-        player->SendMailResult(0, MAIL_SEND, MAIL_ERR_NOT_ENOUGH_MONEY);
-        return;
-    }
+    uint64 reqmoney = uint64(cost) + money;
 
     if (!player->HasEnoughMoney(reqmoney))
     {
@@ -284,9 +302,13 @@ void WorldSession::HandleSendMail(WorldPacket& recvData)
         return;
     }
 
-    player->SendMailResult(0, MAIL_SEND, MAIL_OK);
+    if (!TakeMoney64(player, reqmoney))
+    {
+        player->SendMailResult(0, MAIL_SEND, MAIL_ERR_NOT_ENOUGH_MONEY);
+        return;
+    }
 
-    player->ModifyMoney(-int32(reqmoney));
+    player->SendMailResult(0, MAIL_SEND, MAIL_OK);
     player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_MAIL, cost);
 
     bool needItemDelay = false;
@@ -520,6 +542,11 @@ void WorldSession::HandleMailTakeItem(WorldPacket& recvData)
         player->SendMailResult(mailId, MAIL_ITEM_TAKEN, MAIL_ERR_NOT_ENOUGH_MONEY);
         return;
     }
+    if (m->COD > static_cast<uint64>(std::numeric_limits<int64>::max()))
+    {
+        player->SendMailResult(mailId, MAIL_ITEM_TAKEN, MAIL_ERR_NOT_ENOUGH_MONEY);
+        return;
+    }
 
     Item* it = player->GetMItem(itemLowGuid);
 
@@ -565,7 +592,11 @@ void WorldSession::HandleMailTakeItem(WorldPacket& recvData)
                 }
             }
 
-            player->ModifyMoney(-int32(m->COD));
+            if (!TakeMoney64(player, m->COD))
+            {
+                player->SendMailResult(mailId, MAIL_ITEM_TAKEN, MAIL_ERR_NOT_ENOUGH_MONEY);
+                return;
+            }
         }
 
         m->COD = 0;
@@ -606,7 +637,7 @@ void WorldSession::HandleMailTakeMoney(WorldPacket& recvData)
         return;
     }
 
-    if (!player->ModifyMoney(m->money, false))
+    if (!AddMoney64(player, m->money, false))
     {
         player->SendMailResult(mailId, MAIL_MONEY_TAKEN, MAIL_ERR_EQUIP_ERROR, EQUIP_ERR_TOO_MUCH_GOLD);
         return;
@@ -699,10 +730,10 @@ void WorldSession::HandleGetMailList(WorldPacket& recvData)
             body = "";
         }
 
-        data << uint32(mail->COD);                                      // COD
+        data << ToClientMoney(mail->COD);                               // COD
         data << uint32(0);                                              // probably changed in 3.3.3
         data << uint32(mail->stationery);                               // stationery (Stationery.dbc)
-        data << uint32(mail->money);                                    // Gold
+        data << ToClientMoney(mail->money);                             // Gold
         data << uint32(mail->checked);                                  // flags
         data << float(float(mail->expire_time - GameTime::GetGameTime().count()) / DAY);  // Time
         data << uint32(mail->mailTemplateId);                           // mail template (MailTemplate.dbc)

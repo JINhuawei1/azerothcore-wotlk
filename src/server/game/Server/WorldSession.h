@@ -341,6 +341,8 @@ public:
 
     void ReadAddonsInfo(ByteBuffer& data);
     void SendAddonsInfo();
+    bool HasEnabledAddon(std::string const& addonName) const;
+    void SetLargeDamageTextAddonEnabled(bool enabled) { _hasLargeDamageTextAddon = enabled; }
 
     void ReadMovementInfo(WorldPacket& data, MovementInfo* mi);
     void WriteMovementInfo(WorldPacket* data, MovementInfo* mi);
@@ -481,7 +483,7 @@ public:
     //auction
     void SendAuctionHello(ObjectGuid guid, Creature* unit);
     void SendAuctionCommandResult(uint32 auctionId, uint32 Action, uint32 ErrorCode, uint32 bidError = 0);
-    void SendAuctionBidderNotification(uint32 location, uint32 auctionId, ObjectGuid bidder, uint32 bidSum, uint32 diff, uint32 item_template);
+    void SendAuctionBidderNotification(uint32 location, uint32 auctionId, ObjectGuid bidder, uint64 bidSum, uint64 diff, uint32 item_template);
     void SendAuctionOwnerNotification(AuctionEntry* auction);
 
     //Item Enchantment
@@ -1186,6 +1188,7 @@ private:
     ObjectGuid m_currentBankerGUID;
     uint32 _offlineTime;
     bool _kicked;
+    bool _hasLargeDamageTextAddon = false;
     // Packets cooldown
     time_t _calendarEventCreationCooldown;
 

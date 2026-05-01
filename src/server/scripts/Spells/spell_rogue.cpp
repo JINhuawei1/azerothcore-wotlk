@@ -18,6 +18,7 @@
 #include "CellImpl.h"
 #include "CreatureScript.h"
 #include "GridNotifiers.h"
+#include "SpellScriptCombatValue.h"
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
@@ -123,7 +124,7 @@ class spell_rog_blade_flurry : public AuraScript
         DamageInfo* damageInfo = eventInfo.GetDamageInfo();
         if (procTarget && damageInfo)
         {
-            int32 damage = damageInfo->GetUnmitigatedDamage();
+            int32 damage = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(damageInfo->GetUnmitigatedDamage()));
 
             CustomSpellValues values;
             values.AddSpellMod(SPELLVALUE_BASE_POINT0, damage);
@@ -420,7 +421,7 @@ class spell_rog_nerves_of_steel : public AuraScript
     {
         // reduces all damage taken while stun or fear
         if (GetTarget()->GetUnitFlags() & (UNIT_FLAG_FLEEING) || (GetTarget()->GetUnitFlags() & (UNIT_FLAG_STUNNED) && GetTarget()->HasAuraWithMechanic(1 << MECHANIC_STUN)))
-            absorbAmount = CalculatePct(dmgInfo.GetDamage(), absorbPct);
+            absorbAmount = SpellScriptCombat::CalculatePctInt32Saturated(dmgInfo.GetDamage(), absorbPct);
     }
 
     void Register() override
@@ -556,7 +557,7 @@ class spell_rog_rupture : public AuraScript
             if (cp > 5)
                 cp = 5;
 
-            amount += int32(caster->GetTotalAttackPowerValue(BASE_ATTACK) * attackpowerPerCombo[cp]);
+            amount = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(amount) + SpellScriptCombat::GetAttackPower(caster, BASE_ATTACK) * static_cast<long double>(attackpowerPerCombo[cp]));
         }
     }
 

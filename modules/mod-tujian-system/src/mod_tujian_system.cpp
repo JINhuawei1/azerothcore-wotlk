@@ -25,7 +25,6 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cctype>
 #include <cstring>
 #include <memory>
@@ -154,28 +153,6 @@ namespace
     {
         float minDamage[MAX_ATTACK][MAX_ITEM_PROTO_DAMAGES] = {};
         float maxDamage[MAX_ATTACK][MAX_ITEM_PROTO_DAMAGES] = {};
-    };
-
-    struct ApplyPlayerActivationProfile
-    {
-        size_t activationRecordCount = 0;
-        size_t equipModeActivationCount = 0;
-        size_t fastPathActivationCount = 0;
-        size_t fallbackPathActivationCount = 0;
-        size_t virtualEquipSpellCount = 0;
-        size_t itemSetContributionCount = 0;
-        size_t itemSetSpellApplyCount = 0;
-        size_t activatedGroupCount = 0;
-        size_t externalSkillCarrierCount = 0;
-        uint32 slowestItemSetId = 0;
-        int64 clearPreviousStateMs = 0;
-        int64 collectActivationStateMs = 0;
-        int64 applyBonusesMs = 0;
-        int64 applyItemSetsMs = 0;
-        int64 applyExternalSkillsMs = 0;
-        int64 refreshStatsMs = 0;
-        int64 slowestItemSetMs = 0;
-        int64 totalMs = 0;
     };
 
     std::unordered_map<uint32, TuJianEntry> tuJianEntries;
@@ -1616,14 +1593,10 @@ namespace
         return records.size();
     }
 
-    ApplyPlayerActivationProfile ApplyPlayerActivationData(Player* player)
+    void ApplyPlayerActivationData(Player* player)
     {
-        ApplyPlayerActivationProfile profile;
         if (!player)
-            return profile;
-
-        using namespace std::chrono;
-        auto totalStart = high_resolution_clock::now();
+            return;
 
         uint32 playerGuid = player->GetGUID().GetCounter();
         bool hadCachedState =
@@ -1634,44 +1607,42 @@ namespace
             playerWeaponDamageBonuses.find(playerGuid) != playerWeaponDamageBonuses.end() ||
             playerFixedAllStatsBonus.find(playerGuid) != playerFixedAllStatsBonus.end();
 
-        auto clearStart = high_resolution_clock::now();
         RemovePlayerVirtualItems(player, false);
-        profile.clearPreviousStateMs = duration_cast<milliseconds>(high_resolution_clock::now() - clearStart).count();
 
         auto activationItr = playerActivationCache.find(playerGuid);
         if (activationItr == playerActivationCache.end() || activationItr->second.empty())
         {
             if (hadCachedState)
-            {
-                auto refreshStart = high_resolution_clock::now();
                 RefreshPlayerStats(player);
-                profile.refreshStatsMs = duration_cast<milliseconds>(high_resolution_clock::now() - refreshStart).count();
-            }
 
-            profile.totalMs = duration_cast<milliseconds>(high_resolution_clock::now() - totalStart).count();
-            return profile;
+            return;
         }
 
-        profile.activationRecordCount = activationItr->second.size();
+        size_t activationRecordCount = activationItr->second.size();
+        size_t equipModeActivationCount = 0;
+        size_t itemSetContributionCount = 0;
+        size_t externalSkillCarrierCount = 0;
+
+        bool batchRestoreCanModifyStats = player->CanModifyStats();
+        if (batchRestoreCanModifyStats)
+            player->SetCanModifyStats(false);
 
         std::vector<VirtualAppliedItem> appliedItems;
-        appliedItems.reserve(profile.activationRecordCount);
+        appliedItems.reserve(activationRecordCount);
         std::vector<DirectAppliedItem> fallbackAppliedItems;
-        fallbackAppliedItems.reserve(profile.activationRecordCount);
+        fallbackAppliedItems.reserve(activationRecordCount);
         AggregatedItemBonusCache aggregatedBonusCache;
         std::unordered_map<uint32, uint32> aggregatedItemSetCounts;
-        aggregatedItemSetCounts.reserve(profile.activationRecordCount);
+        aggregatedItemSetCounts.reserve(activationRecordCount);
         PlayerWeaponDamageBonusCache weaponDamageBonuses;
         int32 totalFixedAllStatsBonus = 0;
 
 #ifdef MODULE_ITEM_SKILLS
         std::unordered_map<uint32, std::unordered_set<uint32>> activatedTuJianIdsByGroup;
         std::unordered_map<uint32, uint32> carrierItemEntryByGroup;
-        activatedTuJianIdsByGroup.reserve(profile.activationRecordCount);
-        carrierItemEntryByGroup.reserve(profile.activationRecordCount);
+        activatedTuJianIdsByGroup.reserve(activationRecordCount);
+        carrierItemEntryByGroup.reserve(activationRecordCount);
 #endif
-
-        auto collectStart = high_resolution_clock::now();
 
         for (PlayerActivationRecord const& record : activationItr->second)
         {
@@ -1713,11 +1684,10 @@ namespace
                 continue;
             }
 
-            ++profile.equipModeActivationCount;
+            ++equipModeActivationCount;
             if (CanUseFastItemBonusPath(proto))
             {
                 AccumulateItemBonuses(player, proto, applyCount, aggregatedBonusCache);
-                ++profile.fastPathActivationCount;
             }
             else
             {
@@ -1728,7 +1698,6 @@ namespace
                 fallbackApplied.itemEntry = record.currentItemEntry;
                 fallbackApplied.applyCount = applyCount;
                 fallbackAppliedItems.push_back(fallbackApplied);
-                ++profile.fallbackPathActivationCount;
             }
 
             AddWeaponDamageBonus(weaponDamageBonuses, proto, applyCount);
@@ -1762,17 +1731,13 @@ namespace
             applied.applyEquipSpell = true;
             applied.item = std::move(tempItem);
             appliedItems.push_back(std::move(applied));
-            ++profile.virtualEquipSpellCount;
         }
 
-        profile.collectActivationStateMs = duration_cast<milliseconds>(high_resolution_clock::now() - collectStart).count();
-
-        auto applyBonusesStart = high_resolution_clock::now();
         bool hasAggregatedBonuses = aggregatedBonusCache.HasAnyValue();
 
         if (!fallbackAppliedItems.empty())
             playerFallbackAppliedItems[playerGuid] = std::move(fallbackAppliedItems);
-        if (profile.equipModeActivationCount > 0)
+        if (equipModeActivationCount > 0)
             playerWeaponDamageBonuses[playerGuid] = weaponDamageBonuses;
 
         if (hasAggregatedBonuses)
@@ -1787,9 +1752,6 @@ namespace
             playerFixedAllStatsBonus[playerGuid] = totalFixedAllStatsBonus;
         }
 
-        profile.applyBonusesMs = duration_cast<milliseconds>(high_resolution_clock::now() - applyBonusesStart).count();
-
-        auto applyItemSetsStart = high_resolution_clock::now();
         if (!aggregatedItemSetCounts.empty())
         {
             // 批量施加套装法术时先暂停属性即时重算，最后统一 RefreshPlayerStats。
@@ -1812,7 +1774,7 @@ namespace
                 contribution.setId = pair.first;
                 contribution.itemCount = pair.second;
                 contributions.push_back(contribution);
-                ++profile.itemSetContributionCount;
+                ++itemSetContributionCount;
             }
 
             if (restoreCanModifyStats)
@@ -1822,12 +1784,7 @@ namespace
                 playerItemSetContributions[playerGuid] = std::move(contributions);
         }
 
-        profile.applyItemSetsMs = duration_cast<milliseconds>(high_resolution_clock::now() - applyItemSetsStart).count();
-
 #ifdef MODULE_ITEM_SKILLS
-        auto applyExternalSkillsStart = high_resolution_clock::now();
-        profile.activatedGroupCount = activatedTuJianIdsByGroup.size();
-
         for (auto const& pair : activatedTuJianIdsByGroup)
         {
             uint32 groupId = pair.first;
@@ -1893,35 +1850,29 @@ namespace
                 applied.hasExternalSkills = true;
                 applied.item = std::move(tempItem);
                 appliedItems.push_back(std::move(applied));
-                ++profile.externalSkillCarrierCount;
+                ++externalSkillCarrierCount;
             }
         }
 
         sItemSkillsEffects->UpdatePlayerHitSkillsCache(player);
-        profile.applyExternalSkillsMs = duration_cast<milliseconds>(high_resolution_clock::now() - applyExternalSkillsStart).count();
 #endif
 
         if (!appliedItems.empty())
             playerVirtualItems[playerGuid] = std::move(appliedItems);
 
+        if (batchRestoreCanModifyStats)
+            player->SetCanModifyStats(true);
+
         bool needRefreshStats =
             hadCachedState ||
-            profile.equipModeActivationCount > 0 ||
+            equipModeActivationCount > 0 ||
             hasAggregatedBonuses ||
-            profile.itemSetContributionCount > 0 ||
+            itemSetContributionCount > 0 ||
             totalFixedAllStatsBonus > 0 ||
-            profile.externalSkillCarrierCount > 0;
+            externalSkillCarrierCount > 0;
 
         if (needRefreshStats)
-        {
-            auto refreshStart = high_resolution_clock::now();
             RefreshPlayerStats(player);
-            profile.refreshStatsMs = duration_cast<milliseconds>(high_resolution_clock::now() - refreshStart).count();
-        }
-
-        profile.totalMs = duration_cast<milliseconds>(high_resolution_clock::now() - totalStart).count();
-
-        return profile;
     }
 
     void UpsertPlayerActivationRecord(uint32 playerGuid, PlayerActivationRecord const& newRecord)
@@ -1936,6 +1887,21 @@ namespace
             *itr = newRecord;
         else
             records.push_back(newRecord);
+    }
+
+    bool IsTuJianActivatedForPlayer(uint32 playerGuid, uint32 tuJianId)
+    {
+        auto activationItr = playerActivationCache.find(playerGuid);
+        if (activationItr == playerActivationCache.end())
+            return false;
+
+        return std::any_of(
+            activationItr->second.begin(),
+            activationItr->second.end(),
+            [tuJianId](PlayerActivationRecord const& record)
+            {
+                return record.tuJianId == tuJianId && record.currentLevel > 0;
+            });
     }
 
     bool CheckAndConsumeActivationRequirement(Player* player, TuJianEntry const& tuJian, std::string* failureMessage = nullptr)
@@ -2007,7 +1973,7 @@ namespace
         return true;
     }
 
-    bool ActivateTuJianForPlayer(Player* player, uint32 itemEntry, uint32 level, std::string* failureMessage = nullptr)
+    bool ActivateTuJianForPlayer(Player* player, uint32 itemEntry, uint32 level, std::string* failureMessage = nullptr, bool applyImmediately = true)
     {
         if (!player)
         {
@@ -2044,8 +2010,69 @@ namespace
             playerGuid, record.tuJianId, record.setId, record.currentLevel, record.currentItemEntry);
 
         UpsertPlayerActivationRecord(playerGuid, record);
-        ApplyPlayerActivationData(player);
+        if (applyImmediately)
+            ApplyPlayerActivationData(player);
         return true;
+    }
+
+    uint32 CollectAvailableTuJianForPlayer(
+        Player* player,
+        uint32& activeSkipped,
+        uint32& missingSkipped,
+        uint32& failedCount,
+        std::string& lastFailure,
+        std::unordered_set<uint32>& touchedChapters)
+    {
+        activeSkipped = 0;
+        missingSkipped = 0;
+        failedCount = 0;
+        lastFailure.clear();
+        touchedChapters.clear();
+
+        if (!player)
+            return 0;
+
+        uint32 activatedCount = 0;
+        uint32 playerGuid = player->GetGUID().GetCounter();
+
+        for (auto const& pair : tuJianEntries)
+        {
+            TuJianEntry const& entry = pair.second;
+            if (entry.itemEntry == 0 || entry.id == 0)
+                continue;
+
+            if (IsTuJianActivatedForPlayer(playerGuid, entry.id))
+            {
+                ++activeSkipped;
+                continue;
+            }
+
+            if (!player->HasItemCount(entry.itemEntry, 1, false))
+            {
+                ++missingSkipped;
+                continue;
+            }
+
+            std::string failureMessage;
+            if (ActivateTuJianForPlayer(player, entry.itemEntry, 1, &failureMessage, false))
+            {
+                ++activatedCount;
+                uint32 chapterId = GetChapterIdForEntry(entry);
+                if (chapterId != 0)
+                    touchedChapters.insert(chapterId);
+            }
+            else
+            {
+                ++failedCount;
+                if (!failureMessage.empty())
+                    lastFailure = failureMessage;
+            }
+        }
+
+        if (activatedCount > 0)
+            ApplyPlayerActivationData(player);
+
+        return activatedCount;
     }
 
     bool DeactivateTuJianForPlayer(Player* player, uint32 itemEntry)
@@ -2176,17 +2203,8 @@ public:
         if (!TujianSystem_Enable || !player)
             return;
 
-        using namespace std::chrono;
-        auto totalStart = high_resolution_clock::now();
-
         LoadPlayerActivationData(player);
         ApplyPlayerActivationData(player);
-
-        LOG_INFO("module",
-            "mod-tujian-system: 玩家 {} OnPlayerLogin 完成 GUID={} 总耗时={}ms",
-            player->GetName(),
-            player->GetGUID().ToString(),
-            duration_cast<milliseconds>(high_resolution_clock::now() - totalStart).count());
     }
 
     void OnPlayerLogout(Player* player) override
@@ -2249,6 +2267,7 @@ public:
         if (command == "REQ_STATE")
         {
             SendTuJianSummaryToPlayer(player);
+            SendTuJianStateToPlayer(player);
             return;
         }
 
@@ -2275,6 +2294,38 @@ public:
         if (command == "OPEN")
         {
             SendTuJianOpenUI(player);
+            return;
+        }
+
+        if (command == "COLLECT")
+        {
+            uint32 activeSkipped = 0;
+            uint32 missingSkipped = 0;
+            uint32 failedCount = 0;
+            std::string lastFailure;
+            std::unordered_set<uint32> touchedChapters;
+            uint32 activatedCount = CollectAvailableTuJianForPlayer(
+                player, activeSkipped, missingSkipped, failedCount, lastFailure, touchedChapters);
+
+            std::ostringstream message;
+            message << "一键收集完成：激活 " << activatedCount
+                    << " 个，跳过已激活 " << activeSkipped
+                    << " 个，背包缺少 " << missingSkipped
+                    << " 个";
+            if (failedCount > 0)
+            {
+                message << "，失败 " << failedCount << " 个";
+                if (!lastFailure.empty())
+                    message << "，最后失败原因：" << lastFailure;
+            }
+            message << "。";
+
+            SendTuJianActionResult(player, "COLLECT", activatedCount > 0 || failedCount == 0, 0, activatedCount, message.str());
+            SendTuJianSummaryToPlayer(player);
+            SendTuJianStateToPlayer(player);
+
+            for (uint32 chapterId : touchedChapters)
+                SendTuJianPageStateToPlayer(player, chapterId);
             return;
         }
 

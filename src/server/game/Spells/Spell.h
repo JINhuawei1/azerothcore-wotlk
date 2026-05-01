@@ -502,7 +502,7 @@ public:
     void SendSpellGo();
     void SendSpellCooldown();
     void SendLogExecute();
-    void ExecuteLogEffectTakeTargetPower(uint8 effIndex, Unit* target, uint32 PowerType, uint32 powerTaken, float gainMultiplier);
+    void ExecuteLogEffectTakeTargetPower(uint8 effIndex, Unit* target, uint32 PowerType, uint64 powerTaken, float gainMultiplier);
     void ExecuteLogEffectExtraAttacks(uint8 effIndex, Unit* victim, uint32 attCount);
     void ExecuteLogEffectInterruptCast(uint8 effIndex, Unit* victim, uint32 spellId);
     void ExecuteLogEffectDurabilityDamage(uint8 effIndex, Unit* victim, int32 itemId, int32 slot);
@@ -577,8 +577,8 @@ public:
     Unit* GetCaster() const { return m_caster; }
     Unit* GetOriginalCaster() const { return m_originalCaster; }
     SpellInfo const* GetSpellInfo() const { return m_spellInfo; }
-    int32 GetPowerCost() const { return m_powerCost; }
-    void SetPowerCost(int32 cost) { m_powerCost = cost; }  // 模块支持：允许修改技能消耗
+    int64 GetPowerCost() const { return m_powerCost; }
+    void SetPowerCost(int64 cost) { m_powerCost = cost; }  // 模块支持：允许修改技能消耗
 
     bool UpdatePointers();                              // must be used at call Spell code after time delay (non triggered spell cast/update spell call/etc)
 
@@ -619,7 +619,7 @@ public:
     //Spell data
     SpellSchoolMask m_spellSchoolMask;                  // Spell school (can be overwrite for some spells (wand shoot for example)
     WeaponAttackType m_attackType;                      // For weapon based attack
-    int32 m_powerCost;                                  // Calculated spell cost     initialized only in Spell::prepare
+    int64 m_powerCost;                                  // Calculated spell cost     initialized only in Spell::prepare
     int32 m_casttime;                                   // Calculated spell cast time initialized only in Spell::prepare
     int32 m_channeledDuration;                          // Calculated channeled spell duration in order to calculate correct pushback.
     bool m_canReflect;                                  // can reflect this spell?

@@ -28,6 +28,7 @@ EndScriptData */
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "ReputationMgr.h"
+#include <limits>
 
 using namespace Acore::ChatCommands;
 
@@ -334,10 +335,10 @@ public:
             }
 
             // If the quest requires money
-            int32 ReqOrRewMoney = quest->GetRewOrReqMoney(player->GetLevel());
+            int64 ReqOrRewMoney = quest->GetRewOrReqMoney(player->GetLevel());
             if (ReqOrRewMoney < 0)
             {
-                player->ModifyMoney(-ReqOrRewMoney);
+                player->ModifyMoney(ReqOrRewMoney == std::numeric_limits<int64>::min() ? std::numeric_limits<int64>::max() : -ReqOrRewMoney);
             }
 
             player->CompleteQuest(entry);
@@ -689,7 +690,7 @@ public:
                 trans->Append(stmt);
             }
 
-            int32 rewMoney = 0;
+            int64 rewMoney = 0;
 
             if (charLevel >= sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL))
             {
@@ -705,7 +706,7 @@ public:
                 trans->Append(stmt);
             }
 
-            if (int32 rewOrReqMoney = quest->GetRewOrReqMoney(charLevel))
+            if (int64 rewOrReqMoney = quest->GetRewOrReqMoney(charLevel))
             {
                 rewMoney += rewOrReqMoney;
             }

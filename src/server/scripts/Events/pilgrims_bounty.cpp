@@ -25,6 +25,22 @@
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
 #include "Vehicle.h"
+#include <limits>
+
+namespace
+{
+    int32 CalculatePctInt32Saturated(uint64 base, int32 pct)
+    {
+        if (!base || pct <= 0)
+            return 0;
+
+        long double value = static_cast<long double>(base) * static_cast<long double>(pct) / 100.0L;
+        if (value >= static_cast<long double>(std::numeric_limits<int32>::max()))
+            return std::numeric_limits<int32>::max();
+
+        return static_cast<int32>(value);
+    }
+}
 
 ///////////////////////////////////////
 ////// TABLE EVENT
@@ -598,9 +614,9 @@ class spell_pilgrims_bounty_food_aura : public AuraScript
         if (GetCaster())
         {
             if (GetId() == 66041)
-                amount = CalculatePct(GetCaster()->GetMaxPower(POWER_MANA), 20);
+                amount = CalculatePctInt32Saturated(GetCaster()->GetMaxPowerForCombat(POWER_MANA), 20);
             else
-                amount = CalculatePct(GetCaster()->GetMaxHealth(), 15);
+                amount = CalculatePctInt32Saturated(GetCaster()->GetMaxHealthForCombat(), 15);
         }
         canBeRecalculated = true;
     }

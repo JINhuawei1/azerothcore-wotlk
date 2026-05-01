@@ -41,7 +41,7 @@ public:
      * @param player Contains information about the Player
      * @param gold Contains information about money
      */
-    virtual void OnLootMoney(Player* /*player*/, uint32 /*gold*/) { }
+    virtual void OnLootMoney(Player* /*player*/, uint64 /*gold*/) { }
 };
 
 #endif

@@ -24,8 +24,8 @@ CREATE TABLE `mail_server_template` (
   `id` int unsigned NOT NULL AUTO_INCREMENT,
   `reqLevel` tinyint unsigned NOT NULL DEFAULT '0',
   `reqPlayTime` int unsigned NOT NULL DEFAULT '0',
-  `moneyA` int unsigned NOT NULL DEFAULT '0',
-  `moneyH` int unsigned NOT NULL DEFAULT '0',
+  `moneyA` bigint unsigned NOT NULL DEFAULT '0',
+  `moneyH` bigint unsigned NOT NULL DEFAULT '0',
   `itemA` int unsigned NOT NULL DEFAULT '0',
   `itemCountA` int unsigned NOT NULL DEFAULT '0',
   `itemH` int unsigned NOT NULL DEFAULT '0',
@@ -55,4 +55,3 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2024-12-17 22:33:11
-

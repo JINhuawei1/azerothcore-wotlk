@@ -28,6 +28,28 @@
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
+#include <limits>
+
+namespace
+{
+    uint32 ToClientMoney(uint64 money)
+    {
+        return money > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(money);
+    }
+
+    uint64 SaturatingAdd(uint64 left, uint64 right)
+    {
+        return left > std::numeric_limits<uint64>::max() - right ? std::numeric_limits<uint64>::max() : left + right;
+    }
+
+    bool TakeMoney64(Player* player, uint64 amount)
+    {
+        if (amount > static_cast<uint64>(std::numeric_limits<int64>::max()))
+            return false;
+
+        return player->ModifyMoney(-static_cast<int64>(amount));
+    }
+}
 
 //void called when player click on auctioneer npc
 void WorldSession::HandleAuctionHelloOpcode(WorldPacket& recvData)
@@ -85,14 +107,14 @@ void WorldSession::SendAuctionCommandResult(uint32 auctionId, uint32 Action, uin
 }
 
 //this function sends notification, if bidder is online
-void WorldSession::SendAuctionBidderNotification(uint32 location, uint32 auctionId, ObjectGuid bidder, uint32 bidSum, uint32 diff, uint32 item_template)
+void WorldSession::SendAuctionBidderNotification(uint32 location, uint32 auctionId, ObjectGuid bidder, uint64 bidSum, uint64 diff, uint32 item_template)
 {
     WorldPacket data(SMSG_AUCTION_BIDDER_NOTIFICATION, (8 * 4));
     data << uint32(location);
     data << uint32(auctionId);
     data << bidder;
-    data << uint32(bidSum);
-    data << uint32(diff);
+    data << ToClientMoney(bidSum);
+    data << ToClientMoney(diff);
     data << uint32(item_template);
     data << uint32(0);
     SendPacket(&data);
@@ -103,7 +125,7 @@ void WorldSession::SendAuctionOwnerNotification(AuctionEntry* auction)
 {
     WorldPacket data(SMSG_AUCTION_OWNER_NOTIFICATION, (8 * 4));
     data << uint32(auction->Id);
-    data << uint32(auction->bid);
+    data << ToClientMoney(auction->bid);
     data << uint32(0);                                      //unk
     data << uint64(0);                                      //unk (bidder guid?)
     data << uint32(auction->item_template);
@@ -149,14 +171,6 @@ void WorldSession::HandleAuctionSellItem(WorldPacket& recvData)
 
     if (!bid || !etime)
         return;
-
-    if (bid > MAX_MONEY_AMOUNT || buyout > MAX_MONEY_AMOUNT)
-    {
-        LOG_DEBUG("network", "WORLD: HandleAuctionSellItem - Player {} ({}) attempted to sell item with higher price than max gold amount.",
-            _player->GetName(), _player->GetGUID().ToString());
-        SendAuctionCommandResult(0, AUCTION_SELL_ITEM, ERR_AUCTION_DATABASE_ERROR);
-        return;
-    }
 
     Creature* creature = GetPlayer()->GetNPCIfCanInteractWith(auctioneer, UNIT_NPC_FLAG_AUCTIONEER);
     if (!creature)
@@ -254,14 +268,18 @@ void WorldSession::HandleAuctionSellItem(WorldPacket& recvData)
         uint32 auctionTime = uint32(etime * sWorld->getRate(RATE_AUCTION_TIME));
         AuctionHouseObject* auctionHouse = sAuctionMgr->GetAuctionsMap(creature->GetFaction());
 
-        uint32 deposit = sAuctionMgr->GetAuctionDeposit(auctionHouseEntry, etime, item, finalCount);
+        uint64 deposit = sAuctionMgr->GetAuctionDeposit(auctionHouseEntry, etime, item, finalCount);
         if (!_player->HasEnoughMoney(deposit))
         {
             SendAuctionCommandResult(0, AUCTION_SELL_ITEM, ERR_AUCTION_NOT_ENOUGHT_MONEY);
             return;
         }
 
-        _player->ModifyMoney(-int32(deposit));
+        if (!TakeMoney64(_player, deposit))
+        {
+            SendAuctionCommandResult(0, AUCTION_SELL_ITEM, ERR_AUCTION_NOT_ENOUGHT_MONEY);
+            return;
+        }
 
         AuctionEntry* AH = new AuctionEntry;
         AH->Id = sObjectMgr->GenerateAuctionID();
@@ -394,12 +412,14 @@ void WorldSession::HandleAuctionPlaceBid(WorldPacket& recvData)
 {
     ObjectGuid auctioneer;
     uint32 auctionId;
-    uint32 price;
+    uint32 clientPrice;
     recvData >> auctioneer;
-    recvData >> auctionId >> price;
+    recvData >> auctionId >> clientPrice;
 
-    if (!auctionId || !price)
+    if (!auctionId || !clientPrice)
         return;                                             //check for cheaters
+
+    uint64 price = clientPrice;
 
     Creature* creature = GetPlayer()->GetNPCIfCanInteractWith(auctioneer, UNIT_NPC_FLAG_AUCTIONEER);
     if (!creature)
@@ -444,8 +464,8 @@ void WorldSession::HandleAuctionPlaceBid(WorldPacket& recvData)
         return;
 
     // price too low for next bid if not buyout
-    if ((price < auction->buyout || auction->buyout == 0) &&
-            price < auction->bid + AuctionEntry::CalculateAuctionOutBid(auction->bid))
+    uint64 minimumOutbid = SaturatingAdd(auction->bid, AuctionEntry::CalculateAuctionOutBid(auction->bid));
+    if ((price < auction->buyout || auction->buyout == 0) && price < minimumOutbid)
     {
         //auction has already higher bid, client tests it!
         return;
@@ -465,23 +485,30 @@ void WorldSession::HandleAuctionPlaceBid(WorldPacket& recvData)
         if (auction->bidder)
         {
             if (auction->bidder == player->GetGUID())
-                player->ModifyMoney(-int32(price - auction->bid));
+            {
+                if (!TakeMoney64(player, price - auction->bid))
+                    return;
+            }
             else
             {
                 // mail to last bidder and return money
                 sAuctionMgr->SendAuctionOutbiddedMail(auction, price, GetPlayer(), trans);
-                player->ModifyMoney(-int32(price));
+                if (!TakeMoney64(player, price))
+                    return;
             }
         }
         else
-            player->ModifyMoney(-int32(price));
+        {
+            if (!TakeMoney64(player, price))
+                return;
+        }
 
         auction->bidder = player->GetGUID();
         auction->bid = price;
 
         sAuctionMgr->GetAuctionHouseSearcher()->UpdateBid(auction);
 
-        GetPlayer()->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_AUCTION_BID, price);
+        GetPlayer()->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_AUCTION_BID, ToClientMoney(price));
 
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_AUCTION_BID);
         stmt->SetData(0, auction->bidder.GetCounter());
@@ -495,16 +522,20 @@ void WorldSession::HandleAuctionPlaceBid(WorldPacket& recvData)
     {
         //buyout:
         if (player->GetGUID() == auction->bidder)
-            player->ModifyMoney(-int32(auction->buyout - auction->bid));
+        {
+            if (!TakeMoney64(player, auction->buyout - auction->bid))
+                return;
+        }
         else
         {
-            player->ModifyMoney(-int32(auction->buyout));
+            if (!TakeMoney64(player, auction->buyout))
+                return;
             if (auction->bidder)                          //buyout for bidded auction ..
                 sAuctionMgr->SendAuctionOutbiddedMail(auction, auction->buyout, GetPlayer(), trans);
         }
         auction->bidder = player->GetGUID();
         auction->bid = auction->buyout;
-        GetPlayer()->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_AUCTION_BID, auction->buyout);
+        GetPlayer()->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_AUCTION_BID, ToClientMoney(auction->buyout));
 
         //- Mails must be under transaction control too to prevent data loss
         sAuctionMgr->SendAuctionSalePendingMail(auction, trans);
@@ -556,12 +587,13 @@ void WorldSession::HandleAuctionRemoveItem(WorldPacket& recvData)
 
         if (auction->bidder)                        // If we have a bidder, we have to send him the money he paid
         {
-            uint32 auctionCut = auction->GetAuctionCut();
+            uint64 auctionCut = auction->GetAuctionCut();
             if (!player->HasEnoughMoney(auctionCut))          //player doesn't have enough money, maybe message needed
                 return;
             //some auctionBidderNotification would be needed, but don't know that parts..
             sAuctionMgr->SendAuctionCancelledToBidderMail(auction, trans);
-            player->ModifyMoney(-int32(auctionCut));
+            if (!TakeMoney64(player, auctionCut))
+                return;
         }
 
         // item will deleted or added to received mail list

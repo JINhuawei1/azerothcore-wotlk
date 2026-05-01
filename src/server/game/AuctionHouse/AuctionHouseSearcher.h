@@ -80,10 +80,10 @@ struct SearchableAuctionEntry
     uint32 Id;
     ObjectGuid ownerGuid;
     std::string ownerName;
-    uint32 buyout;
+    uint64 buyout;
     time_t expire_time;
-    uint32 startbid;
-    uint32 bid;
+    uint64 startbid;
+    uint64 bid;
     ObjectGuid bidderGuid;
     AuctionHouseFaction listFaction;
     SearchableAuctionEntryItem item;
@@ -218,11 +218,11 @@ struct AuctionSearchRemove : AuctionSearcherUpdate
 
 struct AuctionSearchUpdateBid : AuctionSearcherUpdate
 {
-    AuctionSearchUpdateBid(uint32 _auctionId, AuctionHouseFaction _listFaction, uint32 _bid, ObjectGuid _bidderGuid)
+    AuctionSearchUpdateBid(uint32 _auctionId, AuctionHouseFaction _listFaction, uint64 _bid, ObjectGuid _bidderGuid)
         : AuctionSearcherUpdate(AuctionSearcherUpdate::Type::UPDATE_BID, _listFaction), auctionId(_auctionId), bid(_bid), bidderGuid(_bidderGuid) { }
 
     uint32 auctionId;
-    uint32 bid;
+    uint64 bid;
     ObjectGuid bidderGuid;
 };
 

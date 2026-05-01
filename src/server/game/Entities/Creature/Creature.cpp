@@ -48,6 +48,8 @@
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSessionMgr.h"
+#include <algorithm>
+#include <cmath>
 #include <limits>
 
 /// @todo: this import is not necessary for compilation and marked as unused by the IDE
@@ -62,9 +64,52 @@ CreatureMovementData::CreatureMovementData() : Ground(CreatureGroundMovementType
 
 namespace
 {
+constexpr uint64 CREATURE_CLIENT_VISIBLE_HEALTH_LIMIT = 2147483520ULL;
+
 uint32 ToCreatureUpdateFieldValue(uint64 value)
 {
-    return value > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(value);
+    return value > CREATURE_CLIENT_VISIBLE_HEALTH_LIMIT ? static_cast<uint32>(CREATURE_CLIENT_VISIBLE_HEALTH_LIMIT) : static_cast<uint32>(value);
+}
+
+uint32 ScaleExtendedValueToClient(uint64 currentValue, uint64 maxValue, uint32 clientMaxValue)
+{
+    if (!currentValue || !maxValue)
+        return 0;
+
+    if (!clientMaxValue)
+        return 1;
+
+    if (currentValue >= maxValue)
+        return clientMaxValue;
+
+    if (maxValue <= clientMaxValue)
+        return currentValue > clientMaxValue ? clientMaxValue : static_cast<uint32>(currentValue);
+
+    long double scaled = (static_cast<long double>(clientMaxValue) * static_cast<long double>(currentValue)) / static_cast<long double>(maxValue);
+    uint32 clientValue = static_cast<uint32>(scaled + 0.5L);
+    if (!clientValue)
+        return 1;
+
+    return clientValue > clientMaxValue ? clientMaxValue : clientValue;
+}
+
+uint64 ScaleClientValueToExtended(uint32 clientValue, uint32 clientMaxValue, uint64 extendedMaxValue)
+{
+    if (!clientValue || !clientMaxValue || !extendedMaxValue)
+        return 0;
+
+    if (extendedMaxValue <= clientMaxValue)
+        return clientValue;
+
+    if (clientValue >= clientMaxValue)
+        return extendedMaxValue;
+
+    long double scaled = (static_cast<long double>(extendedMaxValue) * static_cast<long double>(clientValue)) / static_cast<long double>(clientMaxValue);
+    uint64 extendedValue = static_cast<uint64>(scaled + 0.5L);
+    if (!extendedValue)
+        return 1;
+
+    return extendedValue > extendedMaxValue ? extendedMaxValue : extendedValue;
 }
 }
 
@@ -317,6 +362,132 @@ Creature::~Creature()
 
     delete i_AI;
     i_AI = nullptr;
+}
+
+void Creature::SetExtendedMaxHealth(uint64 value)
+{
+    if (value <= GetMaxHealth())
+    {
+        m_extendedMaxHealth = 0;
+        m_extendedHealth = 0;
+        return;
+    }
+
+    m_extendedMaxHealth = value;
+    if (!m_extendedHealth || m_extendedHealth > m_extendedMaxHealth)
+        m_extendedHealth = m_extendedMaxHealth;
+}
+
+void Creature::SetExtendedHealth(uint64 value)
+{
+    if (!m_extendedMaxHealth)
+        return;
+
+    m_extendedHealth = value > m_extendedMaxHealth ? m_extendedMaxHealth : value;
+}
+
+void Creature::SyncClientHealthFromExtended()
+{
+    if (!m_extendedMaxHealth)
+        return;
+
+    uint32 clientMaxHealth = GetMaxHealth();
+    uint32 clientHealth = ScaleExtendedValueToClient(m_extendedHealth, m_extendedMaxHealth, clientMaxHealth);
+
+    m_syncingClientHealthFromExtended = true;
+    SetHealth(clientHealth);
+    m_pendingClientHealthSyncTicks = 0;
+    m_syncingClientHealthFromExtended = false;
+}
+
+void Creature::ApplyPendingClientHealthSync()
+{
+    if (!m_pendingClientHealthSyncTicks)
+        return;
+
+    --m_pendingClientHealthSyncTicks;
+    if (m_pendingClientHealthSyncTicks)
+        return;
+
+    uint32 clientMaxHealth = GetMaxHealth();
+    if (!clientMaxHealth || GetExtendedHealth() <= clientMaxHealth)
+        return;
+
+    m_syncingClientHealthFromExtended = true;
+    SetHealth(clientMaxHealth);
+    m_syncingClientHealthFromExtended = false;
+}
+
+uint64 Creature::GetExtendedPower(Powers power) const
+{
+    if (power < POWER_MANA || power >= MAX_POWERS)
+        return 0;
+
+    return m_extendedMaxPowers[power] ? m_extendedPowers[power] : GetPower(power);
+}
+
+uint64 Creature::GetExtendedMaxPower(Powers power) const
+{
+    if (power < POWER_MANA || power >= MAX_POWERS)
+        return 0;
+
+    return m_extendedMaxPowers[power] ? m_extendedMaxPowers[power] : GetMaxPower(power);
+}
+
+void Creature::SetExtendedMaxPower(Powers power, uint64 value)
+{
+    if (power < POWER_MANA || power >= MAX_POWERS)
+        return;
+
+    if (value <= GetMaxPower(power))
+    {
+        m_extendedMaxPowers[power] = 0;
+        m_extendedPowers[power] = 0;
+        return;
+    }
+
+    m_extendedMaxPowers[power] = value;
+    if (!m_extendedPowers[power] || m_extendedPowers[power] > m_extendedMaxPowers[power])
+        m_extendedPowers[power] = m_extendedMaxPowers[power];
+}
+
+void Creature::SetExtendedPower(Powers power, uint64 value)
+{
+    if (power < POWER_MANA || power >= MAX_POWERS || !m_extendedMaxPowers[power])
+        return;
+
+    m_extendedPowers[power] = value > m_extendedMaxPowers[power] ? m_extendedMaxPowers[power] : value;
+}
+
+void Creature::SetExtendedPowerFromClientPower(Powers power, uint32 clientPower)
+{
+    if (power < POWER_MANA || power >= MAX_POWERS || !m_extendedMaxPowers[power])
+        return;
+
+    uint32 clientMaxPower = GetMaxPower(power);
+    if (!clientPower || !clientMaxPower)
+    {
+        m_extendedPowers[power] = 0;
+        return;
+    }
+
+    m_extendedPowers[power] = ScaleClientValueToExtended(clientPower, clientMaxPower, m_extendedMaxPowers[power]);
+}
+
+void Creature::SyncClientPowerFromExtended(Powers power, bool withPowerUpdate /*= true*/)
+{
+    if (power < POWER_MANA || power >= MAX_POWERS || !m_extendedMaxPowers[power])
+        return;
+
+    uint32 clientMaxPower = GetMaxPower(power);
+    uint64 extendedMaxPower = GetExtendedMaxPower(power);
+    uint64 extendedPower = GetExtendedPower(power);
+
+    uint32 clientPower = ScaleExtendedValueToClient(extendedPower, extendedMaxPower, clientMaxPower);
+
+    m_syncingClientPowerFromExtended[power] = true;
+    SetPower(power, clientPower, withPowerUpdate);
+    m_syncingClientPowerFromExtended[power] = false;
 }
 
 void Creature::AddToWorld()
@@ -587,18 +758,20 @@ bool Creature::UpdateEntry(uint32 Entry, const CreatureData* data, bool changele
     SetAttackTime(OFF_ATTACK,    cInfo->BaseAttackTime);
     SetAttackTime(RANGED_ATTACK, cInfo->RangeAttackTime);
 
-    uint32 previousHealth = GetHealth();
-    uint32 previousMaxHealth = GetMaxHealth();
-    uint32 previousPlayerDamageReq = _playerDamageReq;
+    uint64 previousHealth = GetHealthForCombat();
+    uint64 previousMaxHealth = GetMaxHealthForCombat();
+    uint64 previousPlayerDamageReq = _playerDamageReq;
 
     SelectLevel(changelevel);
     if (previousHealth > 0)
     {
-        SetHealth(previousHealth);
+        uint64 restoredHealth = std::min<uint64>(previousHealth, GetMaxHealthForCombat());
+        SetHealthForCombat(restoredHealth);
 
-        if (previousMaxHealth && previousMaxHealth > GetMaxHealth())
+        if (previousMaxHealth && previousMaxHealth > GetMaxHealthForCombat())
         {
-            _playerDamageReq = (uint32)(previousPlayerDamageReq * GetMaxHealth() / previousMaxHealth);
+            long double scaledReq = (static_cast<long double>(previousPlayerDamageReq) * static_cast<long double>(GetMaxHealthForCombat())) / static_cast<long double>(previousMaxHealth);
+            _playerDamageReq = scaledReq > static_cast<long double>(std::numeric_limits<uint64>::max()) ? std::numeric_limits<uint64>::max() : static_cast<uint64>(scaledReq);
         }
         else
         {
@@ -736,6 +909,8 @@ void Creature::Update(uint32 diff)
             // CORPSE/DEAD state will processed at next tick (in other case death timer will be updated unexpectedly)
             if (!IsAlive())
                 break;
+
+            ApplyPendingClientHealthSync();
 
             // if creature is charmed, switch to charmed AI
             if (NeedChangeAI)
@@ -962,8 +1137,11 @@ bool Creature::IsFreeToMove()
 
 void Creature::Regenerate(Powers power)
 {
-    uint32 curValue = GetPower(power);
-    uint32 maxValue = GetMaxPower(power);
+    if (power < POWER_MANA || power >= MAX_POWERS)
+        return;
+
+    uint64 curValue = GetPowerForCombat(power);
+    uint64 maxValue = GetMaxPowerForCombat(power);
 
     // Xinef: implement power regeneration flag
     if (!HasUnitFlag2(UNIT_FLAG2_REGENERATE_POWER) && !GetOwnerGUID().IsPlayer())
@@ -977,20 +1155,20 @@ void Creature::Regenerate(Powers power)
     if (curValue >= maxValue)
         return;
 
-    float addvalue = 0.0f;
+    long double addvalue = 0.0L;
 
     switch (power)
     {
         case POWER_FOCUS:
             {
                 // For hunter pets.
-                addvalue = 24 * sWorld->getRate(RATE_POWER_FOCUS);
+                addvalue = 24.0L * sWorld->getRate(RATE_POWER_FOCUS);
                 break;
             }
         case POWER_ENERGY:
             {
                 // For deathknight's ghoul.
-                addvalue = 20;
+                addvalue = 20.0L;
                 break;
             }
         case POWER_MANA:
@@ -1000,18 +1178,18 @@ void Creature::Regenerate(Powers power)
                 {
                     if (GetEntry() == NPC_IMP || GetEntry() == NPC_WATER_ELEMENTAL_TEMP || GetEntry() == NPC_WATER_ELEMENTAL_PERM)
                     {
-                        addvalue = uint32((GetStat(STAT_SPIRIT) / (IsUnderLastManaUseEffect() ? 8.0f : 5.0f) + 17.0f));
+                        addvalue = (GetStat(STAT_SPIRIT) / (IsUnderLastManaUseEffect() ? 8.0L : 5.0L) + 17.0L);
                     }
                     else if (!IsUnderLastManaUseEffect())
                     {
                         float ManaIncreaseRate = sWorld->getRate(RATE_POWER_MANA);
                         float Spirit = GetStat(STAT_SPIRIT);
 
-                        addvalue = uint32((Spirit / 5.0f + 17.0f) * ManaIncreaseRate);
+                        addvalue = (static_cast<long double>(Spirit) / 5.0L + 17.0L) * static_cast<long double>(ManaIncreaseRate);
                     }
                 }
                 else
-                    addvalue = maxValue / 3;
+                    addvalue = static_cast<long double>(maxValue) / 3.0L;
                 break;
             }
         default:
@@ -1024,9 +1202,17 @@ void Creature::Regenerate(Powers power)
         if (Powers((*i)->GetMiscValue()) == power)
             AddPct(addvalue, (*i)->GetAmount());
 
-    addvalue += GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_POWER_REGEN, power) * (power == POWER_FOCUS ? PET_FOCUS_REGEN_INTERVAL.count() : CREATURE_REGEN_INTERVAL) / (5 * IN_MILLISECONDS);
+    addvalue += static_cast<long double>(GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_POWER_REGEN, power)) * static_cast<long double>(power == POWER_FOCUS ? PET_FOCUS_REGEN_INTERVAL.count() : CREATURE_REGEN_INTERVAL) / static_cast<long double>(5 * IN_MILLISECONDS);
 
-    ModifyPower(power, int32(addvalue));
+    uint64 missing = maxValue - curValue;
+    uint64 restore = 0;
+    if (addvalue > 0.0L && !std::isnan(static_cast<double>(addvalue)))
+        restore = addvalue >= static_cast<long double>(std::numeric_limits<uint64>::max()) ? std::numeric_limits<uint64>::max() : static_cast<uint64>(addvalue);
+    if (restore > missing)
+        restore = missing;
+
+    if (restore)
+        ModifyPower64(power, restore > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(restore));
 }
 
 void Creature::RegenerateHealth()
@@ -1034,13 +1220,13 @@ void Creature::RegenerateHealth()
     if (!isRegeneratingHealth())
         return;
 
-    uint32 curValue = GetHealth();
-    uint32 maxValue = GetMaxHealth();
+    uint64 curValue = GetHealthForCombat();
+    uint64 maxValue = GetMaxHealthForCombat();
 
     if (curValue >= maxValue)
         return;
 
-    uint32 addvalue = 0;
+    uint64 addvalue = 0;
 
     // Not only pet, but any controlled creature
     // Xinef: fix polymorph rapid regen
@@ -1062,17 +1248,24 @@ void Creature::RegenerateHealth()
     for (AuraEffectList::const_iterator i = ModPowerRegenPCTAuras.begin(); i != ModPowerRegenPCTAuras.end(); ++i)
         AddPct(addvalue, (*i)->GetAmount());
 
-    addvalue += GetTotalAuraModifier(SPELL_AURA_MOD_REGEN) * CREATURE_REGEN_INTERVAL  / (5 * IN_MILLISECONDS);
+    int32 regenMod = GetTotalAuraModifier(SPELL_AURA_MOD_REGEN) * CREATURE_REGEN_INTERVAL / (5 * IN_MILLISECONDS);
+    if (regenMod >= 0)
+        addvalue += static_cast<uint32>(regenMod);
+    else
+    {
+        uint64 reduction = static_cast<uint64>(-regenMod);
+        addvalue = reduction > addvalue ? 0 : addvalue - reduction;
+    }
 
     // 安全限制：治疗量不能超过缺失生命值，避免 uint32 溢出后在 ModifyHealth(int32) 中变成负值
-    uint32 const missing = maxValue - curValue;
+    uint64 const missing = maxValue - curValue;
     if (addvalue > missing)
         addvalue = missing;
 
     if (!addvalue)
         return;
 
-    ModifyHealth(static_cast<int32>(addvalue));
+    ModifyHealth(addvalue > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(addvalue));
 }
 
 void Creature::DoFleeToGetAssistance()
@@ -1518,8 +1711,8 @@ void Creature::SaveToDB(uint32 mapid, uint8 spawnMask, uint32 phaseMask)
     stmt->SetData(index++, m_respawnDelay);
     stmt->SetData(index++, m_wanderDistance);
     stmt->SetData(index++, 0);
-    stmt->SetData(index++, GetHealth());
-    stmt->SetData(index++, GetPower(POWER_MANA));
+    stmt->SetData(index++, GetHealthForCombat());
+    stmt->SetData(index++, GetPowerForCombat(POWER_MANA));
     stmt->SetData(index++, uint8(GetDefaultMovementType()));
     stmt->SetData(index++, npcflag);
     stmt->SetData(index++, unit_flags);
@@ -1555,22 +1748,31 @@ void Creature::SelectLevel(bool changelevel)
     uint64 health64 = uint64(static_cast<long double>(basehp) * static_cast<long double>(healthmod));
     uint32 health = ToCreatureUpdateFieldValue(health64);
 
+    m_extendedCreateHealth = health64;
     SetCreateHealth(health);
     SetMaxHealth(health);
     SetHealth(health);
+    SetExtendedMaxHealth(health64);
+    SetExtendedHealth(health64);
+    SyncClientHealthFromExtended();
     ResetPlayerDamageReq();
 
     // mana
-    uint32 mana = ToCreatureUpdateFieldValue(stats->GenerateMana(cInfo));
+    uint64 mana64 = stats->GenerateMana(cInfo);
+    uint32 mana = ToCreatureUpdateFieldValue(mana64);
 
+    m_extendedCreateMana = mana64;
     SetCreateMana(mana);
     SetMaxPower(POWER_MANA, mana);                          //MAX Mana
     SetPower(POWER_MANA, mana);
+    SetExtendedMaxPower(POWER_MANA, mana64);
+    SetExtendedPower(POWER_MANA, mana64);
+    SyncClientPowerFromExtended(POWER_MANA);
 
     /// @todo: set UNIT_FIELD_POWER*, for some creature class case (energy, etc)
 
-    SetModifierValue(UNIT_MOD_HEALTH, BASE_VALUE, (float)health);
-    SetModifierValue(UNIT_MOD_MANA, BASE_VALUE, (float)mana);
+    SetModifierValue(UNIT_MOD_HEALTH, BASE_VALUE, static_cast<float>(health64));
+    SetModifierValue(UNIT_MOD_MANA, BASE_VALUE, static_cast<float>(mana64));
 
     // damage
 
@@ -1784,26 +1986,28 @@ bool Creature::LoadCreatureFromDB(ObjectGuid::LowType spawnId, Map* map, bool ad
         }
     }
 
-    uint32 curhealth;
+    uint64 curhealth;
+    uint64 curmana;
 
     if (!m_regenHealth)
     {
         curhealth = data->curhealth;
         if (curhealth)
         {
-            curhealth = uint32(curhealth * _GetHealthMod(GetCreatureTemplate()->rank));
+            curhealth = uint64(static_cast<long double>(curhealth) * static_cast<long double>(_GetHealthMod(GetCreatureTemplate()->rank)));
             if (curhealth < 1)
                 curhealth = 1;
         }
-        SetPower(POWER_MANA, data->curmana);
+        curmana = data->curmana;
     }
     else
     {
-        curhealth = GetMaxHealth();
-        SetPower(POWER_MANA, GetMaxPower(POWER_MANA));
+        curhealth = GetMaxHealthForCombat();
+        curmana = GetMaxPowerForCombat(POWER_MANA);
     }
 
-    SetHealth(m_deathState == DeathState::Alive ? curhealth : 0);
+    SetHealthForCombat(m_deathState == DeathState::Alive ? curhealth : 0);
+    SetPowerForCombat(POWER_MANA, curmana);
 
     // checked at creature_template loading
     m_defaultMovementType = MovementGeneratorType(data->movementType);
@@ -3835,7 +4039,7 @@ bool Creature::IsDamageEnoughForLootingAndReward() const
     return m_creatureInfo->HasFlagsExtra(CREATURE_FLAG_EXTRA_NO_PLAYER_DAMAGE_REQ) || (_playerDamageReq == 0 && _damagedByPlayer);
 }
 
-void Creature::LowerPlayerDamageReq(uint32 unDamage, bool damagedByPlayer /*= true*/)
+void Creature::LowerPlayerDamageReq(uint64 unDamage, bool damagedByPlayer /*= true*/)
 {
     if (_playerDamageReq)
         _playerDamageReq > unDamage ? _playerDamageReq -= unDamage : _playerDamageReq = 0;
@@ -3848,11 +4052,11 @@ void Creature::LowerPlayerDamageReq(uint32 unDamage, bool damagedByPlayer /*= tr
 
 void Creature::ResetPlayerDamageReq()
 {
-    _playerDamageReq = GetHealth() / 2;
+    _playerDamageReq = GetHealthForCombat() / 2;
     _damagedByPlayer = false;
 }
 
-uint32 Creature::GetPlayerDamageReq() const
+uint64 Creature::GetPlayerDamageReq() const
 {
     return _playerDamageReq;
 }
@@ -3860,16 +4064,18 @@ uint32 Creature::GetPlayerDamageReq() const
 bool Creature::CanCastSpell(uint32 spellID) const
 {
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellID);
-    int32 currentPower = GetPower(getPowerType());
+    uint64 currentPower = GetPowerForCombat(getPowerType());
 
     if (HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_SILENCED) || IsSpellProhibited(spellInfo->GetSchoolMask()))
     {
         return false;
     }
 
-    if (spellInfo && (currentPower < spellInfo->CalcPowerCost(this, spellInfo->GetSchoolMask())))
+    if (spellInfo)
     {
-        return false;
+        int64 powerCost = spellInfo->CalcPowerCost(this, spellInfo->GetSchoolMask());
+        if (powerCost > 0 && currentPower < static_cast<uint64>(powerCost))
+            return false;
     }
 
     return true;

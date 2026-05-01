@@ -116,7 +116,7 @@ struct boss_shade_of_aran : public BossAI
         BossAI::Reset();
         // Reset the mana of the boss fully before resetting drinking
         // If this was omitted, the boss would start drinking on reset if the mana was low on a wipe
-        me->SetPower(POWER_MANA, me->GetMaxPower(POWER_MANA));
+        me->SetPowerForCombat(POWER_MANA, me->GetMaxPowerForCombat(POWER_MANA));
         _drinkScheduler.CancelAll();
 
         _lastSuperSpell = 0;
@@ -203,7 +203,8 @@ struct boss_shade_of_aran : public BossAI
             me->RemoveAurasDueToSpell(SPELL_DRINK);
             me->SetStandState(UNIT_STAND_STATE_STAND);
             me->SetReactState(REACT_AGGRESSIVE);
-            me->SetPower(POWER_MANA, me->GetMaxPower(POWER_MANA) - 32000);
+            uint64 maxMana = me->GetMaxPowerForCombat(POWER_MANA);
+            me->SetPowerForCombat(POWER_MANA, maxMana > 32000 ? maxMana - 32000 : 0);
             _drinkScheduler.CancelGroup(GROUP_DRINKING);
             _drinkScheduler.Schedule(1s, [this](TaskContext)
             {
@@ -213,10 +214,11 @@ struct boss_shade_of_aran : public BossAI
         }
     }
 
-    void OnPowerUpdate(Powers /*power*/, int32 /*gain*/, int32 /*updateVal*/, uint32 currentPower) override
+    void OnPowerUpdate(Powers /*power*/, int32 /*gain*/, int32 /*updateVal*/, uint32 /*currentPower*/) override
     {
         // Should drink at 10%, need 10% mana for mass polymorph
-        if (!_hasDrunk && me->GetMaxPower(POWER_MANA) && (currentPower * 100 / me->GetMaxPower(POWER_MANA)) < 13.5)
+        uint64 maxMana = me->GetMaxPowerForCombat(POWER_MANA);
+        if (!_hasDrunk && maxMana && (static_cast<long double>(me->GetPowerForCombat(POWER_MANA)) * 100.0L / static_cast<long double>(maxMana)) < 13.5L)
         {
             _hasDrunk = true;
             me->SetReactState(REACT_PASSIVE);
@@ -241,7 +243,8 @@ struct boss_shade_of_aran : public BossAI
             {
                 me->SetStandState(UNIT_STAND_STATE_STAND);
                 me->SetReactState(REACT_AGGRESSIVE);
-                me->SetPower(POWER_MANA, me->GetMaxPower(POWER_MANA) - 32000);
+                uint64 maxMana = me->GetMaxPowerForCombat(POWER_MANA);
+                me->SetPowerForCombat(POWER_MANA, maxMana > 32000 ? maxMana - 32000 : 0);
                 DoCastSelf(SPELL_AOE_PYROBLAST);
                 _drinkScheduler.CancelGroup(GROUP_DRINKING);
                 _drinking = false;
@@ -293,7 +296,8 @@ struct boss_shade_of_aran : public BossAI
 
                     if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(_currentNormalSpell))
                     {
-                        if (int32(me->GetPower(POWER_MANA)) < spellInfo->CalcPowerCost(me, (SpellSchoolMask)spellInfo->SchoolMask))
+                        int64 powerCost = spellInfo->CalcPowerCost(me, (SpellSchoolMask)spellInfo->SchoolMask);
+                        if (powerCost > 0 && me->GetPowerForCombat(POWER_MANA) < static_cast<uint64>(powerCost))
                         {
                             DoCastSelf(SPELL_POTION);
                         }

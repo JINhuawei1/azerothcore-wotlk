@@ -126,8 +126,8 @@ struct ServerMail
 {
     ServerMail() = default;
     uint32 id{ 0 };
-    uint32 moneyA{ 0 };
-    uint32 moneyH{ 0 };
+    uint64 moneyA{ 0 };
+    uint64 moneyH{ 0 };
     std::string subject;
     std::string body;
     uint8 active{ 0 };
@@ -210,7 +210,7 @@ public:
      * @param body Mail body.
      * @param active Whether the mail template is active.
      */
-    void SendServerMail(Player* player, uint32 id, uint32 money, std::vector<ServerMailItems> const& items, std::vector<ServerMailCondition> const& conditions, std::string const& subject, std::string const& body) const;
+    void SendServerMail(Player* player, uint32 id, uint64 money, std::vector<ServerMailItems> const& items, std::vector<ServerMailCondition> const& conditions, std::string const& subject, std::string const& body) const;
 
     /**
      * @brief Retrieves the entire server mail store.

@@ -24,6 +24,7 @@
 #include "CreatureData.h"
 #include "LootMgr.h"
 #include "Unit.h"
+#include <array>
 #include <list>
 
 class SpellInfo;
@@ -63,6 +64,27 @@ public:
     void LoadEquipment(int8 id = 1, bool force = false);
 
     [[nodiscard]] ObjectGuid::LowType GetSpawnId() const { return m_spawnId; }
+    [[nodiscard]] uint64 GetExtendedHealth() const { return m_extendedMaxHealth ? m_extendedHealth : GetHealth(); }
+    [[nodiscard]] uint64 GetExtendedMaxHealth() const { return m_extendedMaxHealth ? m_extendedMaxHealth : GetMaxHealth(); }
+    [[nodiscard]] uint64 GetHealthForCombat() const override { return GetExtendedHealth(); }
+    [[nodiscard]] uint64 GetMaxHealthForCombat() const override { return GetExtendedMaxHealth(); }
+    [[nodiscard]] uint64 GetCreateHealthForCombat() const override { return m_extendedCreateHealth ? m_extendedCreateHealth : GetCreateHealth(); }
+    void SetExtendedMaxHealth(uint64 value);
+    void SetExtendedHealth(uint64 value);
+    void SyncClientHealthFromExtended();
+    void ApplyPendingClientHealthSync();
+    [[nodiscard]] bool IsSyncingClientHealthFromExtended() const { return m_syncingClientHealthFromExtended; }
+    [[nodiscard]] uint64 GetExtendedPower(Powers power) const;
+    [[nodiscard]] uint64 GetExtendedMaxPower(Powers power) const;
+    [[nodiscard]] uint64 GetPowerForCombat(Powers power) const override { return GetExtendedPower(power); }
+    [[nodiscard]] uint64 GetMaxPowerForCombat(Powers power) const override { return GetExtendedMaxPower(power); }
+    [[nodiscard]] uint64 GetCreateManaForCombat() const override { return m_extendedCreateMana ? m_extendedCreateMana : GetCreateMana(); }
+    [[nodiscard]] uint64 GetCreatePowerForCombat(Powers power) const override { return power == POWER_MANA ? GetCreateManaForCombat() : GetCreatePowers(power); }
+    void SetExtendedMaxPower(Powers power, uint64 value);
+    void SetExtendedPower(Powers power, uint64 value);
+    void SetExtendedPowerFromClientPower(Powers power, uint32 clientPower);
+    void SyncClientPowerFromExtended(Powers power, bool withPowerUpdate = true);
+    [[nodiscard]] bool IsSyncingClientPowerFromExtended(Powers power) const { return power >= POWER_MANA && power < MAX_POWERS && m_syncingClientPowerFromExtended[power]; }
 
     void Update(uint32 time) override;  // overwrited Unit::Update
     void GetRespawnPosition(float& x, float& y, float& z, float* ori = nullptr, float* dist = nullptr) const;
@@ -365,9 +387,9 @@ public:
     void SetLootRewardDisabled(bool disable) { DisableLootReward = disable; }
     [[nodiscard]] bool IsLootRewardDisabled() const { return DisableLootReward; }
     [[nodiscard]] bool IsDamageEnoughForLootingAndReward() const;
-    void LowerPlayerDamageReq(uint32 unDamage, bool damagedByPlayer = true);
+    void LowerPlayerDamageReq(uint64 unDamage, bool damagedByPlayer = true);
     void ResetPlayerDamageReq();
-    [[nodiscard]] uint32 GetPlayerDamageReq() const;
+    [[nodiscard]] uint64 GetPlayerDamageReq() const;
 
     [[nodiscard]] uint32 GetOriginalEntry() const { return m_originalEntry; }
     void SetOriginalEntry(uint32 entry) { m_originalEntry = entry; }
@@ -488,6 +510,15 @@ protected:
     CreatureData const* m_creatureData;
 
     float m_detectionDistance;
+    uint64 m_extendedCreateHealth = 0;
+    uint64 m_extendedCreateMana = 0;
+    uint64 m_extendedHealth = 0;
+    uint64 m_extendedMaxHealth = 0;
+    bool m_syncingClientHealthFromExtended = false;
+    uint8 m_pendingClientHealthSyncTicks = 0;
+    std::array<uint64, MAX_POWERS> m_extendedPowers = { };
+    std::array<uint64, MAX_POWERS> m_extendedMaxPowers = { };
+    std::array<bool, MAX_POWERS> m_syncingClientPowerFromExtended = { };
     uint16 m_LootMode;  // bitmask, default LOOT_MODE_DEFAULT, determines what loot will be lootable
 
     float _sparringPct;
@@ -522,7 +553,7 @@ private:
 
     uint32 m_assistanceTimer;
 
-    uint32 _playerDamageReq;
+    uint64 _playerDamageReq;
     bool _damagedByPlayer;
     bool _isCombatMovementAllowed;
 };

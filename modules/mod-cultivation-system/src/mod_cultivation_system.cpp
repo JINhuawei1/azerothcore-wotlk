@@ -31,6 +31,7 @@
 #include "RequirementInterface.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <unordered_map>
 #include <vector>
 #include <string>
@@ -41,6 +42,12 @@ using namespace Acore::ChatCommands;
 // Addon消息通信常量
 static constexpr const char* CULTIVATION_ADDON_PREFIX = "CULT_SYS";
 static constexpr size_t CULTIVATION_MAX_ADDON_PAYLOAD = 220;
+static constexpr uint64 CULTIVATION_CLIENT_VISIBLE_HEALTH_LIMIT = 2147483520ULL;
+
+static uint32 ToCultivationClientHealth(uint64 value)
+{
+    return value > CULTIVATION_CLIENT_VISIBLE_HEALTH_LIMIT ? static_cast<uint32>(CULTIVATION_CLIENT_VISIBLE_HEALTH_LIMIT) : static_cast<uint32>(value);
+}
 
 // ============================================
 // 数据结构
@@ -1865,12 +1872,21 @@ class spell_cultivation_yuanying : public SpellScript
             mirror->SetReactState(REACT_AGGRESSIVE);
 
             float healthPct = 0.6f;
-            uint32 playerHP = player->GetMaxHealth();
-            mirror->SetMaxHealth(static_cast<uint32>(playerHP * healthPct));
-            mirror->SetHealth(static_cast<uint32>(playerHP * healthPct));
+            uint64 playerHP = player->GetMaxHealthForCombat();
+            uint64 mirrorHP = static_cast<uint64>(static_cast<long double>(playerHP) * static_cast<long double>(healthPct));
+            uint32 clientMirrorHP = ToCultivationClientHealth(mirrorHP);
+            mirror->SetMaxHealth(clientMirrorHP);
+            if (mirrorHP > clientMirrorHP)
+            {
+                mirror->SetExtendedMaxHealth(mirrorHP);
+                mirror->SetExtendedHealth(mirrorHP);
+                mirror->SyncClientHealthFromExtended();
+            }
+            else
+                mirror->SetHealth(clientMirrorHP);
 
-            float ap = player->GetTotalAttackPowerValue(BASE_ATTACK) * healthPct;
-            float minDmg = ap / 14.0f * 2.0f;
+            double ap = player->GetExtendedTotalAttackPowerValue(BASE_ATTACK) * static_cast<double>(healthPct);
+            float minDmg = static_cast<float>(std::min<double>(ap / 14.0 * 2.0, std::numeric_limits<float>::max()));
             float maxDmg = minDmg * 1.2f;
             mirror->SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, minDmg);
             mirror->SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, maxDmg);

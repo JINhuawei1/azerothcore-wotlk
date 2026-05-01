@@ -52,7 +52,7 @@ public:
 
                     if (!result)
                     {
-                        uint32 money = isAlliance ? servMail.moneyA : servMail.moneyH;
+                        uint64 money = isAlliance ? servMail.moneyA : servMail.moneyH;
                         std::vector<ServerMailItems> const& items = isAlliance ? servMail.itemsA : servMail.itemsH;
                         std::vector<ServerMailCondition> const& conditions = servMail.conditions;
 

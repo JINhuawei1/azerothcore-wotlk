@@ -34,6 +34,98 @@
 #include "Util.h"
 #include "Vehicle.h"
 #include "WorldPacket.h"
+#include <cmath>
+#include <limits>
+
+namespace
+{
+    int32 ApplyPeriodicHasteToDuration(int32 duration, Unit* caster, SpellInfo const* spellInfo)
+    {
+        if (duration <= 0 || !caster || !spellInfo)
+            return duration;
+
+        if (!caster->HasAuraTypeWithAffectMask(SPELL_AURA_PERIODIC_HASTE, spellInfo) && !spellInfo->HasAttribute(SPELL_ATTR5_SPELL_HASTE_AFFECTS_PERIODIC))
+            return duration;
+
+        long double hastedDuration = static_cast<long double>(duration) * static_cast<long double>(caster->GetFloatValue(UNIT_MOD_CAST_SPEED));
+        if (hastedDuration <= 0.0L || std::isnan(static_cast<double>(hastedDuration)))
+            return 1;
+
+        if (hastedDuration >= static_cast<long double>(std::numeric_limits<int32>::max()))
+            return std::numeric_limits<int32>::max();
+
+        return std::max<int32>(1, static_cast<int32>(hastedDuration));
+    }
+
+    int32 CalculatePctInt32Saturated(uint64 base, float pct)
+    {
+        if (!base || pct <= 0.0f)
+            return 0;
+
+        long double value = static_cast<long double>(base) * static_cast<long double>(pct) / 100.0L;
+        if (value >= static_cast<long double>(std::numeric_limits<int32>::max()))
+            return std::numeric_limits<int32>::max();
+
+        return static_cast<int32>(value);
+    }
+
+    uint64 CalculatePctUInt64Saturated(uint64 base, float pct)
+    {
+        if (!base || pct <= 0.0f)
+            return 0;
+
+        long double value = static_cast<long double>(base) * static_cast<long double>(pct) / 100.0L;
+        if (value >= static_cast<long double>(std::numeric_limits<uint64>::max()))
+            return std::numeric_limits<uint64>::max();
+
+        return static_cast<uint64>(value);
+    }
+
+    int64 ToPositiveInt64(uint64 value)
+    {
+        return value > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(value);
+    }
+
+    void DealTriggeredDirectSpellDamage(Unit* caster, Unit* target, uint32 spellId, uint64 rawDamage, AuraEffect const* triggeredByAura)
+    {
+        if (!caster || !target || !target->IsAlive() || !rawDamage)
+            return;
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+        if (!spellInfo)
+            return;
+
+        if (target->IsImmunedToDamageOrSchool(spellInfo))
+        {
+            caster->SendSpellDamageImmune(target, spellId);
+            return;
+        }
+
+        caster->SetLastDamagedTargetGuid(target->GetGUID());
+
+        rawDamage = caster->SpellDamageBonusDone(target, spellInfo, rawDamage, SPELL_DIRECT_DAMAGE, EFFECT_0);
+        rawDamage = target->SpellDamageBonusTaken(caster, spellInfo, rawDamage, SPELL_DIRECT_DAMAGE);
+
+        SpellNonMeleeDamage damageInfo(caster, target, spellInfo, spellInfo->GetSchoolMask());
+        caster->CalculateSpellDamageTaken(&damageInfo, ToPositiveInt64(rawDamage), spellInfo);
+        caster->SendSpellNonMeleeDamageLog(&damageInfo);
+        caster->DealSpellDamage(&damageInfo, true);
+
+        if (!target->CanProc())
+            return;
+
+        uint32 procAttacker = 0;
+        uint32 procVictim = 0;
+        createProcFlags(spellInfo, BASE_ATTACK, false, procAttacker, procVictim);
+        if (damageInfo.damage)
+            procVictim |= PROC_FLAG_TAKEN_DAMAGE;
+
+        uint32 procEx = createProcExtendMask(&damageInfo, SPELL_MISS_NONE) | PROC_EX_INTERNAL_TRIGGERED;
+        DamageInfo dmgInfo(damageInfo, SPELL_DIRECT_DAMAGE);
+        Unit::ProcDamageAndSpell(caster, target, procAttacker, procVictim, procEx, damageInfo.damage, BASE_ATTACK, spellInfo,
+            triggeredByAura ? triggeredByAura->GetSpellInfo() : nullptr, triggeredByAura ? triggeredByAura->GetEffIndex() : -1, nullptr, &dmgInfo);
+    }
+}
 
 /// @todo: this import is not necessary for compilation and marked as unused by the IDE
 //  however, for some reasons removing it would cause a damn linking issue
@@ -817,7 +909,7 @@ void Aura::Update(uint32 diff, Unit* caster)
                     Powers powertype = Powers(m_spellInfo->PowerType);
                     if (powertype == POWER_HEALTH)
                     {
-                        if (int32(caster->GetHealth()) > ManaPerSecond)
+                        if (caster->GetHealthForCombat() > static_cast<uint64>(ManaPerSecond))
                             caster->ModifyHealth(-ManaPerSecond);
                         else
                         {
@@ -827,8 +919,8 @@ void Aura::Update(uint32 diff, Unit* caster)
                     }
                     else
                     {
-                        if (int32(caster->GetPower(powertype)) >= ManaPerSecond)
-                            caster->ModifyPower(powertype, -ManaPerSecond);
+                        if (caster->GetPowerForCombat(powertype) >= static_cast<uint64>(ManaPerSecond))
+                            caster->ModifyPower64(powertype, -ManaPerSecond);
                         else
                         {
                             Remove();
@@ -888,8 +980,7 @@ void Aura::RefreshDuration(bool withMods)
     {
         int32 duration = m_spellInfo->GetMaxDuration();
         // Calculate duration of periodics affected by haste.
-        if (caster->HasAuraTypeWithAffectMask(SPELL_AURA_PERIODIC_HASTE, m_spellInfo) || m_spellInfo->HasAttribute(SPELL_ATTR5_SPELL_HASTE_AFFECTS_PERIODIC))
-            duration = int32(duration * caster->GetFloatValue(UNIT_MOD_CAST_SPEED));
+        duration = ApplyPeriodicHasteToDuration(duration, caster, m_spellInfo);
         SetMaxDuration(duration);
 
         SetDuration(duration);
@@ -932,10 +1023,7 @@ void Aura::RefreshTimersWithMods()
 {
     Unit* caster = GetCaster();
     m_maxDuration = CalcMaxDuration();
-    if ((caster && caster->HasAuraTypeWithAffectMask(SPELL_AURA_PERIODIC_HASTE, m_spellInfo)) || m_spellInfo->HasAttribute(SPELL_ATTR5_SPELL_HASTE_AFFECTS_PERIODIC))
-    {
-        m_maxDuration = int32(m_maxDuration * caster->GetFloatValue(UNIT_MOD_CAST_SPEED));
-    }
+    m_maxDuration = ApplyPeriodicHasteToDuration(m_maxDuration, caster, m_spellInfo);
 
     // xinef: we should take ModSpellDuration into account, but none of the spells using this function is affected by contents of ModSpellDuration
     RefreshDuration();
@@ -1486,12 +1574,19 @@ void Aura::HandleAuraSpecificMods(AuraApplication const* aurApp, Unit* caster, b
                     // Improved Devouring Plague
                     if (AuraEffect const* aurEff = caster->GetDummyAuraEffect(SPELLFAMILY_PRIEST, 3790, 1))
                     {
-                        uint32 damage = GetEffect(0)->GetAmount();
+                        uint64 damage = GetEffect(0)->GetAmountForCombat();
                         damage = target->SpellDamageBonusTaken(caster, GetSpellInfo(), damage, DOT);
-                        int32 basepoints0 = aurEff->GetAmount() * GetEffect(0)->GetTotalTicks() * int32(damage) / 100;
-                        int32 heal = int32(CalculatePct(basepoints0, 15));
+                        uint32 totalTicks = std::max<int32>(GetEffect(0)->GetTotalTicks(), 1);
+                        uint64 totalDamage = damage > std::numeric_limits<uint64>::max() / totalTicks ? std::numeric_limits<uint64>::max() : damage * totalTicks;
+                        uint64 improvedDamage = CalculatePctUInt64Saturated(totalDamage, static_cast<float>(aurEff->GetAmount()));
+                        int32 basepoints0 = CalculatePctInt32Saturated(totalDamage, static_cast<float>(aurEff->GetAmount()));
+                        int32 heal = CalculatePctInt32Saturated(improvedDamage, 15.0f);
 
-                        caster->CastCustomSpell(target, 63675, &basepoints0, nullptr, nullptr, true, nullptr, GetEffect(0));
+                        if (improvedDamage > static_cast<uint64>(std::numeric_limits<int32>::max()))
+                            DealTriggeredDirectSpellDamage(caster, target, 63675, improvedDamage, GetEffect(0));
+                        else
+                            caster->CastCustomSpell(target, 63675, &basepoints0, nullptr, nullptr, true, nullptr, GetEffect(0));
+
                         caster->CastCustomSpell(caster, 75999, &heal, nullptr, nullptr, true, nullptr, GetEffect(0));
                     }
                 }
@@ -1748,7 +1843,7 @@ void Aura::HandleAuraSpecificMods(AuraApplication const* aurApp, Unit* caster, b
                             else if (aurEff->GetId() == 47537)
                                 multiplier += 0.5f;
 
-                            int32 basepoints0 = int32(CalculatePct(caster->GetMaxPower(POWER_MANA), multiplier));
+                            int32 basepoints0 = CalculatePctInt32Saturated(caster->GetMaxPowerForCombat(POWER_MANA), multiplier);
                             caster->CastCustomSpell(caster, 47755, &basepoints0, nullptr, nullptr, true);
                         }
                         // effect on aura target
@@ -1762,7 +1857,7 @@ void Aura::HandleAuraSpecificMods(AuraApplication const* aurApp, Unit* caster, b
                             {
                                 case POWER_MANA:
                                     {
-                                        int32 basepoints0 = int32(CalculatePct(target->GetMaxPower(POWER_MANA), 2));
+                                        int32 basepoints0 = CalculatePctInt32Saturated(target->GetMaxPowerForCombat(POWER_MANA), 2.0f);
                                         caster->CastCustomSpell(target, 63654, &basepoints0, nullptr, nullptr, true);
                                         break;
                                     }

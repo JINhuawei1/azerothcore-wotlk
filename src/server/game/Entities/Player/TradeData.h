@@ -52,8 +52,8 @@ public:                                                 // constructors
     [[nodiscard]] Item*  GetSpellCastItem() const;
     [[nodiscard]] bool HasSpellCastItem() const { return m_spellCastItem; }
 
-    [[nodiscard]] uint32 GetMoney() const { return m_money; }
-    void SetMoney(uint32 money);
+    [[nodiscard]] uint64 GetMoney() const { return m_money; }
+    void SetMoney(uint64 money);
 
     [[nodiscard]] bool IsAccepted() const { return m_accepted; }
     void SetAccepted(bool state, bool crosssend = false);
@@ -71,7 +71,7 @@ private:                                                // fields
     bool       m_accepted;                              // m_player press accept for trade list
     bool       m_acceptProccess;                        // one from player/trader press accept and this processed
 
-    uint32     m_money;                                 // m_player place money to trade
+    uint64     m_money;                                 // m_player place money to trade
 
     uint32     m_spell;                                 // m_player apply spell to non-traded slot item
     ObjectGuid m_spellCastItem;                         // applied spell casted by item use

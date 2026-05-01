@@ -21,6 +21,15 @@
 #include "DBCStores.h"
 #include "GameTime.h"
 #include "Player.h"
+#include <limits>
+
+namespace
+{
+    uint32 ToClientMoney(uint64 money)
+    {
+        return money > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(money);
+    }
+}
 
 AuctionHouseWorkerThread::AuctionHouseWorkerThread(ProducerConsumerQueue<AuctionSearcherRequest*>* requestQueue, MPSCQueue<AuctionSearcherResponse>* responseQueue)
 {
@@ -449,13 +458,13 @@ void SearchableAuctionEntry::BuildAuctionInfo(WorldPacket& data) const
     data << uint32(item.spellCharges);                              // item->charge FFFFFFF
     data << uint32(0);                                              // item->flags (client doesnt do anything with it)
     data << ownerGuid;                                              // Auction->owner
-    data << uint32(startbid);                                       // Auction->startbid (not sure if useful)
-    data << uint32(bid ? AuctionEntry::CalculateAuctionOutBid(bid) : 0);
+    data << ToClientMoney(startbid);                                // Auction->startbid (not sure if useful)
+    data << ToClientMoney(bid ? AuctionEntry::CalculateAuctionOutBid(bid) : 0);
     // Minimal outbid
-    data << uint32(buyout);                                         // Auction->buyout
+    data << ToClientMoney(buyout);                                  // Auction->buyout
     data << uint32((expire_time - GameTime::GetGameTime().count()) * IN_MILLISECONDS); // time left
     data << bidderGuid;                                             // auction->bidder current
-    data << uint32(bid);                                            // current bid
+    data << ToClientMoney(bid);                                     // current bid
 }
 
 void SearchableAuctionEntry::SetItemNames()
@@ -611,8 +620,8 @@ int SearchableAuctionEntry::CompareAuctionEntry(uint32 column, SearchableAuction
     }
     case AUCTION_SORT_BID:                                             // bid = 8
     {
-        uint32 bid1 = bid ? bid : startbid;
-        uint32 bid2 = auc.bid ? auc.bid : auc.startbid;
+        uint64 bid1 = bid ? bid : startbid;
+        uint64 bid2 = auc.bid ? auc.bid : auc.startbid;
 
         if (bid1 > bid2)
             return -1;

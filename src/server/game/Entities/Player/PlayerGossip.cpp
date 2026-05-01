@@ -285,7 +285,7 @@ void Player::OnGossipSelect(WorldObject* source, uint32 gossipListId, uint32 men
     if (!menuItemData)
         return;
 
-    int32 cost = int32(item->BoxMoney);
+    uint64 cost = item->BoxMoney;
     if (!HasEnoughMoney(cost))
     {
         SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, 0, 0, 0);
@@ -390,7 +390,7 @@ void Player::OnGossipSelect(WorldObject* source, uint32 gossipListId, uint32 men
         }
     }
 
-    ModifyMoney(-cost);
+    ModifyMoney(-static_cast<int64>(cost));
 }
 
 uint32 Player::GetGossipTextId(WorldObject* source)

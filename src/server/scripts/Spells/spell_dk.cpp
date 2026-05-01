@@ -21,6 +21,7 @@
 #include "SpellAuraEffects.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "SpellScriptCombatValue.h"
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
 #include "Totem.h"
@@ -203,35 +204,37 @@ class spell_dk_raise_ally : public SpellScript
                     if (stat != STAT_STRENGTH && stat != STAT_STAMINA)
                         continue;
 
-                    float value = 0.0f;
-                    float mod = (stat == STAT_STAMINA ? 0.3f : 0.7f);
+                    long double value = 0.0L;
+                    long double mod = (stat == STAT_STAMINA ? 0.3L : 0.7L);
 
                     // Check just if owner has Ravenous Dead since it's effect is not an aura
                     AuraEffect const* aurEff = GetCaster()->GetAuraEffect(SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE, SPELLFAMILY_DEATHKNIGHT, 3010, 0);
                     if (aurEff)
                     {
                         SpellInfo const* spellInfo = aurEff->GetSpellInfo();                                                 // Then get the SpellProto and add the dummy effect value
-                        AddPct(mod, spellInfo->Effects[EFFECT_1].CalcValue());                                              // Ravenous Dead edits the original scale
+                        mod += SpellScriptCombat::PercentOf(mod, spellInfo->Effects[EFFECT_1].CalcValue());                 // Ravenous Dead edits the original scale
                     }
                     // Glyph of the Ghoul
                     aurEff = GetCaster()->GetAuraEffect(SPELL_DK_GLYPH_OF_THE_GHOUL, EFFECT_0);
                     if (aurEff)
-                        mod += CalculatePct(1.0f, aurEff->GetAmount());                                                    // Glyph of the Ghoul adds a flat value to the scale mod
+                        mod += SpellScriptCombat::PercentOf(1.0L, aurEff->GetAmount());                                    // Glyph of the Ghoul adds a flat value to the scale mod
 
-                    value = float(GetCaster()->GetStat(stat)) * mod;
-                    value = ghoul->GetTotalStatValue(stat, value);
-                    ghoul->SetStat(stat, int32(value));
-                    ghoul->ApplyStatBuffMod(stat, value, true);
+                    value = SpellScriptCombat::GetStat(GetCaster(), stat) * mod;
+                    value = ghoul->GetTotalStatValue(stat, static_cast<float>(std::min<long double>(value, std::numeric_limits<float>::max())));
+                    ghoul->SetStat(stat, SpellScriptCombat::ToPositiveInt32Saturated(value));
+                    ghoul->ApplyStatBuffMod(stat, static_cast<float>(std::min<long double>(value, std::numeric_limits<float>::max())), true);
                 }
 
                 // Attack Power
-                ghoul->SetModifierValue(UNIT_MOD_ATTACK_POWER, BASE_VALUE, 589 + ghoul->GetStat(STAT_STRENGTH) + ghoul->GetStat(STAT_AGILITY));
-                ghoul->SetInt32Value(UNIT_FIELD_ATTACK_POWER, (int32)ghoul->GetModifierValue(UNIT_MOD_ATTACK_POWER, BASE_VALUE) * ghoul->GetModifierValue(UNIT_MOD_ATTACK_POWER, BASE_PCT));
-                ghoul->SetInt32Value(UNIT_FIELD_ATTACK_POWER_MODS, (int32)ghoul->GetModifierValue(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE));
+                long double ghoulBaseAttackPower = 589.0L + SpellScriptCombat::GetStat(ghoul, STAT_STRENGTH) + SpellScriptCombat::GetStat(ghoul, STAT_AGILITY);
+                ghoul->SetModifierValue(UNIT_MOD_ATTACK_POWER, BASE_VALUE, static_cast<float>(std::min<long double>(ghoulBaseAttackPower, std::numeric_limits<float>::max())));
+                ghoul->SetInt32Value(UNIT_FIELD_ATTACK_POWER, SpellScriptCombat::ToPositiveInt32Saturated(static_cast<long double>(ghoul->GetModifierValue(UNIT_MOD_ATTACK_POWER, BASE_VALUE)) * ghoul->GetModifierValue(UNIT_MOD_ATTACK_POWER, BASE_PCT)));
+                ghoul->SetInt32Value(UNIT_FIELD_ATTACK_POWER_MODS, SpellScriptCombat::ToInt32Saturated(ghoul->GetModifierValue(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE)));
                 ghoul->SetFloatValue(UNIT_FIELD_ATTACK_POWER_MULTIPLIER, ghoul->GetModifierValue(UNIT_MOD_ATTACK_POWER, TOTAL_PCT) - 1.0f);
 
                 // Health
-                ghoul->SetModifierValue(UNIT_MOD_HEALTH, TOTAL_VALUE, (ghoul->GetStat(STAT_STAMINA) - ghoul->GetCreateStat(STAT_STAMINA)) * 10.0f);
+                long double ghoulHealthBonus = (SpellScriptCombat::GetStat(ghoul, STAT_STAMINA) - static_cast<long double>(ghoul->GetCreateStat(STAT_STAMINA))) * 10.0L;
+                ghoul->SetModifierValue(UNIT_MOD_HEALTH, TOTAL_VALUE, static_cast<float>(std::min<long double>(std::max<long double>(ghoulHealthBonus, 0.0L), std::numeric_limits<float>::max())));
 
                 // Power Energy
                 ghoul->SetModifierValue(UnitMods(UNIT_MOD_POWER_START + static_cast<uint8>(POWER_ENERGY)), BASE_VALUE, ghoul->GetCreatePowers(POWER_ENERGY));
@@ -310,14 +313,14 @@ class spell_dk_death_and_decay : public SpellScript
     {
         Unit* caster = GetCaster();
         Unit* target = GetHitUnit();
-        int32 damage = GetHitDamage();
+        int64 damage = GetHitDamage();
 
         // T10P2 bonus
         if (AuraEffect* aurEff = caster->GetAuraEffectDummy(70650))
-            AddPct(damage, aurEff->GetAmount());
+            damage = SpellScriptCombat::AddPctInt64Saturated(damage, aurEff->GetAmount());
         // Glyph of Death and Decay
         if (AuraEffect* aurEff = caster->GetAuraEffect(58629, EFFECT_0))
-            AddPct(damage, aurEff->GetAmount());
+            damage = SpellScriptCombat::AddPctInt64Saturated(damage, aurEff->GetAmount());
 
         // Xinef: include AOE damage reducing auras
         if (target)
@@ -497,7 +500,7 @@ class spell_dk_wandering_plague_aura : public AuraScript
         PreventDefaultAction();
 
         eventInfo.GetActor()->AddSpellCooldown(SPELL_DK_WANDERING_PLAGUE_TRIGGER, 0, 1000);
-        eventInfo.GetActor()->CastCustomSpell(SPELL_DK_WANDERING_PLAGUE_TRIGGER, SPELLVALUE_BASE_POINT0, CalculatePct<int32, int32>(eventInfo.GetDamageInfo()->GetDamage(), aurEff->GetAmount()), eventInfo.GetActionTarget(), TRIGGERED_FULL_MASK);
+        eventInfo.GetActor()->CastCustomSpell(SPELL_DK_WANDERING_PLAGUE_TRIGGER, SPELLVALUE_BASE_POINT0, SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(static_cast<long double>(eventInfo.GetDamageInfo()->GetDamage()), aurEff->GetAmount())), eventInfo.GetActionTarget(), TRIGGERED_FULL_MASK);
     }
 
     void Register() override
@@ -742,7 +745,7 @@ class spell_dk_pet_scaling : public AuraScript
             // xinef: ebon garogyle - inherit 30% of stamina
             if (GetUnitOwner()->GetEntry() == NPC_EBON_GARGOYLE && stat == STAT_STAMINA)
                 if (Unit* owner = GetUnitOwner()->GetOwner())
-                    amount = CalculatePct(std::max<int32>(0, owner->GetStat(stat)), 30);
+                    amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(SpellScriptCombat::GetStat(owner, stat), 30));
             return;
         }
 
@@ -761,7 +764,7 @@ class spell_dk_pet_scaling : public AuraScript
             if (AuraEffect const* glyphEff = owner->GetAuraEffect(SPELL_DK_GLYPH_OF_THE_GHOUL, EFFECT_0))
                 modifier += glyphEff->GetAmount();
 
-            amount = CalculatePct(std::max<int32>(0, owner->GetStat(stat)), modifier);
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(SpellScriptCombat::GetStat(owner, stat), modifier));
         }
     }
 
@@ -779,7 +782,7 @@ class spell_dk_pet_scaling : public AuraScript
             if (owner->GetDummyAuraEffect(SPELLFAMILY_DEATHKNIGHT, 1986, 0))
                 modifier = 40;
 
-            amount = CalculatePct(std::max<int32>(0, owner->GetTotalAttackPowerValue(BASE_ATTACK)), modifier);
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(SpellScriptCombat::GetAttackPower(owner, BASE_ATTACK), modifier));
 
             // xinef: Update appropriate player field
             if (owner->IsPlayer())
@@ -833,15 +836,15 @@ class spell_dk_pet_scaling : public AuraScript
             {
                 if (aurEff->GetMiscValue() == STAT_STAMINA)
                 {
-                    uint32 actStat = GetUnitOwner()->GetHealth();
+                    uint64 actStat = GetUnitOwner()->GetHealthForCombat();
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetHealth(std::min<uint32>(GetUnitOwner()->GetMaxHealth(), actStat));
+                    GetUnitOwner()->SetHealthForCombat(std::min<uint64>(GetUnitOwner()->GetMaxHealthForCombat(), actStat));
                 }
                 else
                 {
-                    uint32 actStat = GetUnitOwner()->GetPower(POWER_MANA);
+                    uint64 actStat = GetUnitOwner()->GetPowerForCombat(POWER_MANA);
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetPower(POWER_MANA, std::min<uint32>(GetUnitOwner()->GetMaxPower(POWER_MANA), actStat));
+                    GetUnitOwner()->SetPowerForCombat(POWER_MANA, std::min<uint64>(GetUnitOwner()->GetMaxPowerForCombat(POWER_MANA), actStat));
                 }
             }
         }
@@ -887,7 +890,7 @@ class spell_dk_anti_magic_shell_raid : public AuraScript
 
     void Absorb(AuraEffect* /*aurEff*/, DamageInfo& dmgInfo, uint32& absorbAmount)
     {
-        absorbAmount = CalculatePct(dmgInfo.GetDamage(), absorbPct);
+        absorbAmount = SpellScriptCombat::CalculatePctInt32Saturated(dmgInfo.GetDamage(), absorbPct);
     }
 
     void Register() override
@@ -922,7 +925,7 @@ class spell_dk_anti_magic_shell_self : public AuraScript
 
     void Absorb(AuraEffect* /*aurEff*/, DamageInfo& dmgInfo, uint32& absorbAmount)
     {
-        uint64 damageAbsorb = CalculatePct(dmgInfo.GetDamage(), absorbPct);
+        uint64 damageAbsorb = SpellScriptCombat::CalculatePctUInt64(dmgInfo.GetDamage(), absorbPct);
         uint64 healthAbsorb = GetTarget()->CountPctFromMaxHealth(hpPct);
         absorbAmount = static_cast<uint32>(std::min(damageAbsorb, healthAbsorb));
     }
@@ -989,13 +992,13 @@ class spell_dk_anti_magic_zone : public AuraScript
         amount = talentSpell->Effects[EFFECT_0].CalcValue(owner);
         if (Player* player = owner->ToPlayer())
         {
-            amount += int32(2 * player->GetTotalAttackPowerValue(BASE_ATTACK));
+            amount = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(amount) + 2.0L * SpellScriptCombat::GetAttackPower(player, BASE_ATTACK));
         }
     }
 
     void Absorb(AuraEffect* /*aurEff*/, DamageInfo& dmgInfo, uint32& absorbAmount)
     {
-        absorbAmount = CalculatePct(dmgInfo.GetDamage(), absorbPct);
+        absorbAmount = SpellScriptCombat::CalculatePctInt32Saturated(dmgInfo.GetDamage(), absorbPct);
     }
 
     void Register() override
@@ -1071,7 +1074,7 @@ class spell_dk_blood_gorged : public AuraScript
             return;
         }
 
-        int32 bp = static_cast<int32>(damageInfo->GetDamage() * 1.5f);
+        int32 bp = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(damageInfo->GetDamage()) * 1.5L);
         GetTarget()->CastCustomSpell(SPELL_DK_BLOOD_GORGED_HEAL, SPELLVALUE_BASE_POINT0, bp, _procTarget, true, nullptr, aurEff);
     }
 
@@ -1159,9 +1162,9 @@ class spell_dk_corpse_explosion : public SpellScript
     void HandleDamage(SpellEffIndex effIndex, Unit* target)
     {
         if (effIndex == EFFECT_0)
-            GetCaster()->CastCustomSpell(GetSpellInfo()->Effects[EFFECT_1].CalcValue(), SPELLVALUE_BASE_POINT0, GetEffectValue(), target, true);
+            GetCaster()->CastCustomSpell(GetSpellInfo()->Effects[EFFECT_1].CalcValue(), SPELLVALUE_BASE_POINT0, SpellScriptCombat::ToClientSpellValue(static_cast<long double>(GetEffectValue())), target, true);
         else if (effIndex == EFFECT_1)
-            GetCaster()->CastCustomSpell(GetEffectValue(), SPELLVALUE_BASE_POINT0, GetSpell()->CalculateSpellDamage(EFFECT_0, nullptr), target, true);
+            GetCaster()->CastCustomSpell(static_cast<uint32>(GetEffectValue()), SPELLVALUE_BASE_POINT0, GetSpell()->CalculateSpellDamage(EFFECT_0, nullptr), target, true);
     }
 
     void HandleCorpseExplosion(SpellEffIndex effIndex)
@@ -1213,19 +1216,19 @@ class spell_dk_death_coil : public SpellScript
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
-        int32 damage = GetEffectValue();
+        int32 damage = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(GetEffectValue()));
         Unit* caster = GetCaster();
         if (Unit* target = GetHitUnit())
         {
             if (caster->IsFriendlyTo(target))
             {
-                int32 bp = int32(damage * 1.5f);
+                int32 bp = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(damage) * 1.5L);
                 caster->CastCustomSpell(target, SPELL_DK_DEATH_COIL_HEAL, &bp, nullptr, nullptr, true);
             }
             else
             {
                 if (AuraEffect const* auraEffect = caster->GetAuraEffect(SPELL_DK_ITEM_SIGIL_VENGEFUL_HEART, EFFECT_1))
-                    damage += auraEffect->GetBaseAmount();
+                    damage = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(damage) + auraEffect->GetBaseAmount());
                 caster->CastCustomSpell(target, SPELL_DK_DEATH_COIL_DAMAGE, &damage, nullptr, nullptr, true);
             }
         }
@@ -1470,10 +1473,10 @@ class spell_dk_death_strike : public SpellScript
         if (Unit* target = GetHitUnit())
         {
             uint32 count = target->GetDiseasesByCaster(caster->GetGUID());
-            int32 bp = int32(count * caster->CountPctFromMaxHealth(int32(GetSpellInfo()->Effects[EFFECT_0].DamageMultiplier)));
+            int32 bp = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(count) * static_cast<long double>(caster->CountPctFromMaxHealth(static_cast<int32>(GetSpellInfo()->Effects[EFFECT_0].DamageMultiplier))));
             // Improved Death Strike
             if (AuraEffect const* aurEff = caster->GetAuraEffect(SPELL_AURA_ADD_PCT_MODIFIER, SPELLFAMILY_DEATHKNIGHT, DK_ICON_ID_IMPROVED_DEATH_STRIKE, 0))
-                AddPct(bp, caster->CalculateSpellDamage(caster, aurEff->GetSpellInfo(), 2));
+                bp = SpellScriptCombat::AddPctClientSpellValue(bp, caster->CalculateSpellDamage(caster, aurEff->GetSpellInfo(), 2));
             caster->CastCustomSpell(caster, SPELL_DK_DEATH_STRIKE_HEAL, &bp, nullptr, nullptr, false);
         }
     }
@@ -1496,7 +1499,7 @@ class spell_dk_ghoul_explode : public SpellScript
 
     void HandleDamage(SpellEffIndex /*effIndex*/)
     {
-        int32 value = int32(GetCaster()->CountPctFromMaxHealth(GetSpellInfo()->Effects[EFFECT_2].CalcValue(GetCaster())));
+        int64 value = SpellScriptCombat::ToInt64Saturated(static_cast<long double>(GetCaster()->CountPctFromMaxHealth(GetSpellInfo()->Effects[EFFECT_2].CalcValue(GetCaster()))));
         SetEffectValue(value);
     }
 
@@ -1541,11 +1544,11 @@ class spell_dk_ghoul_thrash : public SpellScript
 
         if (Aura* frenzy = GetCaster()->GetAura(SPELL_GHOUL_FRENZY))
         {
-            float APBonus = GetCaster()->GetTotalAttackPowerValue(BASE_ATTACK);
-            float fixedDamageBonus = APBonus * GetEffectValue() * 0.01f;
-            APBonus *= 0.05f * frenzy->GetStackAmount();
+            long double APBonus = SpellScriptCombat::GetAttackPower(GetCaster(), BASE_ATTACK);
+            long double fixedDamageBonus = APBonus * static_cast<long double>(GetEffectValue()) * 0.01L;
+            long double variableDamageBonus = APBonus * static_cast<long double>(frenzy->GetStackAmount()) * static_cast<long double>(urand(1000, 2000)) / 20000.0L;
 
-            SetEffectValue(fixedDamageBonus + urand(int32(APBonus), int32(APBonus * 2.f)));
+            SetEffectValue(SpellScriptCombat::ToInt64Saturated(fixedDamageBonus + variableDamageBonus));
 
             if (Unit* caster = GetCaster())
             {
@@ -2032,7 +2035,7 @@ class spell_dk_scent_of_blood : public AuraScript
 class spell_dk_scourge_strike : public SpellScript
 {
     PrepareSpellScript(spell_dk_scourge_strike);
-    float multiplier;
+    long double multiplier;
     ObjectGuid guid;
 
     bool Load() override
@@ -2053,13 +2056,13 @@ class spell_dk_scourge_strike : public SpellScript
         if (Unit* unitTarget = GetHitUnit())
         {
             uint8 mode = caster->GetAuraEffectDummy(SPELL_DK_GLYPH_OF_SCOURGE_STRIKE) ? 2 : 0;
-            float disease_amt = GetEffectValue();
+            long double disease_amt = static_cast<long double>(GetEffectValue());
 
             // Death Knight T8 Melee 4P Bonus
             if (AuraEffect const* aurEff = caster->GetAuraEffect(SPELL_DK_ITEM_T8_MELEE_4P_BONUS, EFFECT_0))
-                AddPct(disease_amt, aurEff->GetAmount());
+                disease_amt += SpellScriptCombat::PercentOf(disease_amt, aurEff->GetAmount());
 
-            multiplier = disease_amt * unitTarget->GetDiseasesByCaster(caster->GetGUID(), mode) / 100.0f;
+            multiplier = disease_amt * static_cast<long double>(unitTarget->GetDiseasesByCaster(caster->GetGUID(), mode)) / 100.0L;
             guid = unitTarget->GetGUID();
         }
     }
@@ -2069,7 +2072,7 @@ class spell_dk_scourge_strike : public SpellScript
         Unit* caster = GetCaster();
         if (Unit* unitTarget = ObjectAccessor::GetUnit(*caster, guid))
         {
-            int32 bp = GetHitDamage() * multiplier;
+            int32 bp = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(GetHitDamage()) * multiplier);
             caster->CastCustomSpell(unitTarget, SPELL_DK_SCOURGE_STRIKE_TRIGGERED, &bp, nullptr, nullptr, true);
 
             // Xinef: Shadowmourne hack (scourge strike trigger proc disabled...)
@@ -2124,7 +2127,7 @@ class spell_dk_spell_deflection : public AuraScript
             chance = 0.0f;
 
         if ((dmgInfo.GetDamageType() == SPELL_DIRECT_DAMAGE) && roll_chance_f(chance))
-            absorbAmount = CalculatePct(dmgInfo.GetDamage(), absorbPct);
+            absorbAmount = SpellScriptCombat::CalculatePctInt32Saturated(dmgInfo.GetDamage(), absorbPct);
     }
 
     void Register() override
@@ -2199,7 +2202,7 @@ class spell_dk_will_of_the_necropolis : public AuraScript
         // Damage that would take you below [effect0] health or taken while you are at [effect0]
         if (remainingHp < minHp)
         {
-            dmgInfo.AbsorbDamage(CalculatePct(dmgInfo.GetDamage(), absorbPct));
+            dmgInfo.AbsorbDamage(SpellScriptCombat::CalculatePctUInt64(dmgInfo.GetDamage(), absorbPct));
             absorbAmount = 0;
         }
     }
@@ -2220,21 +2223,21 @@ class spell_dk_army_of_the_dead_passive : public AuraScript
     {
         // army ghoul inherits 6.5% of AP
         if (Unit* owner = GetUnitOwner()->GetOwner())
-            amount = CalculatePct(std::max<int32>(0, owner->GetTotalAttackPowerValue(BASE_ATTACK)), 6.5f);
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(SpellScriptCombat::GetAttackPower(owner, BASE_ATTACK), 6.5L));
     }
 
     void CalculateHealthAmount(AuraEffect const* /*aurEff*/, int32& amount, bool& /*canBeRecalculated*/)
     {
         // army ghoul inherits 20% of health
         if (Unit* owner = GetUnitOwner()->GetOwner())
-            amount = owner->CountPctFromMaxHealth(20);
+            amount = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(owner->CountPctFromMaxHealth(20)));
     }
 
     void CalculateSPAmount(AuraEffect const* /*aurEff*/, int32& amount, bool& /*canBeRecalculated*/)
     {
         // army ghoul inherits 6.5% of AP
         if (Unit* owner = GetUnitOwner()->GetOwner())
-            amount = CalculatePct(std::max<int32>(0, owner->GetTotalAttackPowerValue(BASE_ATTACK)), 6.5f);
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(SpellScriptCombat::GetAttackPower(owner, BASE_ATTACK), 6.5L));
     }
 
     void HandleEffectApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)

@@ -25,7 +25,7 @@ CREATE TABLE `guild_rank` (
   `rid` tinyint unsigned NOT NULL,
   `rname` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
   `rights` int unsigned DEFAULT '0',
-  `BankMoneyPerDay` int unsigned NOT NULL DEFAULT '0',
+  `BankMoneyPerDay` bigint unsigned NOT NULL DEFAULT '0',
   PRIMARY KEY (`guildid`,`rid`),
 
   KEY `Idx_rid` (`rid`)
@@ -50,4 +50,3 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2024-12-17 22:33:08
-

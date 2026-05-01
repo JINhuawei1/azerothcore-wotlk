@@ -35,6 +35,7 @@
 #include "WaypointMgr.h"
 #include "World.h"
 #include "WorldStateDefines.h"
+#include <limits>
 
 /// @todo: this import is not necessary for compilation and marked as unused by the IDE
 //  however, for some reasons removing it would cause a damn linking issue
@@ -347,7 +348,28 @@ public:
         void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
         {
             resetTimer = 5000;
-            damage = 0;
+
+            if (!damage)
+                return;
+
+            uint64 health = me->GetHealthForCombat();
+            if (health <= 1)
+            {
+                me->SetHealthForCombat(me->GetMaxHealthForCombat());
+                health = me->GetHealthForCombat();
+            }
+
+            if (health <= 1)
+            {
+                damage = 0;
+                return;
+            }
+
+            // DamageTaken is still a legacy uint32 hook. For extended-health dummies
+            // let Unit::DealDamage keep the original 64-bit damage unless the real
+            // combat health can be represented here safely.
+            if (health <= std::numeric_limits<uint32>::max() && damage >= static_cast<uint32>(health))
+                damage = static_cast<uint32>(health - 1);
         }
 
         void UpdateAI(uint32 diff) override
@@ -2037,7 +2059,7 @@ public:
             return true;
         }
 
-        player->ModifyMoney(-toggleXpCost);
+        player->ModifyMoney(-static_cast<int64>(toggleXpCost));
 
         switch (action)
         {

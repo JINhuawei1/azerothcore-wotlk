@@ -9,6 +9,10 @@
 
 这是一个 AzerothCore 魔兽世界服务器模拟器项目（基于 WotLK 3.3.5）。
 
+# 日志约定
+
+- 需要确认能直接输出到 `worldserver` 控制台的定位/排查日志时，优先使用 `LOG_INFO("server.loading", "...")`，参考现有 `[性能监控-登录总耗时]` 日志；不要默认使用 `entities.unit`、`entities.player`、`module` 等可能不显示在控制台的日志分类。
+
 # 本地工具链
 
 - 涉及 `agent-harness`、`az`、`acore-cli`、服务器管理、账号、角色、物品、NPC、公会、GM、数据库、日志、进程、监控、配置、校验等任务时，优先使用 `D:\azerothcore-wotlk03\agent-harness`。短命令别名使用 `az`。首选入口是 `acore-cli` 或 `az`；若 PATH 中没有这些命令，则在 `D:\azerothcore-wotlk03\agent-harness` 下使用 `python -m cli_anything.azerothcore`。需要结构化结果时优先加 `--json`。

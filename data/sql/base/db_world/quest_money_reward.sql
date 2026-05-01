@@ -22,16 +22,16 @@ DROP TABLE IF EXISTS `quest_money_reward`;
 /*!50503 SET character_set_client = utf8mb4 */;
 CREATE TABLE `quest_money_reward` (
   `Level` int NOT NULL DEFAULT '0',
-  `Money0` int NOT NULL DEFAULT '0',
-  `Money1` int NOT NULL DEFAULT '0',
-  `Money2` int NOT NULL DEFAULT '0',
-  `Money3` int NOT NULL DEFAULT '0',
-  `Money4` int NOT NULL DEFAULT '0',
-  `Money5` int NOT NULL DEFAULT '0',
-  `Money6` int NOT NULL DEFAULT '0',
-  `Money7` int NOT NULL DEFAULT '0',
-  `Money8` int NOT NULL DEFAULT '0',
-  `Money9` int NOT NULL DEFAULT '0',
+  `Money0` bigint unsigned NOT NULL DEFAULT '0',
+  `Money1` bigint unsigned NOT NULL DEFAULT '0',
+  `Money2` bigint unsigned NOT NULL DEFAULT '0',
+  `Money3` bigint unsigned NOT NULL DEFAULT '0',
+  `Money4` bigint unsigned NOT NULL DEFAULT '0',
+  `Money5` bigint unsigned NOT NULL DEFAULT '0',
+  `Money6` bigint unsigned NOT NULL DEFAULT '0',
+  `Money7` bigint unsigned NOT NULL DEFAULT '0',
+  `Money8` bigint unsigned NOT NULL DEFAULT '0',
+  `Money9` bigint unsigned NOT NULL DEFAULT '0',
   PRIMARY KEY (`Level`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
@@ -135,4 +135,3 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2024-12-17 22:34:21
-

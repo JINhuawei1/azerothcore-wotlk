@@ -319,7 +319,7 @@ struct Loot
 
     std::vector<LootItem> items;
     std::vector<LootItem> quest_items;
-    uint32 gold;
+    uint64 gold;
     uint8 unlootedCount{0};
     ObjectGuid roundRobinPlayer;        // GUID of the player having the Round-Robin ownership for the loot. If 0, round robin owner has released.
     ObjectGuid lootOwnerGUID;
@@ -330,7 +330,7 @@ struct Loot
     ObjectGuid sourceWorldObjectGUID;
     GameObject* sourceGameObject{nullptr};
 
-    Loot(uint32 _gold = 0) : gold(_gold) { }
+    Loot(uint64 _gold = 0) : gold(_gold) { }
     ~Loot() { clear(); }
 
     // if loot becomes invalid this reference is used to inform the listener

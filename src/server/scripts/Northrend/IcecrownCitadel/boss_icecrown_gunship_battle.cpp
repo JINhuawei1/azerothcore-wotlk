@@ -2323,10 +2323,10 @@ class spell_igb_cannon_blast : public SpellScript
             int32 energizeAmount = spellInfo->Effects[EFFECT_1].CalcValue(caster);
 
             // Apply the power gain directly to the caster
-            caster->ModifyPower(POWER_ENERGY, energizeAmount);
+            caster->ModifyPower64(POWER_ENERGY, energizeAmount);
         }
 
-        if (caster->GetPower(POWER_ENERGY) >= 100)
+        if (caster->GetPowerForCombat(POWER_ENERGY) >= 100)
         {
             caster->CastSpell(caster, SPELL_OVERHEAT, true);
             if (Vehicle* vehicle = caster->GetVehicleKit())

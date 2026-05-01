@@ -1977,7 +1977,7 @@ public:
         uint32 totalPlayerTime          = 0;
         uint8 level                     = 0;
         std::string alive               = handler->GetAcoreString(LANG_ERROR);
-        uint32 money                    = 0;
+        uint64 money                    = 0;
         uint32 xp                       = 0;
         uint32 xptotal                  = 0;
 
@@ -2041,7 +2041,7 @@ public:
             Field* fields      = charInfoResult->Fetch();
             totalPlayerTime    = fields[0].Get<uint32>();
             level              = fields[1].Get<uint8>();
-            money              = fields[2].Get<uint32>();
+            money              = fields[2].Get<uint64>();
             accId              = fields[3].Get<uint32>();
             raceid             = fields[4].Get<uint8>();
             classid            = fields[5].Get<uint8>();
@@ -2297,9 +2297,9 @@ public:
 
         // However, as we usually just require a target here, we use target instead.
         // Output XIV. LANG_PINFO_CHR_MONEY
-        uint32 gold = money / GOLD;
-        uint32 silv = (money % GOLD) / SILVER;
-        uint32 copp = (money % GOLD) % SILVER;
+        uint64 gold = money / GOLD;
+        uint64 silv = (money % GOLD) / SILVER;
+        uint64 copp = (money % GOLD) % SILVER;
         handler->PSendSysMessage(LANG_PINFO_CHR_MONEY, gold, silv, copp);
 
         // Position data

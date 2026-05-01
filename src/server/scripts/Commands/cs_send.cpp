@@ -188,7 +188,7 @@ public:
         return true;
     }
 
-    static bool HandleSendMoneyCommand(ChatHandler* handler, Optional<PlayerIdentifier> target, QuotedString subject, QuotedString text, uint32 money)
+    static bool HandleSendMoneyCommand(ChatHandler* handler, Optional<PlayerIdentifier> target, QuotedString subject, QuotedString text, uint64 money)
     {
         if (!target)
         {

@@ -38,6 +38,11 @@ constexpr char CUT_SYSTEM_ADDON_PREFIX[] = "CUT_SYS";
 constexpr size_t MAX_ADDON_PAYLOAD = 220;
 constexpr size_t MAX_CLIENT_HIT_NOTIFICATIONS = 10;
 
+uint32 ToClientHitNotificationValue(uint64 damage)
+{
+    return damage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(damage);
+}
+
 std::string SanitizeAddonText(std::string text)
 {
     for (char& ch : text)
@@ -419,22 +424,22 @@ public:
         }
     }
 
-    uint32 CalculateCutDamage(Unit* attacker, Unit* victim, CutEntry const& entry) const
+    uint64 CalculateCutDamage(Unit* attacker, Unit* victim, CutEntry const& entry) const
     {
         if (!attacker || !victim)
             return 0;
 
         if (entry.damageType == CUT_DAMAGE_FIXED)
         {
-            return std::max<uint32>(1, static_cast<uint32>(std::ceil(entry.cutDamage)));
+            return std::max<uint64>(1, static_cast<uint64>(std::ceil(entry.cutDamage)));
         }
 
         float percent = std::min(entry.cutDamage, 100.0f);
-        uint32 finalDamage = static_cast<uint32>(std::ceil(static_cast<double>(victim->GetHealth()) * static_cast<double>(percent) / 100.0));
-        return std::max<uint32>(1, finalDamage);
+        uint64 finalDamage = static_cast<uint64>(std::ceil(static_cast<long double>(victim->GetHealthForCombat()) * static_cast<long double>(percent) / 100.0L));
+        return std::max<uint64>(1, finalDamage);
     }
 
-    bool TryPrepareCutDamage(Unit* attacker, Unit* victim, uint32& cutDamage) const
+    bool TryPrepareCutDamage(Unit* attacker, Unit* victim, uint64& cutDamage) const
     {
         cutDamage = 0;
 
@@ -484,11 +489,11 @@ public:
         if (!attacker || !victim || !victim->IsAlive())
             return false;
 
-        uint32 cutDamage = 0;
+        uint64 cutDamage = 0;
         if (!TryPrepareCutDamage(attacker, victim, cutDamage))
             return false;
 
-        appliedDamage = std::min(cutDamage, std::numeric_limits<uint32>::max() - damage);
+        appliedDamage = static_cast<uint32>(std::min<uint64>(cutDamage, std::numeric_limits<uint32>::max() - damage));
         if (appliedDamage == 0)
             return false;
 
@@ -496,26 +501,27 @@ public:
         return true;
     }
 
-    bool TryApplyCutDamage(Unit* attacker, Unit* victim, int32& damage, uint32& appliedDamage) const
+    bool TryApplyCutDamage(Unit* attacker, Unit* victim, int64& damage, uint32& appliedDamage) const
     {
         appliedDamage = 0;
 
         if (!attacker || !victim || !victim->IsAlive() || damage < 0)
             return false;
 
-        uint32 cutDamage = 0;
+        uint64 cutDamage = 0;
         if (!TryPrepareCutDamage(attacker, victim, cutDamage))
             return false;
 
-        int32 remainingSpace = std::numeric_limits<int32>::max() - damage;
+        int64 remainingSpace = std::numeric_limits<int64>::max() - damage;
         if (remainingSpace <= 0)
             return false;
 
-        appliedDamage = std::min<uint32>(cutDamage, static_cast<uint32>(remainingSpace));
-        if (appliedDamage == 0)
+        uint64 appliedWideDamage = std::min<uint64>(cutDamage, static_cast<uint64>(remainingSpace));
+        if (appliedWideDamage == 0)
             return false;
 
-        damage += static_cast<int32>(appliedDamage);
+        damage += static_cast<int64>(appliedWideDamage);
+        appliedDamage = ToClientHitNotificationValue(appliedWideDamage);
         return true;
     }
 
@@ -890,7 +896,7 @@ public:
         QueueCutHitNotification(attacker, appliedDamage);
     }
 
-    void ModifySpellDamageTaken(Unit* victim, Unit* attacker, int32& damage, SpellInfo const* /*spellInfo*/) override
+    void ModifySpellDamageTaken(Unit* victim, Unit* attacker, int64& damage, SpellInfo const* /*spellInfo*/) override
     {
         uint32 appliedDamage = 0;
         if (!CutSystemMgr::Instance()->TryApplyCutDamage(attacker, victim, damage, appliedDamage))

@@ -665,8 +665,8 @@ struct GameObjectTemplateAddon
     uint32  entry;
     uint32  faction;
     uint32  flags;
-    uint32  mingold;
-    uint32  maxgold;
+    uint64  mingold;
+    uint64  maxgold;
     std::array<uint32, 4> artKits = {};
 };
 

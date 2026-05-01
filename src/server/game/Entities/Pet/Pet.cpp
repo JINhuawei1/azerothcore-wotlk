@@ -37,6 +37,16 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 
+namespace
+{
+constexpr uint64 PET_CLIENT_VISIBLE_HEALTH_LIMIT = 2147483520ULL;
+
+uint32 ToPetUpdateFieldValue(uint64 value)
+{
+    return value > PET_CLIENT_VISIBLE_HEALTH_LIMIT ? static_cast<uint32>(PET_CLIENT_VISIBLE_HEALTH_LIMIT) : static_cast<uint32>(value);
+}
+}
+
 Pet::Pet(Player* owner, PetType type) : Guardian(nullptr, owner ? owner->GetGUID() : ObjectGuid::Empty, true),
     m_usedTalentCount(0),
     m_removed(false),
@@ -463,19 +473,19 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
             }
         }
 
-        uint32 curHealth = savedhealth;
+        uint64 curHealth = savedhealth;
         if (healthPct)
         {
             curHealth = CountPctFromMaxHealth(healthPct);
         }
 
-        uint32 curMana = savedmana;
+        uint64 curMana = savedmana;
         if (fullMana)
-            curMana = GetMaxPower(POWER_MANA);
+            curMana = GetMaxPowerForCombat(POWER_MANA);
 
         if (getPetType() == SUMMON_PET && !current) //all (?) summon pets come with full health when called, but not when they are current
         {
-            SetPower(POWER_MANA, GetMaxPower(POWER_MANA));
+            SetPowerForCombat(POWER_MANA, GetMaxPowerForCombat(POWER_MANA));
             SetFullHealth();
         }
         else
@@ -484,8 +494,8 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
                 setDeathState(DeathState::JustDied);
             else
             {
-                SetHealth(curHealth > GetMaxHealth() ? GetMaxHealth() : curHealth);
-                SetPower(POWER_MANA, curMana > GetMaxPower(POWER_MANA) ? GetMaxPower(POWER_MANA) : curMana);
+                SetHealthForCombat(curHealth);
+                SetPowerForCombat(POWER_MANA, curMana);
             }
         }
 
@@ -521,8 +531,8 @@ void Pet::SavePetToDB(PetSaveMode mode)
         mode = PET_SAVE_NOT_IN_SLOT;
     }
 
-    uint32 curhealth = GetHealth();
-    uint32 curmana = GetPower(POWER_MANA);
+    uint64 curhealth = GetHealthForCombat();
+    uint64 curmana = GetPowerForCombat(POWER_MANA);
 
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
     // save auras before possibly removing them
@@ -636,7 +646,7 @@ void Pet::setDeathState(DeathState s, bool /*despawn = false*/)                 
             //lose happiness when died and not in BG/Arena
             MapEntry const* mapEntry = sMapStore.LookupEntry(GetMapId());
             if (!mapEntry || (mapEntry->map_type != MAP_ARENA && mapEntry->map_type != MAP_BATTLEGROUND))
-                ModifyPower(POWER_HAPPINESS, -HAPPINESS_LEVEL_SIZE);
+                ModifyPower64(POWER_HAPPINESS, -HAPPINESS_LEVEL_SIZE);
 
             //SetUnitFlag(UNIT_FLAG_STUNNED);
         }
@@ -858,20 +868,20 @@ void Pet::Update(uint32 diff)
 
 void Pet::LoseHappiness()
 {
-    uint32 curValue = GetPower(POWER_HAPPINESS);
+    uint64 curValue = GetPowerForCombat(POWER_HAPPINESS);
     if (curValue <= 0)
         return;
     int32 addvalue = 670;                                   //value is 70/35/17/8/4 (per min) * 1000 / 8 (timer 7.5 secs)
     if (IsInCombat())                                        //we know in combat happiness fades faster, multiplier guess
         addvalue = int32(addvalue * 1.5f);
-    ModifyPower(POWER_HAPPINESS, -addvalue);
+    ModifyPower64(POWER_HAPPINESS, -addvalue);
 }
 
 HappinessState Pet::GetHappinessState()
 {
-    if (GetPower(POWER_HAPPINESS) < HAPPINESS_LEVEL_SIZE)
+    if (GetPowerForCombat(POWER_HAPPINESS) < HAPPINESS_LEVEL_SIZE)
         return UNHAPPY;
-    else if (GetPower(POWER_HAPPINESS) >= HAPPINESS_LEVEL_SIZE * 2)
+    else if (GetPowerForCombat(POWER_HAPPINESS) >= HAPPINESS_LEVEL_SIZE * 2)
         return HAPPY;
     else
         return CONTENT;
@@ -1109,12 +1119,20 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
             factorHealth *= _GetHealthMod(cinfo->rank);
         }
 
-        SetCreateHealth(pInfo->health*factorHealth);
-        SetModifierValue(UNIT_MOD_HEALTH, BASE_VALUE, (float)pInfo->health);
+        uint64 health64 = std::max<uint64>(1, uint64(static_cast<long double>(pInfo->health) * static_cast<long double>(factorHealth)));
+        uint32 health = ToPetUpdateFieldValue(health64);
+        m_extendedCreateHealth = health64;
+        SetCreateHealth(health);
+        SetModifierValue(UNIT_MOD_HEALTH, BASE_VALUE, static_cast<float>(health64));
+        SetExtendedMaxHealth(health64);
         if (petType != HUNTER_PET) //hunter pet use focus
         {
-            SetCreateMana(pInfo->mana);
-            SetModifierValue(UNIT_MOD_MANA, BASE_VALUE, (float)pInfo->mana);
+            uint64 mana64 = pInfo->mana;
+            uint32 mana = ToPetUpdateFieldValue(mana64);
+            m_extendedCreateMana = mana64;
+            SetCreateMana(mana);
+            SetModifierValue(UNIT_MOD_MANA, BASE_VALUE, static_cast<float>(mana64));
+            SetExtendedMaxPower(POWER_MANA, mana64);
         }
 
         if (pInfo->armor > 0)
@@ -1136,10 +1154,19 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
             factorHealth *= _GetHealthMod(cinfo->rank);
         }
 
-        SetCreateHealth(std::max<uint32>(1, stats->BaseHealth[cinfo->expansion]*factorHealth));
-        SetModifierValue(UNIT_MOD_HEALTH, BASE_VALUE, GetCreateHealth());
-        SetCreateMana(stats->BaseMana * factorMana);
-        SetModifierValue(UNIT_MOD_MANA, BASE_VALUE, GetCreateMana());
+        uint64 health64 = std::max<uint64>(1, uint64(static_cast<long double>(stats->BaseHealth[cinfo->expansion]) * static_cast<long double>(factorHealth)));
+        uint32 health = ToPetUpdateFieldValue(health64);
+        m_extendedCreateHealth = health64;
+        SetCreateHealth(health);
+        SetModifierValue(UNIT_MOD_HEALTH, BASE_VALUE, static_cast<float>(health64));
+        SetExtendedMaxHealth(health64);
+
+        uint64 mana64 = uint64(static_cast<long double>(stats->BaseMana) * static_cast<long double>(factorMana));
+        uint32 mana = ToPetUpdateFieldValue(mana64);
+        m_extendedCreateMana = mana64;
+        SetCreateMana(mana);
+        SetModifierValue(UNIT_MOD_MANA, BASE_VALUE, static_cast<float>(mana64));
+        SetExtendedMaxPower(POWER_MANA, mana64);
 
         // xinef: added some multipliers so debuffs can affect pets in any way...
         SetCreateStat(STAT_STRENGTH, 22);
@@ -1398,7 +1425,7 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
     if (GetEntry() == NPC_RISEN_GHOUL)
     {
         // 100% energy after summon
-        SetPower(POWER_ENERGY, GetMaxPower(POWER_ENERGY));
+        SetPowerForCombat(POWER_ENERGY, GetMaxPowerForCombat(POWER_ENERGY));
 
         // xinef: fixes orc death knight command racial
         if (owner->getRace() == RACE_ORC)
@@ -1424,7 +1451,7 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
     UpdateAllStats();
 
     SetFullHealth();
-    SetPower(POWER_MANA, GetMaxPower(POWER_MANA));
+    SetPowerForCombat(POWER_MANA, GetMaxPowerForCombat(POWER_MANA));
 
     if (owner->IsPlayer())
         sScriptMgr->OnPlayerAfterGuardianInitStatsForLevel(owner->ToPlayer(), this);
@@ -2477,8 +2504,8 @@ void Pet::FillPetInfo(PetStable::PetInfo* petInfo) const
     petInfo->ReactState = GetReactState();
     petInfo->Name = GetName();
     petInfo->WasRenamed = !HasByteFlag(UNIT_FIELD_BYTES_2, 2, UNIT_CAN_BE_RENAMED);
-    petInfo->Health = GetHealth();
-    petInfo->Mana = GetPower(POWER_MANA);
+    petInfo->Health = GetHealthForCombat();
+    petInfo->Mana = GetPowerForCombat(POWER_MANA);
     petInfo->Happiness = GetPower(POWER_HAPPINESS);
     petInfo->ActionBar = GenerateActionBarData();
     petInfo->LastSaveTime = GameTime::GetGameTime().count();

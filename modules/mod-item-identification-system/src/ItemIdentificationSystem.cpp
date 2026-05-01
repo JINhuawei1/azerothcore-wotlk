@@ -1,4 +1,5 @@
 #include "ItemIdentificationSystem.h"
+#include <limits>
 #include "ScriptMgr.h"
 #include "Player.h"
 #include "Item.h"
@@ -165,6 +166,97 @@ namespace
 
         return data.str();
     }
+
+    struct ClientItemLocation
+    {
+        int32 bag = 0;
+        uint8 slot = 0;
+        bool valid = false;
+    };
+
+    ClientItemLocation GetClientItemLocation(Item* item)
+    {
+        ClientItemLocation location;
+        if (!item)
+            return location;
+
+        uint8 serverBag = item->GetBagSlot();
+        uint8 serverSlot = item->GetSlot();
+
+        if (serverBag == INVENTORY_SLOT_BAG_0)
+        {
+            if (serverSlot >= EQUIPMENT_SLOT_START && serverSlot < EQUIPMENT_SLOT_END)
+            {
+                location.bag = 255;
+                location.slot = static_cast<uint8>(serverSlot + 1);
+                location.valid = true;
+            }
+            else if (serverSlot >= INVENTORY_SLOT_ITEM_START && serverSlot < INVENTORY_SLOT_ITEM_END)
+            {
+                location.bag = 0;
+                location.slot = static_cast<uint8>(serverSlot - INVENTORY_SLOT_ITEM_START + 1);
+                location.valid = true;
+            }
+        }
+        else if (serverBag >= INVENTORY_SLOT_BAG_START && serverBag < INVENTORY_SLOT_BAG_END)
+        {
+            location.bag = static_cast<int32>(serverBag - INVENTORY_SLOT_BAG_START + 1);
+            location.slot = static_cast<uint8>(serverSlot + 1);
+            location.valid = true;
+        }
+
+        return location;
+    }
+
+    Item* FindPlayerItemByGuidForAddon(Player* player, uint32 itemGuid)
+    {
+        if (!player || itemGuid == 0)
+            return nullptr;
+
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        {
+            Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+            if (item && item->GetGUID().GetCounter() == itemGuid)
+                return item;
+        }
+
+        for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+        {
+            Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+            if (item && item->GetGUID().GetCounter() == itemGuid)
+                return item;
+        }
+
+        for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+        {
+            Bag* bag = player->GetBagByPos(bagSlot);
+            if (!bag)
+                continue;
+
+            for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
+            {
+                Item* item = bag->GetItemByPos(slot);
+                if (item && item->GetGUID().GetCounter() == itemGuid)
+                    return item;
+            }
+        }
+
+        return nullptr;
+    }
+
+    void QueueAllModuleDataAddonRefresh(Player* player, uint32 itemID, uint32 guid, Milliseconds delay)
+    {
+        if (!player || itemID == 0 || guid == 0)
+            return;
+
+        ObjectGuid playerGuid = player->GetGUID();
+        player->m_Events.AddEventAtOffset([playerGuid, itemID, guid]()
+        {
+            Player* player = ObjectAccessor::FindPlayer(playerGuid);
+            if (player && player->IsInWorld())
+                sItemIdentificationSystem->SendAllModuleDataAddon(player, itemID, guid);
+        }, delay);
+    }
 }
 
 #if __has_include("ItemSets.h")
@@ -229,7 +321,7 @@ void ItemIdentificationSystem::LoadConfig(bool reload)
     _enabled = sConfigMgr->GetOption<bool>("ItemIdentificationSystem.Enable", true);
     _baseSuccessRate = sConfigMgr->GetOption<uint32>("ItemIdentificationSystem.BaseSuccessRate", 100);
     _destroyOnFail = sConfigMgr->GetOption<bool>("ItemIdentificationSystem.DestroyOnFail", false);
-    _cost = sConfigMgr->GetOption<uint32>("ItemIdentificationSystem.Cost", 10000);
+    _cost = sConfigMgr->GetOption<uint64>("ItemIdentificationSystem.Cost", 10000);
     _enableAnnounce = sConfigMgr->GetOption<bool>("ItemIdentificationSystem.EnableAnnounce", true);
     _debugMode = sConfigMgr->GetOption<bool>("ItemIdentificationSystem.Debug", false);
 
@@ -543,7 +635,7 @@ bool ItemIdentificationSystem::CanIdentify(Player* player, Item* item, bool send
     DebugLog("物品类型检查通过 (类型: {}, 名称: {})", proto->Class, proto->Name1);
 
     // 检查玩家金币是否足够
-    uint32 playerMoney = player->GetMoney();
+    uint64 playerMoney = player->GetMoney();
 
     if (playerMoney < _cost)
     {
@@ -579,7 +671,7 @@ bool ItemIdentificationSystem::IdentifyItem(Player* player, Item* item, uint32 g
 
     // 【修复】先不扣费，等所有校验和操作成功后再扣费
     // 保存当前金币数（用于验证）
-    uint32 costToDeduct = _cost;
+    uint64 costToDeduct = _cost;
 
     // 计算成功率
     uint32 successRate = GetSuccessRate(player, item);
@@ -597,7 +689,10 @@ bool ItemIdentificationSystem::IdentifyItem(Player* player, Item* item, uint32 g
         if (applyResult)
         {
             // 【修复】应用成功后才扣除金币
-            player->ModifyMoney(-static_cast<int32>(costToDeduct));
+            if (costToDeduct > static_cast<uint64>(std::numeric_limits<int64>::max()))
+                player->SetMoney(player->GetMoney() > costToDeduct ? player->GetMoney() - costToDeduct : 0);
+            else
+                player->ModifyMoney(-static_cast<int64>(costToDeduct));
             ChatHandler(player->GetSession()).SendNotification("已扣除 {} 铜币用于鉴定", costToDeduct);
             ChatHandler(player->GetSession()).SendNotification("物品鉴定成功！");
 
@@ -634,7 +729,10 @@ bool ItemIdentificationSystem::IdentifyItem(Player* player, Item* item, uint32 g
     else
     {
         // 鉴定失败（掷骰失败，这是正常游戏机制，需要扣费）
-        player->ModifyMoney(-static_cast<int32>(costToDeduct));
+        if (costToDeduct > static_cast<uint64>(std::numeric_limits<int64>::max()))
+            player->SetMoney(player->GetMoney() > costToDeduct ? player->GetMoney() - costToDeduct : 0);
+        else
+            player->ModifyMoney(-static_cast<int64>(costToDeduct));
         ChatHandler(player->GetSession()).SendNotification("已扣除 {} 铜币用于鉴定", costToDeduct);
         ChatHandler(player->GetSession()).SendNotification("鉴定失败！");
 
@@ -649,34 +747,21 @@ bool ItemIdentificationSystem::IdentifyItem(Player* player, Item* item, uint32 g
     }
 }
 
-// 根据组ID和物品ID随机选择一个鉴定模板（根据几率加权）- 优化版：使用内存数据
-uint32 ItemIdentificationSystem::SelectIdentificationTemplate(uint32 groupId, Item* item)
+// 根据组ID随机选择一个鉴定模板（根据几率加权）- 优化版：使用内存数据
+uint32 ItemIdentificationSystem::SelectIdentificationTemplate(uint32 groupId, Item* /*item*/)
 {
     // ✅ 从内存中筛选指定组ID的模板（不查询数据库）
+    // 注意：这里不能用物品品质过滤模板等级，否则同品质物品会只剩一个候选模板，随机几率失效。
     std::vector<std::pair<uint32, uint32>> templates; // <模板ID, 几率>
     uint32 totalChance = 0;
-    uint32 matchLevel = GetIdentificationTemplateMatchLevel(item);
 
     for (const auto& pair : _identificationTemplates)
     {
         const IdentificationTemplate& tmpl = pair.second;
-        if (tmpl.group == groupId && (matchLevel == 0 || tmpl.level == 0 || tmpl.level == matchLevel))
+        if (tmpl.group == groupId)
         {
             templates.push_back(std::make_pair(tmpl.id, tmpl.randomChance));
             totalChance += tmpl.randomChance;
-        }
-    }
-
-    if (templates.empty())
-    {
-        for (const auto& pair : _identificationTemplates)
-        {
-            const IdentificationTemplate& tmpl = pair.second;
-            if (tmpl.group == groupId)
-            {
-                templates.push_back(std::make_pair(tmpl.id, tmpl.randomChance));
-                totalChance += tmpl.randomChance;
-            }
         }
     }
 
@@ -933,6 +1018,7 @@ bool ItemIdentificationSystem::ApplyIdentification(Player* player, Item* item, u
 
     // 10. 保存鉴定记录到数据库
     SaveIdentificationRecord(record);
+    AddToIdentifiedCache(itemGuid);
 
     // 11. 刷新物品显示
     RefreshItem(player, item);
@@ -946,8 +1032,8 @@ bool ItemIdentificationSystem::ApplyIdentification(Player* player, Item* item, u
         _batchQueryCache.erase(cacheKey);
     }
 
-    // 13. 鉴定流程完成后，主动向统一物品提示框发送批量数据，刷新所有模块属性
-    SendAllModuleDataAddon(player, item->GetEntry(), itemGuid);
+    // 13. 鉴定流程完成后延迟推送一次，等待调用方清理待鉴定标记和子模块数据落库。
+    QueueAllModuleDataAddonRefresh(player, item->GetEntry(), itemGuid, 2000ms);
 
     // 13. 套装刷新已优化：移除鉴定时的刷新调用
     // 原因：物品在背包中时套装效果不需要生效，只有装备时才需要刷新
@@ -3299,8 +3385,10 @@ private:
                  << moduleData.magicHitData << ":"
                  << moduleData.runeData << ":"
                  << moduleData.setData << ":"
-                 << moduleData.huanjingData << ":"
-                 << moduleData.templateStatsData;
+                 << moduleData.huanjingData;
+        if (!moduleData.pendingIdentifyData.empty())
+            response << ":" << moduleData.pendingIdentifyData;
+        response << ":" << moduleData.templateStatsData;
 
         std::string responseStr = response.str();
 
@@ -3438,7 +3526,7 @@ private:
         if (!item)
         {
             // 清理无效的标记
-            CharacterDatabase.Execute("DELETE FROM `待鉴定物品标记` WHERE `物品GUID` = {}", itemGuid);
+            CharacterDatabase.DirectExecute("DELETE FROM `待鉴定物品标记` WHERE `物品GUID` = {}", itemGuid);
             SendAddonResponse(player, "IDENTIFY_RESULT:ERROR:物品不存在或不在背包中");
             return;
         }
@@ -3446,7 +3534,7 @@ private:
         // 验证物品ID是否匹配
         if (item->GetEntry() != itemId)
         {
-            CharacterDatabase.Execute("DELETE FROM `待鉴定物品标记` WHERE `物品GUID` = {}", itemGuid);
+            CharacterDatabase.DirectExecute("DELETE FROM `待鉴定物品标记` WHERE `物品GUID` = {}", itemGuid);
             SendAddonResponse(player, "IDENTIFY_RESULT:ERROR:物品数据不匹配");
             return;
         }
@@ -3470,7 +3558,7 @@ private:
         }
 
         // 5. 删除待鉴定标记
-        CharacterDatabase.Execute("DELETE FROM `待鉴定物品标记` WHERE `物品GUID` = {}", itemGuid);
+        CharacterDatabase.DirectExecute("DELETE FROM `待鉴定物品标记` WHERE `物品GUID` = {}", itemGuid);
 
         // 【关键修复】鉴定成功后清除批量查询缓存，确保下次查询返回新数据
         {
@@ -3489,33 +3577,13 @@ private:
         if (identifySuccess)
         {
             // 发送鉴定成功消息，包含背包位置信息以便客户端正确清理缓存
-            uint8 serverBag = item->GetBagSlot();
-            uint8 slot = item->GetSlot();
-
-            // 【关键】服务器端背包编号转换为客户端编号
-            int clientBag;
-            if (serverBag == INVENTORY_SLOT_BAG_0)  // 255 = 主背包
-            {
-                clientBag = 0;
-            }
-            else if (serverBag >= INVENTORY_SLOT_BAG_START && serverBag <= INVENTORY_SLOT_BAG_END)  // 19-22
-            {
-                clientBag = serverBag - INVENTORY_SLOT_BAG_START + 1;  // 19->1, 20->2, 21->3, 22->4
-            }
-            else
-            {
-                // 装备栏物品，使用特殊标记255
-                clientBag = 255;
-            }
-
-            // 【关键修复】服务器端槽位是0-based，客户端UI是1-based，需要+1
-            int clientSlot = (int)slot + 1;
+            ClientItemLocation location = GetClientItemLocation(item);
+            int clientBag = location.valid ? location.bag : 255;
+            uint8 clientSlot = location.valid ? location.slot : static_cast<uint8>(item->GetSlot() + 1);
 
             std::ostringstream response;
             response << "IDENTIFY_RESULT:SUCCESS:" << clientBag << ":" << clientSlot << ":" << itemId << ":" << huanJingMultiplier;
             SendAddonResponse(player, response.str());
-
-            HandleAddonBatchQuery(player, itemId, itemGuid, clientBag, static_cast<uint8>(clientSlot));
         }
         else
         {
@@ -3599,8 +3667,8 @@ private:
                 // 【新增】确保鉴定缓存已更新（防止缓存不同步）
                 sItemIdentificationSystem->AddToIdentifiedCache(itemGuid);
 
-                // 发送物品属性数据到客户端
-                sItemIdentificationSystem->SendAllModuleDataAddon(player, itemId, itemGuid);
+                if (identificationGroupId == 0)
+                    QueueAllModuleDataAddonRefresh(player, itemId, itemGuid, 2000ms);
             }
             else
             {
@@ -3620,7 +3688,7 @@ private:
                 ss << processedGuids[i];
             }
             ss << ")";
-            CharacterDatabase.Execute(ss.str().c_str());
+            CharacterDatabase.DirectExecute(ss.str().c_str());
         }
 
         // 发送批量鉴定结果
@@ -3901,7 +3969,7 @@ private:
     {
         // 使用异步执行，避免阻塞主线程
         // 0. 待鉴定物品标记表（物品删除时同步清理）
-        CharacterDatabase.Execute(
+        CharacterDatabase.DirectExecute(
             "DELETE FROM `待鉴定物品标记` WHERE `物品GUID` = {}", itemGuid);
 
         // 1. 鉴定记录表
@@ -4026,7 +4094,7 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
             std::vector<std::string> tablesToCheck = {
                 "物品属性_数据", "物品_鉴定记录", "物品成长_玩家记录",
                 "物品强化_记录", "物品技能_数据", "魔次系统_数据",
-                "符文系统_数据", "_物品套装_数据"
+                "符文系统_数据", "_物品套装_数据", "待鉴定物品标记"
             };
 
             for (const auto& tableName : tablesToCheck)
@@ -4051,6 +4119,26 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
         auto it = cache->find(tableName);
         return (it != cache->end() && it->second);
     };
+
+    if (!isIdentified && TableExists("待鉴定物品标记"))
+    {
+        QueryResult pendingIdentifyResult = CharacterDatabase.Query(
+            "SELECT `幻境倍率`, `幻境倍率模式`, `鉴定组ID` FROM `待鉴定物品标记` WHERE `物品GUID` = {} AND `物品ID` = {} LIMIT 1",
+            guid, itemID);
+
+        if (pendingIdentifyResult)
+        {
+            Field* fields = pendingIdentifyResult->Fetch();
+            uint32 multiplier = fields[0].Get<uint32>();
+            char multiplierMode = DbValueToHuanJingMode(fields[1].Get<int32>());
+            uint32 groupId = fields[2].Get<uint32>();
+
+            std::ostringstream pendingStream;
+            pendingStream << "PENDID|" << multiplierMode << "|" << multiplier << "|" << groupId;
+            result.pendingIdentifyData = pendingStream.str();
+            result.hasData = true;
+        }
+    }
 
     // ========== 【性能优化】使用UNION合并多个查询为一个 ==========
     DebugLog("[批量查询-优化] 开始使用UNION查询: itemID={}, guid={}", itemID, guid);
@@ -4607,10 +4695,23 @@ void ItemIdentificationSystem::SendAllModuleDataAddon(Player* player, uint32 ite
     if (!player)
         return;
 
+    {
+        std::lock_guard<std::mutex> lock(_batchCacheMutex);
+        uint64 cacheKey = (static_cast<uint64>(itemID) << 32) | guid;
+        _batchQueryCache.erase(cacheKey);
+    }
+
     AllModuleData data = QueryAllModuleData(itemID, guid);
+    Item* item = FindPlayerItemByGuidForAddon(player, guid);
+    ClientItemLocation location = GetClientItemLocation(item);
 
     std::ostringstream response;
-    response << "ALL_MODULE_DATA:" << itemID << ":" << guid << ":"
+    if (location.valid)
+        response << "ALL_MODULE_DATA:" << location.bag << ":" << static_cast<uint32>(location.slot) << ":" << itemID << ":" << guid << ":";
+    else
+        response << "ALL_MODULE_DATA:" << itemID << ":" << guid << ":";
+
+    response
              << data.baseAttributes << ":"
              << data.additionalAttributes << ":"
              << data.identificationDisplayData << ":"
@@ -4620,8 +4721,10 @@ void ItemIdentificationSystem::SendAllModuleDataAddon(Player* player, uint32 ite
              << data.magicHitData << ":"
              << data.runeData << ":"
              << data.setData << ":"
-             << data.huanjingData << ":"
-             << data.templateStatsData;
+             << data.huanjingData;
+    if (!data.pendingIdentifyData.empty())
+        response << ":" << data.pendingIdentifyData;
+    response << ":" << data.templateStatsData;
 
     std::string responseStr = response.str();
 
@@ -4711,8 +4814,10 @@ void ItemIdentificationSystem::HandleBatchQueryCommand(Player* player, uint32 it
              << data.magicHitData << ":"
              << data.runeData << ":"
              << data.setData << ":"
-             << data.huanjingData << ":"
-             << data.templateStatsData;
+             << data.huanjingData;
+    if (!data.pendingIdentifyData.empty())
+        response << ":" << data.pendingIdentifyData;
+    response << ":" << data.templateStatsData;
 
     // 发送前记录完整消息内容
     DebugLog("[批量查询命令] 准备发送完整消息: [{}]", response.str());
@@ -5156,7 +5261,7 @@ static bool DoIdentifyItem(Player* player, Item* item, ChatHandler* handler = nu
     // 验证物品ID是否匹配
     if (item->GetEntry() != itemId)
     {
-        CharacterDatabase.Execute("DELETE FROM `待鉴定物品标记` WHERE `物品GUID` = {}", itemGuid);
+        CharacterDatabase.DirectExecute("DELETE FROM `待鉴定物品标记` WHERE `物品GUID` = {}", itemGuid);
         if (handler)
             handler->SendSysMessage("|cffff0000物品数据不匹配|r");
         return false;
@@ -5201,10 +5306,10 @@ static bool DoIdentifyItem(Player* player, Item* item, ChatHandler* handler = nu
     }
 
     // 删除待鉴定标记（无论成功失败都删除，避免重复鉴定尝试）
-    CharacterDatabase.Execute("DELETE FROM `待鉴定物品标记` WHERE `物品GUID` = {}", itemGuid);
+    CharacterDatabase.DirectExecute("DELETE FROM `待鉴定物品标记` WHERE `物品GUID` = {}", itemGuid);
 
-    // 发送物品属性数据到客户端
-    sItemIdentificationSystem->SendAllModuleDataAddon(player, itemId, itemGuid);
+    if (identificationGroupId == 0)
+        QueueAllModuleDataAddonRefresh(player, itemId, itemGuid, 2000ms);
 
     return identifySuccess;
 }
@@ -5474,8 +5579,8 @@ bool ItemIdentificationCommandScript::HandleBatchIdentifyCommand(ChatHandler* ha
         if (success)
         {
             successCount++;
-            // 发送物品属性数据到客户端
-            sItemIdentificationSystem->SendAllModuleDataAddon(player, itemId, itemGuid);
+            if (identificationGroupId == 0)
+                QueueAllModuleDataAddonRefresh(player, itemId, itemGuid, 2000ms);
         }
         else
         {
@@ -5495,7 +5600,7 @@ bool ItemIdentificationCommandScript::HandleBatchIdentifyCommand(ChatHandler* ha
             ss << processedGuids[i];
         }
         ss << ")";
-        CharacterDatabase.Execute(ss.str().c_str());
+        CharacterDatabase.DirectExecute(ss.str().c_str());
     }
 
     handler->SendSysMessage("|cff00ff00===== 批量鉴定完成 =====|r");

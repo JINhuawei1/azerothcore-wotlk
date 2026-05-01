@@ -1,0 +1,11 @@
+## Interface: 30300
+## Title: 大数字伤害显示
+## Title-zhCN: 大数字伤害显示
+## Notes: 使用服务端下发的64位伤害消息替换客户端官方伤害飘字
+## Notes-zhCN: 使用服务端下发的64位伤害消息替换客户端官方伤害飘字
+## Author: OpenAI Codex
+## Version: 1.0.0
+## SavedVariables: LargeDamageTextDB
+
+LargeDamageText.lua
+

@@ -20,6 +20,7 @@
 #include "SpellAuraEffects.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "SpellScriptCombatValue.h"
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
 /*
@@ -238,7 +239,7 @@ class spell_warr_last_stand : public SpellScript
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
         Unit* caster = GetCaster();
-        int32 healthModSpellBasePoints0 = int32(caster->CountPctFromMaxHealth(GetEffectValue()));
+        int32 healthModSpellBasePoints0 = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(caster->CountPctFromMaxHealth(SpellScriptCombat::ToPositiveInt32Saturated(static_cast<long double>(GetEffectValue())))));
         caster->CastCustomSpell(caster, SPELL_WARRIOR_LAST_STAND_TRIGGERED, &healthModSpellBasePoints0, nullptr, nullptr, true, nullptr);
     }
 
@@ -260,15 +261,15 @@ class spell_warr_deep_wounds : public SpellScript
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
-        int32 damage = std::max<int32>(GetEffectValue(), 0);
+        uint64 damage = GetEffectValue() > 0 ? static_cast<uint64>(GetEffectValue()) : 0;
         Unit* caster = GetCaster();
         if (Unit* target = GetHitUnit())
         {
             // include target dependant auras
             damage = target->MeleeDamageBonusTaken(caster, damage, BASE_ATTACK, GetSpellInfo());
             // apply percent damage mods
-            ApplyPct(damage, 16.0f * GetSpellInfo()->GetRank() / 6.0f);
-            target->CastDelayedSpellWithPeriodicAmount(caster, SPELL_WARRIOR_DEEP_WOUNDS_RANK_PERIODIC, SPELL_AURA_PERIODIC_DAMAGE, damage, EFFECT_0);
+            damage = SpellScriptCombat::CalculatePctUInt64(damage, 16.0L * static_cast<long double>(GetSpellInfo()->GetRank()) / 6.0L);
+            target->CastDelayedSpellWithPeriodicAmount(caster, SPELL_WARRIOR_DEEP_WOUNDS_RANK_PERIODIC, SPELL_AURA_PERIODIC_DAMAGE, SpellScriptCombat::ToClientSpellValue(static_cast<long double>(damage)), EFFECT_0);
 
             //caster->CastCustomSpell(target, SPELL_WARRIOR_DEEP_WOUNDS_RANK_PERIODIC, &damage, nullptr, nullptr, true);
         }
@@ -297,7 +298,7 @@ class spell_warr_charge : public SpellScript
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
-        int32 chargeBasePoints0 = GetEffectValue();
+        int32 chargeBasePoints0 = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(GetEffectValue()));
         Unit* caster = GetCaster();
         caster->CastCustomSpell(caster, SPELL_WARRIOR_CHARGE, &chargeBasePoints0, nullptr, nullptr, true);
 
@@ -339,7 +340,7 @@ class spell_warr_slam : public SpellScript
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
         if (GetHitUnit())
-            GetCaster()->CastCustomSpell(SPELL_WARRIOR_SLAM, SPELLVALUE_BASE_POINT0, GetEffectValue(), GetHitUnit(), TRIGGERED_FULL_MASK);
+            GetCaster()->CastCustomSpell(SPELL_WARRIOR_SLAM, SPELLVALUE_BASE_POINT0, SpellScriptCombat::ToClientSpellValue(static_cast<long double>(GetEffectValue())), GetHitUnit(), TRIGGERED_FULL_MASK);
     }
 
     void Register() override
@@ -364,7 +365,7 @@ class spell_warr_damage_shield : public AuraScript
         PreventDefaultAction();
 
         // % of amount blocked
-        int32 damage = CalculatePct(int32(GetTarget()->GetShieldBlockValue()), aurEff->GetAmount());
+        int32 damage = SpellScriptCombat::CalculatePctClientSpellValue(GetTarget()->GetShieldBlockValue(), aurEff->GetAmount());
         GetTarget()->CastCustomSpell(SPELL_WARRIOR_DAMAGE_SHIELD_DAMAGE, SPELLVALUE_BASE_POINT0, damage, eventInfo.GetProcTarget(), true, nullptr, aurEff);
     }
 
@@ -404,22 +405,33 @@ class spell_warr_execute : public SpellScript
         if (Unit* target = GetHitUnit())
         {
             SpellInfo const* spellInfo = GetSpellInfo();
-            int32 rageUsed = std::min<int32>(300 - spellInfo->CalcPowerCost(caster, SpellSchoolMask(spellInfo->SchoolMask)), caster->GetPower(POWER_RAGE));
-            int32 newRage = std::max<int32>(0, caster->GetPower(POWER_RAGE) - rageUsed);
+            uint64 currentRage = caster->GetPowerForCombat(POWER_RAGE);
+            int64 powerCost = spellInfo->CalcPowerCost(caster, SpellSchoolMask(spellInfo->SchoolMask));
+            int32 maxRageSpend = powerCost >= 300 ? 0 : static_cast<int32>(300 - powerCost);
+            uint64 rageUsed = std::min<uint64>(static_cast<uint64>(maxRageSpend), currentRage);
+            uint64 newRage = currentRage - rageUsed;
 
             // Sudden Death rage save
             if (AuraEffect* aurEff = caster->GetAuraEffect(SPELL_AURA_PROC_TRIGGER_SPELL, SPELLFAMILY_GENERIC, WARRIOR_ICON_ID_SUDDEN_DEATH, EFFECT_0))
             {
                 int32 ragesave = aurEff->GetSpellInfo()->Effects[EFFECT_1].CalcValue() * 10;
-                newRage = std::max(newRage, ragesave);
+                if (ragesave > 0)
+                    newRage = std::max<uint64>(newRage, static_cast<uint64>(ragesave));
             }
 
-            caster->SetPower(POWER_RAGE, uint32(newRage));
+            caster->SetPowerForCombat(POWER_RAGE, newRage);
             // Glyph of Execution bonus
             if (AuraEffect* aurEff = caster->GetAuraEffect(SPELL_WARRIOR_GLYPH_OF_EXECUTION, EFFECT_0))
-                rageUsed += aurEff->GetAmount() * 10;
+            {
+                int32 glyphRage = aurEff->GetAmount() * 10;
+                if (glyphRage > 0)
+                    rageUsed += static_cast<uint32>(glyphRage);
+            }
 
-            int32 bp = GetEffectValue() + int32(rageUsed * spellInfo->Effects[effIndex].DamageMultiplier + caster->GetTotalAttackPowerValue(BASE_ATTACK) * 0.2f);
+            long double bpValue = static_cast<long double>(GetEffectValue()) +
+                static_cast<long double>(rageUsed) * static_cast<long double>(spellInfo->Effects[effIndex].DamageMultiplier) +
+                SpellScriptCombat::GetAttackPower(caster, BASE_ATTACK) * 0.2L;
+            int32 bp = SpellScriptCombat::ToClientSpellValue(bpValue);
             caster->CastCustomSpell(target, SPELL_WARRIOR_EXECUTE, &bp, nullptr, nullptr, true, nullptr, nullptr, GetOriginalCaster()->GetGUID());
         }
     }
@@ -438,7 +450,7 @@ class spell_warr_concussion_blow : public SpellScript
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
-        SetHitDamage(CalculatePct(GetCaster()->GetTotalAttackPowerValue(BASE_ATTACK), GetEffectValue()));
+        SetHitDamage(SpellScriptCombat::ToInt64Saturated(SpellScriptCombat::PercentOf(SpellScriptCombat::GetAttackPower(GetCaster(), BASE_ATTACK), static_cast<long double>(GetEffectValue()))));
     }
 
     void Register() override
@@ -459,20 +471,19 @@ class spell_warr_bloodthirst : public SpellScript
 
     void HandleDamage(SpellEffIndex effIndex)
     {
-        int32 damage = GetEffectValue();
-        ApplyPct(damage, GetCaster()->GetTotalAttackPowerValue(BASE_ATTACK));
+        uint64 damage = SpellScriptCombat::ToUInt64Saturated(SpellScriptCombat::PercentOf(static_cast<long double>(GetEffectValue()), SpellScriptCombat::GetAttackPower(GetCaster(), BASE_ATTACK)));
 
         if (Unit* target = GetHitUnit())
         {
-            damage = GetCaster()->SpellDamageBonusDone(target, GetSpellInfo(), uint32(damage), SPELL_DIRECT_DAMAGE, effIndex);
-            damage = target->SpellDamageBonusTaken(GetCaster(), GetSpellInfo(), uint32(damage), SPELL_DIRECT_DAMAGE);
+            damage = GetCaster()->SpellDamageBonusDone(target, GetSpellInfo(), damage, SPELL_DIRECT_DAMAGE, effIndex);
+            damage = target->SpellDamageBonusTaken(GetCaster(), GetSpellInfo(), damage, SPELL_DIRECT_DAMAGE);
         }
-        SetHitDamage(damage);
+        SetHitDamage(damage > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(damage));
     }
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
-        int32 damage = GetEffectValue();
+        int32 damage = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(GetEffectValue()));
         GetCaster()->CastCustomSpell(GetCaster(), SPELL_WARRIOR_BLOODTHIRST, &damage, nullptr, nullptr, true, nullptr);
     }
 
@@ -569,7 +580,7 @@ class spell_warr_rend : public AuraScript
             canBeRecalculated = false;
 
             // $0.2 * (($MWB + $mwb) / 2 + $AP / 14 * $MWS) bonus per tick
-            float ap = caster->GetTotalAttackPowerValue(BASE_ATTACK);
+            long double ap = SpellScriptCombat::GetAttackPower(caster, BASE_ATTACK);
             int32 mws = caster->GetAttackTime(BASE_ATTACK);
             float mwbMin = 0.f;
             float mwbMax = 0.f;
@@ -579,15 +590,15 @@ class spell_warr_rend : public AuraScript
                 mwbMax += caster->GetWeaponDamageRange(BASE_ATTACK, MAXDAMAGE, i);
             }
 
-            float mwb = ((mwbMin + mwbMax) / 2 + ap * mws / 14000) * 0.2f;
-            amount += int32(caster->ApplyEffectModifiers(GetSpellInfo(), aurEff->GetEffIndex(), mwb));
+            long double mwb = ((static_cast<long double>(mwbMin + mwbMax) / 2.0L) + ap * static_cast<long double>(mws) / 14000.0L) * 0.2L;
+            amount = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(amount) + static_cast<long double>(caster->ApplyEffectModifiers(GetSpellInfo(), aurEff->GetEffIndex(), static_cast<float>(std::min<long double>(mwb, std::numeric_limits<float>::max())))));
 
             // "If used while your target is above 75% health, Rend does 35% more damage."
             // as for 3.1.3 only ranks above 9 (wrong tooltip?)
             if (GetSpellInfo()->GetRank() >= 9)
             {
                 if (GetUnitOwner()->HasAuraState(AURA_STATE_HEALTH_ABOVE_75_PERCENT, GetSpellInfo(), caster))
-                    AddPct(amount, GetSpellInfo()->Effects[EFFECT_2].CalcValue(caster));
+                    amount = SpellScriptCombat::AddPctClientSpellValue(amount, GetSpellInfo()->Effects[EFFECT_2].CalcValue(caster));
             }
         }
     }
@@ -683,7 +694,7 @@ class spell_warr_sweeping_strikes : public AuraScript
                     eventInfo.GetActor()->AddSpellCooldown(SPELL_WARRIOR_SWEEPING_STRIKES_EXTRA_ATTACK_1, 0, 500);
                 }
 
-                int32 damage = damageInfo->GetUnmitigatedDamage();
+                int32 damage = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(damageInfo->GetUnmitigatedDamage()));
                 GetTarget()->CastCustomSpell(_procTarget, SPELL_WARRIOR_SWEEPING_STRIKES_EXTRA_ATTACK_1, &damage, 0, 0, true, nullptr, aurEff);
             }
         }
@@ -955,8 +966,7 @@ class spell_warr_heroic_strike : public SpellScript
         }
         if (bonusDamage)
         {
-            int32 damage = GetHitDamage();
-            AddPct(damage, 35); // "Causes ${0.35*$m1} additional damage against Dazed targets."
+            int64 damage = SpellScriptCombat::AddPctInt64Saturated(GetHitDamage(), 35); // "Causes ${0.35*$m1} additional damage against Dazed targets."
             SetHitDamage(damage);
         }
     }

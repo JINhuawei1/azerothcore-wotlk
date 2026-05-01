@@ -383,8 +383,8 @@ struct CreatureData
     uint32 spawntimesecs{0};
     float wander_distance{0.0f};
     uint32 currentwaypoint{0};
-    uint32 curhealth{0};
-    uint32 curmana{0};
+    uint64 curhealth{0};
+    uint64 curmana{0};
     uint8 movementType{0};
     uint8 spawnMask{0};
     uint32 npcflag{0};

@@ -25,6 +25,18 @@
 #include "Player.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
+#include <limits>
+
+namespace
+{
+uint32 ToClientQuestMoney(int64 money)
+{
+    if (money <= 0)
+        return 0;
+
+    return money > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(money);
+}
+}
 
 void BuildPlayerLockDungeonBlock(WorldPacket& data, lfg::LfgLockMap const& lock)
 {
@@ -189,7 +201,7 @@ void WorldSession::HandleLfgPlayerLockInfoRequestOpcode(WorldPacket& /*recvData*
         {
             uint8 playerLevel = GetPlayer() ? GetPlayer()->GetLevel() : 0;
             data << uint8(done);
-            data << uint32(quest->GetRewOrReqMoney(playerLevel));
+            data << ToClientQuestMoney(quest->GetRewOrReqMoney(playerLevel));
             if (!GetPlayer()->IsMaxLevel())
                 data << uint32(quest->XPValue(playerLevel));
             else
@@ -485,7 +497,7 @@ void WorldSession::SendLfgPlayerReward(lfg::LfgPlayerRewardData const& rewardDat
     data << uint32(rewardData.sdungeonEntry);              // Dungeon Finished
     data << uint8(rewardData.done);
     data << uint32(1);
-    data << uint32(rewardData.quest->GetRewOrReqMoney(playerLevel));
+    data << ToClientQuestMoney(rewardData.quest->GetRewOrReqMoney(playerLevel));
     data << uint32(rewardData.quest->XPValue(playerLevel));
     data << uint32(0);
     data << uint32(0);

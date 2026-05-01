@@ -29,7 +29,7 @@ CREATE TABLE `characters` (
   `gender` tinyint unsigned NOT NULL DEFAULT '0',
   `level` tinyint unsigned NOT NULL DEFAULT '0',
   `xp` int unsigned NOT NULL DEFAULT '0',
-  `money` int unsigned NOT NULL DEFAULT '0',
+  `money` bigint unsigned NOT NULL DEFAULT '0',
   `skin` tinyint unsigned NOT NULL DEFAULT '0',
   `face` tinyint unsigned NOT NULL DEFAULT '0',
   `hairStyle` tinyint unsigned NOT NULL DEFAULT '0',
@@ -77,14 +77,14 @@ CREATE TABLE `characters` (
   `knownCurrencies` bigint unsigned NOT NULL DEFAULT '0',
   `watchedFaction` int unsigned NOT NULL DEFAULT '0',
   `drunk` tinyint unsigned NOT NULL DEFAULT '0',
-  `health` int unsigned NOT NULL DEFAULT '0',
-  `power1` int unsigned NOT NULL DEFAULT '0',
-  `power2` int unsigned NOT NULL DEFAULT '0',
-  `power3` int unsigned NOT NULL DEFAULT '0',
-  `power4` int unsigned NOT NULL DEFAULT '0',
-  `power5` int unsigned NOT NULL DEFAULT '0',
-  `power6` int unsigned NOT NULL DEFAULT '0',
-  `power7` int unsigned NOT NULL DEFAULT '0',
+  `health` bigint unsigned NOT NULL DEFAULT '0',
+  `power1` bigint unsigned NOT NULL DEFAULT '0',
+  `power2` bigint unsigned NOT NULL DEFAULT '0',
+  `power3` bigint unsigned NOT NULL DEFAULT '0',
+  `power4` bigint unsigned NOT NULL DEFAULT '0',
+  `power5` bigint unsigned NOT NULL DEFAULT '0',
+  `power6` bigint unsigned NOT NULL DEFAULT '0',
+  `power7` bigint unsigned NOT NULL DEFAULT '0',
   `latency` int unsigned DEFAULT '0',
   `talentGroupsCount` tinyint unsigned NOT NULL DEFAULT '1',
   `activeTalentGroup` tinyint unsigned NOT NULL DEFAULT '0',
@@ -129,4 +129,3 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2024-12-17 22:33:05
-

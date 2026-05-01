@@ -294,8 +294,8 @@ typedef std::list<PlayerCreateInfoItem> PlayerCreateInfoItems;
 struct PlayerClassLevelInfo
 {
     PlayerClassLevelInfo()  = default;
-    uint32 basehealth{0};
-    uint32 basemana{0};
+    uint64 basehealth{0};
+    uint64 basemana{0};
 };
 
 struct PlayerClassInfo
@@ -933,8 +933,8 @@ enum PlayerCharmedAISpells
 
 // Player summoning auto-decline time (in secs)
 #define MAX_PLAYER_SUMMON_DELAY                   (2*MINUTE)
-// 40万金币上限 = 4,000,000,000 铜币
-#define MAX_MONEY_AMOUNT                       (4000000000ULL)
+// Server-side money is stored as uint64; client coinage remains a uint32 proxy.
+#define MAX_MONEY_AMOUNT                       (0xFFFFFFFFFFFFFFFFULL)
 
 struct ProgressionRequirement
 {
@@ -1361,8 +1361,9 @@ public:
     void DestroyZoneLimitedItem(bool update, uint32 new_zone);
     void SplitItem(uint16 src, uint16 dst, uint32 count);
     void SwapItem(uint16 src, uint16 dst);
-    void AddItemToBuyBackSlot(Item* pItem, uint32 money);
+    void AddItemToBuyBackSlot(Item* pItem, uint64 money);
     Item* GetItemFromBuyBackSlot(uint32 slot);
+    uint64 GetBuybackPrice(uint32 slot) const;
     void RemoveItemFromBuyBackSlot(uint32 slot, bool del);
     [[nodiscard]] uint32 GetMaxKeyringSize() const { return KEYRING_SLOT_END - KEYRING_SLOT_START; }
     void SendEquipError(InventoryResult msg, Item* pItem, Item* pItem2 = nullptr, uint32 itemid = 0);
@@ -1380,7 +1381,7 @@ public:
     }
     void SendNewItem(Item* item, uint32 count, bool received, bool created, bool broadcast = false, bool sendChatMessage = true);
     bool BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uint32 item, uint8 count, uint8 bag, uint8 slot);
-    bool _StoreOrEquipNewItem(uint32 vendorslot, uint32 item, uint8 count, uint8 bag, uint8 slot, int32 price, ItemTemplate const* pProto, Creature* pVendor, VendorItem const* crItem, bool bStore);
+    bool _StoreOrEquipNewItem(uint32 vendorslot, uint32 item, uint8 count, uint8 bag, uint8 slot, uint64 price, ItemTemplate const* pProto, Creature* pVendor, VendorItem const* crItem, bool bStore);
 
     [[nodiscard]] float GetReputationPriceDiscount(Creature const* creature) const;
     [[nodiscard]] float GetReputationPriceDiscount(FactionTemplateEntry const* factionTemplate) const;
@@ -1537,7 +1538,7 @@ public:
     void KilledPlayerCreditForQuest(uint16 count, Quest const* quest);
     void KillCreditGO(uint32 entry, ObjectGuid guid = ObjectGuid::Empty);
     void TalkedToCreature(uint32 entry, ObjectGuid guid);
-    void MoneyChanged(uint32 value);
+    void MoneyChanged(uint64 value);
     void ReputationChanged(FactionEntry const* factionEntry);
     void ReputationChanged2(FactionEntry const* factionEntry);
     [[nodiscard]] bool HasQuestForItem(uint32 itemId, uint32 excludeQuestId = 0, bool turnIn = false, bool* showInLoot = nullptr) const;
@@ -1820,7 +1821,7 @@ public:
     void SetLastPotionId(uint32 item_id) { m_lastPotionId = item_id; }
     void UpdatePotionCooldown(Spell* spell = nullptr);
 
-    void setResurrectRequestData(ObjectGuid guid, uint32 mapId, float X, float Y, float Z, uint64 health, uint32 mana)
+    void setResurrectRequestData(ObjectGuid guid, uint32 mapId, float X, float Y, float Z, uint64 health, uint64 mana)
     {
         m_resurrectGUID = guid;
         m_resurrectMap = mapId;
@@ -2168,9 +2169,9 @@ public:
 
     // duel health and mana reset methods
     void SaveHealthBeforeDuel()     { healthBeforeDuel = GetExtendedHealth(); }
-    void SaveManaBeforeDuel()       { manaBeforeDuel = GetPower(POWER_MANA); }
-    void RestoreHealthAfterDuel()   { SetExtendedHealth(healthBeforeDuel); SyncClientHealthFromExtended(); }
-    void RestoreManaAfterDuel()     { SetPower(POWER_MANA, manaBeforeDuel); }
+    void SaveManaBeforeDuel()       { manaBeforeDuel = GetPowerForCombat(POWER_MANA); }
+    void RestoreHealthAfterDuel()   { SetHealthForCombat(healthBeforeDuel); }
+    void RestoreManaAfterDuel()     { SetPowerForCombat(POWER_MANA, manaBeforeDuel); }
 
     //End of PvP System
 
@@ -2213,14 +2214,27 @@ public:
     }
     [[nodiscard]] uint64 GetExtendedHealth() const;
     [[nodiscard]] uint64 GetExtendedMaxHealth() const { return _extendedMaxHealth ? _extendedMaxHealth : GetMaxHealth(); }
+    [[nodiscard]] bool HasExtendedHealthForCombat() const { return _extendedMaxHealth >= 2000000000ULL; }
     [[nodiscard]] uint64 GetHealthForCombat() const override { return GetExtendedHealth(); }
     [[nodiscard]] uint64 GetMaxHealthForCombat() const override { return GetExtendedMaxHealth(); }
+    [[nodiscard]] uint64 GetCreateHealthForCombat() const override { return _extendedCreateHealth ? _extendedCreateHealth : GetCreateHealth(); }
     void SetExtendedHealth(uint64 value);
     void SetExtendedHealthFromClientHealth(uint32 clientHealth);
     void SyncClientHealthFromExtended();
     void ApplyPendingClientHealthSync();
     [[nodiscard]] bool IsSyncingClientHealthFromExtended() const { return _syncingClientHealthFromExtended; }
+    [[nodiscard]] uint64 GetExtendedPower(Powers power) const;
     [[nodiscard]] uint64 GetExtendedMaxPower(Powers power) const { return _extendedMaxPowers[power] ? _extendedMaxPowers[power] : GetMaxPower(power); }
+    [[nodiscard]] bool HasExtendedPowerForCombat(Powers power) const { return power >= POWER_MANA && power < MAX_POWERS && _extendedMaxPowers[power] != 0; }
+    [[nodiscard]] uint64 GetPowerForCombat(Powers power) const override { return GetExtendedPower(power); }
+    [[nodiscard]] uint64 GetMaxPowerForCombat(Powers power) const override { return GetExtendedMaxPower(power); }
+    [[nodiscard]] uint64 GetCreateManaForCombat() const override { return _extendedCreateMana ? _extendedCreateMana : GetCreateMana(); }
+    [[nodiscard]] uint64 GetCreatePowerForCombat(Powers power) const override { return power == POWER_MANA ? GetCreateManaForCombat() : GetCreatePowers(power); }
+    void SetExtendedMaxPower(Powers power, uint64 value);
+    void SetExtendedPower(Powers power, uint64 value);
+    void SetExtendedPowerFromClientPower(Powers power, uint32 clientPower);
+    void SyncClientPowerFromExtended(Powers power, bool forceUpdate = false, bool withPowerUpdate = true);
+    [[nodiscard]] bool IsSyncingClientPowerFromExtended(Powers power) const { return power >= POWER_MANA && power < MAX_POWERS && _syncingClientPowerFromExtended[power]; }
     [[nodiscard]] int64 GetExtendedCombatRating(CombatRating cr) const { return _extendedCombatRatings[cr]; }
     void SetExtendedCombatRating(CombatRating cr, int64 value) { _extendedCombatRatings[cr] = value; }
     [[nodiscard]] double GetExtendedRatingBonusValue(CombatRating cr) const
@@ -2262,6 +2276,33 @@ public:
     [[nodiscard]] int64 GetExtendedHealingBonus() const { return _extendedHealingBonus; }
     void SetExtendedHealingBonus(int64 value) { _extendedHealingBonus = value; }
     void SetExtendedSpellDamageBonus(SpellSchools school, int64 value) { _extendedSpellDamageBonuses[school] = value; }
+    [[nodiscard]] int64 GetExtendedSpellDamageBonus(SpellSchools school) const
+    {
+        if (school <= SPELL_SCHOOL_NORMAL || school >= MAX_SPELL_SCHOOL)
+            return 0;
+
+        int64 bonus = _extendedSpellDamageBonuses[school];
+        if (bonus > 0)
+            return bonus;
+
+        int32 fallback = GetInt32Value(PLAYER_FIELD_MOD_DAMAGE_DONE_POS + school);
+        return fallback > 0 ? static_cast<int64>(fallback) : 0;
+    }
+    [[nodiscard]] int64 GetExtendedSpellDamageBonus(SpellSchoolMask schoolMask) const
+    {
+        int64 maxBonus = 0;
+        for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
+        {
+            if (!(schoolMask & SpellSchoolMask(1 << i)))
+                continue;
+
+            int64 schoolBonus = GetExtendedSpellDamageBonus(SpellSchools(i));
+            if (schoolBonus > maxBonus)
+                maxBonus = schoolBonus;
+        }
+
+        return maxBonus;
+    }
     [[nodiscard]] int64 GetExtendedSpellDamageBonus() const
     {
         int64 maxBonus = 0;
@@ -2429,7 +2470,7 @@ public:
     /*********************************************************/
 
     bool IsImmuneToEnvironmentalDamage();
-    uint32 EnvironmentalDamage(EnviromentalDamage type, uint32 damage);
+    uint64 EnvironmentalDamage(EnviromentalDamage type, uint64 damage);
 
     /*********************************************************/
     /***               FLOOD FILTER SYSTEM                 ***/
@@ -2915,6 +2956,7 @@ protected:
 
     Item* m_items[PLAYER_SLOTS_COUNT];
     uint32 m_currentBuybackSlot;
+    std::array<uint64, BUYBACK_SLOT_END - BUYBACK_SLOT_START> m_buybackPrices = { };
 
     std::vector<Item*> m_itemUpdateQueue;
     bool m_itemUpdateQueueBlocked;
@@ -2968,7 +3010,7 @@ protected:
     uint32 m_resurrectMap;
     float m_resurrectX, m_resurrectY, m_resurrectZ;
     uint64 m_resurrectHealth;
-    uint32 m_resurrectMana;
+    uint64 m_resurrectMana;
 
     WorldSession* m_session;
 
@@ -3128,7 +3170,7 @@ private:
 
     // duel health and mana reset attributes
     uint64 healthBeforeDuel;
-    uint32 manaBeforeDuel;
+    uint64 manaBeforeDuel;
 
     bool m_isInstantFlightOn;
 
@@ -3141,11 +3183,15 @@ private:
     bool _wasOutdoor;
     std::array<int64, MAX_STATS> _extendedStats = { };
     std::array<double, MAX_ATTACK> _extendedAttackPower = { };
+    uint64 _extendedCreateHealth = 0;
+    uint64 _extendedCreateMana = 0;
     uint64 _extendedHealth = 0;
     uint64 _extendedMaxHealth = 0;
     bool _syncingClientHealthFromExtended = false;
     uint8 _pendingClientHealthSyncTicks = 0;
+    std::array<uint64, MAX_POWERS> _extendedPowers = { };
     std::array<uint64, MAX_POWERS> _extendedMaxPowers = { };
+    std::array<bool, MAX_POWERS> _syncingClientPowerFromExtended = { };
     std::array<int64, MAX_COMBAT_RATING> _extendedBaseRatingValue = { };
     std::array<int64, MAX_COMBAT_RATING> _extendedCombatRatings = { };
     int64 _extendedArmor = 0;

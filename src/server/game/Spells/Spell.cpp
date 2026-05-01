@@ -65,6 +65,82 @@
 
 extern pEffect SpellEffects[TOTAL_SPELL_EFFECTS];
 
+namespace
+{
+    constexpr uint32 MaxClientSpellPowerValue = 2000000000u;
+
+    int64 urand64(int64 min, int64 max)
+    {
+        if (max <= min)
+            return min;
+
+        uint64 range = static_cast<uint64>(max - min);
+        uint64 roll = (static_cast<uint64>(urand(0, std::numeric_limits<uint32>::max())) << 32) | urand(0, std::numeric_limits<uint32>::max());
+        return min + static_cast<int64>(roll % (range + 1));
+    }
+
+    uint32 ToClientSpellPowerMax(uint32 value)
+    {
+        return value > MaxClientSpellPowerValue ? MaxClientSpellPowerValue : value;
+    }
+
+    uint32 ScalePowerToClient(uint64 currentValue, uint64 maxValue, uint32 clientMaxValue)
+    {
+        if (!currentValue || !maxValue)
+            return 0;
+
+        if (!clientMaxValue)
+            return 1;
+
+        if (currentValue >= maxValue)
+            return clientMaxValue;
+
+        if (maxValue <= clientMaxValue)
+            return currentValue > clientMaxValue ? clientMaxValue : static_cast<uint32>(currentValue);
+
+        long double scaled = (static_cast<long double>(clientMaxValue) * static_cast<long double>(currentValue)) / static_cast<long double>(maxValue);
+        uint32 clientValue = static_cast<uint32>(scaled + 0.5L);
+        if (!clientValue)
+            return 1;
+
+        return clientValue > clientMaxValue ? clientMaxValue : clientValue;
+    }
+
+    uint32 GetClientSpellPowerLeft(Unit const* caster, Powers power)
+    {
+        if (!caster || power < POWER_MANA || power >= MAX_POWERS)
+            return 0;
+
+        uint32 clientMaxPower = ToClientSpellPowerMax(caster->GetMaxPower(power));
+        uint64 maxPower = caster->GetMaxPowerForCombat(power);
+        uint64 currentPower = caster->GetPowerForCombat(power);
+        uint32 clientPower = ScalePowerToClient(currentPower, maxPower, clientMaxPower);
+
+        if (power == POWER_MANA && maxPower > clientMaxPower && clientPower >= clientMaxPower && clientMaxPower > 1)
+            return clientMaxPower - 1;
+
+        return clientPower;
+    }
+
+    int32 ApplyPeriodicHasteToDuration(int32 duration, Unit const* caster, SpellInfo const* spellInfo)
+    {
+        if (duration <= 0 || !caster || !spellInfo)
+            return duration;
+
+        if (!caster->HasAuraTypeWithAffectMask(SPELL_AURA_PERIODIC_HASTE, spellInfo) && !spellInfo->HasAttribute(SPELL_ATTR5_SPELL_HASTE_AFFECTS_PERIODIC))
+            return duration;
+
+        long double hastedDuration = static_cast<long double>(duration) * static_cast<long double>(caster->GetFloatValue(UNIT_MOD_CAST_SPEED));
+        if (hastedDuration <= 0.0L || std::isnan(static_cast<double>(hastedDuration)))
+            return 1;
+
+        if (hastedDuration >= static_cast<long double>(std::numeric_limits<int32>::max()))
+            return std::numeric_limits<int32>::max();
+
+        return std::max<int32>(1, static_cast<int32>(hastedDuration));
+    }
+}
+
 SpellDestination::SpellDestination()
 {
     _position.Relocate(0, 0, 0, 0);
@@ -2820,7 +2896,7 @@ void Spell::DoAllEffectOnTarget(TargetInfo* target)
 
         // Do triggers for unit (reflect triggers passed on hit phase for correct drop charge)
         if (canEffectTrigger)
-            Unit::ProcDamageAndSpell(caster, unitTarget, procAttacker, procVictim, procEx, uint32(std::min<uint64>(addhealth, std::numeric_limits<uint32>::max())), m_attackType, m_spellInfo, m_triggeredByAuraSpell.spellInfo,
+            Unit::ProcDamageAndSpell(caster, unitTarget, procAttacker, procVictim, procEx, addhealth, m_attackType, m_spellInfo, m_triggeredByAuraSpell.spellInfo,
                 m_triggeredByAuraSpell.effectIndex, this, nullptr, &healInfo);
     }
     // Do damage and triggers
@@ -3224,8 +3300,7 @@ SpellMissInfo Spell::DoSpellHitOnUnit(Unit* unit, uint32 effectMask, bool scaleA
                     duration = m_originalCaster->ModSpellDuration(aurSpellInfo, unit, duration, positive, effectMask);
 
                     // xinef: haste affects duration of those spells twice
-                    if (m_originalCaster->HasAuraTypeWithAffectMask(SPELL_AURA_PERIODIC_HASTE, aurSpellInfo) || m_spellInfo->HasAttribute(SPELL_ATTR5_SPELL_HASTE_AFFECTS_PERIODIC))
-                        duration = int32(duration * m_originalCaster->GetFloatValue(UNIT_MOD_CAST_SPEED));
+                    duration = ApplyPeriodicHasteToDuration(duration, m_originalCaster, aurSpellInfo);
 
                     if (m_spellValue->AuraDuration != 0)
                     {
@@ -4149,8 +4224,7 @@ void Spell::handle_immediate()
                 modOwner->ApplySpellMod(m_spellInfo->Id, SPELLMOD_DURATION, duration);
 
             // Apply haste mods
-            if (m_caster->HasAuraTypeWithAffectMask(SPELL_AURA_PERIODIC_HASTE, m_spellInfo) || m_spellInfo->HasAttribute(SPELL_ATTR5_SPELL_HASTE_AFFECTS_PERIODIC))
-                duration = int32(duration * m_caster->GetFloatValue(UNIT_MOD_CAST_SPEED));
+            duration = ApplyPeriodicHasteToDuration(duration, m_caster, m_spellInfo);
 
             m_spellState = SPELL_STATE_CASTING;
             m_caster->AddInterruptMask(m_spellInfo->ChannelInterruptFlags);
@@ -4821,7 +4895,7 @@ void Spell::SendSpellStart()
     m_targets.Write(data);
 
     if (castFlags & CAST_FLAG_POWER_LEFT_SELF)
-        data << uint32(m_caster->GetPower((Powers)m_spellInfo->PowerType));
+        data << uint32(GetClientSpellPowerLeft(m_caster, (Powers)m_spellInfo->PowerType));
 
     if (castFlags & CAST_FLAG_PROJECTILE)
         WriteAmmoToPacket(&data);
@@ -4925,7 +4999,7 @@ void Spell::SendSpellGo()
     m_targets.Write(data);
 
     if (castFlags & CAST_FLAG_POWER_LEFT_SELF)
-        data << uint32(m_caster->GetPower((Powers)m_spellInfo->PowerType));
+        data << uint32(GetClientSpellPowerLeft(m_caster, (Powers)m_spellInfo->PowerType));
 
     if (castFlags & CAST_FLAG_RUNE_LIST)                   // rune cooldowns list
     {
@@ -5151,11 +5225,11 @@ void Spell::SendLogExecute()
     m_caster->SendMessageToSet(&data, true);
 }
 
-void Spell::ExecuteLogEffectTakeTargetPower(uint8 effIndex, Unit* target, uint32 PowerType, uint32 powerTaken, float gainMultiplier)
+void Spell::ExecuteLogEffectTakeTargetPower(uint8 effIndex, Unit* target, uint32 PowerType, uint64 powerTaken, float gainMultiplier)
 {
     InitEffectExecuteData(effIndex);
     *m_effectExecuteData[effIndex] << target->GetPackGUID();
-    *m_effectExecuteData[effIndex] << uint32(powerTaken);
+    *m_effectExecuteData[effIndex] << uint32(std::min<uint64>(powerTaken, std::numeric_limits<uint32>::max()));
     *m_effectExecuteData[effIndex] << uint32(PowerType);
     *m_effectExecuteData[effIndex] << float(gainMultiplier);
 }
@@ -5401,7 +5475,7 @@ void Spell::TakePower()
     // health as power used
     if (PowerType == POWER_HEALTH)
     {
-        m_caster->ModifyHealth(-(int32)m_powerCost);
+        m_caster->ModifyHealth(-m_powerCost);
         return;
     }
 
@@ -5412,13 +5486,17 @@ void Spell::TakePower()
     }
 
     if (hit)
-        m_caster->ModifyPower(PowerType, -m_powerCost);
+        m_caster->ModifyPower64(PowerType, -m_powerCost);
     else
-        m_caster->ModifyPower(PowerType, -irand(0, m_powerCost / 4));
+        m_caster->ModifyPower64(PowerType, -urand64(0, m_powerCost / 4));
 
     // Set the five second timer
     if (PowerType == POWER_MANA && m_powerCost > 0)
     {
+        if (Player* player = m_caster->ToPlayer())
+            if (player->HasExtendedPowerForCombat(POWER_MANA) || player->GetExtendedMaxPower(POWER_MANA) > ToClientSpellPowerMax(player->GetMaxPower(POWER_MANA)))
+                player->SyncClientPowerFromExtended(POWER_MANA, true, true);
+
         m_caster->SetLastManaUse(GameTime::GetGameTimeMS().count());
     }
 }
@@ -5572,7 +5650,7 @@ void Spell::TakeRunePower(bool didHit)
     // you can gain some runic power when use runes
     if (didHit)
         if (int32 rp = int32(runeCostData->runePowerGain * sWorld->getRate(RATE_POWER_RUNICPOWER_INCOME)))
-            player->ModifyPower(POWER_RUNIC_POWER, int32(rp));
+            player->ModifyPower64(POWER_RUNIC_POWER, rp);
 }
 
 void Spell::TakeReagents()
@@ -7216,7 +7294,7 @@ SpellCastResult Spell::CheckPower()
 
     // Check power amount
     Powers PowerType = Powers(m_spellInfo->PowerType);
-    if (int32(m_caster->GetPower(PowerType)) < m_powerCost)
+    if (m_powerCost > 0 && m_caster->GetPowerForCombat(PowerType) < static_cast<uint64>(m_powerCost))
         return SPELL_FAILED_NO_POWER;
     else
         return SPELL_CAST_OK;

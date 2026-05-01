@@ -21,6 +21,20 @@
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
 #include "naxxramas.h"
+#include <limits>
+
+namespace
+{
+    int64 ToPositiveInt64(uint64 value)
+    {
+        return value > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(value);
+    }
+
+    int32 ToInt32Saturated(uint64 value)
+    {
+        return value > static_cast<uint64>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(value);
+    }
+}
 
 enum Yells
 {
@@ -667,10 +681,11 @@ class spell_kelthuzad_detonate_mana_aura : public AuraScript
     {
         PreventDefaultAction();
         Unit* target = GetTarget();
-        if (auto mana = int32(target->GetMaxPower(POWER_MANA) / 10))
+        if (uint64 manaToDrain = target->GetMaxPowerForCombat(POWER_MANA) / 10)
         {
-            mana = target->ModifyPower(POWER_MANA, -mana);
-            target->CastCustomSpell(SPELL_MANA_DETONATION_DAMAGE, SPELLVALUE_BASE_POINT0, -mana * 10, target, true, nullptr, aurEff);
+            int64 mana = target->ModifyPower64(POWER_MANA, -ToPositiveInt64(manaToDrain));
+            uint64 drainedMana = mana < 0 ? static_cast<uint64>(-mana) : 0;
+            target->CastCustomSpell(SPELL_MANA_DETONATION_DAMAGE, SPELLVALUE_BASE_POINT0, ToInt32Saturated(drainedMana > static_cast<uint64>(std::numeric_limits<int32>::max() / 10) ? static_cast<uint64>(std::numeric_limits<int32>::max()) : drainedMana * 10), target, true, nullptr, aurEff);
         }
     }
 

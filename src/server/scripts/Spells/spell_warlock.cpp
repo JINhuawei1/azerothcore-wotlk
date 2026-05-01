@@ -21,9 +21,27 @@
 #include "SpellAuraEffects.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "SpellScriptCombatValue.h"
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
 #include "TemporarySummon.h"
+#include <limits>
+
+namespace
+{
+    int32 CalculatePctInt32Saturated(uint64 base, int32 pct)
+    {
+        if (!base || pct <= 0)
+            return 0;
+
+        long double value = static_cast<long double>(base) * static_cast<long double>(pct) / 100.0L;
+        if (value >= static_cast<long double>(std::numeric_limits<int32>::max()))
+            return std::numeric_limits<int32>::max();
+
+        return static_cast<int32>(value);
+    }
+}
+
 /*
  * Scripts for spells with SPELLFAMILY_WARLOCK and SPELLFAMILY_GENERIC spells used by warlock players.
  * Ordered alphabetically using scriptname.
@@ -261,7 +279,7 @@ class spell_warl_demonic_knowledge : public AuraScript
         if (Unit* caster = GetCaster())
         {
             uint8 pct = aurEff->GetBaseAmount() + aurEff->GetDieSides();
-            amount = CalculatePct(caster->GetStat(STAT_STAMINA) + caster->GetStat(STAT_INTELLECT), pct);
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(SpellScriptCombat::GetStat(caster, STAT_STAMINA) + SpellScriptCombat::GetStat(caster, STAT_INTELLECT), pct));
         }
     }
 
@@ -312,7 +330,7 @@ class spell_warl_generic_scaling : public AuraScript
         {
             Stats stat = Stats(aurEff->GetSpellInfo()->Effects[aurEff->GetEffIndex()].MiscValue);
             int32 modifier = stat == STAT_STAMINA ? 75 : 30;
-            amount = CalculatePct(std::max<int32>(0, owner->GetStat(stat)), modifier);
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(SpellScriptCombat::GetStat(owner, stat), modifier));
         }
     }
 
@@ -321,10 +339,8 @@ class spell_warl_generic_scaling : public AuraScript
         // xinef: by default warlock pet inherits 57% of max(SP FIRE, SP SHADOW) as AP
         if (Unit* owner = GetUnitOwner()->GetOwner())
         {
-            int32 fire  = owner->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_FIRE);
-            int32 shadow = owner->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_SHADOW);
-            int32 maximum  = (fire > shadow) ? fire : shadow;
-            amount = CalculatePct(std::max<int32>(0, maximum), 57);
+            long double maximum = std::max(SpellScriptCombat::GetSpellDamageBonus(owner, SPELL_SCHOOL_MASK_FIRE), SpellScriptCombat::GetSpellDamageBonus(owner, SPELL_SCHOOL_MASK_SHADOW));
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(maximum, 57));
         }
     }
 
@@ -333,10 +349,8 @@ class spell_warl_generic_scaling : public AuraScript
         // xinef: by default warlock pet inherits 15% of max(SP FIRE, SP SHADOW) as SP
         if (Unit* owner = GetUnitOwner()->GetOwner())
         {
-            int32 fire  = owner->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_FIRE);
-            int32 shadow = owner->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_SHADOW);
-            int32 maximum  = (fire > shadow) ? fire : shadow;
-            amount = CalculatePct(std::max<int32>(0, maximum), 15);
+            long double maximum = std::max(SpellScriptCombat::GetSpellDamageBonus(owner, SPELL_SCHOOL_MASK_FIRE), SpellScriptCombat::GetSpellDamageBonus(owner, SPELL_SCHOOL_MASK_SHADOW));
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(maximum, 15));
 
             // xinef: Update appropriate player field
             if (owner->IsPlayer())
@@ -361,15 +375,15 @@ class spell_warl_generic_scaling : public AuraScript
             {
                 if (aurEff->GetMiscValue() == STAT_STAMINA)
                 {
-                    uint32 actStat = GetUnitOwner()->GetHealth();
+                    uint64 actStat = GetUnitOwner()->GetHealthForCombat();
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetHealth(std::min<uint32>(GetUnitOwner()->GetMaxHealth(), actStat));
+                    GetUnitOwner()->SetHealthForCombat(std::min<uint64>(GetUnitOwner()->GetMaxHealthForCombat(), actStat));
                 }
                 else
                 {
-                    uint32 actStat = GetUnitOwner()->GetPower(POWER_MANA);
+                    uint64 actStat = GetUnitOwner()->GetPowerForCombat(POWER_MANA);
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetPower(POWER_MANA, std::min<uint32>(GetUnitOwner()->GetMaxPower(POWER_MANA), actStat));
+                    GetUnitOwner()->SetPowerForCombat(POWER_MANA, std::min<uint64>(GetUnitOwner()->GetMaxPowerForCombat(POWER_MANA), actStat));
                 }
             }
         }
@@ -423,7 +437,7 @@ class spell_warl_infernal_scaling : public AuraScript
         {
             Stats stat = Stats(aurEff->GetSpellInfo()->Effects[aurEff->GetEffIndex()].MiscValue);
             int32 modifier = stat == STAT_STAMINA ? 75 : 30;
-            amount = CalculatePct(std::max<int32>(0, owner->GetStat(stat)), modifier);
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(SpellScriptCombat::GetStat(owner, stat), modifier));
         }
     }
 
@@ -432,10 +446,8 @@ class spell_warl_infernal_scaling : public AuraScript
         // xinef: by default warlock pet inherits 57% of max(SP FIRE, SP SHADOW) as AP
         if (Unit* owner = GetUnitOwner()->GetOwner())
         {
-            int32 fire  = owner->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_FIRE);
-            int32 shadow = owner->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_SHADOW);
-            int32 maximum  = (fire > shadow) ? fire : shadow;
-            amount = CalculatePct(std::max<int32>(0, maximum), 57);
+            long double maximum = std::max(SpellScriptCombat::GetSpellDamageBonus(owner, SPELL_SCHOOL_MASK_FIRE), SpellScriptCombat::GetSpellDamageBonus(owner, SPELL_SCHOOL_MASK_SHADOW));
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(maximum, 57));
         }
     }
 
@@ -444,10 +456,8 @@ class spell_warl_infernal_scaling : public AuraScript
         // xinef: by default warlock pet inherits 15% of max(SP FIRE, SP SHADOW) as SP
         if (Unit* owner = GetUnitOwner()->GetOwner())
         {
-            int32 fire  = owner->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_FIRE);
-            int32 shadow = owner->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_SHADOW);
-            int32 maximum  = (fire > shadow) ? fire : shadow;
-            amount = CalculatePct(std::max<int32>(0, maximum), 15);
+            long double maximum = std::max(SpellScriptCombat::GetSpellDamageBonus(owner, SPELL_SCHOOL_MASK_FIRE), SpellScriptCombat::GetSpellDamageBonus(owner, SPELL_SCHOOL_MASK_SHADOW));
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(maximum, 15));
 
             // xinef: Update appropriate player field
             if (owner->IsPlayer())
@@ -542,7 +552,7 @@ class spell_warl_demonic_empowerment : public SpellScript
                     case CREATURE_FAMILY_VOIDWALKER:
                         {
                             SpellInfo const* spellInfo = sSpellMgr->AssertSpellInfo(SPELL_WARLOCK_DEMONIC_EMPOWERMENT_VOIDWALKER);
-                            int32 hp = int32(targetCreature->CountPctFromMaxHealth(GetCaster()->CalculateSpellDamage(targetCreature, spellInfo, 0)));
+                            int32 hp = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(targetCreature->CountPctFromMaxHealth(GetCaster()->CalculateSpellDamage(targetCreature, spellInfo, 0))));
                             targetCreature->CastCustomSpell(targetCreature, SPELL_WARLOCK_DEMONIC_EMPOWERMENT_VOIDWALKER, &hp, nullptr, nullptr, true);
                             //unitTarget->CastSpell(unitTarget, 54441, true);
                             break;
@@ -748,9 +758,11 @@ class spell_warl_seed_of_corruption_aura: public AuraScript
         if (!damageInfo || !damageInfo->GetDamage())
             return;
 
-        int32 remainingDamage = aurEff->GetAmount() - damageInfo->GetDamage();
-        if (remainingDamage > 0)
+        int32 currentAmount = aurEff->GetAmount();
+        uint64 currentAmountForCombat = currentAmount > 0 ? static_cast<uint64>(currentAmount) : 0;
+        if (damageInfo->GetDamage() < currentAmountForCombat)
         {
+            int32 remainingDamage = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(currentAmountForCombat - damageInfo->GetDamage()));
             GetAura()->GetEffect(EFFECT_1)->SetAmount(remainingDamage);
         }
         else // damage threshold has been reached
@@ -807,9 +819,11 @@ class spell_warl_seed_of_corruption_generic_aura: public AuraScript
         if (!damageInfo || !damageInfo->GetDamage())
             return;
 
-        int32 remainingDamage = aurEff->GetAmount() - damageInfo->GetDamage();
-        if (remainingDamage > 0)
+        int32 currentAmount = aurEff->GetAmount();
+        uint64 currentAmountForCombat = currentAmount > 0 ? static_cast<uint64>(currentAmount) : 0;
+        if (damageInfo->GetDamage() < currentAmountForCombat)
         {
+            int32 remainingDamage = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(currentAmountForCombat - damageInfo->GetDamage()));
             GetAura()->GetEffect(EFFECT_1)->SetAmount(remainingDamage);
         }
         else // damage threshold has been reached
@@ -878,10 +892,10 @@ class spell_warl_siphon_life : public AuraScript
     {
         PreventDefaultAction();
 
-        int32 amount = CalculatePct(static_cast<int32>(eventInfo.GetDamageInfo()->GetDamage()), aurEff->GetAmount());
+        int32 amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(static_cast<long double>(eventInfo.GetDamageInfo()->GetDamage()), aurEff->GetAmount()));
         // Glyph of Siphon Life
         if (AuraEffect const* glyph = GetTarget()->GetAuraEffect(SPELL_WARLOCK_GLYPH_OF_SIPHON_LIFE, EFFECT_0))
-            AddPct(amount, glyph->GetAmount());
+            amount = SpellScriptCombat::AddPctClientSpellValue(amount, glyph->GetAmount());
 
         GetTarget()->CastCustomSpell(SPELL_WARLOCK_SIPHON_LIFE_HEAL, SPELLVALUE_BASE_POINT0, amount, GetTarget(), true, nullptr, aurEff);
     }
@@ -913,15 +927,15 @@ class spell_warl_life_tap : public SpellScript
         Player* caster = GetCaster()->ToPlayer();
         if (Unit* target = GetHitUnit())
         {
-            int32 spellEffect = GetEffectValue();
-            int32 mana = int32(spellEffect + (caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_SHADOW) * 0.5f));
+            int64 spellEffect = GetEffectValue();
+            int32 mana = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(spellEffect) + SpellScriptCombat::GetSpellDamageBonus(caster, SPELL_SCHOOL_MASK_SHADOW) * 0.5L);
 
             // Shouldn't Appear in Combat Log
             target->ModifyHealth(-spellEffect);
 
             // Improved Life Tap mod
             if (AuraEffect const* aurEff = caster->GetDummyAuraEffect(SPELLFAMILY_WARLOCK, WARLOCK_ICON_ID_IMPROVED_LIFE_TAP, 0))
-                AddPct(mana, aurEff->GetAmount());
+                mana = SpellScriptCombat::AddPctClientSpellValue(mana, aurEff->GetAmount());
 
             caster->CastCustomSpell(target, SPELL_WARLOCK_LIFE_TAP_ENERGIZE, &mana, nullptr, nullptr, false);
 
@@ -932,7 +946,7 @@ class spell_warl_life_tap : public SpellScript
 
             if (manaFeedVal > 0)
             {
-                ApplyPct(manaFeedVal, mana);
+                manaFeedVal = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(manaFeedVal, mana));
                 caster->CastCustomSpell(caster, SPELL_WARLOCK_LIFE_TAP_ENERGIZE_2, &manaFeedVal, nullptr, nullptr, true, nullptr);
             }
         }
@@ -940,7 +954,11 @@ class spell_warl_life_tap : public SpellScript
 
     SpellCastResult CheckCast()
     {
-        if ((int32(GetCaster()->GetHealth()) > int32(GetSpellInfo()->Effects[EFFECT_0].CalcValue())))
+        int32 lifeCost = GetSpellInfo()->Effects[EFFECT_0].CalcValue();
+        if (lifeCost < 0)
+            lifeCost = 0;
+
+        if (GetCaster()->GetHealthForCombat() > static_cast<uint64>(lifeCost))
             return SPELL_CAST_OK;
         return SPELL_FAILED_FIZZLE;
     }
@@ -1054,7 +1072,7 @@ class spell_warl_fel_synergy : public AuraScript
     {
         PreventDefaultAction();
 
-        int32 heal = CalculatePct(static_cast<int32>(eventInfo.GetDamageInfo()->GetDamage()), aurEff->GetAmount());
+        int32 heal = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(static_cast<long double>(eventInfo.GetDamageInfo()->GetDamage()), aurEff->GetAmount()));
         GetTarget()->CastCustomSpell(SPELL_WARLOCK_FEL_SYNERGY_HEAL, SPELLVALUE_BASE_POINT0, heal, (Unit*)nullptr, true, nullptr, aurEff); // TARGET_UNIT_PET
     }
 
@@ -1074,7 +1092,7 @@ class spell_warl_haunt : public SpellScript
     {
         if (Aura* aura = GetHitAura())
             if (AuraEffect* aurEff = aura->GetEffect(EFFECT_1))
-                aurEff->SetAmount(CalculatePct(aurEff->GetAmount(), GetHitDamage()));
+                aurEff->SetAmount(SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(static_cast<long double>(aurEff->GetAmount()), static_cast<long double>(GetHitDamage()))));
     }
 
     void Register() override
@@ -1222,12 +1240,12 @@ class spell_warl_shadow_ward : public AuraScript
         if (Unit* caster = GetCaster())
         {
             // +80.68% from sp bonus
-            float bonus = 0.8068f;
+            long double bonus = 0.8068L;
 
-            bonus *= caster->SpellBaseDamageBonusDone(GetSpellInfo()->GetSchoolMask());
-            bonus *= caster->CalculateLevelPenalty(GetSpellInfo());
+            bonus *= SpellScriptCombat::GetSpellDamageBonus(caster, GetSpellInfo()->GetSchoolMask());
+            bonus *= static_cast<long double>(caster->CalculateLevelPenalty(GetSpellInfo()));
 
-            amount += int32(bonus);
+            amount = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(amount) + bonus);
         }
     }
 
@@ -1311,7 +1329,7 @@ class spell_warl_drain_soul : public AuraScript
             // Improved Drain Soul.
             if (Aura const* impDrainSoul = caster->GetAuraOfRankedSpell(SPELL_WARLOCK_IMPROVED_DRAIN_SOUL_R1, caster->GetGUID()))
             {
-                int32 amount = CalculatePct(caster->GetMaxPower(POWER_MANA), impDrainSoul->GetSpellInfo()->Effects[EFFECT_2].CalcValue());
+                int32 amount = CalculatePctInt32Saturated(caster->GetMaxPowerForCombat(POWER_MANA), impDrainSoul->GetSpellInfo()->Effects[EFFECT_2].CalcValue());
                 caster->CastCustomSpell(SPELL_WARLOCK_IMPROVED_DRAIN_SOUL_PROC, SPELLVALUE_BASE_POINT0, amount, caster, true, nullptr, aurEff, caster->GetGUID());
             }
         }
@@ -1479,10 +1497,10 @@ class spell_warl_demonic_pact_aura : public AuraScript
 
             if (AuraEffect* talentAurEff = owner->GetDummyAuraEffect(SPELLFAMILY_WARLOCK, WARLOCK_ICON_ID_DEMONIC_PACT, EFFECT_0))
             {
-                int32 spellDamageMinusBonus = owner->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_MAGIC) - currentBonus;
-                if (spellDamageMinusBonus < 0)
+                long double spellDamageMinusBonus = SpellScriptCombat::GetSpellDamageBonus(owner, SPELL_SCHOOL_MASK_MAGIC) - currentBonus;
+                if (spellDamageMinusBonus < 0.0L)
                     return;
-                int32 bp = int32((talentAurEff->GetAmount() / 100.0f) * spellDamageMinusBonus);
+                int32 bp = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(spellDamageMinusBonus, talentAurEff->GetAmount()));
                 owner->CastCustomSpell((Unit*)nullptr, SPELL_WARLOCK_DEMONIC_PACT_PROC, &bp, &bp, 0, true, nullptr, talentAurEff);
                 eventInfo.GetActor()->AddSpellCooldown(aurEff->GetId(), 0, eventInfo.GetProcCooldown());
             }

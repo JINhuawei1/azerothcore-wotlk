@@ -31,7 +31,7 @@ CREATE TABLE `gossip_menu_option` (
   `ActionMenuID` int unsigned NOT NULL DEFAULT '0',
   `ActionPoiID` int unsigned NOT NULL DEFAULT '0',
   `BoxCoded` tinyint unsigned NOT NULL DEFAULT '0',
-  `BoxMoney` int unsigned NOT NULL DEFAULT '0',
+  `BoxMoney` bigint unsigned NOT NULL DEFAULT '0',
   `BoxText` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
   `BoxBroadcastTextID` int NOT NULL DEFAULT '0',
   `VerifiedBuild` int DEFAULT NULL,
@@ -4610,4 +4610,3 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2024-12-17 22:33:56
-

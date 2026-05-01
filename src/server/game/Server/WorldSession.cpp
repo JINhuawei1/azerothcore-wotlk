@@ -1124,6 +1124,8 @@ void WorldSession::WriteMovementInfo(WorldPacket* data, MovementInfo* mi)
 
 void WorldSession::ReadAddonsInfo(ByteBuffer& data)
 {
+    _hasLargeDamageTextAddon = false;
+
     if (data.rpos() + 4 > data.size())
         return;
 
@@ -1168,6 +1170,8 @@ void WorldSession::ReadAddonsInfo(ByteBuffer& data)
                 addonInfo >> enabled >> crc >> unk1;
 
                 LOG_DEBUG("network", "ADDON: Name: {}, Enabled: 0x{:x}, CRC: 0x{:x}, Unknown2: 0x{:x}", addonName, enabled, crc, unk1);
+                if (enabled && addonName == "LargeDamageText")
+                    _hasLargeDamageTextAddon = true;
 
                 AddonInfo addon(addonName, enabled, crc, 2, true);
 
@@ -1209,6 +1213,20 @@ void WorldSession::ReadAddonsInfo(ByteBuffer& data)
     }
     else
         LOG_ERROR("network", "Addon packet uncompress error!");
+}
+
+bool WorldSession::HasEnabledAddon(std::string const& addonName) const
+{
+    if (addonName == "LargeDamageText")
+        return _hasLargeDamageTextAddon;
+
+    for (AddonInfo const& addon : m_addonsList)
+    {
+        if (addon.Enabled && addon.Name == addonName)
+            return true;
+    }
+
+    return false;
 }
 
 void WorldSession::SendAddonsInfo()

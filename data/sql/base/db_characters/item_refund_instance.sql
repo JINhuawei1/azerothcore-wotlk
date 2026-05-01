@@ -23,7 +23,7 @@ DROP TABLE IF EXISTS `item_refund_instance`;
 CREATE TABLE `item_refund_instance` (
   `item_guid` int unsigned NOT NULL COMMENT 'Item GUID',
   `player_guid` int unsigned NOT NULL COMMENT 'Player GUID',
-  `paidMoney` int unsigned NOT NULL DEFAULT '0',
+  `paidMoney` bigint unsigned NOT NULL DEFAULT '0',
   `paidExtendedCost` smallint unsigned NOT NULL DEFAULT '0',
   PRIMARY KEY (`item_guid`,`player_guid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Item Refund System';
@@ -47,4 +47,3 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2024-12-17 22:33:09
-

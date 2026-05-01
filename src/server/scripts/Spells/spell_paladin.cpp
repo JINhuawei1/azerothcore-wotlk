@@ -19,10 +19,50 @@
 #include "Player.h"
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
+#include "SpellScriptCombatValue.h"
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
 #include "UnitAI.h"
+#include <algorithm>
 #include <limits>
+
+namespace
+{
+    constexpr int32 MaxClientSpellValue = 1999999999;
+
+    int32 ToSpellValueInt32(uint64 value)
+    {
+        return value > static_cast<uint64>(MaxClientSpellValue) ? MaxClientSpellValue : static_cast<int32>(value);
+    }
+
+    int32 ToSpellValueInt32(long double value)
+    {
+        if (value != value)
+            return 0;
+
+        if (value >= static_cast<long double>(MaxClientSpellValue))
+            return MaxClientSpellValue;
+
+        if (value <= static_cast<long double>(std::numeric_limits<int32>::min()))
+            return std::numeric_limits<int32>::min();
+
+        return static_cast<int32>(value);
+    }
+
+    int64 ToSpellDamageInt64(long double value)
+    {
+        if (value != value)
+            return 0;
+
+        if (value >= static_cast<long double>(std::numeric_limits<int64>::max()))
+            return std::numeric_limits<int64>::max();
+
+        if (value <= static_cast<long double>(std::numeric_limits<int64>::min()))
+            return std::numeric_limits<int64>::min();
+
+        return static_cast<int64>(value);
+    }
+}
 /*
  * Scripts for spells with SPELLFAMILY_PALADIN and SPELLFAMILY_GENERIC spells used by paladin players.
  * Ordered alphabetically using scriptname.
@@ -217,18 +257,18 @@ class spell_pal_sacred_shield_base : public AuraScript
             amount = spellInfo->Effects[EFFECT_0].CalcValue();
 
             // +75.00% from sp bonus
-            amount += CalculatePct(caster->SpellBaseDamageBonusDone(spellInfo->GetSchoolMask()), 75.0f);
+            amount = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(amount) + SpellScriptCombat::PercentOf(SpellScriptCombat::GetSpellDamageBonus(caster, spellInfo->GetSchoolMask()), 75.0L));
 
             // Xinef: removed divine guardian because it will affect triggered spell with increased amount
             // Arena - Dampening
             if (AuraEffect const* dampening = caster->GetAuraEffect(SPELL_GENERIC_ARENA_DAMPENING, EFFECT_0))
             {
-                AddPct(amount, dampening->GetAmount());
+                amount = SpellScriptCombat::AddPctClientSpellValue(amount, dampening->GetAmount());
             }
             // Battleground - Dampening
             else if (AuraEffect const* dampening2 = caster->GetAuraEffect(SPELL_GENERIC_BATTLEGROUND_DAMPENING, EFFECT_0))
             {
-                AddPct(amount, dampening2->GetAmount());
+                amount = SpellScriptCombat::AddPctClientSpellValue(amount, dampening2->GetAmount());
             }
         }
     }
@@ -264,10 +304,10 @@ class spell_pal_sacred_shield_base : public AuraScript
             if (caster && procSpell->SpellFamilyName == SPELLFAMILY_PALADIN &&
                     procSpell->SpellFamilyFlags.HasFlag(0x40000000) && caster->GetAuraEffect(SPELL_AURA_PROC_TRIGGER_SPELL, SPELLFAMILY_PALADIN, 3021, 0)) // need infusion of light
             {
-                int32 basepoints = int32(float(healinfo->GetHeal()) / 12.0f);
+                int32 basepoints = ToSpellValueInt32(static_cast<long double>(healinfo->GetHeal()) / 12.0L);
                 // Item - Paladin T9 Holy 4P Bonus (Flash of Light)
                 if (AuraEffect const* aurEffect = caster->GetAuraEffect(67191, EFFECT_0))
-                    AddPct(basepoints, aurEffect->GetAmount());
+                    basepoints = SpellScriptCombat::AddPctClientSpellValue(basepoints, aurEffect->GetAmount());
 
                 caster->CastCustomSpell(eventInfo.GetActionTarget(), 66922, &basepoints, nullptr, nullptr, true, nullptr, aurEff, caster->GetGUID());
                 return;
@@ -361,7 +401,7 @@ private:
                                     : float(defenseSkillValue) / float(reqDefForMaxHeal);
 
             uint64 healAmount64 = victim->CountPctFromMaxHealth(uint32(healPct * pctFromDefense));
-            int32 healAmount = healAmount64 > static_cast<uint64>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(healAmount64);
+            int32 healAmount = ToSpellValueInt32(healAmount64);
             victim->CastCustomSpell(PAL_SPELL_ARDENT_DEFENDER_HEAL, SPELLVALUE_BASE_POINT0, healAmount, victim, true, nullptr, aurEff);
             if (Player* player = victim->ToPlayer())
                 if (player->GetExtendedMaxHealth() > player->GetMaxHealth() && player->GetExtendedHealth() < healAmount64)
@@ -584,7 +624,10 @@ class spell_pal_divine_storm : public SpellScript
     {
         Unit* caster = GetCaster();
         if (GetHitUnit() != caster)
-            caster->CastCustomSpell(SPELL_PALADIN_DIVINE_STORM_DUMMY, SPELLVALUE_BASE_POINT0, (GetHitDamage() * healPct) / 100, caster, true);
+        {
+            long double healAmount = static_cast<long double>(GetHitDamage()) * static_cast<long double>(healPct) / 100.0L;
+            caster->CastCustomSpell(SPELL_PALADIN_DIVINE_STORM_DUMMY, SPELLVALUE_BASE_POINT0, ToSpellValueInt32(healAmount), caster, true);
+        }
     }
 
     void Register() override
@@ -614,7 +657,7 @@ class spell_pal_divine_storm_dummy : public SpellScript
         if (!_targetCount || ! GetHitUnit())
             return;
 
-        int32 heal = GetEffectValue() / _targetCount;
+        int32 heal = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(GetEffectValue()) / static_cast<long double>(_targetCount));
         GetCaster()->CastCustomSpell(GetHitUnit(), SPELL_PALADIN_DIVINE_STORM_HEAL, &heal, nullptr, nullptr, true);
     }
 private:
@@ -674,7 +717,10 @@ class spell_pal_eye_for_an_eye : public AuraScript
         }
 
         // return damage % to attacker but < 50% own total health
-        int32 damage = std::min(CalculatePct(static_cast<int32>(damageInfo->GetDamage()), aurEff->GetAmount()), static_cast<int32>(GetTarget()->GetMaxHealth()) / 2);
+        uint64 reflectedDamage = SpellScriptCombat::CalculatePctUInt64(damageInfo->GetDamage(), aurEff->GetAmount());
+        uint64 maxReflectedDamage = GetTarget()->GetMaxHealthForCombat() / 2;
+        uint64 cappedDamage = std::min(reflectedDamage, maxReflectedDamage);
+        int32 damage = ToSpellValueInt32(cappedDamage);
         GetTarget()->CastCustomSpell(SPELL_PALADIN_EYE_FOR_AN_EYE_DAMAGE, SPELLVALUE_BASE_POINT0, damage, eventInfo.GetProcTarget(), true, nullptr, aurEff);
     }
 
@@ -735,13 +781,13 @@ class spell_pal_hand_of_sacrifice_aura : public AuraScript
 {
     PrepareAuraScript(spell_pal_hand_of_sacrifice_aura);
 
-    int32 remainingAmount;
+    uint64 remainingAmount;
 
     bool Load() override
     {
         if (Unit* caster = GetCaster())
         {
-            remainingAmount = caster->GetMaxHealth();
+            remainingAmount = caster->GetMaxHealthForCombat();
             return true;
         }
         return false;
@@ -749,12 +795,13 @@ class spell_pal_hand_of_sacrifice_aura : public AuraScript
 
     void Split(AuraEffect* /*aurEff*/, DamageInfo& /*dmgInfo*/, uint32& splitAmount)
     {
-        remainingAmount -= splitAmount;
-
-        if (remainingAmount <= 0)
+        if (splitAmount >= remainingAmount)
         {
             GetTarget()->RemoveAura(SPELL_PALADIN_HAND_OF_SACRIFICE);
+            remainingAmount = 0;
         }
+        else
+            remainingAmount -= splitAmount;
     }
 
     void Register() override
@@ -1102,8 +1149,8 @@ class spell_pal_seal_of_righteousness : public AuraScript
     {
         PreventDefaultAction();
 
-        float ap = GetTarget()->GetTotalAttackPowerValue(BASE_ATTACK);
-        int32 holy = GetTarget()->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_HOLY);
+        long double ap = SpellScriptCombat::GetAttackPower(GetTarget(), BASE_ATTACK);
+        long double holy = SpellScriptCombat::GetSpellDamageBonus(GetTarget(), SPELL_SCHOOL_MASK_HOLY);
         holy += eventInfo.GetProcTarget()->SpellBaseDamageBonusTaken(SPELL_SCHOOL_MASK_HOLY);
 
         // Xinef: Libram of Divine Purpose
@@ -1112,7 +1159,7 @@ class spell_pal_seal_of_righteousness : public AuraScript
             holy += aurEffPaladin->GetAmount();
         }
 
-        int32 bp = std::max<int32>(0, int32((ap * 0.022f + 0.044f * holy) * GetTarget()->GetAttackTime(BASE_ATTACK) / 1000));
+        int32 bp = ToSpellValueInt32(std::max<long double>(0.0L, (ap * 0.022L + 0.044L * holy) * static_cast<long double>(GetTarget()->GetAttackTime(BASE_ATTACK)) / 1000.0L));
         GetTarget()->CastCustomSpell(SPELL_PALADIN_SEAL_OF_RIGHTEOUSNESS, SPELLVALUE_BASE_POINT0, bp, eventInfo.GetProcTarget(), true, nullptr, aurEff);
     }
 
@@ -1141,7 +1188,7 @@ class spell_pal_seal_of_vengeance : public SpellScript
         uint32 auraId = (spellId == SPELL_PALADIN_SEAL_OF_VENGEANCE_EFFECT)
             ? SPELL_PALADIN_HOLY_VENGEANCE
             : SPELL_PALADIN_BLOOD_CORRUPTION;
-        int32 damage = GetHitDamage();
+        int64 damage = GetHitDamage();
         uint8 stacks = 0;
 
         if (target)
@@ -1150,7 +1197,7 @@ class spell_pal_seal_of_vengeance : public SpellScript
             if (aura)
                 stacks = aura->GetStackAmount();
 
-            damage = ((damage * stacks) / 5);
+            damage = ToSpellDamageInt64(static_cast<long double>(damage) * static_cast<long double>(stacks) / 5.0L);
 
             SetHitDamage(damage);
         }

@@ -253,7 +253,7 @@ void WorldSession::HandleTrainerBuySpellOpcode(WorldPacket& recvData)
     if (!_player->HasEnoughMoney(nSpellCost))
         return;
 
-    _player->ModifyMoney(-int32(nSpellCost));
+    _player->ModifyMoney(-static_cast<int64>(nSpellCost));
 
     unit->SendPlaySpellVisual(179); // 53 SpellCastDirected
     unit->SendPlaySpellImpact(_player->GetGUID(), 362); // 113 EmoteSalute
@@ -753,7 +753,7 @@ void WorldSession::HandleBuyStableSlot(WorldPacket& recvData)
         if (_player->HasEnoughMoney(SlotPrice->Price))
         {
             ++petStable.MaxStabledPets;
-            _player->ModifyMoney(-int32(SlotPrice->Price));
+            _player->ModifyMoney(-static_cast<int64>(SlotPrice->Price));
             SendStableResult(STABLE_SUCCESS_BUY_SLOT);
         }
         else

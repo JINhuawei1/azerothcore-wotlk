@@ -30,12 +30,25 @@
 #include "ReputationMgr.h"
 #include "SkillDiscovery.h"
 #include "SpellAuraEffects.h"
+#include "SpellScriptCombatValue.h"
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
 #include "Unit.h"
+#include <limits>
 #include "Vehicle.h"
 #include <array>
 #include <cmath>
+
+namespace
+{
+    constexpr int32 MaxClientSpellValue = 1999999999;
+
+    int32 ToInt32Saturated(uint64 value)
+    {
+        return value > static_cast<uint64>(MaxClientSpellValue) ? MaxClientSpellValue : static_cast<int32>(value);
+    }
+}
+
 /*
  * Scripts for spells with SPELLFAMILY_GENERIC which cannot be included in AI script file
  * of creature using it or can't be bound to any player class.
@@ -284,8 +297,7 @@ class spell_gen_reduced_above_60 : public SpellScript
         if (Unit* target = GetHitUnit())
             if (target->GetLevel() > 60)
             {
-                int32 damage = GetHitDamage();
-                AddPct(damage, -4 * int8(std::min(target->GetLevel(), uint8(85)) - 60)); // prevents reduce by more than 100%
+                int64 damage = SpellScriptCombat::AddPctInt64Saturated(GetHitDamage(), -4 * int8(std::min(target->GetLevel(), uint8(85)) - 60)); // prevents reduce by more than 100%
                 SetHitDamage(damage);
             }
     }
@@ -2416,7 +2428,12 @@ class spell_gen_lifeblood : public AuraScript
     void CalculateAmount(AuraEffect const* aurEff, int32& amount, bool& /*canBeRecalculated*/)
     {
         if (Unit* owner = GetUnitOwner())
-            amount += int32(CalculatePct(owner->GetMaxHealth(), 1.5f / aurEff->GetTotalTicks()));
+        {
+            long double pct = 1.5L / static_cast<long double>(aurEff->GetTotalTicks());
+            uint64 heal = static_cast<uint64>(static_cast<long double>(owner->GetMaxHealthForCombat()) * pct / 100.0L);
+            int32 healAmount = ToInt32Saturated(heal);
+            amount = amount > MaxClientSpellValue - healAmount ? MaxClientSpellValue : amount + healAmount;
+        }
     }
 
     void Register() override
@@ -2624,7 +2641,7 @@ class spell_gen_dummy_trigger : public SpellScript
 
     void HandleDummy(SpellEffIndex /* effIndex */)
     {
-        int32 damage = GetEffectValue();
+        int32 damage = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(GetEffectValue()));
         Unit* caster = GetCaster();
         if (Unit* target = GetHitUnit())
             if (SpellInfo const* triggeredByAuraSpell = GetTriggeringSpell())
@@ -4210,30 +4227,30 @@ class spell_gen_gift_of_naaru : public AuraScript
         if (!GetCaster())
             return;
 
-        float heal = 0.0f;
+        long double heal = 0.0L;
         switch (GetSpellInfo()->SpellFamilyName)
         {
             case SPELLFAMILY_MAGE:
             case SPELLFAMILY_WARLOCK:
             case SPELLFAMILY_PRIEST:
-                heal = 1.885f * float(GetCaster()->SpellBaseDamageBonusDone(GetSpellInfo()->GetSchoolMask()));
+                heal = 1.885L * SpellScriptCombat::GetSpellDamageBonus(GetCaster(), GetSpellInfo()->GetSchoolMask());
                 break;
             case SPELLFAMILY_PALADIN:
             case SPELLFAMILY_SHAMAN:
-                heal = std::max(1.885f * float(GetCaster()->SpellBaseDamageBonusDone(GetSpellInfo()->GetSchoolMask())), 1.1f * float(GetCaster()->GetTotalAttackPowerValue(BASE_ATTACK)));
+                heal = std::max(1.885L * SpellScriptCombat::GetSpellDamageBonus(GetCaster(), GetSpellInfo()->GetSchoolMask()), 1.1L * SpellScriptCombat::GetAttackPower(GetCaster(), BASE_ATTACK));
                 break;
             case SPELLFAMILY_WARRIOR:
             case SPELLFAMILY_HUNTER:
             case SPELLFAMILY_DEATHKNIGHT:
-                heal = 1.1f * float(std::max(GetCaster()->GetTotalAttackPowerValue(BASE_ATTACK), GetCaster()->GetTotalAttackPowerValue(RANGED_ATTACK)));
+                heal = 1.1L * std::max(SpellScriptCombat::GetAttackPower(GetCaster(), BASE_ATTACK), SpellScriptCombat::GetAttackPower(GetCaster(), RANGED_ATTACK));
                 break;
             case SPELLFAMILY_GENERIC:
             default:
                 break;
         }
 
-        int32 healTick = std::floor(heal / aurEff->GetTotalTicks());
-        amount += int32(std::max(healTick, 0));
+        long double healTick = std::floor(heal / static_cast<long double>(aurEff->GetTotalTicks()));
+        amount = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(amount) + std::max(healTick, 0.0L));
     }
 
     void Register() override
@@ -4295,7 +4312,7 @@ class spell_gen_replenishment_aura : public AuraScript
 
     bool Load() override
     {
-        return GetUnitOwner()->GetPower(POWER_MANA);
+        return GetUnitOwner()->GetPowerForCombat(POWER_MANA) > 0;
     }
 
     void CalculateAmount(AuraEffect const* /*aurEff*/, int32& amount, bool& /*canBeRecalculated*/)
@@ -4303,10 +4320,10 @@ class spell_gen_replenishment_aura : public AuraScript
         switch (GetSpellInfo()->Id)
         {
             case SPELL_REPLENISHMENT:
-                amount = GetUnitOwner()->GetMaxPower(POWER_MANA) * 0.002f;
+                amount = ToInt32Saturated(static_cast<uint64>(static_cast<long double>(GetUnitOwner()->GetMaxPowerForCombat(POWER_MANA)) * 0.002L));
                 break;
             case SPELL_INFINITE_REPLENISHMENT:
-                amount = GetUnitOwner()->GetMaxPower(POWER_MANA) * 0.0025f;
+                amount = ToInt32Saturated(static_cast<uint64>(static_cast<long double>(GetUnitOwner()->GetMaxPowerForCombat(POWER_MANA)) * 0.0025L));
                 break;
             default:
                 break;
@@ -5311,7 +5328,7 @@ class spell_gen_set_health : public SpellScript
         if (Unit* target = GetHitUnit())
         {
             uint32 value = GetSpellInfo()->Effects[EFFECT_0].CalcValue();
-            target->SetHealth(target->CountPctFromMaxHealth(value));
+            target->SetHealthForCombat(target->CountPctFromMaxHealth(value));
         }
     }
 

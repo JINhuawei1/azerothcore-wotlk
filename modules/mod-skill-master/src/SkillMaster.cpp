@@ -474,7 +474,7 @@ bool SkillMasterServerScript::HandleTrainerBuySpell(WorldSession* session, World
     }
 
     // 扣除金币
-    player->ModifyMoney(-int32(cost));
+    player->ModifyMoney(-static_cast<int64>(cost));
 
     // 播放特效
     creature->SendPlaySpellVisual(179);

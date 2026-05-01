@@ -29,9 +29,35 @@
 #include "UpdateTime.h"
 #include "World.h"
 #include "WorldPacket.h"
+#include <limits>
 #include <vector>
 
 constexpr auto AH_MINIMUM_DEPOSIT = 100;
+
+namespace
+{
+    uint32 ToClientMoney(uint64 money)
+    {
+        return money > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(money);
+    }
+
+    uint64 ToUInt64Clamped(long double value)
+    {
+        if (value <= 0.0L)
+            return 0;
+
+        long double maxValue = static_cast<long double>(std::numeric_limits<uint64>::max());
+        if (value >= maxValue)
+            return std::numeric_limits<uint64>::max();
+
+        return static_cast<uint64>(value);
+    }
+
+    uint64 SaturatingAdd(uint64 left, uint64 right)
+    {
+        return left > std::numeric_limits<uint64>::max() - right ? std::numeric_limits<uint64>::max() : left + right;
+    }
+}
 
 AuctionHouseMgr::AuctionHouseMgr() : _auctionHouseSearcher(new AuctionHouseSearcher())
 {
@@ -89,24 +115,25 @@ AuctionHouseObject* AuctionHouseMgr::GetAuctionsMapByHouseId(AuctionHouseId auct
     return &_neutralAuctions;
 }
 
-uint32 AuctionHouseMgr::GetAuctionDeposit(AuctionHouseEntry const* entry, uint32 time, Item* pItem, uint32 count)
+uint64 AuctionHouseMgr::GetAuctionDeposit(AuctionHouseEntry const* entry, uint32 time, Item* pItem, uint32 count)
 {
-    uint32 MSV = pItem->GetTemplate()->SellPrice;
+    uint64 MSV = pItem->GetTemplate()->SellPrice;
 
-    if (MSV <= 0)
-        return AH_MINIMUM_DEPOSIT * sWorld->getRate(RATE_AUCTION_DEPOSIT);
+    if (!MSV)
+        return ToUInt64Clamped(static_cast<long double>(AH_MINIMUM_DEPOSIT) * sWorld->getRate(RATE_AUCTION_DEPOSIT));
 
-    float multiplier = CalculatePct(float(entry->depositPercent), 3);
+    long double multiplier = static_cast<long double>(entry->depositPercent) * 3.0L / 100.0L;
     uint32 timeHr = (((time / 60) / 60) / 12);
-    uint32 deposit = uint32(((multiplier * MSV * count / 3) * timeHr * 3) * sWorld->getRate(RATE_AUCTION_DEPOSIT));
+    uint64 deposit = ToUInt64Clamped(((multiplier * static_cast<long double>(MSV) * count / 3.0L) * timeHr * 3.0L) * sWorld->getRate(RATE_AUCTION_DEPOSIT));
 
     LOG_DEBUG("auctionHouse", "MSV:        {}", MSV);
     LOG_DEBUG("auctionHouse", "Items:      {}", count);
     LOG_DEBUG("auctionHouse", "Multiplier: {}", multiplier);
     LOG_DEBUG("auctionHouse", "Deposit:    {}", deposit);
 
-    if (deposit < AH_MINIMUM_DEPOSIT * sWorld->getRate(RATE_AUCTION_DEPOSIT))
-        return AH_MINIMUM_DEPOSIT * sWorld->getRate(RATE_AUCTION_DEPOSIT);
+    uint64 minimumDeposit = ToUInt64Clamped(static_cast<long double>(AH_MINIMUM_DEPOSIT) * sWorld->getRate(RATE_AUCTION_DEPOSIT));
+    if (deposit < minimumDeposit)
+        return minimumDeposit;
     else
         return deposit;
 }
@@ -187,15 +214,17 @@ void AuctionHouseMgr::SendAuctionSuccessfulMail(AuctionEntry* auction, Character
     // owner exist
     if (owner || owner_accId)
     {
-        uint32 profit = auction->bid + auction->deposit - auction->GetAuctionCut();
+        uint64 auctionCut = auction->GetAuctionCut();
+        uint64 gross = SaturatingAdd(auction->bid, auction->deposit);
+        uint64 profit = gross > auctionCut ? gross - auctionCut : 0;
         sScriptMgr->OnBeforeAuctionHouseMgrSendAuctionSuccessfulMail(this, auction, owner, owner_accId, profit, sendNotification, updateAchievementCriteria, sendMail);
 
         if (owner)
         {
             if (updateAchievementCriteria) // can be changed in the hook
             {
-                owner->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_GOLD_EARNED_BY_AUCTIONS, profit);
-                owner->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_AUCTION_SOLD, auction->bid);
+                owner->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_GOLD_EARNED_BY_AUCTIONS, ToClientMoney(profit));
+                owner->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_AUCTION_SOLD, ToClientMoney(auction->bid));
             }
 
             if (sendNotification) // can be changed in the hook
@@ -203,8 +232,8 @@ void AuctionHouseMgr::SendAuctionSuccessfulMail(AuctionEntry* auction, Character
         }
         else if (updateAchievementCriteria)
         {
-            sAchievementMgr->UpdateAchievementCriteriaForOfflinePlayer(auction->owner.GetCounter(), ACHIEVEMENT_CRITERIA_TYPE_GOLD_EARNED_BY_AUCTIONS, profit);
-            sAchievementMgr->UpdateAchievementCriteriaForOfflinePlayer(auction->owner.GetCounter(), ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_AUCTION_SOLD, auction->bid);
+            sAchievementMgr->UpdateAchievementCriteriaForOfflinePlayer(auction->owner.GetCounter(), ACHIEVEMENT_CRITERIA_TYPE_GOLD_EARNED_BY_AUCTIONS, ToClientMoney(profit));
+            sAchievementMgr->UpdateAchievementCriteriaForOfflinePlayer(auction->owner.GetCounter(), ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_AUCTION_SOLD, ToClientMoney(auction->bid));
         }
 
         if (sendMail) // can be changed in the hook
@@ -260,7 +289,7 @@ void AuctionHouseMgr::SendAuctionExpiredMail(AuctionEntry* auction, CharacterDat
 }
 
 //this function sends mail to old bidder
-void AuctionHouseMgr::SendAuctionOutbiddedMail(AuctionEntry* auction, uint32 newPrice, Player* newBidder, CharacterDatabaseTransaction trans, bool sendNotification, bool sendMail)
+void AuctionHouseMgr::SendAuctionOutbiddedMail(AuctionEntry* auction, uint64 newPrice, Player* newBidder, CharacterDatabaseTransaction trans, bool sendNotification, bool sendMail)
 {
     Player* oldBidder = ObjectAccessor::FindConnectedPlayer(auction->bidder);
 
@@ -550,21 +579,20 @@ AuctionHouseFaction AuctionEntry::GetFactionId() const
     return AuctionHouseMgr::GetAuctionHouseFactionFromHouseId(houseId);
 }
 
-uint32 AuctionEntry::GetAuctionCut() const
+uint64 AuctionEntry::GetAuctionCut() const
 {
-    int32 cut = int32(CalculatePct(bid, auctionHouseEntry->cutPercent) * sWorld->getRate(RATE_AUCTION_CUT));
-    return std::max(cut, 0);
+    return ToUInt64Clamped((static_cast<long double>(bid) * auctionHouseEntry->cutPercent / 100.0L) * sWorld->getRate(RATE_AUCTION_CUT));
 }
 
-uint32 AuctionEntry::GetAuctionOutBid() const
+uint64 AuctionEntry::GetAuctionOutBid() const
 {
     return CalculateAuctionOutBid(bid);
 }
 
 /// the sum of outbid is (1% from current bid)*5, if bid is very small, it is 1c
-uint32 AuctionEntry::CalculateAuctionOutBid(uint32 bid)
+uint64 AuctionEntry::CalculateAuctionOutBid(uint64 bid)
 {
-    uint32 outbid = CalculatePct(bid, 5);
+    uint64 outbid = bid / 20;
     return outbid ? outbid : 1;
 }
 
@@ -599,12 +627,12 @@ bool AuctionEntry::LoadFromDB(Field* fields)
     item_template = fields[3].Get<uint32>();
     itemCount = fields[4].Get<uint32>();
     owner = ObjectGuid::Create<HighGuid::Player>(fields[5].Get<uint32>());
-    buyout = fields[6].Get<uint32>();
+    buyout = fields[6].Get<uint64>();
     expire_time = fields[7].Get<uint32>();
     bidder = ObjectGuid::Create<HighGuid::Player>(fields[8].Get<uint32>());
-    bid = fields[9].Get<uint32>();
-    startbid = fields[10].Get<uint32>();
-    deposit = fields[11].Get<uint32>();
+    bid = fields[9].Get<uint64>();
+    startbid = fields[10].Get<uint64>();
+    deposit = fields[11].Get<uint64>();
 
     auctionHouseEntry = AuctionHouseMgr::GetAuctionHouseEntryFromHouse(houseId);
     if (!auctionHouseEntry)
@@ -630,7 +658,7 @@ std::string AuctionEntry::BuildAuctionMailSubject(MailAuctionAnswers response) c
     return strm.str();
 }
 
-std::string AuctionEntry::BuildAuctionMailBody(ObjectGuid guid, uint32 bid, uint32 buyout, uint32 deposit /*= 0*/, uint32 cut /*= 0*/, uint32 moneyDelay /*= 0*/, uint32 eta /*= 0*/)
+std::string AuctionEntry::BuildAuctionMailBody(ObjectGuid guid, uint64 bid, uint64 buyout, uint64 deposit /*= 0*/, uint64 cut /*= 0*/, uint32 moneyDelay /*= 0*/, uint32 eta /*= 0*/)
 {
     std::ostringstream strm;
     strm.width(16);

@@ -26,7 +26,7 @@ CREATE TABLE `guild_bank_eventlog` (
   `TabId` tinyint unsigned NOT NULL DEFAULT '0' COMMENT 'Guild bank TabId',
   `EventType` tinyint unsigned NOT NULL DEFAULT '0' COMMENT 'Event type',
   `PlayerGuid` int unsigned NOT NULL DEFAULT '0',
-  `ItemOrMoney` int unsigned NOT NULL DEFAULT '0',
+  `ItemOrMoney` bigint unsigned NOT NULL DEFAULT '0',
   `ItemStackCount` smallint unsigned NOT NULL DEFAULT '0',
   `DestTabId` tinyint unsigned NOT NULL DEFAULT '0' COMMENT 'Destination Tab Id',
   `TimeStamp` int unsigned NOT NULL DEFAULT '0' COMMENT 'Event UNIX time',
@@ -58,4 +58,3 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2024-12-17 22:33:07
-

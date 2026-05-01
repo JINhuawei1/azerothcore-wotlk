@@ -103,6 +103,69 @@ uint32 ToUInt32ForDBC(uint64 value)
 {
     return value > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(value);
 }
+
+uint32 ToClientCreateValue(uint64 value)
+{
+    constexpr uint32 MaxClientCreateValue = 2000000000u;
+    return value > MaxClientCreateValue ? MaxClientCreateValue : static_cast<uint32>(value);
+}
+
+uint32 ToClientResourceValue(uint64 value)
+{
+    constexpr uint32 MaxClientResourceValue = 2000000000u;
+    return value > MaxClientResourceValue ? MaxClientResourceValue : static_cast<uint32>(value);
+}
+
+uint32 ScaleExtendedValueToClient(uint64 currentValue, uint64 maxValue, uint32 clientMaxValue)
+{
+    if (!currentValue || !maxValue)
+        return 0;
+
+    if (!clientMaxValue)
+        return 1;
+
+    if (currentValue >= maxValue)
+        return clientMaxValue;
+
+    if (maxValue <= clientMaxValue)
+        return currentValue > clientMaxValue ? clientMaxValue : static_cast<uint32>(currentValue);
+
+    long double scaled = (static_cast<long double>(clientMaxValue) * static_cast<long double>(currentValue)) / static_cast<long double>(maxValue);
+    uint32 clientValue = static_cast<uint32>(scaled + 0.5L);
+    if (!clientValue)
+        return 1;
+
+    return clientValue > clientMaxValue ? clientMaxValue : clientValue;
+}
+
+uint32 GetClientCurrentPowerValue(Powers power, uint64 currentValue, uint64 maxValue, uint32 clientMaxValue)
+{
+    uint32 clientPower = ScaleExtendedValueToClient(currentValue, maxValue, clientMaxValue);
+    if (power == POWER_MANA && maxValue > clientMaxValue && clientPower >= clientMaxValue && clientMaxValue > 1)
+        return clientMaxValue - 1;
+
+    return clientPower;
+}
+
+uint64 ScaleClientValueToExtended(uint32 clientValue, uint32 clientMaxValue, uint64 extendedMaxValue)
+{
+    if (!clientValue || !clientMaxValue || !extendedMaxValue)
+        return 0;
+
+    if (extendedMaxValue <= clientMaxValue)
+        return clientValue;
+
+    if (clientValue >= clientMaxValue)
+        return extendedMaxValue;
+
+    long double scaled = (static_cast<long double>(extendedMaxValue) * static_cast<long double>(clientValue)) / static_cast<long double>(clientMaxValue);
+    uint64 extendedValue = static_cast<uint64>(scaled + 0.5L);
+    if (!extendedValue)
+        return 1;
+
+    return extendedValue > extendedMaxValue ? extendedMaxValue : extendedValue;
+}
+
 }
 #include "WorldSessionMgr.h"
 #include "WorldState.h"
@@ -616,7 +679,7 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
     if (HasActivePowerType(POWER_MANA))
     {
         UpdateMaxPower(POWER_MANA);                         // Update max Mana (for add bonus from intellect)
-        SetPower(POWER_MANA, GetMaxPower(POWER_MANA));
+        SetPowerForCombat(POWER_MANA, GetMaxPowerForCombat(POWER_MANA));
     }
 
     if (HasActivePowerType(POWER_RUNIC_POWER))
@@ -777,7 +840,7 @@ bool Player::IsImmuneToEnvironmentalDamage()
     return (!isTargetableForAttack(false, nullptr)) || isTotalImmune();
 }
 
-uint32 Player::EnvironmentalDamage(EnviromentalDamage type, uint32 damage)
+uint64 Player::EnvironmentalDamage(EnviromentalDamage type, uint64 damage)
 {
     if (IsImmuneToEnvironmentalDamage())
         return 0;
@@ -786,6 +849,7 @@ uint32 Player::EnvironmentalDamage(EnviromentalDamage type, uint32 damage)
     uint64 absorb = 0;
     uint64 resist = 0;
     uint64 envDamage = damage;
+    uint32 clientDamage = damage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(damage);
 
     switch (type)
     {
@@ -803,18 +867,17 @@ uint32 Player::EnvironmentalDamage(EnviromentalDamage type, uint32 damage)
     }
 
     Unit::DealDamageMods(this, envDamage, &absorb);
-    damage = envDamage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(envDamage);
+    clientDamage = envDamage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(envDamage);
 
     WorldPackets::CombatLog::EnvironmentalDamageLog packet;
     packet.Victim = GetGUID();
     packet.Type = type != DAMAGE_FALL_TO_VOID ? type : DAMAGE_FALL;
-    packet.Amount = damage;
+    packet.Amount = clientDamage;
     packet.Absorbed = absorb > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(absorb);
     packet.Resisted = resist > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(resist);
     SendMessageToSet(packet.Write(), true);
 
     uint64 dealtDamage = Unit::DealDamage(this, this, envDamage, nullptr, SELF_DAMAGE, SPELL_SCHOOL_MASK_NORMAL, nullptr, false);
-    uint32 final_damage = dealtDamage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(dealtDamage);
 
     if (!IsAlive())
     {
@@ -830,7 +893,7 @@ uint32 Player::EnvironmentalDamage(EnviromentalDamage type, uint32 damage)
         UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_DEATHS_FROM, 1, type);
     }
 
-    return final_damage;
+    return dealtDamage;
 }
 
 int32 Player::getMaxTimer(MirrorTimerType timer)
@@ -883,7 +946,7 @@ void Player::HandleDrowning(uint32 time_diff)
                 m_MirrorTimer[BREATH_TIMER] += 1 * IN_MILLISECONDS;
                 // Calculate and deal damage
                 /// @todo: Check this formula
-                uint32 damage = GetMaxHealth() / 5 + urand(0, GetLevel() - 1);
+                uint64 damage = GetMaxHealthForCombat() / 5 + urand(0, GetLevel() - 1);
                 EnvironmentalDamage(DAMAGE_DROWNING, damage);
             }
             else if (!(m_MirrorTimerFlagsLast & UNDERWATER_INWATER))      // Update time in client if need
@@ -919,7 +982,7 @@ void Player::HandleDrowning(uint32 time_diff)
                 m_MirrorTimer[FATIGUE_TIMER] += 1 * IN_MILLISECONDS;
                 if (IsAlive())                                            // Calculate and deal damage
                 {
-                    uint32 damage = GetMaxHealth() / 5 + urand(0, GetLevel() - 1);
+                    uint64 damage = GetMaxHealthForCombat() / 5 + urand(0, GetLevel() - 1);
                     EnvironmentalDamage(DAMAGE_EXHAUSTED, damage);
                 }
                 else if (HasPlayerFlag(PLAYER_FLAGS_GHOST))       // Teleport ghost to graveyard
@@ -1117,7 +1180,7 @@ void Player::SetExtendedHealthFromClientHealth(uint32 clientHealth)
     if (_syncingClientHealthFromExtended)
         return;
 
-    uint32 clientMaxHealth = GetMaxHealth();
+    uint32 clientMaxHealth = ToClientResourceValue(GetMaxHealth());
     uint64 extendedMaxHealth = GetExtendedMaxHealth();
 
     if (!clientHealth || !clientMaxHealth)
@@ -1126,52 +1189,97 @@ void Player::SetExtendedHealthFromClientHealth(uint32 clientHealth)
         return;
     }
 
-    if (extendedMaxHealth <= clientMaxHealth)
-    {
-        _extendedHealth = clientHealth;
-        return;
-    }
-
-    if (clientHealth >= clientMaxHealth)
-    {
-        _extendedHealth = extendedMaxHealth;
-        return;
-    }
-
-    _extendedHealth = clientHealth;
+    _extendedHealth = ScaleClientValueToExtended(clientHealth, clientMaxHealth, extendedMaxHealth);
 }
 
 void Player::SyncClientHealthFromExtended()
 {
-    uint32 clientMaxHealth = GetMaxHealth();
+    uint32 clientMaxHealth = ToClientResourceValue(GetMaxHealth());
     uint64 extendedMaxHealth = GetExtendedMaxHealth();
     uint64 extendedHealth = GetExtendedHealth();
 
-    uint32 clientHealth = 0;
-    if (!extendedHealth)
-        clientHealth = 0;
-    else if (!clientMaxHealth)
-        clientHealth = 1;
-    else if (extendedMaxHealth <= clientMaxHealth)
-        clientHealth = static_cast<uint32>(extendedHealth > clientMaxHealth ? clientMaxHealth : extendedHealth);
-    else if (extendedHealth > clientMaxHealth)
-        clientHealth = clientMaxHealth;
-    else
-        clientHealth = static_cast<uint32>(extendedHealth);
+    uint32 clientHealth = ScaleExtendedValueToClient(extendedHealth, extendedMaxHealth, clientMaxHealth);
 
     _syncingClientHealthFromExtended = true;
-    if (clientHealth == clientMaxHealth && extendedHealth > clientMaxHealth && GetHealth() == clientHealth && clientHealth > 1)
+    SetHealth(clientHealth);
+    _pendingClientHealthSyncTicks = 0;
+    _syncingClientHealthFromExtended = false;
+}
+
+uint64 Player::GetExtendedPower(Powers power) const
+{
+    if (power < POWER_MANA || power >= MAX_POWERS)
+        return 0;
+
+    return _extendedMaxPowers[power] ? _extendedPowers[power] : GetPower(power);
+}
+
+void Player::SetExtendedMaxPower(Powers power, uint64 value)
+{
+    if (power < POWER_MANA || power >= MAX_POWERS)
+        return;
+
+    constexpr uint64 ExtendedResourceBoundary = 2000000000ULL;
+    uint32 clientMaxPower = ToClientResourceValue(GetMaxPower(power));
+    if (value < ExtendedResourceBoundary && value <= clientMaxPower)
     {
-        SetHealth(clientHealth - 1);
-        _pendingClientHealthSyncTicks = 2;
-    }
-    else
-    {
-        SetHealth(clientHealth);
-        _pendingClientHealthSyncTicks = 0;
+        _extendedMaxPowers[power] = 0;
+        _extendedPowers[power] = 0;
+        return;
     }
 
-    _syncingClientHealthFromExtended = false;
+    _extendedMaxPowers[power] = value;
+    if (!_extendedPowers[power] || _extendedPowers[power] > _extendedMaxPowers[power])
+        _extendedPowers[power] = _extendedMaxPowers[power];
+}
+
+void Player::SetExtendedPower(Powers power, uint64 value)
+{
+    if (power < POWER_MANA || power >= MAX_POWERS || !_extendedMaxPowers[power])
+        return;
+
+    _extendedPowers[power] = value > _extendedMaxPowers[power] ? _extendedMaxPowers[power] : value;
+}
+
+void Player::SetExtendedPowerFromClientPower(Powers power, uint32 clientPower)
+{
+    if (power < POWER_MANA || power >= MAX_POWERS || !_extendedMaxPowers[power])
+        return;
+
+    uint32 clientMaxPower = ToClientResourceValue(GetMaxPower(power));
+    if (!clientPower || !clientMaxPower)
+    {
+        _extendedPowers[power] = 0;
+        return;
+    }
+
+    _extendedPowers[power] = ScaleClientValueToExtended(clientPower, clientMaxPower, _extendedMaxPowers[power]);
+}
+
+void Player::SyncClientPowerFromExtended(Powers power, bool forceUpdate /*= false*/, bool withPowerUpdate /*= true*/)
+{
+    if (power < POWER_MANA || power >= MAX_POWERS || !_extendedMaxPowers[power])
+        return;
+
+    uint32 clientMaxPower = ToClientResourceValue(GetMaxPower(power));
+    uint64 extendedMaxPower = GetExtendedMaxPower(power);
+    uint64 extendedPower = GetExtendedPower(power);
+
+    uint32 clientPower = GetClientCurrentPowerValue(power, extendedPower, extendedMaxPower, clientMaxPower);
+    uint32 oldClientPower = GetPower(power);
+
+    _syncingClientPowerFromExtended[power] = true;
+    SetPower(power, clientPower, withPowerUpdate);
+    _syncingClientPowerFromExtended[power] = false;
+
+    if (forceUpdate && withPowerUpdate && oldClientPower == clientPower)
+    {
+        WorldPacket data(SMSG_POWER_UPDATE, 8 + 1 + 4);
+        data << GetPackGUID();
+        data << uint8(power);
+        data << uint32(clientPower);
+        SendDirectMessage(&data);
+    }
 }
 
 void Player::ApplyPendingClientHealthSync()
@@ -1183,7 +1291,7 @@ void Player::ApplyPendingClientHealthSync()
     if (_pendingClientHealthSyncTicks)
         return;
 
-    uint32 clientMaxHealth = GetMaxHealth();
+    uint32 clientMaxHealth = ToClientResourceValue(GetMaxHealth());
     if (!clientMaxHealth || GetExtendedHealth() <= clientMaxHealth)
         return;
 
@@ -1751,13 +1859,13 @@ void Player::ProcessDelayedOperations()
         else
             SetFullHealth();
 
-        if (GetMaxPower(POWER_MANA) > m_resurrectMana)
-            SetPower(POWER_MANA, m_resurrectMana);
+        if (GetMaxPowerForCombat(POWER_MANA) > m_resurrectMana)
+            SetPowerForCombat(POWER_MANA, m_resurrectMana);
         else
-            SetPower(POWER_MANA, GetMaxPower(POWER_MANA));
+            SetPowerForCombat(POWER_MANA, GetMaxPowerForCombat(POWER_MANA));
 
         SetPower(POWER_RAGE, 0);
-        SetPower(POWER_ENERGY, GetMaxPower(POWER_ENERGY));
+        SetPowerForCombat(POWER_ENERGY, GetMaxPowerForCombat(POWER_ENERGY));
 
         SpawnCorpseBones();
     }
@@ -1961,7 +2069,10 @@ void Player::RegenerateAll()
 
 void Player::Regenerate(Powers power)
 {
-    uint32 maxValue = GetMaxPower(power);
+    if (power < POWER_MANA || power >= MAX_POWERS)
+        return;
+
+    uint64 maxValue = GetMaxPowerForCombat(power);
     if (!maxValue)
         return;
 
@@ -1973,36 +2084,52 @@ void Player::Regenerate(Powers power)
             //Set the value to 0 first then set it to max to force resend of packet as for range clients keeps removing rage
             if (power == POWER_RAGE || power == POWER_RUNIC_POWER)
             {
-                UpdateUInt32Value(static_cast<uint16>(UNIT_FIELD_POWER1) + power, 0);
+                SetPower(power, 0, false, true);
             }
 
-            SetPower(power, maxValue);
+            if (HasExtendedPowerForCombat(power) || GetExtendedMaxPower(power) > GetMaxPower(power))
+            {
+                SetExtendedPower(power, maxValue);
+                SyncClientPowerFromExtended(power, power == POWER_MANA);
+            }
+            else
+                SetPower(power, static_cast<uint32>(maxValue));
             return;
         }
     }
 
-    uint32 curValue = GetPower(power);
+    uint64 curValue = GetPowerForCombat(power);
+
+    if (power == POWER_MANA && (HasExtendedPowerForCombat(power) || GetExtendedMaxPower(power) > GetMaxPower(power)) && curValue > 0 && GetPower(power) == 0 && IsAlive() && getPowerType() == POWER_MANA)
+    {
+        SyncClientPowerFromExtended(power, true);
+    }
 
     /// @todo: possible use of miscvalueb instead of amount
     if (HasAuraTypeWithMiscvalue(SPELL_AURA_PREVENT_REGENERATE_POWER, power + 1))
         return;
 
     float addvalue = 0.0f;
+    bool manaRecentCast = false;
+    float manaRegenFlat = 0.0f;
+    float manaInterruptedRegenFlat = 0.0f;
 
     switch (power)
     {
         case POWER_MANA:
             {
-                bool recentCast = IsUnderLastManaUseEffect();
+                manaRecentCast = IsUnderLastManaUseEffect();
                 float ManaIncreaseRate = sWorld->getRate(RATE_POWER_MANA);
+                manaRegenFlat = GetFloatValue(UNIT_FIELD_POWER_REGEN_FLAT_MODIFIER + AsUnderlyingType(POWER_MANA));
+                manaInterruptedRegenFlat = GetFloatValue(UNIT_FIELD_POWER_REGEN_INTERRUPTED_FLAT_MODIFIER + AsUnderlyingType(POWER_MANA));
 
                 if (sWorld->getBoolConfig(CONFIG_LOW_LEVEL_REGEN_BOOST) && GetLevel() < 15)
                     ManaIncreaseRate = sWorld->getRate(RATE_POWER_MANA) * (2.066f - (GetLevel() * 0.066f));
 
-                if (recentCast) // Trinity Updates Mana in intervals of 2s, which is correct
-                    addvalue += GetFloatValue(UNIT_FIELD_POWER_REGEN_INTERRUPTED_FLAT_MODIFIER + AsUnderlyingType(POWER_MANA)) *  ManaIncreaseRate * 0.001f * m_regenTimer;
+                if (manaRecentCast) // Trinity Updates Mana in intervals of 2s, which is correct
+                    addvalue += manaInterruptedRegenFlat *  ManaIncreaseRate * 0.001f * m_regenTimer;
                 else
-                    addvalue += GetFloatValue(UNIT_FIELD_POWER_REGEN_FLAT_MODIFIER + AsUnderlyingType(POWER_MANA)) * ManaIncreaseRate * 0.001f * m_regenTimer;
+                    addvalue += manaRegenFlat * ManaIncreaseRate * 0.001f * m_regenTimer;
             }
             break;
         case POWER_RAGE:                                    // Regenerate rage
@@ -2056,6 +2183,11 @@ void Player::Regenerate(Powers power)
             addvalue += float(GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_POWER_REGEN, power) * ((power != POWER_ENERGY) ? m_regenTimerCount : m_regenTimer)) / (5.0f * IN_MILLISECONDS);
     }
 
+    if (power == POWER_MANA && (HasExtendedPowerForCombat(power) || GetExtendedMaxPower(power) > GetMaxPower(power)) && addvalue < 0.0f)
+    {
+        return;
+    }
+
     if (addvalue < 0.0f)
     {
         if (curValue == 0)
@@ -2070,7 +2202,7 @@ void Player::Regenerate(Powers power)
         return;
 
     addvalue += m_powerFraction[power];
-    uint32 integerValue = uint32(std::fabs(addvalue));
+    uint64 integerValue = uint64(std::fabs(addvalue));
 
     if (addvalue < 0.0f)
     {
@@ -2098,30 +2230,37 @@ void Player::Regenerate(Powers power)
             m_powerFraction[power] = addvalue - integerValue;
     }
 
-    if (m_regenTimerCount >= 2000 || curValue == 0 || curValue == maxValue)
-        SetPower(power, curValue, true, true);
+    if (HasExtendedPowerForCombat(power) || GetExtendedMaxPower(power) > GetMaxPower(power))
+    {
+        SetExtendedPower(power, curValue);
+        SyncClientPowerFromExtended(power, power == POWER_MANA);
+    }
+    else if (m_regenTimerCount >= 2000 || curValue == 0 || curValue == maxValue)
+    {
+        SetPower(power, static_cast<uint32>(curValue), true, true);
+    }
     else
-        UpdateUInt32Value(UNIT_FIELD_POWER1 + AsUnderlyingType(power), curValue);
+        SetPower(power, ToClientResourceValue(curValue), false, true);
 }
 
 void Player::RegenerateHealth()
 {
-    uint32 curValue = GetHealth();
-    uint32 maxValue = GetMaxHealth();
+    uint64 curValue = GetHealthForCombat();
+    uint64 maxValue = GetMaxHealthForCombat();
 
     if (curValue >= maxValue)
         return;
 
-    float HealthIncreaseRate = sWorld->getRate(RATE_HEALTH);
+    long double HealthIncreaseRate = sWorld->getRate(RATE_HEALTH);
 
     if (sWorld->getBoolConfig(CONFIG_LOW_LEVEL_REGEN_BOOST) && GetLevel() < 15)
         HealthIncreaseRate = sWorld->getRate(RATE_HEALTH) * (2.066f - (GetLevel() * 0.066f));
 
-    float addvalue = 0.0f;
+    long double addvalue = 0.0L;
 
     // polymorphed case
     if (IsPolymorphed())
-        addvalue = (float)GetMaxHealth() / 3;
+        addvalue = static_cast<long double>(GetMaxHealthForCombat()) / 3.0L;
     // normal regen case (maybe partly in combat case)
     else if (!IsInCombat() || HasRegenDuringCombatAura())
     {
@@ -2155,7 +2294,8 @@ void Player::RegenerateHealth()
     if (addvalue < 0)
         addvalue = 0;
 
-    ModifyHealth(int32(addvalue));
+    int64 healthGain = addvalue > static_cast<long double>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(addvalue);
+    ModifyHealth(healthGain);
 }
 
 void Player::ResetAllPowers()
@@ -2163,7 +2303,7 @@ void Player::ResetAllPowers()
     SetFullHealth();
     if (HasActivePowerType(POWER_MANA))
     {
-        SetPower(POWER_MANA, GetMaxPower(POWER_MANA));
+        SetPowerForCombat(POWER_MANA, GetMaxPowerForCombat(POWER_MANA));
     }
     if (HasActivePowerType(POWER_RAGE))
     {
@@ -2171,7 +2311,7 @@ void Player::ResetAllPowers()
     }
     if (HasActivePowerType(POWER_ENERGY))
     {
-        SetPower(POWER_ENERGY, GetMaxPower(POWER_ENERGY));
+        SetPowerForCombat(POWER_ENERGY, GetMaxPowerForCombat(POWER_ENERGY));
     }
     if (HasActivePowerType(POWER_RUNIC_POWER))
     {
@@ -2588,11 +2728,15 @@ void Player::GiveLevel(uint8 level)
 
     WorldPackets::Misc::LevelUpInfo packet;
     packet.Level = level;
-    packet.HealthDelta = int32(classInfo.basehealth) - int32(GetCreateHealth());
+    _extendedCreateHealth = classInfo.basehealth;
+    _extendedCreateMana = classInfo.basemana;
+    uint32 clientBaseHealth = ToClientCreateValue(classInfo.basehealth);
+    uint32 clientBaseMana = ToClientCreateValue(classInfo.basemana);
+    packet.HealthDelta = int32(clientBaseHealth) - int32(GetCreateHealth());
 
     /// @todo find some better solution
     // for (int i = 0; i < MAX_POWERS; ++i)
-    packet.PowerDelta[0] = int32(classInfo.basemana) - int32(GetCreateMana());
+    packet.PowerDelta[0] = int32(clientBaseMana) - int32(GetCreateMana());
     packet.PowerDelta[1] = 0;
     packet.PowerDelta[2] = 0;
     packet.PowerDelta[3] = 0;
@@ -2619,8 +2763,8 @@ void Player::GiveLevel(uint8 level)
     for (uint8 i = STAT_STRENGTH; i < MAX_STATS; ++i)
         SetCreateStat(Stats(i), info.stats[i]);
 
-    SetCreateHealth(classInfo.basehealth);
-    SetCreateMana(classInfo.basemana);
+    SetCreateHealth(clientBaseHealth);
+    SetCreateMana(clientBaseMana);
 
     InitTalentForLevel();
     InitTaxiNodesForLevel();
@@ -2637,10 +2781,10 @@ void Player::GiveLevel(uint8 level)
     {
         // set current level health and mana/energy to maximum after applying all mods.
         SetFullHealth();
-        SetPower(POWER_MANA, GetMaxPower(POWER_MANA));
-        SetPower(POWER_ENERGY, GetMaxPower(POWER_ENERGY));
-        if (GetPower(POWER_RAGE) > GetMaxPower(POWER_RAGE))
-            SetPower(POWER_RAGE, GetMaxPower(POWER_RAGE));
+        SetPowerForCombat(POWER_MANA, GetMaxPowerForCombat(POWER_MANA));
+        SetPowerForCombat(POWER_ENERGY, GetMaxPowerForCombat(POWER_ENERGY));
+        if (GetPowerForCombat(POWER_RAGE) > GetMaxPowerForCombat(POWER_RAGE))
+            SetPowerForCombat(POWER_RAGE, GetMaxPowerForCombat(POWER_RAGE));
         SetPower(POWER_FOCUS, 0);
         SetPower(POWER_HAPPINESS, 0);
     }
@@ -2730,10 +2874,15 @@ void Player::InitStatsForLevel(bool reapplyMods)
     for (uint8 i = STAT_STRENGTH; i < MAX_STATS; ++i)
         SetStat(Stats(i), info.stats[i]);
 
-    SetCreateHealth(classInfo.basehealth);
+    uint32 clientBaseHealth = ToClientCreateValue(classInfo.basehealth);
+    uint32 clientBaseMana = ToClientCreateValue(classInfo.basemana);
+
+    _extendedCreateHealth = classInfo.basehealth;
+    _extendedCreateMana = classInfo.basemana;
+    SetCreateHealth(clientBaseHealth);
 
     //set create powers
-    SetCreateMana(classInfo.basemana);
+    SetCreateMana(clientBaseMana);
 
     SetArmor(int32(m_createStats[STAT_AGILITY] * 2));
 
@@ -2815,7 +2964,9 @@ void Player::InitStatsForLevel(bool reapplyMods)
     for (uint8 i = POWER_MANA; i < MAX_POWERS; ++i)
         SetMaxPower(Powers(i),  uint32(GetCreatePowers(Powers(i))));
 
-    SetMaxHealth(classInfo.basehealth);                     // stamina bonus will applied later
+    SetMaxHealth(clientBaseHealth);                     // stamina bonus will applied later
+    _extendedMaxHealth = classInfo.basehealth;
+    SetExtendedMaxPower(POWER_MANA, classInfo.basemana);
 
     // cleanup mounted state (it will set correctly at aura loading if player saved at mount.
     SetUInt32Value(UNIT_FIELD_MOUNTDISPLAYID, 0);
@@ -2851,10 +3002,10 @@ void Player::InitStatsForLevel(bool reapplyMods)
 
     // set current level health and mana/energy to maximum after applying all mods.
     SetFullHealth();
-    SetPower(POWER_MANA, GetMaxPower(POWER_MANA));
-    SetPower(POWER_ENERGY, GetMaxPower(POWER_ENERGY));
-    if (GetPower(POWER_RAGE) > GetMaxPower(POWER_RAGE))
-        SetPower(POWER_RAGE, GetMaxPower(POWER_RAGE));
+    SetPowerForCombat(POWER_MANA, GetMaxPowerForCombat(POWER_MANA));
+    SetPowerForCombat(POWER_ENERGY, GetMaxPowerForCombat(POWER_ENERGY));
+    if (GetPowerForCombat(POWER_RAGE) > GetMaxPowerForCombat(POWER_RAGE))
+        SetPowerForCombat(POWER_RAGE, GetMaxPowerForCombat(POWER_RAGE));
     SetPower(POWER_FOCUS, 0);
     SetPower(POWER_HAPPINESS, 0);
     SetPower(POWER_RUNIC_POWER, 0);
@@ -3902,7 +4053,7 @@ bool Player::resetTalents(bool noResetCost)
 
     if (!noResetCost)
     {
-        ModifyMoney(-(int32)resetCost);
+        ModifyMoney(-static_cast<int64>(resetCost));
         UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_TALENTS, resetCost);
         UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_NUMBER_OF_TALENT_RESETS, 1);
 
@@ -4169,7 +4320,7 @@ void Player::DeleteFromDB(ObjectGuid::LowType lowGuid, uint32 accountId, bool up
                         uint32 sender        = mailFields[3].Get<uint32>();
                         std::string subject  = mailFields[4].Get<std::string>();
                         std::string body     = mailFields[5].Get<std::string>();
-                        uint32 money         = mailFields[6].Get<uint32>();
+                        uint64 money         = mailFields[6].Get<uint64>();
                         bool has_items       = mailFields[7].Get<bool>();
 
                         // We can return mail now
@@ -4626,9 +4777,9 @@ void Player::ResurrectPlayer(float restore_percent, bool applySickness)
     {
         SetExtendedHealth(static_cast<uint64>(static_cast<long double>(GetExtendedMaxHealth()) * static_cast<long double>(restore_percent)));
         SyncClientHealthFromExtended();
-        SetPower(POWER_MANA, uint32(GetMaxPower(POWER_MANA)*restore_percent));
+        SetPowerForCombat(POWER_MANA, static_cast<uint64>(static_cast<long double>(GetMaxPowerForCombat(POWER_MANA)) * static_cast<long double>(restore_percent)));
         SetPower(POWER_RAGE, 0);
-        SetPower(POWER_ENERGY, uint32(GetMaxPower(POWER_ENERGY)*restore_percent));
+        SetPowerForCombat(POWER_ENERGY, static_cast<uint64>(static_cast<long double>(GetMaxPowerForCombat(POWER_ENERGY)) * static_cast<long double>(restore_percent)));
     }
 
     // trigger update zone for alive state zone updates
@@ -5029,7 +5180,7 @@ uint32 Player::DurabilityRepair(uint16 pos, bool cost, float discountMod, bool g
                 return TotalCost;
             }
             else
-                ModifyMoney(-int32(costs));
+                ModifyMoney(-static_cast<int64>(costs));
         }
     }
 
@@ -5415,10 +5566,11 @@ float Player::OCTRegenMPPerSpirit()
 
 void Player::ApplyRatingMod(CombatRating cr, int64 value, bool apply)
 {
-    int64 oldRating = m_baseRatingValue[cr];
-    int64 oldExtendedRating = _extendedBaseRatingValue[cr];
+    bool const affectsHaste = cr == CR_HASTE_MELEE || cr == CR_HASTE_RANGED || cr == CR_HASTE_SPELL;
+    float const oldHasteBonus = affectsHaste ? GetRatingBonusValue(cr) : 0.0f;
+
     int64 nextRating = m_baseRatingValue[cr] + (apply ? value : -value);
-    int64 nextExtendedRating = oldExtendedRating + (apply ? value : -value);
+    int64 nextExtendedRating = _extendedBaseRatingValue[cr] + (apply ? value : -value);
 
     if (nextRating < 0)
         nextRating = 0;
@@ -5427,36 +5579,36 @@ void Player::ApplyRatingMod(CombatRating cr, int64 value, bool apply)
 
     m_baseRatingValue[cr] = nextRating;
     _extendedBaseRatingValue[cr] = nextExtendedRating;
-    // explicit affected values
-    if (cr == CR_HASTE_MELEE || cr == CR_HASTE_RANGED || cr == CR_HASTE_SPELL)
+
+    UpdateRating(cr);
+
+    // 急速实际影响攻速/施法速度，必须基于 UpdateRating 后已套上限的有效 rating。
+    if (affectsHaste)
     {
-        double const mult = static_cast<double>(GetRatingMultiplier(cr));
-        double const oldValD = static_cast<double>(oldExtendedRating > 0 ? oldExtendedRating : oldRating) * mult;
-        double const newValD = static_cast<double>(_extendedBaseRatingValue[cr] > 0 ? _extendedBaseRatingValue[cr] : m_baseRatingValue[cr]) * mult;
-        float const oldVal = oldValD > static_cast<double>(std::numeric_limits<float>::max()) ? std::numeric_limits<float>::max() : static_cast<float>(oldValD);
-        float const newVal = newValD > static_cast<double>(std::numeric_limits<float>::max()) ? std::numeric_limits<float>::max() : static_cast<float>(newValD);
+        float const newHasteBonus = GetRatingBonusValue(cr);
+        if (oldHasteBonus == newHasteBonus)
+            return;
+
         switch (cr)
         {
             case CR_HASTE_MELEE:
-                ApplyAttackTimePercentMod(BASE_ATTACK, oldVal, false);
-                ApplyAttackTimePercentMod(OFF_ATTACK, oldVal, false);
-                ApplyAttackTimePercentMod(BASE_ATTACK, newVal, true);
-                ApplyAttackTimePercentMod(OFF_ATTACK, newVal, true);
+                ApplyAttackTimePercentMod(BASE_ATTACK, oldHasteBonus, false);
+                ApplyAttackTimePercentMod(OFF_ATTACK, oldHasteBonus, false);
+                ApplyAttackTimePercentMod(BASE_ATTACK, newHasteBonus, true);
+                ApplyAttackTimePercentMod(OFF_ATTACK, newHasteBonus, true);
                 break;
             case CR_HASTE_RANGED:
-                ApplyAttackTimePercentMod(RANGED_ATTACK, oldVal, false);
-                ApplyAttackTimePercentMod(RANGED_ATTACK, newVal, true);
+                ApplyAttackTimePercentMod(RANGED_ATTACK, oldHasteBonus, false);
+                ApplyAttackTimePercentMod(RANGED_ATTACK, newHasteBonus, true);
                 break;
             case CR_HASTE_SPELL:
-                ApplyCastTimePercentMod(oldVal, false);
-                ApplyCastTimePercentMod(newVal, true);
+                ApplyCastTimePercentMod(oldHasteBonus, false);
+                ApplyCastTimePercentMod(newHasteBonus, true);
                 break;
             default:
                 break;
         }
     }
-
-    UpdateRating(cr);
 }
 
 void Player::SetRegularAttackTime()
@@ -9216,7 +9368,7 @@ Pet* Player::SummonPet(uint32 entry, float x, float y, float z, float ang, PetTy
         pet->SetUInt32Value(UNIT_FIELD_PETEXPERIENCE, 0);
         pet->SetUInt32Value(UNIT_FIELD_PETNEXTLEVELEXP, 1000);
         pet->SetFullHealth();
-        pet->SetPower(POWER_MANA, pet->GetMaxPower(POWER_MANA));
+        pet->SetPowerForCombat(POWER_MANA, pet->GetMaxPowerForCombat(POWER_MANA));
         pet->SetUInt32Value(UNIT_FIELD_PET_NAME_TIMESTAMP, uint32(GameTime::GetGameTime().count())); // cast can't be helped in this case
     }
 
@@ -9936,7 +10088,7 @@ void Player::ApplySpellMod(uint32 spellId, SpellModOp op, T& basevalue, Spell* s
     if (!spellInfo)
         return;
 
-    float totalmul = 1.0f;
+    long double totalmul = 1.0L;
     int32 totalflat = 0;
 
     auto calculateSpellMod = [&](SpellModifier* mod)
@@ -9947,7 +10099,7 @@ void Player::ApplySpellMod(uint32 spellId, SpellModOp op, T& basevalue, Spell* s
 
         // skip if already instant or cost is free
         if (mod->op == SPELLMOD_CASTING_TIME || mod->op == SPELLMOD_COST)
-            if (((float)basevalue + (float)basevalue * (totalmul - 1.0f) + (float)totalflat) <= 0)
+            if ((static_cast<long double>(basevalue) + static_cast<long double>(basevalue) * (totalmul - 1.0L) + static_cast<long double>(totalflat)) <= 0.0L)
                 return;
 
         if (mod->type == SPELLMOD_FLAT)
@@ -9982,9 +10134,9 @@ void Player::ApplySpellMod(uint32 spellId, SpellModOp op, T& basevalue, Spell* s
 
             // xinef: those two mods should be multiplicative (Glyph of Renew)
             if (mod->op == SPELLMOD_DAMAGE || mod->op == SPELLMOD_DOT)
-                totalmul *= CalculatePct(1.0f, 100.0f + mod->value);
+                totalmul *= CalculatePct(1.0L, 100.0f + mod->value);
             else
-                totalmul += CalculatePct(1.0f, mod->value);
+                totalmul += CalculatePct(1.0L, mod->value);
         }
 
         DropModCharge(mod, spell);
@@ -10013,6 +10165,7 @@ void Player::ApplySpellMod(uint32 spellId, SpellModOp op, T& basevalue, Spell* s
 }
 
 template AC_GAME_API void Player::ApplySpellMod(uint32 spellId, SpellModOp op, int32& basevalue, Spell* spell, bool temporaryPet);
+template AC_GAME_API void Player::ApplySpellMod(uint32 spellId, SpellModOp op, int64& basevalue, Spell* spell, bool temporaryPet);
 template AC_GAME_API void Player::ApplySpellMod(uint32 spellId, SpellModOp op, uint32& basevalue, Spell* spell, bool temporaryPet);
 template AC_GAME_API void Player::ApplySpellMod(uint32 spellId, SpellModOp op, float& basevalue, Spell* spell, bool temporaryPet);
 template AC_GAME_API void Player::ApplySpellMod(uint32 spellId, SpellModOp op, long double& basevalue, Spell* spell, bool temporaryPet);
@@ -10505,7 +10658,7 @@ bool Player::ActivateTaxiPathTo(std::vector<uint32> const& nodes, Creature* npc 
         return false;
     }
 
-    uint32 money = GetMoney();
+    uint64 money = GetMoney();
 
     if (npc)
     {
@@ -10537,7 +10690,7 @@ bool Player::ActivateTaxiPathTo(std::vector<uint32> const& nodes, Creature* npc 
     {
         TaxiNodesEntry const* lastPathNode = sTaxiNodesStore.LookupEntry(nodes[nodes.size() - 1]);
         m_taxi.ClearTaxiDestinations();
-        ModifyMoney(-(int32)totalcost);
+        ModifyMoney(-static_cast<int64>(totalcost));
         UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_TRAVELLING, totalcost);
         TeleportTo(lastPathNode->map_id, lastPathNode->x, lastPathNode->y, lastPathNode->z, GetOrientation());
         return false;
@@ -10545,7 +10698,7 @@ bool Player::ActivateTaxiPathTo(std::vector<uint32> const& nodes, Creature* npc 
     else
     {
         m_flightSpellActivated = spellid;
-        ModifyMoney(-(int32)firstcost);
+        ModifyMoney(-static_cast<int64>(firstcost));
         UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_TRAVELLING, firstcost);
         GetSession()->SendActivateTaxiReply(ERR_TAXIOK);
         GetSession()->SendDoFlight(mount_display_id, sourcepath);
@@ -10783,7 +10936,7 @@ void Player::InitDisplayIds()
     }
 }
 
-inline bool Player::_StoreOrEquipNewItem(uint32 vendorslot, uint32 item, uint8 count, uint8 bag, uint8 slot, int32 price, ItemTemplate const* pProto, Creature* pVendor, VendorItem const* crItem, bool bStore)
+inline bool Player::_StoreOrEquipNewItem(uint32 vendorslot, uint32 item, uint8 count, uint8 bag, uint8 slot, uint64 price, ItemTemplate const* pProto, Creature* pVendor, VendorItem const* crItem, bool bStore)
 {
     ItemPosCountVec vDest;
     uint16 uiDest = 0;
@@ -10796,7 +10949,8 @@ inline bool Player::_StoreOrEquipNewItem(uint32 vendorslot, uint32 item, uint8 c
         return false;
     }
 
-    ModifyMoney(-price);
+    if (price > static_cast<uint64>(std::numeric_limits<int64>::max()) || !ModifyMoney(-static_cast<int64>(price)))
+        return false;
 
     if (crItem->ExtendedCost)                            // case for new honor system
     {
@@ -10980,19 +11134,21 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
         }
     }
 
-    uint32 price = 0;
+    uint64 price = 0;
     if (crItem->IsGoldRequired(pProto) && pProto->BuyPrice > 0) //Assume price cannot be negative (do not know why it is int32)
     {
-        uint32 maxCount = static_cast<uint32>(MAX_MONEY_AMOUNT / static_cast<uint64>(pProto->BuyPrice));
-        if ((uint32)count > maxCount)
+        uint64 unitPrice = static_cast<uint64>(pProto->BuyPrice);
+        uint64 maxCount = unitPrice ? std::numeric_limits<uint64>::max() / unitPrice : 0;
+        if (static_cast<uint64>(count) > maxCount)
         {
             LOG_ERROR("entities.player", "Player {} tried to buy {} item id {}, causing overflow", GetName(), (uint32)count, pProto->ItemId);
-            count = (uint8)maxCount;
+            count = maxCount > std::numeric_limits<uint8>::max() ? std::numeric_limits<uint8>::max() : static_cast<uint8>(maxCount);
         }
-        price = static_cast<uint32>(static_cast<uint64>(pProto->BuyPrice) * count); //it should not exceed MAX_MONEY_AMOUNT
+        price = unitPrice * count;
 
         // reputation discount
-        price = uint32(std::floor(price * GetReputationPriceDiscount(creature)));
+        long double discountedPrice = std::floor(static_cast<long double>(price) * static_cast<long double>(GetReputationPriceDiscount(creature)));
+        price = discountedPrice >= static_cast<long double>(std::numeric_limits<uint64>::max()) ? std::numeric_limits<uint64>::max() : static_cast<uint64>(discountedPrice);
 
         if (!HasEnoughMoney(price))
         {
@@ -11693,7 +11849,7 @@ void Player::InitPrimaryProfessions()
     SetFreePrimaryProfessions(sWorld->getIntConfig(CONFIG_MAX_PRIMARY_TRADE_SKILL));
 }
 
-bool Player::ModifyMoney(int64 amount, bool sendError /*= true*/)
+bool Player::ModifyMoney(int64 amount, bool /*sendError*/ /*= true*/)
 {
     if (!amount)
         return true;
@@ -11701,17 +11857,15 @@ bool Player::ModifyMoney(int64 amount, bool sendError /*= true*/)
     sScriptMgr->OnPlayerMoneyChanged(this, amount);
 
     if (amount < 0)
-        SetMoney (GetMoney() > uint64(-amount) ? GetMoney() + amount : 0);
+    {
+        uint64 reduction = amount == std::numeric_limits<int64>::min() ? static_cast<uint64>(std::numeric_limits<int64>::max()) + 1 : static_cast<uint64>(-amount);
+        SetMoney(GetMoney() > reduction ? GetMoney() - reduction : 0);
+    }
     else
     {
-        if (GetMoney() < uint64(MAX_MONEY_AMOUNT - amount))
-            SetMoney(GetMoney() + amount);
-        else
-        {
-            if (sendError)
-                SendEquipError(EQUIP_ERR_TOO_MUCH_GOLD, nullptr, nullptr);
-            return false;
-        }
+        uint64 add = static_cast<uint64>(amount);
+        uint64 money = GetMoney();
+        SetMoney(add > std::numeric_limits<uint64>::max() - money ? std::numeric_limits<uint64>::max() : money + add);
     }
 
     return true;
@@ -13021,14 +13175,14 @@ void Player::ResurectUsingRequestData()
     else
         SetFullHealth();
 
-    if (GetMaxPower(POWER_MANA) > m_resurrectMana)
-        SetPower(POWER_MANA, m_resurrectMana);
+    if (GetMaxPowerForCombat(POWER_MANA) > m_resurrectMana)
+        SetPowerForCombat(POWER_MANA, m_resurrectMana);
     else
-        SetPower(POWER_MANA, GetMaxPower(POWER_MANA));
+        SetPowerForCombat(POWER_MANA, GetMaxPowerForCombat(POWER_MANA));
 
     SetPower(POWER_RAGE, 0);
 
-    SetPower(POWER_ENERGY, GetMaxPower(POWER_ENERGY));
+    SetPowerForCombat(POWER_ENERGY, GetMaxPowerForCombat(POWER_ENERGY));
 
     SpawnCorpseBones();
 }
@@ -14041,11 +14195,13 @@ void Player::HandleFall(MovementInfo const& movementInfo)
         int32 safe_fall = GetTotalAuraModifier(SPELL_AURA_SAFE_FALL);
 
         float damageperc = 0.018f * (z_diff - safe_fall) - 0.2426f;
-        uint32 original_health = GetHealth(), final_damage = 0;
+        uint64 original_health = GetHealthForCombat();
+        uint64 final_damage = 0;
 
         if (damageperc > 0 && !IsImmunedToDamageOrSchool(SPELL_SCHOOL_MASK_NORMAL))
         {
-            uint32 damage = (uint32)(damageperc * GetMaxHealth() * sWorld->getRate(RATE_DAMAGE_FALL));
+            long double fallDamage = static_cast<long double>(damageperc) * static_cast<long double>(GetMaxHealthForCombat()) * static_cast<long double>(sWorld->getRate(RATE_DAMAGE_FALL));
+            uint64 damage = fallDamage <= 0.0L ? 0 : (fallDamage > static_cast<long double>(std::numeric_limits<uint64>::max()) ? std::numeric_limits<uint64>::max() : static_cast<uint64>(fallDamage));
 
             //float height = movementInfo.pos.m_positionZ;
             //UpdateGroundPositionZ(movementInfo.pos.m_positionX, movementInfo.pos.m_positionY, height);
@@ -14053,12 +14209,12 @@ void Player::HandleFall(MovementInfo const& movementInfo)
             if (damage > 0)
             {
                 //Prevent fall damage from being more than the player maximum health
-                if (damage > GetMaxHealth())
-                    damage = GetMaxHealth();
+                if (damage > GetMaxHealthForCombat())
+                    damage = GetMaxHealthForCombat();
 
                 // Gust of Wind
                 if (HasAura(43621))
-                    damage = GetMaxHealth() / 2;
+                    damage = GetMaxHealthForCombat() / 2;
 
                 // Divine Protection
                 if (HasAura(498))
@@ -14941,10 +15097,10 @@ void Player::_SaveCharacter(bool create, CharacterDatabaseTransaction trans)
         stmt->SetData(index++, GetUInt64Value(PLAYER_FIELD_KNOWN_CURRENCIES));
         stmt->SetData(index++, GetUInt32Value(PLAYER_FIELD_WATCHED_FACTION_INDEX));
         stmt->SetData(index++, GetDrunkValue());
-        stmt->SetData(index++, GetHealth());
+        stmt->SetData(index++, GetHealthForCombat());
 
         for (uint32 i = 0; i < MAX_POWERS; ++i)
-            stmt->SetData(index++, GetPower(Powers(i)));
+            stmt->SetData(index++, GetPowerForCombat(Powers(i)));
 
         stmt->SetData(index++, GetSession()->GetLatency());
 
@@ -15081,10 +15237,10 @@ void Player::_SaveCharacter(bool create, CharacterDatabaseTransaction trans)
         stmt->SetData(index++, GetUInt64Value(PLAYER_FIELD_KNOWN_CURRENCIES));
         stmt->SetData(index++, GetUInt32Value(PLAYER_FIELD_WATCHED_FACTION_INDEX));
         stmt->SetData(index++, GetDrunkValue());
-        stmt->SetData(index++, GetHealth());
+        stmt->SetData(index++, GetHealthForCombat());
 
         for (uint32 i = 0; i < MAX_POWERS; ++i)
-            stmt->SetData(index++, GetPower(Powers(i)));
+            stmt->SetData(index++, GetPowerForCombat(Powers(i)));
 
         stmt->SetData(index++, GetSession()->GetLatency());
 
@@ -15713,7 +15869,7 @@ bool Player::EnsureItemRefundData(Item* item)
     if (PreparedQueryResult result = CharacterDatabase.Query(stmt))
     {
         item->SetRefundRecipient((*result)[0].Get<uint32>());
-        item->SetPaidMoney((*result)[1].Get<uint32>());
+        item->SetPaidMoney((*result)[1].Get<uint64>());
         item->SetPaidExtendedCost((*result)[2].Get<uint16>());
 
         AddRefundReference(item->GetGUID());
@@ -15756,7 +15912,7 @@ void Player::SendRefundInfo(Item* item)
 
     WorldPacket data(SMSG_ITEM_REFUND_INFO_RESPONSE, 8 + 4 + 4 + 4 + 4 * 4 + 4 * 4 + 4 + 4);
     data << item->GetGUID();                            // item guid
-    data << uint32(item->GetPaidMoney());               // money cost
+    data << ToUInt32ForDBC(item->GetPaidMoney());       // money cost
     data << uint32(iece->reqhonorpoints);               // honor point cost
     data << uint32(iece->reqarenapoints);               // arena point cost
     for (uint8 i = 0; i < MAX_ITEM_EXTENDED_COST_REQUIREMENTS; ++i)                       // item cost data
@@ -15865,7 +16021,7 @@ void Player::RefundItem(Item* item)
     WorldPacket data(SMSG_ITEM_REFUND_RESULT, 8 + 4 + 4 + 4 + 4 + 4 * 4 + 4 * 4);
     data << item->GetGUID();                            // item guid
     data << uint32(0);                                  // 0, or error code
-    data << uint32(item->GetPaidMoney());               // money cost
+    data << ToUInt32ForDBC(item->GetPaidMoney());       // money cost
     data << uint32(iece->reqhonorpoints);               // honor point cost
     data << uint32(iece->reqarenapoints);               // arena point cost
     for (uint8 i = 0; i < MAX_ITEM_EXTENDED_COST_REQUIREMENTS; ++i) // item cost data
@@ -15875,7 +16031,7 @@ void Player::RefundItem(Item* item)
     }
     GetSession()->SendPacket(&data);
 
-    uint32 moneyRefund = item->GetPaidMoney();  // item-> will be invalidated in DestroyItem
+    uint64 moneyRefund = item->GetPaidMoney();  // item-> will be invalidated in DestroyItem
 
     // Save all relevant data to DB to prevent desynchronisation exploits
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
@@ -15903,7 +16059,12 @@ void Player::RefundItem(Item* item)
 
     // Grant back money
     if (moneyRefund)
-        ModifyMoney(moneyRefund); // Saved in SaveInventoryAndGoldToDB
+    {
+        if (moneyRefund > static_cast<uint64>(std::numeric_limits<int64>::max()))
+            SetMoney(moneyRefund > std::numeric_limits<uint64>::max() - GetMoney() ? std::numeric_limits<uint64>::max() : GetMoney() + moneyRefund);
+        else
+            ModifyMoney(static_cast<int64>(moneyRefund)); // Saved in SaveInventoryAndGoldToDB
+    }
 
     // Grant back Honor points
     if (uint32 honorRefund = iece->reqhonorpoints)
@@ -16064,8 +16225,8 @@ void Player::_LoadPetStable(uint8 petStableSlots, PreparedQueryResult result)
             PetSaveMode slot = PetSaveMode(fields[6].Get<uint8>());
             petInfo.Name = fields[7].Get<std::string>();
             petInfo.WasRenamed = fields[8].Get<bool>();
-            petInfo.Health = fields[9].Get<uint32>();
-            petInfo.Mana = fields[10].Get<uint32>();
+            petInfo.Health = fields[9].Get<uint64>();
+            petInfo.Mana = fields[10].Get<uint64>();
             petInfo.Happiness = fields[11].Get<uint32>();
             petInfo.ActionBar = fields[12].Get<std::string>();
             petInfo.LastSaveTime = fields[13].Get<uint32>();

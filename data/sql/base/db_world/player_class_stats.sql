@@ -23,8 +23,8 @@ DROP TABLE IF EXISTS `player_class_stats`;
 CREATE TABLE `player_class_stats` (
   `Class` tinyint unsigned NOT NULL,
   `Level` tinyint unsigned NOT NULL,
-  `BaseHP` int unsigned NOT NULL DEFAULT '1',
-  `BaseMana` int unsigned NOT NULL DEFAULT '1',
+  `BaseHP` bigint unsigned NOT NULL DEFAULT '1',
+  `BaseMana` bigint unsigned NOT NULL DEFAULT '1',
   `Strength` int unsigned NOT NULL DEFAULT '0',
   `Agility` int unsigned NOT NULL DEFAULT '0',
   `Stamina` int unsigned NOT NULL DEFAULT '0',
@@ -799,4 +799,3 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2024-12-17 22:34:15
-

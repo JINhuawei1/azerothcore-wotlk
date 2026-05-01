@@ -690,7 +690,8 @@ void SmartScript::ProcessAction(SmartScriptHolder& e, Unit* unit, uint32 var0, u
                     bool isRangedAttack = spellMaxRange > NOMINAL_MELEE_RANGE;
                     bool isTargetRooted = target->ToUnit()->HasUnitState(UNIT_STATE_ROOT);
                     // To prevent running back and forth when OOM, we must have more than 10% mana.
-                    bool canCastSpell = me->GetPowerPct(POWER_MANA) > 10.0f && spellInfo->CalcPowerCost(me, spellInfo->GetSchoolMask()) < (int32)me->GetPower(POWER_MANA) && !me->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_SILENCED);
+                    int64 powerCost = spellInfo->CalcPowerCost(me, spellInfo->GetSchoolMask());
+                    bool canCastSpell = me->GetPowerPct(POWER_MANA) > 10.0f && (powerCost <= 0 || me->GetPowerForCombat(POWER_MANA) >= static_cast<uint64>(powerCost)) && !me->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_SILENCED);
                     bool isSpellIgnoreLOS = spellInfo->HasAttribute(SPELL_ATTR2_IGNORE_LINE_OF_SIGHT);
 
                     // If target is rooted we move out of melee range before casting, but not further than spell max range.
@@ -2462,21 +2463,21 @@ void SmartScript::ProcessAction(SmartScriptHolder& e, Unit* unit, uint32 var0, u
         {
             for (WorldObject* target : targets)
                 if (IsUnit(target))
-                    target->ToUnit()->SetPower(Powers(e.action.power.powerType), e.action.power.newPower);
+                    target->ToUnit()->SetPowerForCombat(Powers(e.action.power.powerType), e.action.power.newPower);
             break;
         }
         case SMART_ACTION_ADD_POWER:
         {
             for (WorldObject* target : targets)
                 if (IsUnit(target))
-                    target->ToUnit()->SetPower(Powers(e.action.power.powerType), target->ToUnit()->GetPower(Powers(e.action.power.powerType)) + e.action.power.newPower);
+                    target->ToUnit()->ModifyPower64(Powers(e.action.power.powerType), e.action.power.newPower);
             break;
         }
         case SMART_ACTION_REMOVE_POWER:
         {
             for (WorldObject* target : targets)
                 if (IsUnit(target))
-                    target->ToUnit()->SetPower(Powers(e.action.power.powerType), target->ToUnit()->GetPower(Powers(e.action.power.powerType)) - e.action.power.newPower);
+                    target->ToUnit()->ModifyPower64(Powers(e.action.power.powerType), -static_cast<int64>(e.action.power.newPower));
             break;
         }
         case SMART_ACTION_GAME_EVENT_STOP:
@@ -2726,12 +2727,13 @@ void SmartScript::ProcessAction(SmartScriptHolder& e, Unit* unit, uint32 var0, u
 
                         bool _allowMove = false;
                         SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(e.action.castCustom.spell); // AssertSpellInfo?
-                        int32 mana = me->GetPower(POWER_MANA);
+                        uint64 mana = me->GetPowerForCombat(POWER_MANA);
+                        int64 powerCost = spellInfo->CalcPowerCost(me, spellInfo->GetSchoolMask());
 
                         if (me->GetDistance(target->ToUnit()) > spellInfo->GetMaxRange(true) ||
                             me->GetDistance(target->ToUnit()) < spellInfo->GetMinRange(true) ||
                             !me->IsWithinLOSInMap(target->ToUnit()) ||
-                            mana < spellInfo->CalcPowerCost(me, spellInfo->GetSchoolMask()))
+                            (powerCost > 0 && mana < static_cast<uint64>(powerCost)))
                             _allowMove = true;
 
                         CAST_AI(SmartAI, me->AI())->SetCombatMove(_allowMove);
@@ -2918,7 +2920,7 @@ void SmartScript::ProcessAction(SmartScriptHolder& e, Unit* unit, uint32 var0, u
         {
             for (WorldObject* target : targets)
                 if (Unit* targetUnit = target->ToUnit())
-                    targetUnit->SetHealth(targetUnit->CountPctFromMaxHealth(e.action.setHealthPct.percent));
+                    targetUnit->SetHealthForCombat(targetUnit->CountPctFromMaxHealth(e.action.setHealthPct.percent));
             break;
         }
         case SMART_ACTION_SET_MOVEMENT_SPEED:

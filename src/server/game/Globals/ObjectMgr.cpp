@@ -2207,8 +2207,8 @@ void ObjectMgr::LoadCreatures()
         data.spawntimesecs      = fields[10].Get<uint32>();
         data.wander_distance    = fields[11].Get<float>();
         data.currentwaypoint    = fields[12].Get<uint32>();
-        data.curhealth          = fields[13].Get<uint32>();
-        data.curmana            = fields[14].Get<uint32>();
+        data.curhealth          = fields[13].Get<uint64>();
+        data.curmana            = fields[14].Get<uint64>();
         data.movementType       = fields[15].Get<uint8>();
         data.spawnMask          = fields[16].Get<uint8>();
         data.phaseMask          = fields[17].Get<uint32>();
@@ -3658,8 +3658,8 @@ void ObjectMgr::LoadPetLevelInfo()
         // data for level 1 stored in [0] array element, ...
         PetLevelInfo* pLevelInfo = &pInfoMapEntry[current_level - 1];
 
-        pLevelInfo->health = fields[2].Get<uint32>();
-        pLevelInfo->mana   = fields[3].Get<uint32>();
+        pLevelInfo->health = fields[2].Get<uint64>();
+        pLevelInfo->mana   = fields[3].Get<uint64>();
         pLevelInfo->armor  = fields[9].Get<uint32>();
         pLevelInfo->min_dmg = fields[10].Get<uint32>();
         pLevelInfo->max_dmg = fields[11].Get<uint32>();
@@ -4234,8 +4234,8 @@ void ObjectMgr::LoadPlayerInfo()
 
             PlayerClassLevelInfo& levelInfo = info->levelInfo[current_level - 1];
 
-            levelInfo.basehealth = fields[7].Get<uint32>();
-            levelInfo.basemana = fields[8].Get<uint32>();
+            levelInfo.basehealth = fields[7].Get<uint64>();
+            levelInfo.basemana = fields[8].Get<uint64>();
 
             ++count;
         } while (result->NextRow());
@@ -7450,8 +7450,8 @@ void ObjectMgr::LoadGameObjectTemplateAddons()
         GameObjectTemplateAddon& gameObjectAddon = _gameObjectTemplateAddonStore[entry];
         gameObjectAddon.faction = uint32(fields[1].Get<uint16>());
         gameObjectAddon.flags   = fields[2].Get<uint32>();
-        gameObjectAddon.mingold = fields[3].Get<uint32>();
-        gameObjectAddon.maxgold = fields[4].Get<uint32>();
+        gameObjectAddon.mingold = fields[3].Get<uint64>();
+        gameObjectAddon.maxgold = fields[4].Get<uint64>();
 
         for (uint32 i = 0; i < gameObjectAddon.artKits.size(); i++)
         {
@@ -9445,7 +9445,7 @@ void ObjectMgr::LoadGossipMenuItems()
         gMenuItem.ActionMenuID              = fields[7].Get<uint32>();
         gMenuItem.ActionPoiID               = fields[8].Get<uint32>();
         gMenuItem.BoxCoded                  = fields[9].Get<bool>();
-        gMenuItem.BoxMoney                  = fields[10].Get<uint32>();
+        gMenuItem.BoxMoney                  = fields[10].Get<uint64>();
         gMenuItem.BoxText                   = fields[11].Get<std::string>();
         gMenuItem.BoxBroadcastTextID        = fields[12].Get<uint32>();
 
@@ -10303,7 +10303,7 @@ void ObjectMgr::LoadQuestMoneyRewards()
 
         for (uint8 i = 0; i < MAX_QUEST_MONEY_REWARDS; ++i)
         {
-            questMoneyReward[i] = fields[1 + i].Get<uint32>();
+            questMoneyReward[i] = fields[1 + i].Get<uint64>();
             ++count;
         }
     } while (result->NextRow());
@@ -10312,7 +10312,7 @@ void ObjectMgr::LoadQuestMoneyRewards()
     LOG_INFO("server.loading", " ");
 }
 
-uint32 ObjectMgr::GetQuestMoneyReward(uint8 level, uint32 questMoneyDifficulty) const
+uint64 ObjectMgr::GetQuestMoneyReward(uint8 level, uint64 questMoneyDifficulty) const
 {
     if (questMoneyDifficulty < MAX_QUEST_MONEY_REWARDS)
     {

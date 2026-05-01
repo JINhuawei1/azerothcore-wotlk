@@ -343,10 +343,10 @@ public:
     // Item Refund system
     void SetNotRefundable(Player* owner, bool changestate = true, CharacterDatabaseTransaction* trans = nullptr);
     void SetRefundRecipient(ObjectGuid::LowType pGuidLow) { m_refundRecipient = pGuidLow; }
-    void SetPaidMoney(uint32 money) { m_paidMoney = money; }
+    void SetPaidMoney(uint64 money) { m_paidMoney = money; }
     void SetPaidExtendedCost(uint32 iece) { m_paidExtendedCost = iece; }
     ObjectGuid::LowType GetRefundRecipient() { return m_refundRecipient; }
-    uint32 GetPaidMoney() { return m_paidMoney; }
+    uint64 GetPaidMoney() { return m_paidMoney; }
     uint32 GetPaidExtendedCost() { return m_paidExtendedCost; }
 
     void UpdatePlayedTime(Player* owner);
@@ -375,7 +375,7 @@ private:
     bool mb_in_trade;                                   // true if item is currently in trade-window
     time_t m_lastPlayedTimeUpdate;
     uint32 m_refundRecipient;
-    uint32 m_paidMoney;
+    uint64 m_paidMoney;
     uint32 m_paidExtendedCost;
     AllowedLooterSet allowedGUIDs;
 };

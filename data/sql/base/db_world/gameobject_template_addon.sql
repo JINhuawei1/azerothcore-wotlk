@@ -24,8 +24,8 @@ CREATE TABLE `gameobject_template_addon` (
   `entry` int unsigned NOT NULL DEFAULT '0',
   `faction` smallint unsigned NOT NULL DEFAULT '0',
   `flags` int unsigned NOT NULL DEFAULT '0',
-  `mingold` int unsigned NOT NULL DEFAULT '0',
-  `maxgold` int unsigned NOT NULL DEFAULT '0',
+  `mingold` bigint unsigned NOT NULL DEFAULT '0',
+  `maxgold` bigint unsigned NOT NULL DEFAULT '0',
   `artkit0` int NOT NULL DEFAULT '0',
   `artkit1` int NOT NULL DEFAULT '0',
   `artkit2` int NOT NULL DEFAULT '0',
@@ -21546,4 +21546,3 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2024-12-17 22:33:53
-

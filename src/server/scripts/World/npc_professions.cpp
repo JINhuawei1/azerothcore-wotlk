@@ -429,7 +429,7 @@ void ProcessCastaction(Player* player, Creature* creature, uint32 spellId, uint3
     if ((!spellId || !player->HasSpell(spellId)) && player->HasEnoughMoney(cost))
     {
         player->CastSpell(player, triggeredSpellId, true);
-        player->ModifyMoney(-cost);
+        player->ModifyMoney(-static_cast<int64>(cost));
 
         // xinef: save spells!
         player->SaveToDB(false, false);
@@ -447,7 +447,7 @@ void ProcessUnlearnAction(Player* player, Creature* creature, uint32 spellId, ui
         {
             player->CastSpell(player, spellId, true);
             ProfessionUnlearnSpells(player, spellId);
-            player->ModifyMoney(-cost);
+            player->ModifyMoney(-static_cast<int64>(cost));
             if (alternativeSpellId)
                 creature->CastSpell(player, alternativeSpellId, true);
 

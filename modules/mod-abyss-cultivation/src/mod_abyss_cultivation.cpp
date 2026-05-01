@@ -468,6 +468,49 @@ uint32 ScaleUIntValue(uint32 value, float scale)
     return std::max<uint32>(1u, static_cast<uint32>(std::lround(static_cast<double>(value) * scale)));
 }
 
+int64 ScaleUInt64ToInt64(uint64 value, long double scale)
+{
+    if (value == 0 || scale <= 0.0L)
+        return 0;
+
+    long double scaledValue = static_cast<long double>(value) * scale;
+    if (scaledValue >= static_cast<long double>(std::numeric_limits<int64>::max()))
+        return std::numeric_limits<int64>::max();
+
+    return std::max<int64>(1, static_cast<int64>(std::llround(scaledValue)));
+}
+
+uint64 ScaleUInt64ToUInt64(uint64 value, long double scale)
+{
+    if (value == 0 || scale <= 0.0L)
+        return 0;
+
+    long double scaledValue = static_cast<long double>(value) * scale;
+    if (scaledValue >= static_cast<long double>(std::numeric_limits<uint64>::max()))
+        return std::numeric_limits<uint64>::max();
+
+    return std::max<uint64>(1, static_cast<uint64>(std::llround(scaledValue)));
+}
+
+float ScaleUInt64ToFloat(uint64 value, long double scale)
+{
+    if (value == 0 || scale <= 0.0L)
+        return 0.0f;
+
+    long double scaledValue = static_cast<long double>(value) * scale;
+    if (scaledValue >= static_cast<long double>(std::numeric_limits<float>::max()))
+        return std::numeric_limits<float>::max();
+
+    return static_cast<float>(scaledValue);
+}
+
+constexpr uint64 ABYSS_CLIENT_VISIBLE_HEALTH_LIMIT = 2147483520ULL;
+
+uint32 ToAbyssClientHealth(uint64 value)
+{
+    return value > ABYSS_CLIENT_VISIBLE_HEALTH_LIMIT ? static_cast<uint32>(ABYSS_CLIENT_VISIBLE_HEALTH_LIMIT) : static_cast<uint32>(value);
+}
+
 int64 ScaleIntValue(int64 value, float scale)
 {
     if (value == 0 || scale <= 0.0f)
@@ -1656,6 +1699,17 @@ public:
             config.hasteRatingWeight = fields[22].Get<uint8>();
             config.attackPowerWeight = fields[23].Get<uint8>();
             config.spellPowerWeight = fields[24].Get<uint8>();
+
+            if (config.relicType == 2)
+            {
+                config.activeSlot = ABYSS_RELIC_SLOT_PHASE;
+                config.recommendedSlot = ABYSS_RELIC_SLOT_PHASE;
+            }
+            else if (config.relicType == 3)
+            {
+                config.activeSlot = ABYSS_RELIC_SLOT_ULTIMATE;
+                config.recommendedSlot = ABYSS_RELIC_SLOT_ULTIMATE;
+            }
 
             _relicConfigs[config.itemId] = config;
             ++count;
@@ -3982,7 +4036,7 @@ public:
             {
                 float scale = GetActiveScriptGroupScale(player, "遗物_腐花心核");
                 TriggerBloomBurst(player, dummyCooldown, scale);
-                player->ModifyPower(player->getPowerType(), ScaleIntValue(10, scale));
+                player->ModifyPower64(player->getPowerType(), ScaleIntValue(10, scale));
                 break;
             }
             case 89114: // 梦沼眼膜
@@ -4621,7 +4675,7 @@ public:
             return;
 
         player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(6), scale));
-        player->ModifyPower(player->getPowerType(), ScaleIntValue(20, scale));
+        player->ModifyPower64(player->getPowerType(), ScaleIntValue(20, scale));
         cooldownTime = GetNow();
 
         if (Unit* target = GetPrimaryCombatTarget(player))
@@ -6296,19 +6350,15 @@ public:
         if (powerType == POWER_HEALTH)
             return;
 
-        int32 maxPower = player->GetMaxPower(powerType);
-        if (maxPower <= 0)
+        uint64 maxPower = player->GetMaxPowerForCombat(powerType);
+        if (maxPower == 0)
             return;
 
-        int32 addPower = static_cast<int32>(std::lround(float(maxPower) * pct / 100.0f));
+        int64 addPower = ScaleUInt64ToInt64(maxPower, static_cast<long double>(pct) / 100.0L);
         if (addPower <= 0)
             return;
 
-        uint32 currentPower = player->GetPower(powerType);
-        uint32 maxPowerValue = static_cast<uint32>(maxPower);
-        uint32 addPowerValue = static_cast<uint32>(addPower);
-        uint32 newPower = std::min<uint32>(maxPowerValue, currentPower + addPowerValue);
-        player->SetPower(powerType, newPower);
+        player->ModifyPower64(powerType, addPower);
     }
 
     bool HandlePlayerSetDeathProtection(Player* player)
@@ -6324,7 +6374,8 @@ public:
         {
             procState.lastSetRebirthTime = now;
             player->ResurrectPlayer(1.0f, false);
-            player->SetFullHealth();
+            player->SetExtendedHealth(player->GetMaxHealthForCombat());
+            player->SyncClientHealthFromExtended();
             RestorePlayerPrimaryPowerPct(player, 100.0f);
             player->UpdateAllStats();
             player->UpdateAllRatings();
@@ -6340,7 +6391,8 @@ public:
         {
             procState.lastSetRebirthTime = now;
             player->ResurrectPlayer(1.0f, false);
-            player->SetFullHealth();
+            player->SetExtendedHealth(player->GetMaxHealthForCombat());
+            player->SyncClientHealthFromExtended();
             RestorePlayerPrimaryPowerPct(player, 100.0f);
             player->UpdateAllStats();
             player->UpdateAllRatings();
@@ -6431,7 +6483,7 @@ private:
                 player->ApplyRatingMod(CR_HASTE_MELEE, config->fourPieceHaste, true);
             if (config->fourPieceHpPct > 0)
             {
-                float bonus = player->GetMaxHealth() * config->fourPieceHpPct / 100.0f;
+                float bonus = ScaleUInt64ToFloat(player->GetMaxHealthForCombat(), static_cast<long double>(config->fourPieceHpPct) / 100.0L);
                 player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, bonus, true);
             }
 
@@ -6448,7 +6500,7 @@ private:
                 player->ApplyRatingMod(CR_HASTE_MELEE, config->sixPieceHaste, true);
             if (config->sixPieceHpPct > 0)
             {
-                float bonus = player->GetMaxHealth() * config->sixPieceHpPct / 100.0f;
+                float bonus = ScaleUInt64ToFloat(player->GetMaxHealthForCombat(), static_cast<long double>(config->sixPieceHpPct) / 100.0L);
                 player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, bonus, true);
             }
 
@@ -6465,7 +6517,7 @@ private:
                 player->ApplyRatingMod(CR_HASTE_MELEE, config->eightPieceHaste, true);
             if (config->eightPieceHpPct > 0)
             {
-                float bonus = player->GetMaxHealth() * config->eightPieceHpPct / 100.0f;
+                float bonus = ScaleUInt64ToFloat(player->GetMaxHealthForCombat(), static_cast<long double>(config->eightPieceHpPct) / 100.0L);
                 player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, bonus, true);
             }
 
@@ -6515,7 +6567,7 @@ private:
                 player->ApplyRatingMod(CR_HASTE_MELEE, config->fourPieceHaste, false);
             if (config->fourPieceHpPct > 0)
             {
-                float bonus = player->GetMaxHealth() * config->fourPieceHpPct / 100.0f;
+                float bonus = ScaleUInt64ToFloat(player->GetMaxHealthForCombat(), static_cast<long double>(config->fourPieceHpPct) / 100.0L);
                 player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, bonus, false);
             }
 
@@ -6532,7 +6584,7 @@ private:
                 player->ApplyRatingMod(CR_HASTE_MELEE, config->sixPieceHaste, false);
             if (config->sixPieceHpPct > 0)
             {
-                float bonus = player->GetMaxHealth() * config->sixPieceHpPct / 100.0f;
+                float bonus = ScaleUInt64ToFloat(player->GetMaxHealthForCombat(), static_cast<long double>(config->sixPieceHpPct) / 100.0L);
                 player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, bonus, false);
             }
 
@@ -6549,7 +6601,7 @@ private:
                 player->ApplyRatingMod(CR_HASTE_MELEE, config->eightPieceHaste, false);
             if (config->eightPieceHpPct > 0)
             {
-                float bonus = player->GetMaxHealth() * config->eightPieceHpPct / 100.0f;
+                float bonus = ScaleUInt64ToFloat(player->GetMaxHealthForCombat(), static_cast<long double>(config->eightPieceHpPct) / 100.0L);
                 player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, bonus, false);
             }
 
@@ -6741,13 +6793,21 @@ public:
         float scale = 1.0f + ((healthScale - 1.0f) * 0.10f);
         scale = std::min(std::max(scale, 1.0f), 2.0f);
 
-        uint32 baseHealth = creature->GetMaxHealth();
+        uint64 baseHealth = creature->GetMaxHealthForCombat();
         if (baseHealth > 0)
         {
-            uint32 tunedHealth = static_cast<uint32>(static_cast<float>(baseHealth) * healthScale);
-            tunedHealth = std::max<uint32>(tunedHealth, baseHealth);
-            creature->SetMaxHealth(tunedHealth);
-            creature->SetHealth(tunedHealth);
+            uint64 tunedHealth = ScaleUInt64ToUInt64(baseHealth, static_cast<long double>(healthScale));
+            tunedHealth = std::max<uint64>(tunedHealth, baseHealth);
+            uint32 clientHealth = ToAbyssClientHealth(tunedHealth);
+            creature->SetMaxHealth(clientHealth);
+            if (tunedHealth > clientHealth)
+            {
+                creature->SetExtendedMaxHealth(tunedHealth);
+                creature->SetExtendedHealth(tunedHealth);
+                creature->SyncClientHealthFromExtended();
+            }
+            else
+                creature->SetHealth(clientHealth);
         }
 
         creature->SetObjectScale(scale);
@@ -7143,7 +7203,7 @@ public:
         return false;
     }
 
-    bool TryUnlockStageArtifacts(uint32 guid, PlayerAbyssData& data)
+    bool TryUnlockStageArtifacts(uint32 guid, PlayerAbyssData& /*data*/)
     {
         bool changed = false;
         uint32 now = GetNow();
@@ -7173,12 +7233,6 @@ public:
 
             if (EnsureCollectionEntry(guid, 2, phaseArtifactId, 0, 1, 0, 2, now))
                 changed = true;
-
-            if (data.phaseArtifact == 0)
-            {
-                data.phaseArtifact = phaseArtifactId;
-                changed = true;
-            }
         }
 
         return changed;
@@ -7204,12 +7258,6 @@ public:
 
             uint32 now = GetNow();
             bool changed = EnsureCollectionEntry(guid, 2, relic.itemId, relic.relatedChapterId, 1, 0, 2, now);
-            if (data.ultimateArtifact == 0)
-            {
-                data.ultimateArtifact = relic.itemId;
-                changed = true;
-            }
-
             return changed;
         }
 
@@ -8008,9 +8056,11 @@ public:
 
         if (isModeBossKill)
         {
-            if (state.abyssBossSummoned || state.pendingAbyssModeType != 0)
+            // 仅清理待召唤标记；保留 abyssBossSummoned=true，避免在非连锁模式（如腐化直入）
+            // 因锚点击杀位仍置位而被 IsAbyssSummonReady 判定为可再次召唤，造成同一模式首领被无限重新召唤。
+            // 连锁分支不依赖该标志（ScheduleDelayedModeBossSummon 不读取它，ExecuteDelayedModeBossSummon 会再写入 true）。
+            if (state.pendingAbyssModeType != 0)
             {
-                state.abyssBossSummoned = false;
                 state.pendingAbyssModeType = 0;
                 changed = true;
             }
@@ -8510,12 +8560,24 @@ void SendAbyssStateToAddon(Player* player)
     PlayerAbyssRunState const* runState = sAbyssCultivationMgr->GetDisplayRunState(player);
     AbyssChapterConfig const* currentMapChapter = sAbyssCultivationMgr->GetChapterConfigByMapId(player->GetMapId());
 
+    std::string currentChapterName = currentChapter ? SanitizeAddonText(currentChapter->chapterName) : "0";
+    if (currentChapterName.empty())
+        currentChapterName = "0";
+
+    std::string nextChapterName = nextChapter ? SanitizeAddonText(nextChapter->chapterName) : "0";
+    if (nextChapterName.empty())
+        nextChapterName = "0";
+
+    std::string currentMapChapterName = currentMapChapter ? SanitizeAddonText(currentMapChapter->chapterName) : "0";
+    if (currentMapChapterName.empty())
+        currentMapChapterName = "0";
+
     std::ostringstream payload;
     payload << "STATE:"
             << guid << '|'
             << static_cast<uint32>(player->GetLevel()) << '|'
             << playerData->currentChapter << '|'
-            << SanitizeAddonText(currentChapter ? currentChapter->chapterName : std::string()) << '|'
+            << currentChapterName << '|'
             << playerData->highestChapter << '|'
             << playerData->currentCultivationThreshold << '|'
             << static_cast<uint32>(playerData->storyState) << '|'
@@ -8539,10 +8601,10 @@ void SendAbyssStateToAddon(Player* player)
             << (runState ? (runState->abyssBossSummoned ? 1 : 0) : 0) << '|'
             << (runState ? (runState->cacheBossSummoned ? 1 : 0) : 0) << '|'
             << (nextChapter ? nextChapter->chapterId : 0) << '|'
-            << SanitizeAddonText(nextChapter ? nextChapter->chapterName : std::string()) << '|'
+            << nextChapterName << '|'
             << player->GetMapId() << '|'
             << (currentMapChapter ? currentMapChapter->chapterId : 0) << '|'
-            << SanitizeAddonText(currentMapChapter ? currentMapChapter->chapterName : std::string());
+            << currentMapChapterName;
 
     SendAbyssPayload(player, payload.str());
 }
@@ -12261,7 +12323,7 @@ void ApplyArtifactWeaponActFollowup(Player* player, Unit* target, uint8 actId, A
             break;
         case 2:
         {
-            int32 healAmount = std::max<int32>(1, static_cast<int32>(std::lround(float(player->GetMaxHealth()) * 0.02f * scale)));
+            int64 healAmount = ScaleUInt64ToInt64(player->GetMaxHealthForCombat(), 0.02L * static_cast<long double>(scale));
             player->ModifyHealth(healAmount);
             break;
         }
@@ -12321,7 +12383,7 @@ void HandleArtifactWeaponAxeProc(uint32 spellId, Player* player, Unit* target)
     {
         DealArtifactWeaponDamage(player, target, ARTIFACT_WEAPON_AXE, theme.primarySchool, 2.40f * theme.scalar);
         DealArtifactWeaponAreaDamage(player, target, ARTIFACT_WEAPON_AXE, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_AXE, true), 0.80f * theme.scalar, 6.0f);
-        int32 healAmount = std::max<int32>(1, static_cast<int32>(std::lround(float(player->GetMaxHealth()) * 0.04f * theme.scalar)));
+        int64 healAmount = ScaleUInt64ToInt64(player->GetMaxHealthForCombat(), 0.04L * static_cast<long double>(theme.scalar));
         player->ModifyHealth(healAmount);
         return;
     }
@@ -12408,7 +12470,7 @@ void HandleArtifactWeaponGreataxeProc(uint32 spellId, Player* player, Unit* targ
     {
         DealArtifactWeaponDamage(player, target, ARTIFACT_WEAPON_GREATAXE, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_GREATAXE), 3.20f * theme.scalar);
         DealArtifactWeaponAreaDamage(player, target, ARTIFACT_WEAPON_GREATAXE, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_GREATAXE, true), 0.90f * theme.scalar, 8.0f);
-        int32 healAmount = std::max<int32>(1, static_cast<int32>(std::lround(float(player->GetMaxHealth()) * 0.06f * theme.scalar)));
+        int64 healAmount = ScaleUInt64ToInt64(player->GetMaxHealthForCombat(), 0.06L * static_cast<long double>(theme.scalar));
         player->ModifyHealth(healAmount);
     }
 }
@@ -12535,7 +12597,7 @@ void HandleArtifactWeaponWandProc(uint32 spellId, Player* player, Unit* target)
 
     Powers powerType = player->getPowerType();
     bool highPower = false;
-    if (powerType != POWER_HEALTH && player->GetMaxPower(powerType) > 0)
+    if (powerType != POWER_HEALTH && player->GetMaxPowerForCombat(powerType) > 0)
         highPower = player->GetPowerPct(powerType) >= 80.0f;
 
     PlayerAbyssProcState& procState = sAbyssCultivationMgr->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
@@ -12587,7 +12649,7 @@ void HandleArtifactWeaponFalunProc(uint32 spellId, Player* player, Unit* target)
             break;
     }
 
-    int32 healAmount = std::max<int32>(1, static_cast<int32>(std::lround(float(player->GetMaxHealth()) * 0.06f * theme.scalar)));
+    int64 healAmount = ScaleUInt64ToInt64(player->GetMaxHealthForCombat(), 0.06L * static_cast<long double>(theme.scalar));
     player->ModifyHealth(healAmount);
 }
 
@@ -12859,7 +12921,7 @@ class spell_abyss_corpse_explode : public SpellScript
         float reduction = 1.0f - (_chainCount * 0.15f);
         if (reduction < 0.25f)
             reduction = 0.25f;
-        int64 damage = static_cast<int64>(static_cast<double>(target->GetMaxHealthForCombat()) * 0.25 * reduction);
+        int64 damage = ScaleUInt64ToInt64(target->GetMaxHealthForCombat(), 0.25L * static_cast<long double>(reduction));
 
         caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL);
 
@@ -13042,7 +13104,7 @@ class spell_abyss_soul_reap : public SpellScript
         if (!caster || _hitCount == 0)
             return;
 
-        int64 healAmount = static_cast<int64>(static_cast<double>(caster->GetMaxHealthForCombat()) * 0.03 * _hitCount);
+        int64 healAmount = ScaleUInt64ToInt64(caster->GetMaxHealthForCombat(), 0.03L * static_cast<long double>(_hitCount));
         caster->ModifyHealth(healAmount);
 
         if (Player* player = caster->ToPlayer())

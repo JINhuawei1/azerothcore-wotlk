@@ -21,6 +21,7 @@
 #include "Player.h"
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
+#include "SpellScriptCombatValue.h"
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
 /*
@@ -124,7 +125,7 @@ class spell_dru_t10_balance_4p_bonus : public AuraScript
         uint32 triggered_spell_id = 71023;
         SpellInfo const* triggeredSpell = sSpellMgr->GetSpellInfo(triggered_spell_id);
 
-        int32 amount = CalculatePct(eventInfo.GetDamageInfo()->GetDamage(), aurEff->GetAmount()) / triggeredSpell->GetMaxTicks();
+        int32 amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(static_cast<long double>(eventInfo.GetDamageInfo()->GetDamage()), aurEff->GetAmount()) / static_cast<long double>(triggeredSpell->GetMaxTicks()));
         eventInfo.GetProcTarget()->CastDelayedSpellWithPeriodicAmount(GetTarget(), triggered_spell_id, SPELL_AURA_PERIODIC_DAMAGE, amount, EFFECT_0);
 
         //GetTarget()->CastCustomSpell(triggered_spell_id, SPELLVALUE_BASE_POINT0, amount, eventInfo.GetProcTarget(), true, nullptr, aurEff);
@@ -328,7 +329,7 @@ class spell_dru_treant_scaling : public AuraScript
         if (Unit* owner = GetUnitOwner()->GetOwner())
         {
             Stats stat = Stats(aurEff->GetSpellInfo()->Effects[aurEff->GetEffIndex()].MiscValue);
-            amount = CalculatePct(std::max<int32>(0, owner->GetStat(stat)), 30);
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(SpellScriptCombat::GetStat(owner, stat), 30));
         }
     }
 
@@ -337,12 +338,12 @@ class spell_dru_treant_scaling : public AuraScript
         // xinef: treant inherits 105% of SP as AP - 15% of damage increase per hit
         if (Unit* owner = GetUnitOwner()->GetOwner())
         {
-            int32 nature = owner->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_NATURE);
-            amount = CalculatePct(std::max<int32>(0, nature), 105);
+            long double nature = SpellScriptCombat::GetSpellDamageBonus(owner, SPELL_SCHOOL_MASK_NATURE);
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(nature, 105));
 
             // xinef: brambles talent
             if (AuraEffect const* bramblesEff = owner->GetAuraEffect(SPELL_AURA_ADD_FLAT_MODIFIER, SPELLFAMILY_DRUID, 53, 2))
-                AddPct(amount, bramblesEff->GetAmount());
+                amount = SpellScriptCombat::AddPctClientSpellValue(amount, bramblesEff->GetAmount());
         }
     }
 
@@ -351,8 +352,8 @@ class spell_dru_treant_scaling : public AuraScript
         // xinef: treant inherits 15% of SP
         if (Unit* owner = GetUnitOwner()->GetOwner())
         {
-            int32 nature = owner->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_NATURE);
-            amount = CalculatePct(std::max<int32>(0, nature), 15);
+            long double nature = SpellScriptCombat::GetSpellDamageBonus(owner, SPELL_SCHOOL_MASK_NATURE);
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(nature, 15));
 
             // xinef: Update appropriate player field
             if (owner->IsPlayer())
@@ -558,7 +559,7 @@ class spell_dru_innervate : public AuraScript
     void CalculateAmount(AuraEffect const* aurEff, int32& amount, bool& /*canBeRecalculated*/)
     {
         if (Unit* caster = GetCaster())
-            amount = int32(CalculatePct(caster->GetCreatePowers(POWER_MANA), amount) / aurEff->GetTotalTicks());
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(static_cast<long double>(caster->GetCreatePowerForCombat(POWER_MANA)), amount) / static_cast<long double>(aurEff->GetTotalTicks()));
         else
             amount = 0;
     }
@@ -608,16 +609,17 @@ class spell_dru_lifebloom : public AuraScript
             if (GetEffect(EFFECT_1))
             {
                 Unit* caster = GetCaster();
-                int32 healAmount = GetSpellInfo()->Effects[EFFECT_1].CalcValue(caster ? caster : target, 0, target) * dispelInfo->GetRemovedCharges();
+                int32 healAmount = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(GetSpellInfo()->Effects[EFFECT_1].CalcValue(caster ? caster : target, 0, target)) * dispelInfo->GetRemovedCharges());
                 SpellInfo const* finalHeal = sSpellMgr->GetSpellInfo(SPELL_DRUID_LIFEBLOOM_FINAL_HEAL);
                 if (caster)
                 {
                     // healing with bonus
-                    healAmount = caster->SpellHealingBonusDone(target, finalHeal, healAmount, HEAL, EFFECT_1, 0.0f, dispelInfo->GetRemovedCharges());
-                    healAmount = target->SpellHealingBonusTaken(caster, finalHeal, healAmount, HEAL, dispelInfo->GetRemovedCharges());
+                    uint64 healAmountForCombat = caster->SpellHealingBonusDone(target, finalHeal, static_cast<uint64>(std::max(healAmount, 0)), HEAL, EFFECT_1, 0.0f, dispelInfo->GetRemovedCharges());
+                    healAmountForCombat = target->SpellHealingBonusTaken(caster, finalHeal, healAmountForCombat, HEAL, dispelInfo->GetRemovedCharges());
+                    healAmount = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(healAmountForCombat));
 
                     // mana amount
-                    int32 mana = CalculatePct(caster->GetCreateMana(), GetSpellInfo()->ManaCostPercentage) * dispelInfo->GetRemovedCharges() / 2;
+                    int32 mana = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(static_cast<long double>(caster->GetCreateManaForCombat()), GetSpellInfo()->ManaCostPercentage) * dispelInfo->GetRemovedCharges() / 2.0L);
                     caster->CastCustomSpell(caster, SPELL_DRUID_LIFEBLOOM_ENERGIZE, &mana, nullptr, nullptr, true, nullptr, nullptr, GetCasterGUID());
                 }
                 target->CastCustomSpell(target, SPELL_DRUID_LIFEBLOOM_FINAL_HEAL, &healAmount, nullptr, nullptr, true, nullptr, nullptr, GetCasterGUID());
@@ -651,7 +653,7 @@ class spell_dru_living_seed : public AuraScript
             return;
         }
 
-        int32 amount = CalculatePct(eventInfo.GetHealInfo()->GetHeal(), aurEff->GetAmount());
+        int32 amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(static_cast<long double>(eventInfo.GetHealInfo()->GetHeal()), aurEff->GetAmount()));
         GetTarget()->CastCustomSpell(SPELL_DRUID_LIVING_SEED_PROC, SPELLVALUE_BASE_POINT0, amount, eventInfo.GetProcTarget(), true, nullptr, aurEff);
     }
 
@@ -706,7 +708,7 @@ class spell_dru_moonkin_form_passive : public AuraScript
     {
         // reduces all damage taken while Stunned in Moonkin Form
         if (GetTarget()->GetUnitFlags() & (UNIT_FLAG_STUNNED) && GetTarget()->HasAuraWithMechanic(1 << MECHANIC_STUN))
-            absorbAmount = CalculatePct(dmgInfo.GetDamage(), absorbPct);
+            absorbAmount = SpellScriptCombat::CalculatePctInt32Saturated(dmgInfo.GetDamage(), absorbPct);
     }
 
     void Register() override
@@ -773,7 +775,7 @@ class spell_dru_primal_tenacity : public AuraScript
     {
         // reduces all damage taken while Stunned in Cat Form
         if (GetTarget()->GetShapeshiftForm() == FORM_CAT && GetTarget()->HasUnitFlag(UNIT_FLAG_STUNNED) && GetTarget()->HasAuraWithMechanic(1 << MECHANIC_STUN))
-            absorbAmount = CalculatePct(dmgInfo.GetDamage(), absorbPct);
+            absorbAmount = SpellScriptCombat::CalculatePctInt32Saturated(dmgInfo.GetDamage(), absorbPct);
     }
 
     void Register() override
@@ -810,7 +812,7 @@ class spell_dru_rip : public AuraScript
             else if (AuraEffect const* idol2 = caster->GetAuraEffect(SPELL_DRUID_IDOL_OF_WORSHIP, EFFECT_0))
                 amount += cp * idol2->GetAmount();
 
-            amount += int32(CalculatePct(caster->GetTotalAttackPowerValue(BASE_ATTACK), cp));
+            amount = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(amount) + SpellScriptCombat::PercentOf(SpellScriptCombat::GetAttackPower(caster, BASE_ATTACK), cp));
         }
     }
 
@@ -841,7 +843,7 @@ class spell_dru_savage_defense : public AuraScript
 
     void Absorb(AuraEffect* aurEff, DamageInfo& /*dmgInfo*/, uint32& absorbAmount)
     {
-        absorbAmount = uint32(CalculatePct(GetTarget()->GetTotalAttackPowerValue(BASE_ATTACK), absorbPct));
+        absorbAmount = SpellScriptCombat::CalculatePctInt32Saturated(SpellScriptCombat::ToUInt64Saturated(SpellScriptCombat::GetAttackPower(GetTarget(), BASE_ATTACK)), absorbPct);
         aurEff->SetAmount(0);
     }
 

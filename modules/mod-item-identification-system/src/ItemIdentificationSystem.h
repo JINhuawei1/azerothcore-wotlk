@@ -53,7 +53,7 @@ struct ItemIdentificationRecord
     bool hasSet;
     uint32 setGroup;
     uint32 setId;
-    uint32 costGold;
+    uint64 costGold;
     uint32 successRate;
 };
 
@@ -163,6 +163,9 @@ public:
         // 幻境系统数据（新增）
         std::string huanjingData;        // 格式：multiplier|enhancedAttrs  例如：3|3 10 30,4 20 60
 
+        // 待鉴定状态数据
+        std::string pendingIdentifyData; // 格式：PENDID|mode|multiplier|groupId
+
         // 物品模板64位属性数据
         std::string templateStatsData;    // 格式：TPL64|statType value,...|armor|damageMin damageMax damageType,...
 
@@ -175,7 +178,7 @@ public:
     // 批量查询命令处理器（一次性返回所有数据）
     void HandleBatchQueryCommand(Player* player, uint32 itemID, uint32 guid);
 
-    // 通过 Addon 消息发送批量数据（ALL_MODULE_DATA:itemID:guid:...）
+    // 通过 Addon 消息发送批量数据（优先使用 ALL_MODULE_DATA:bag:slot:itemID:guid:...）
     void SendAllModuleDataAddon(Player* player, uint32 itemID, uint32 guid);
 
 public:
@@ -183,7 +186,7 @@ public:
     bool _enabled;
     uint32 _baseSuccessRate;
     bool _destroyOnFail;
-    uint32 _cost;
+    uint64 _cost;
     bool _enableAnnounce;
     bool _debugMode;
 

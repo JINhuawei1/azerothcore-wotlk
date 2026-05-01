@@ -24,6 +24,7 @@
 #include "SpellAuraEffects.h"
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
+#include "SpellScriptCombatValue.h"
 #include "Vehicle.h"
 /*
  * Scripts for spells with SPELLFAMILY_GENERIC spells used for quests.
@@ -680,7 +681,7 @@ class spell_q11198_take_down_tethyr : public SpellScript
         if (Unit* unit = GetHitUnit())
             if (unit->IsImmuneToPC())
                 return;
-        GetCaster()->CastCustomSpell(42576 /*SPELL_CANNON_BLAST*/, SPELLVALUE_BASE_POINT0, GetEffectValue(), GetCaster(), true);
+        GetCaster()->CastCustomSpell(42576 /*SPELL_CANNON_BLAST*/, SPELLVALUE_BASE_POINT0, SpellScriptCombat::ToClientSpellValue(static_cast<long double>(GetEffectValue())), GetCaster(), true);
     }
 
     void Register() override
@@ -1433,8 +1434,8 @@ class spell_symbol_of_life_dummy : public SpellScript
                 target->RemoveAurasDueToSpell(SPELL_PERMANENT_FEIGN_DEATH);
                 target->ReplaceAllDynamicFlags(0);
                 target->ReplaceAllUnitFlags2(UNIT_FLAG2_NONE);
-                target->SetHealth(target->GetMaxHealth() / 2);
-                target->SetPower(POWER_MANA, uint32(target->GetMaxPower(POWER_MANA) * 0.75f));
+                target->SetHealthForCombat(target->GetMaxHealthForCombat() / 2);
+                target->SetPowerForCombat(POWER_MANA, static_cast<uint64>(static_cast<long double>(target->GetMaxPowerForCombat(POWER_MANA)) * 0.75L));
             }
         }
     }

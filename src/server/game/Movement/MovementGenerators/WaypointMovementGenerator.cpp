@@ -471,7 +471,7 @@ bool FlightPathMovementGenerator::DoUpdate(Player* player, uint32 /*diff*/)
                 if (!_pointsForPathSwitch.empty())
                 {
                     player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_TRAVELLING, _pointsForPathSwitch.front().Cost);
-                    player->ModifyMoney(-_pointsForPathSwitch.front().Cost);
+                    player->ModifyMoney(-static_cast<int64>(_pointsForPathSwitch.front().Cost));
                 }
             }
 

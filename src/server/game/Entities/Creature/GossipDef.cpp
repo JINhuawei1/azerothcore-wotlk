@@ -25,6 +25,43 @@
 #include "ScriptMgr.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
+#include <limits>
+
+namespace
+{
+int64 SaturatingQuestMoneyAdd(int64 left, int64 right)
+{
+    if (right > 0 && left > std::numeric_limits<int64>::max() - right)
+        return std::numeric_limits<int64>::max();
+
+    if (right < 0 && left < std::numeric_limits<int64>::min() - right)
+        return std::numeric_limits<int64>::min();
+
+    return left + right;
+}
+
+uint32 ToClientQuestMoney(int64 money)
+{
+    if (money <= 0)
+        return 0;
+
+    return money > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(money);
+}
+
+uint32 ToClientRequiredQuestMoney(int64 money)
+{
+    if (money >= 0)
+        return 0;
+
+    uint64 required = money == std::numeric_limits<int64>::min() ? static_cast<uint64>(std::numeric_limits<int64>::max()) + 1 : static_cast<uint64>(-money);
+    return required > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(required);
+}
+
+uint32 ToClientGossipMoney(uint64 money)
+{
+    return money > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(money);
+}
+}
 
 GossipMenu::GossipMenu()
 {
@@ -38,7 +75,7 @@ GossipMenu::~GossipMenu()
     ClearMenu();
 }
 
-void GossipMenu::AddMenuItem(int32 menuItemId, uint8 icon, std::string const& message, uint32 sender, uint32 action, std::string const& boxMessage, uint32 boxMoney, bool coded /*= false*/)
+void GossipMenu::AddMenuItem(int32 menuItemId, uint8 icon, std::string const& message, uint32 sender, uint32 action, std::string const& boxMessage, uint64 boxMoney, bool coded /*= false*/)
 {
     ASSERT(_menuItems.size() <= GOSSIP_MAX_MENU_ITEMS);
 
@@ -78,7 +115,7 @@ void GossipMenu::AddMenuItem(int32 menuItemId, uint8 icon, std::string const& me
  * @param action Custom action given to OnGossipHello.
  * @param boxMoney Custom price for pop-up box. If > 0, it will replace DB value.
  */
-void GossipMenu::AddMenuItem(uint32 menuId, uint32 menuItemId, uint32 sender, uint32 action, uint32 boxMoney)
+void GossipMenu::AddMenuItem(uint32 menuId, uint32 menuItemId, uint32 sender, uint32 action, uint64 boxMoney)
 {
     /// Find items for given menu id.
     GossipMenuItemsMapBounds bounds = sObjectMgr->GetGossipMenuItemsMapBounds(menuId);
@@ -206,7 +243,7 @@ void PlayerMenu::SendGossipMenu(uint32 titleTextId, ObjectGuid objectGUID)
         data << uint32(itr->first);
         data << uint8(item.MenuItemIcon);
         data << uint8(item.IsCoded);                    // makes pop up box password
-        data << uint32(item.BoxMoney);                  // money required to open menu, 2.0.3
+        data << ToClientGossipMoney(item.BoxMoney);     // money required to open menu, 2.0.3
         data << item.Message;                           // text for gossip item
         data << item.BoxMessage;                        // accept text (related to money) pop up box, 2.0.3
     }
@@ -453,14 +490,14 @@ void PlayerMenu::SendQuestGiverQuestDetails(Quest const* quest, ObjectGuid npcGU
                 data << uint32(0);
         }
 
-        uint32 moneyRew = 0;
+        int64 moneyRew = 0;
         Player* player = _session->GetPlayer();
         if (player && (player->GetLevel() >= sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL) || sScriptMgr->OnPlayerShouldBeRewardedWithMoneyInsteadOfExp(player)))
         {
             moneyRew = quest->GetRewMoneyMaxLevel();
         }
-        moneyRew += quest->GetRewOrReqMoney(player ? player->GetLevel() : 0); // reward money (below max lvl)
-        data << moneyRew;
+        moneyRew = SaturatingQuestMoneyAdd(moneyRew, quest->GetRewOrReqMoney(player ? player->GetLevel() : 0)); // reward money (below max lvl)
+        data << ToClientQuestMoney(moneyRew);
         uint32 questXp;
         if (player && !sScriptMgr->OnPlayerShouldBeRewardedWithMoneyInsteadOfExp(player))
         {
@@ -553,17 +590,17 @@ void PlayerMenu::SendQuestQueryResponse(Quest const* quest) const
         data << uint32(0);                                  // Hide money rewarded
     else
     {
-        uint32 moneyRew = 0;
+        int64 moneyRew = 0;
         Player* player = _session->GetPlayer();
         if (player && (player->GetLevel() >= sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL) || sScriptMgr->OnPlayerShouldBeRewardedWithMoneyInsteadOfExp(player)))
         {
             moneyRew = quest->GetRewMoneyMaxLevel();
         }
-        moneyRew += quest->GetRewOrReqMoney(player ? player->GetLevel() : 0); // reward money (below max lvl)
-        data << moneyRew;
+        moneyRew = SaturatingQuestMoneyAdd(moneyRew, quest->GetRewOrReqMoney(player ? player->GetLevel() : 0)); // reward money (below max lvl)
+        data << ToClientQuestMoney(moneyRew);
     }
 
-    data << uint32(quest->GetRewMoneyMaxLevel());           // used in XP calculation at client
+    data << ToClientQuestMoney(quest->GetRewMoneyMaxLevel()); // used in XP calculation at client
     data << uint32(quest->GetRewSpell());                   // reward spell, this spell will display (icon) (cast if RewSpellCast == 0)
     data << int32(quest->GetRewSpellCast());                // cast spell
 
@@ -705,14 +742,14 @@ void PlayerMenu::SendQuestGiverOfferReward(Quest const* quest, ObjectGuid npcGUI
             data << uint32(0);
     }
 
-    uint32 moneyRew = 0;
+    int64 moneyRew = 0;
     Player* player = _session->GetPlayer();
     if (player && (player->GetLevel() >= sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL) || sScriptMgr->OnPlayerShouldBeRewardedWithMoneyInsteadOfExp(player)))
     {
         moneyRew = quest->GetRewMoneyMaxLevel();
     }
-    moneyRew += quest->GetRewOrReqMoney(player ? player->GetLevel() : 0); // reward money (below max lvl)
-    data << moneyRew;
+    moneyRew = SaturatingQuestMoneyAdd(moneyRew, quest->GetRewOrReqMoney(player ? player->GetLevel() : 0)); // reward money (below max lvl)
+    data << ToClientQuestMoney(moneyRew);
     uint32 questXp;
     if (player && !sScriptMgr->OnPlayerShouldBeRewardedWithMoneyInsteadOfExp(player))
     {
@@ -810,7 +847,7 @@ void PlayerMenu::SendQuestGiverRequestItems(Quest const* quest, ObjectGuid npcGU
     data << uint32(quest->GetSuggestedPlayers());           // SuggestedGroupNum
 
     // Required Money
-    data << uint32(quest->GetRewOrReqMoney() < 0 ? -quest->GetRewOrReqMoney() : 0);
+    data << ToClientRequiredQuestMoney(quest->GetRewOrReqMoney());
 
     data << uint32(quest->GetReqItemsCount());
     for (int i = 0; i < QUEST_ITEM_OBJECTIVES_COUNT; ++i)

@@ -25,6 +25,7 @@
 #include <boost/core/demangle.hpp>
 #include <cctype>
 #include <cstdarg>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <utf8.h>
@@ -105,9 +106,9 @@ std::string secsToTimeString(uint64 timeInSecs, bool shortText)
     return str;
 }
 
-Optional<int32> MoneyStringToMoney(std::string_view moneyString)
+Optional<int64> MoneyStringToMoney(std::string_view moneyString)
 {
-    int32 money = 0;
+    int64 money = 0;
 
     bool hadG = false;
     bool hadS = false;
@@ -115,7 +116,7 @@ Optional<int32> MoneyStringToMoney(std::string_view moneyString)
 
     for (std::string_view token : Acore::Tokenize(moneyString, ' ', false))
     {
-        uint32 unit;
+        int64 unit;
         switch (token[token.length() - 1])
         {
         case 'g':
@@ -146,15 +147,13 @@ Optional<int32> MoneyStringToMoney(std::string_view moneyString)
             return std::nullopt;
         }
 
-        Optional<uint32> amount = Acore::StringTo<uint32>(token.substr(0, token.length() - 1));
-        if (amount)
-        {
-            money += (unit * *amount);
-        }
-        else
+        Optional<int64> amount = Acore::StringTo<int64>(token.substr(0, token.length() - 1));
+        if (!amount || *amount < 0 || *amount > (std::numeric_limits<int64>::max() - money) / unit)
         {
             return std::nullopt;
         }
+
+        money += unit * *amount;
     }
 
     return money;

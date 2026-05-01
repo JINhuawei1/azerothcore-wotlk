@@ -20,11 +20,29 @@
 #include "CreatureScript.h"
 #include "GridNotifiers.h"
 #include "Pet.h"
+#include "Player.h"
 #include "SpellAuraEffects.h"
 #include "SpellAuras.h"
 #include "SpellMgr.h"
+#include "SpellScriptCombatValue.h"
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
+#include <limits>
+
+namespace
+{
+    int32 ToInt32Saturated(long double value)
+    {
+        if (value <= 0.0L)
+            return 0;
+
+        if (value >= static_cast<long double>(std::numeric_limits<int32>::max()))
+            return std::numeric_limits<int32>::max();
+
+        return static_cast<int32>(value);
+    }
+}
+
 /*
  * Scripts for spells with SPELLFAMILY_HUNTER, SPELLFAMILY_PET and SPELLFAMILY_GENERIC spells used by hunter players.
  * Ordered alphabetically using scriptname.
@@ -184,10 +202,10 @@ class spell_hun_generic_scaling : public AuraScript
             if (AuraEffect* wildHuntEff = GetUnitOwner()->GetDummyAuraEffect(SPELLFAMILY_PET, 3748, EFFECT_0))
                 AddPct(modifier, wildHuntEff->GetAmount());
 
-            amount = CalculatePct(std::max<int32>(0, owner->GetStat(Stats(aurEff->GetSpellInfo()->Effects[aurEff->GetEffIndex()].MiscValue))), modifier);
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(SpellScriptCombat::GetStat(owner, Stats(aurEff->GetSpellInfo()->Effects[aurEff->GetEffIndex()].MiscValue)), modifier));
             if (owner->HasAura(SPELL_HUNTER_PET_LEGGINGS_OF_BEAST_MASTERY))
             {
-                amount += 52;
+                amount = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(amount) + 52.0L);
             }
         }
     }
@@ -203,16 +221,16 @@ class spell_hun_generic_scaling : public AuraScript
             if (AuraEffect* wildHuntEff = GetUnitOwner()->GetDummyAuraEffect(SPELLFAMILY_PET, 3748, EFFECT_1))
                 AddPct(modifier, wildHuntEff->GetAmount());
 
-            float ownerAP = owner->GetTotalAttackPowerValue(RANGED_ATTACK);
+            long double ownerAP = SpellScriptCombat::GetAttackPower(owner, RANGED_ATTACK);
 
             // Xinef: Hunter vs. Wild
             if (AuraEffect* HvWEff = owner->GetAuraEffect(SPELL_AURA_MOD_ATTACK_POWER_OF_STAT_PERCENT, SPELLFAMILY_HUNTER, 3647, EFFECT_0))
-                ownerAP += CalculatePct(owner->GetStat(STAT_STAMINA), HvWEff->GetAmount());
+                ownerAP += SpellScriptCombat::PercentOf(SpellScriptCombat::GetStat(owner, STAT_STAMINA), HvWEff->GetAmount());
 
-            amount = CalculatePct(std::max<int32>(0, ownerAP), modifier);
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(ownerAP, modifier));
             if (owner->HasAura(SPELL_HUNTER_PET_LEGGINGS_OF_BEAST_MASTERY))
             {
-                amount += 70;
+                amount = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(amount) + 70.0L);
             }
         }
     }
@@ -228,7 +246,7 @@ class spell_hun_generic_scaling : public AuraScript
             if (AuraEffect* wildHuntEff = GetUnitOwner()->GetDummyAuraEffect(SPELLFAMILY_PET, 3748, EFFECT_1))
                 AddPct(modifier, wildHuntEff->GetAmount());
 
-            amount = CalculatePct(std::max<int32>(0, owner->GetTotalAttackPowerValue(RANGED_ATTACK)), modifier);
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(SpellScriptCombat::GetAttackPower(owner, RANGED_ATTACK), modifier));
 
             // xinef: Update appropriate player field
             if (owner->IsPlayer())
@@ -253,15 +271,15 @@ class spell_hun_generic_scaling : public AuraScript
             {
                 if (aurEff->GetMiscValue() == STAT_STAMINA)
                 {
-                    uint32 actStat = GetUnitOwner()->GetHealth();
+                    uint64 actStat = GetUnitOwner()->GetHealthForCombat();
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetHealth(std::min<uint32>(GetUnitOwner()->GetMaxHealth(), actStat));
+                    GetUnitOwner()->SetHealthForCombat(std::min<uint64>(GetUnitOwner()->GetMaxHealthForCombat(), actStat));
                 }
                 else
                 {
-                    uint32 actStat = GetUnitOwner()->GetPower(POWER_MANA);
+                    uint64 actStat = GetUnitOwner()->GetPowerForCombat(POWER_MANA);
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetPower(POWER_MANA, std::min<uint32>(GetUnitOwner()->GetMaxPower(POWER_MANA), actStat));
+                    GetUnitOwner()->SetPowerForCombat(POWER_MANA, std::min<uint64>(GetUnitOwner()->GetMaxPowerForCombat(POWER_MANA), actStat));
                 }
             }
         }
@@ -397,12 +415,12 @@ class spell_hun_ascpect_of_the_viper : public AuraScript
     {
         PreventDefaultAction();
 
-        uint32 maxMana = GetTarget()->GetMaxPower(POWER_MANA);
-        int32 mana = CalculatePct(maxMana, GetTarget()->GetAttackTime(RANGED_ATTACK) / 1000.0f);
+        long double manaValue = static_cast<long double>(GetTarget()->GetMaxPowerForCombat(POWER_MANA)) * (static_cast<long double>(GetTarget()->GetAttackTime(RANGED_ATTACK)) / 1000.0L) / 100.0L;
 
         if (AuraEffect const* glyph = GetTarget()->GetAuraEffect(SPELL_HUNTER_GLYPH_OF_ASPECT_OF_THE_VIPER, EFFECT_0))
-            AddPct(mana, glyph->GetAmount());
+            manaValue += manaValue * static_cast<long double>(glyph->GetAmount()) / 100.0L;
 
+        int32 mana = ToInt32Saturated(manaValue);
         GetTarget()->CastCustomSpell(SPELL_HUNTER_ASPECT_OF_THE_VIPER_ENERGIZE, SPELLVALUE_BASE_POINT0, mana, GetTarget(), true, nullptr, aurEff);
     }
 
@@ -475,11 +493,12 @@ class spell_hun_chimera_shot : public SpellScript
                         spellId = SPELL_HUNTER_CHIMERA_SHOT_VIPER;
 
                         // Amount of one aura tick
-                        basePoint = int32(CalculatePct(unitTarget->GetMaxPower(POWER_MANA), aurEff->GetAmount()));
-                        int32 casterBasePoint = aurEff->GetAmount() * unitTarget->GetMaxPower(POWER_MANA) / 50; /// @todo: Caster uses unitTarget?
-                        if (basePoint > casterBasePoint)
-                            basePoint = casterBasePoint;
-                        ApplyPct(basePoint, TickCount * 60);
+                        long double targetMaxMana = static_cast<long double>(unitTarget->GetMaxPowerForCombat(POWER_MANA));
+                        long double basePointValue = targetMaxMana * static_cast<long double>(aurEff->GetAmount()) / 100.0L;
+                        long double casterBasePoint = targetMaxMana * static_cast<long double>(aurEff->GetAmount()) / 50.0L; /// @todo: Caster uses unitTarget?
+                        if (basePointValue > casterBasePoint)
+                            basePointValue = casterBasePoint;
+                        basePoint = ToInt32Saturated(basePointValue * static_cast<long double>(TickCount * 60) / 100.0L);
                     }
                     // Scorpid Sting - Attempts to Disarm the target for 10 sec. This effect cannot occur more than once per 1 minute.
                     else if (familyFlag[0] & 0x00008000)
@@ -578,7 +597,7 @@ class spell_hun_last_stand_pet : public SpellScript
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
         Unit* caster = GetCaster();
-        int32 healthModSpellBasePoints0 = int32(caster->CountPctFromMaxHealth(30));
+        int32 healthModSpellBasePoints0 = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(caster->CountPctFromMaxHealth(30)));
         caster->CastCustomSpell(caster, SPELL_HUNTER_PET_LAST_STAND_TRIGGERED, &healthModSpellBasePoints0, nullptr, nullptr, true, nullptr);
     }
 
@@ -1094,8 +1113,8 @@ class spell_hun_glyph_of_arcane_shot : public AuraScript
             return;
         }
 
-        int32 mana = procSpell->CalcPowerCost(GetTarget(), procSpell->GetSchoolMask());
-        ApplyPct(mana, aurEff->GetAmount());
+        int64 powerCost = procSpell->CalcPowerCost(GetTarget(), procSpell->GetSchoolMask());
+        int32 mana = powerCost > 0 ? ToInt32Saturated(static_cast<long double>(powerCost) * static_cast<long double>(aurEff->GetAmount()) / 100.0L) : 0;
 
         GetTarget()->CastCustomSpell(SPELL_HUNTER_GLYPH_OF_ARCANE_SHOT, SPELLVALUE_BASE_POINT0, mana, GetTarget());
     }

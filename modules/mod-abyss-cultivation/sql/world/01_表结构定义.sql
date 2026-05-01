@@ -86,7 +86,7 @@ CREATE TABLE `_深渊遗物配置` (
   `类型` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '1=章节遗物 2=阶段神器 3=终极神器',
   `幕ID` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '所属幕',
   `关联章节ID` smallint unsigned NOT NULL DEFAULT 0 COMMENT '关联章节',
-  `激活槽位` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '1=主遗物 2=副遗物 3=神器 4=终极',
+  `激活槽位` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '1=主遗物 2-6=副遗物 7=阶段神器 8=终极神器',
   `激活规则` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '1=背包激活 2=界面激活 3=任务后自动激活',
   `互斥组` int unsigned NOT NULL DEFAULT 0 COMMENT '互斥组',
   `特效家族` varchar(32) NOT NULL DEFAULT '' COMMENT '特效家族',

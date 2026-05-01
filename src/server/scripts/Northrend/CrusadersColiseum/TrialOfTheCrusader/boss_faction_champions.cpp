@@ -221,7 +221,7 @@ struct boss_faction_championsAI : public ScriptedAI
         {
             if (powerTimer <= diff)
             {
-                me->ModifyPower(POWER_MANA, me->GetMaxPower(POWER_MANA) / 3);
+                me->ModifyPower64(POWER_MANA, static_cast<int64>(me->GetMaxPowerForCombat(POWER_MANA) / 3));
                 powerTimer = 4000;
             }
             else
@@ -231,7 +231,7 @@ struct boss_faction_championsAI : public ScriptedAI
         {
             if (powerTimer <= diff)
             {
-                me->ModifyPower(POWER_ENERGY, me->GetMaxPower(POWER_ENERGY) / 3);
+                me->ModifyPower64(POWER_ENERGY, static_cast<int64>(me->GetMaxPowerForCombat(POWER_ENERGY) / 3));
                 powerTimer = 1000;
             }
             else

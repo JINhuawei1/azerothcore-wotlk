@@ -16,11 +16,9 @@
  */
 
 #include "PlayerScript.h"
-#include "Log.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "ScriptMgrMacros.h"
-#include <chrono>
 
 void ScriptMgr::OnPlayerBeforeDurabilityRepair(Player* player, ObjectGuid npcGUID, ObjectGuid itemGUID, float& discountMod, uint8 guildBank)
 {
@@ -228,21 +226,22 @@ void ScriptMgr::OnPlayerLogin(Player* player)
     if (scripts.empty())
         return;
 
-    using namespace std::chrono;
-    auto hookStart = high_resolution_clock::now();
+    bool restoreCanModifyStats = player && player->CanModifyStats();
+    if (restoreCanModifyStats)
+        player->SetCanModifyStats(false);
 
     for (PlayerScript* script : scripts)
         script->OnPlayerLogin(player);
 
-    auto hookMs = duration_cast<milliseconds>(high_resolution_clock::now() - hookStart).count();
-    if (hookMs >= 10)
+    if (restoreCanModifyStats)
     {
-        LOG_INFO("server.loading",
-            "[性能监控-玩家脚本] 玩家={} GUID={} 钩子=OnPlayerLogin 脚本数={} 总耗时={}ms",
-            player ? player->GetName() : "n/a",
-            player ? player->GetGUID().ToString() : "n/a",
-            scripts.size(),
-            hookMs);
+        player->SetCanModifyStats(true);
+        player->UpdateAllStats();
+        player->UpdateAttackPowerAndDamage();
+        player->UpdateAttackPowerAndDamage(true);
+        player->UpdateMaxHealth();
+        player->UpdateMaxPower(POWER_MANA);
+        player->UpdateSpellDamageAndHealingBonus();
     }
 }
 
@@ -252,22 +251,8 @@ void ScriptMgr::OnPlayerLoadFromDB(Player* player)
     if (scripts.empty())
         return;
 
-    using namespace std::chrono;
-    auto hookStart = high_resolution_clock::now();
-
     for (PlayerScript* script : scripts)
         script->OnPlayerLoadFromDB(player);
-
-    auto hookMs = duration_cast<milliseconds>(high_resolution_clock::now() - hookStart).count();
-    if (hookMs >= 10)
-    {
-        LOG_INFO("server.loading",
-            "[性能监控-玩家脚本] 玩家={} GUID={} 钩子=OnPlayerLoadFromDB 脚本数={} 总耗时={}ms",
-            player ? player->GetName() : "n/a",
-            player ? player->GetGUID().ToString() : "n/a",
-            scripts.size(),
-            hookMs);
-    }
 }
 
 void ScriptMgr::OnPlayerBeforeLogout(Player* player)
@@ -595,7 +580,7 @@ bool ScriptMgr::OnPlayerCanSellItem(Player* player, Item* item, Creature* creatu
     CALL_ENABLED_BOOLEAN_HOOKS(PlayerScript, PLAYERHOOK_CAN_SELL_ITEM, !script->OnPlayerCanSellItem(player, item, creature));
 }
 
-bool ScriptMgr::OnPlayerCanSendMail(Player* player, ObjectGuid receiverGuid, ObjectGuid mailbox, std::string& subject, std::string& body, uint32 money, uint32 COD, Item* item)
+bool ScriptMgr::OnPlayerCanSendMail(Player* player, ObjectGuid receiverGuid, ObjectGuid mailbox, std::string& subject, std::string& body, uint64 money, uint64 COD, Item* item)
 {
     CALL_ENABLED_BOOLEAN_HOOKS(PlayerScript, PLAYERHOOK_CAN_SEND_MAIL, !script->OnPlayerCanSendMail(player, receiverGuid, mailbox, subject, body, money, COD, item));
 }

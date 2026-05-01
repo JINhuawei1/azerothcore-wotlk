@@ -20,6 +20,7 @@
 #include "Player.h"
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
+#include "SpellScriptCombatValue.h"
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
 #include "TemporarySummon.h"
@@ -98,7 +99,7 @@ class spell_pri_shadowfiend_scaling : public AuraScript
         if (Unit* owner = GetUnitOwner()->GetOwner())
         {
             Stats stat = Stats(aurEff->GetSpellInfo()->Effects[aurEff->GetEffIndex()].MiscValue);
-            amount = CalculatePct(std::max<int32>(0, owner->GetStat(stat)), stat == STAT_STAMINA ? 65 : 30);
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(SpellScriptCombat::GetStat(owner, stat), stat == STAT_STAMINA ? 65 : 30));
         }
     }
 
@@ -107,8 +108,8 @@ class spell_pri_shadowfiend_scaling : public AuraScript
         // xinef: shadowfiend inherits 333% of SP as AP - 35.7% of damage increase per hit
         if (Unit* owner = GetUnitOwner()->GetOwner())
         {
-            int32 shadow = owner->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_SHADOW);
-            amount = CalculatePct(std::max<int32>(0, shadow), 300); // xinef: deacrased to 300, including 15% from self buff
+            long double shadow = SpellScriptCombat::GetSpellDamageBonus(owner, SPELL_SCHOOL_MASK_SHADOW);
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(shadow, 300)); // xinef: deacrased to 300, including 15% from self buff
         }
     }
 
@@ -117,8 +118,8 @@ class spell_pri_shadowfiend_scaling : public AuraScript
         // xinef: shadowfiend inherits 30% of SP
         if (Unit* owner = GetUnitOwner()->GetOwner())
         {
-            int32 shadow = owner->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_SHADOW);
-            amount = CalculatePct(std::max<int32>(0, shadow), 30);
+            long double shadow = SpellScriptCombat::GetSpellDamageBonus(owner, SPELL_SCHOOL_MASK_SHADOW);
+            amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(shadow, 30));
 
             // xinef: Update appropriate player field
             if (owner->IsPlayer())
@@ -201,11 +202,11 @@ class spell_pri_divine_aegis : public AuraScript
     {
         PreventDefaultAction();
 
-        int32 absorb = CalculatePct(int32(eventInfo.GetHealInfo()->GetHeal()), aurEff->GetAmount());
+        int32 absorb = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(static_cast<long double>(eventInfo.GetHealInfo()->GetHeal()), aurEff->GetAmount()));
 
         // Multiple effects stack, so let's try to find this aura.
         if (AuraEffect const* aegis = eventInfo.GetProcTarget()->GetAuraEffect(SPELL_PRIEST_DIVINE_AEGIS, EFFECT_0))
-            absorb += aegis->GetAmount();
+            absorb = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(absorb) + aegis->GetAmount());
 
         absorb = std::min(absorb, eventInfo.GetProcTarget()->GetLevel() * 125);
 
@@ -264,7 +265,7 @@ class spell_pri_glyph_of_prayer_of_healing : public AuraScript
         }
 
         SpellInfo const* triggeredSpellInfo = sSpellMgr->AssertSpellInfo(SPELL_PRIEST_GLYPH_OF_PRAYER_OF_HEALING_HEAL);
-        int32 heal = int32(CalculatePct(int32(healInfo->GetHeal()), aurEff->GetAmount()) / triggeredSpellInfo->GetMaxTicks());
+        int32 heal = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(static_cast<long double>(healInfo->GetHeal()), aurEff->GetAmount()) / static_cast<long double>(triggeredSpellInfo->GetMaxTicks()));
         GetTarget()->CastCustomSpell(SPELL_PRIEST_GLYPH_OF_PRAYER_OF_HEALING_HEAL, SPELLVALUE_BASE_POINT0, heal, eventInfo.GetProcTarget(), true, nullptr, aurEff);
     }
 
@@ -436,7 +437,7 @@ class spell_pri_lightwell_renew : public AuraScript
         {
             // Bonus from Glyph of Lightwell
             if (AuraEffect* modHealing = caster->GetAuraEffect(SPELL_PRIEST_GLYPH_OF_LIGHTWELL, EFFECT_0))
-                AddPct(amount, modHealing->GetAmount());
+                amount = SpellScriptCombat::AddPctClientSpellValue(amount, modHealing->GetAmount());
         }
     }
 
@@ -632,38 +633,38 @@ class spell_pri_penance : public SpellScript
 static int32 CalculateSpellAmount(Unit* caster, int32 amount, SpellInfo const* spellInfo, const AuraEffect* aurEff)
 {
     // +80.68% from sp bonus
-    float bonus = 0.8068f;
+    long double bonus = 0.8068L;
 
     // Borrowed Time
     if (AuraEffect const* borrowedTime = caster->GetDummyAuraEffect(SPELLFAMILY_PRIEST, PRIEST_ICON_ID_BORROWED_TIME, EFFECT_1))
-        bonus += CalculatePct(1.0f, borrowedTime->GetAmount());
+        bonus += SpellScriptCombat::PercentOf(1.0L, borrowedTime->GetAmount());
 
-    bonus *= caster->SpellBaseHealingBonusDone(spellInfo->GetSchoolMask());
+    bonus *= SpellScriptCombat::GetSpellHealingBonus(caster, spellInfo->GetSchoolMask());
 
     // Improved PW: Shield: its weird having a SPELLMOD_ALL_EFFECTS here but its blizzards doing :)
     // Improved PW: Shield is only applied at the spell healing bonus because it was already applied to the base value in CalculateSpellDamage
-    bonus = caster->ApplyEffectModifiers(spellInfo, aurEff->GetEffIndex(), bonus);
-    bonus *= caster->CalculateLevelPenalty(spellInfo);
+    bonus = caster->ApplyEffectModifiers(spellInfo, aurEff->GetEffIndex(), static_cast<float>(std::min<long double>(bonus, std::numeric_limits<float>::max())));
+    bonus *= static_cast<long double>(caster->CalculateLevelPenalty(spellInfo));
 
-    amount += int32(bonus);
+    amount = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(amount) + bonus);
 
     // Twin Disciplines
     if (AuraEffect const* twinDisciplines = caster->GetAuraEffect(SPELL_AURA_ADD_PCT_MODIFIER, SPELLFAMILY_PRIEST, 0x400000, 0, 0, caster->GetGUID()))
-        AddPct(amount, twinDisciplines->GetAmount());
+        amount = SpellScriptCombat::AddPctClientSpellValue(amount, twinDisciplines->GetAmount());
 
     // Focused Power, xinef: apply positive modifier only
     if (int32 healModifier = caster->GetMaxPositiveAuraModifier(SPELL_AURA_MOD_HEALING_DONE_PERCENT))
-        AddPct(amount, healModifier);
+        amount = SpellScriptCombat::AddPctClientSpellValue(amount, healModifier);
 
     // Arena - Dampening
     if (AuraEffect const* arenaDampening = caster->GetAuraEffect(SPELL_GENERIC_ARENA_DAMPENING, EFFECT_0))
     {
-        AddPct(amount, arenaDampening->GetAmount());
+        amount = SpellScriptCombat::AddPctClientSpellValue(amount, arenaDampening->GetAmount());
     }
     // Battleground - Dampening
     else if (AuraEffect const* bgDampening = caster->GetAuraEffect(SPELL_GENERIC_BATTLEGROUND_DAMPENING, EFFECT_0))
     {
-        AddPct(amount, bgDampening->GetAmount());
+        amount = SpellScriptCombat::AddPctClientSpellValue(amount, bgDampening->GetAmount());
     }
 
     return amount;
@@ -694,7 +695,7 @@ class spell_pri_power_word_shield_aura : public AuraScript
         if (Unit* owner = GetUnitOwner())
             if (AuraEffect* talentAurEff = owner->GetAuraEffectOfRankedSpell(SPELL_PRIEST_REFLECTIVE_SHIELD_R1, EFFECT_0))
             {
-                int32 bp = CalculatePct(absorbAmount, talentAurEff->GetAmount());
+                int32 bp = SpellScriptCombat::CalculatePctClientSpellValue(absorbAmount, talentAurEff->GetAmount());
                 // xinef: prevents infinite loop!
                 if (!dmgInfo.GetSpellInfo() || dmgInfo.GetSpellInfo()->Id != SPELL_PRIEST_REFLECTIVE_SHIELD_TRIGGERED)
                     target->CastCustomSpell(dmgInfo.GetAttacker(), SPELL_PRIEST_REFLECTIVE_SHIELD_TRIGGERED, &bp, nullptr, nullptr, true, nullptr, aurEff);
@@ -757,23 +758,23 @@ class spell_pri_prayer_of_mending_heal : public SpellScript
     {
         if (Unit* caster = GetOriginalCaster())
         {
-            int32 heal = GetEffectValue();
+            int64 heal = GetEffectValue();
             if (AuraEffect* aurEff = caster->GetAuraEffect(SPELL_PRIEST_T9_HEALING_2P, EFFECT_0))
             {
-                AddPct(heal, aurEff->GetAmount());
+                heal = SpellScriptCombat::AddPctInt64Saturated(heal, aurEff->GetAmount());
             }
 
             if (AuraEffect* aurEff = caster->GetAuraEffectOfRankedSpell(SPELL_PRIEST_TWIN_DISCIPLINE_R1, EFFECT_0))
             {
-                AddPct(heal, aurEff->GetAmount());
+                heal = SpellScriptCombat::AddPctInt64Saturated(heal, aurEff->GetAmount());
             }
             if (AuraEffect* aurEff = caster->GetAuraEffectOfRankedSpell(SPELL_PRIEST_SPIRITUAL_HEALING_R1, EFFECT_0))
             {
-                AddPct(heal, aurEff->GetAmount());
+                heal = SpellScriptCombat::AddPctInt64Saturated(heal, aurEff->GetAmount());
             }
             if (AuraEffect* aurEff = caster->GetAuraEffectOfRankedSpell(SPELL_PRIEST_DIVINE_PROVIDENCE_R1, EFFECT_0))
             {
-                AddPct(heal, aurEff->GetAmount());
+                heal = SpellScriptCombat::AddPctInt64Saturated(heal, aurEff->GetAmount());
             }
 
             SetEffectValue(heal);
@@ -808,10 +809,13 @@ class spell_pri_renew : public AuraScript
             // Empowered Renew
             if (AuraEffect const* empoweredRenewAurEff = caster->GetDummyAuraEffect(SPELLFAMILY_PRIEST, PRIEST_ICON_ID_EMPOWERED_RENEW_TALENT, EFFECT_1))
             {
-                uint32 heal = GetEffect(EFFECT_0)->GetAmount();
+                uint64 heal = GetEffect(EFFECT_0)->GetAmountForCombat();
                 heal = GetTarget()->SpellHealingBonusTaken(caster, GetSpellInfo(), heal, DOT);
 
-                int32 basepoints0 = empoweredRenewAurEff->GetAmount() * GetEffect(EFFECT_0)->GetTotalTicks() * int32(heal) / 100;
+                int32 basepoints0 = SpellScriptCombat::ToClientSpellValue(
+                    static_cast<long double>(empoweredRenewAurEff->GetAmount()) *
+                    static_cast<long double>(GetEffect(EFFECT_0)->GetTotalTicks()) *
+                    static_cast<long double>(heal) / 100.0L);
                 caster->CastCustomSpell(GetTarget(), SPELL_PRIEST_EMPOWERED_RENEW, &basepoints0, nullptr, nullptr, true, nullptr, aurEff);
             }
         }
@@ -830,11 +834,11 @@ class spell_pri_shadow_word_death : public SpellScript
 
     void HandleDamage()
     {
-        int32 damage = GetHitDamage();
+        int32 damage = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(GetHitDamage()));
 
         // Pain and Suffering reduces damage
         if (AuraEffect* aurEff = GetCaster()->GetDummyAuraEffect(SPELLFAMILY_PRIEST, PRIEST_ICON_ID_PAIN_AND_SUFFERING, EFFECT_1))
-            AddPct(damage, aurEff->GetAmount());
+            damage = SpellScriptCombat::AddPctClientSpellValue(damage, aurEff->GetAmount());
 
         GetCaster()->CastCustomSpell(GetCaster(), SPELL_PRIEST_SHADOW_WORD_DEATH, &damage, 0, 0, true);
     }

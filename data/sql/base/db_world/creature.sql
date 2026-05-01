@@ -38,8 +38,8 @@ CREATE TABLE `creature` (
   `spawntimesecs` int unsigned NOT NULL DEFAULT '120',
   `wander_distance` float NOT NULL DEFAULT '0',
   `currentwaypoint` int unsigned NOT NULL DEFAULT '0',
-  `curhealth` int unsigned NOT NULL DEFAULT '1',
-  `curmana` int unsigned NOT NULL DEFAULT '0',
+  `curhealth` bigint unsigned NOT NULL DEFAULT '1',
+  `curmana` bigint unsigned NOT NULL DEFAULT '0',
   `MovementType` tinyint unsigned NOT NULL DEFAULT '0',
   `npcflag` int unsigned NOT NULL DEFAULT '0',
   `unit_flags` int unsigned NOT NULL DEFAULT '0',
@@ -148128,4 +148128,3 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2024-12-17 22:33:31
-

@@ -19,7 +19,7 @@
 #include "ScriptMgr.h"
 #include "ScriptMgrMacros.h"
 
-void ScriptMgr::OnLootMoney(Player* player, uint32 gold)
+void ScriptMgr::OnLootMoney(Player* player, uint64 gold)
 {
     ASSERT(player);
 

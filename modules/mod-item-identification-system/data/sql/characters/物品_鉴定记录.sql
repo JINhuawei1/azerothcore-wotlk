@@ -40,7 +40,7 @@ CREATE TABLE `物品_鉴定记录` (
   `套装ID` int unsigned NOT NULL DEFAULT '0' COMMENT '具体套装ID',
   
   -- 其他信息
-  `消耗金币` int unsigned NOT NULL DEFAULT '0' COMMENT '鉴定消耗的金币（铜币）',
+  `消耗金币` bigint unsigned NOT NULL DEFAULT '0' COMMENT '鉴定消耗的金币（铜币）',
   `成功率` int unsigned NOT NULL DEFAULT '100' COMMENT '鉴定时的成功率',
   
   PRIMARY KEY (`记录ID`),

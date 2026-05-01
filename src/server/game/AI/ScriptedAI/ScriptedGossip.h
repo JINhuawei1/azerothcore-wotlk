@@ -88,10 +88,10 @@ void ClearGossipMenuFor(Player* player);
 void AddGossipItemFor(Player* player, uint32 icon, std::string const& text, uint32 sender, uint32 action);
 
 // Using provided texts, not from DB
-void AddGossipItemFor(Player* player, uint32 icon, std::string const& text, uint32 sender, uint32 action, std::string const& popupText, uint32 popupMoney, bool coded);
+void AddGossipItemFor(Player* player, uint32 icon, std::string const& text, uint32 sender, uint32 action, std::string const& popupText, uint64 popupMoney, bool coded);
 
 // Uses gossip item info from DB
-void AddGossipItemFor(Player* player, uint32 gossipMenuID, uint32 gossipMenuItemID, uint32 sender, uint32 action, uint32 boxMoney = 0);
+void AddGossipItemFor(Player* player, uint32 gossipMenuID, uint32 gossipMenuItemID, uint32 sender, uint32 action, uint64 boxMoney = 0);
 
 // Send menu text
 void SendGossipMenuFor(Player* player, uint32 npcTextID, ObjectGuid const guid);

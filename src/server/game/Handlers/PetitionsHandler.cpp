@@ -178,7 +178,7 @@ void WorldSession::HandlePetitionBuyOpcode(WorldPacket& recvData)
         return;
     }
 
-    _player->ModifyMoney(-(int32)cost);
+    _player->ModifyMoney(-static_cast<int64>(cost));
     Item* charter = _player->StoreNewItem(dest, charterid, true);
     if (!charter)
         return;

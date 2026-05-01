@@ -10,10 +10,12 @@
 #include "World.h"
 #include "Mail.h"
 #include "DBCStores.h"
+#include "SpellAuras.h"
 #include <array>
 #include <sstream>
 #include <chrono>
 #include <algorithm>  // 用于 std::all_of, std::min, std::remove
+#include <limits>
 
 // 需求模板系统集成：通过模块管理器访问统一的需求接口
 #include "ModuleManager.h"
@@ -43,10 +45,21 @@ namespace
     constexpr uint32 ASCENSION_CHAIN_BOSS_LAST  = 399818;
     constexpr uint32 ASCENSION_CHAIN_BOSS_COUNT = ASCENSION_CHAIN_BOSS_LAST - ASCENSION_CHAIN_BOSS_FIRST + 1;
     constexpr uint32 ASCENSION_CHAIN_SUMMON_MS  = 30 * IN_MILLISECONDS;
-    constexpr uint32 ASCENSION_BOSS_HEALTH_BASE = 1000000000;
-    constexpr uint32 ASCENSION_BOSS_HEALTH_STEP = 100000000;
+    constexpr uint32 ASCENSION_CHAIN_BOSS_CORPSE_DELAY_SEC = 5;
+    constexpr uint64 ASCENSION_BOSS_HEALTH_BASE = 1000000000;
+    constexpr uint64 ASCENSION_BOSS_HEALTH_STEP = 100000000;
+    constexpr uint64 ASCENSION_CLIENT_VISIBLE_HEALTH_LIMIT = 2147483520ULL;
     constexpr uint32 ASCENSION_TRUE_STRIKE_MIN_MS = 1800;
     constexpr uint32 ASCENSION_TRUE_STRIKE_MAX_MS = 2400;
+
+    int32 ClampAscensionInt64ToInt32(int64 value)
+    {
+        if (value > std::numeric_limits<int32>::max())
+            return std::numeric_limits<int32>::max();
+        if (value < std::numeric_limits<int32>::min())
+            return std::numeric_limits<int32>::min();
+        return static_cast<int32>(value);
+    }
 
     enum AscensionBossSpellId : uint32
     {
@@ -257,15 +270,20 @@ namespace
         return entry - ASCENSION_CHAIN_BOSS_FIRST;
     }
 
-    uint32 GetAscensionBossMaxHealth(uint32 entry)
+    uint32 ToAscensionClientHealth(uint64 value)
+    {
+        return value > ASCENSION_CLIENT_VISIBLE_HEALTH_LIMIT ? static_cast<uint32>(ASCENSION_CLIENT_VISIBLE_HEALTH_LIMIT) : static_cast<uint32>(value);
+    }
+
+    uint64 GetAscensionBossMaxHealth(uint32 entry)
     {
         return ASCENSION_BOSS_HEALTH_BASE + GetAscensionBossSequenceIndex(entry) * ASCENSION_BOSS_HEALTH_STEP;
     }
 
-    uint32 GetAscensionBossTrueStrikeDamage(uint32 entry)
+    uint64 GetAscensionBossTrueStrikeDamage(uint32 entry)
     {
-        uint32 maxHealth = GetAscensionBossMaxHealth(entry);
-        return std::max<uint32>(25000u, maxHealth / 25000u);
+        uint64 maxHealth = GetAscensionBossMaxHealth(entry);
+        return std::max<uint64>(25000u, maxHealth / 25000u);
     }
 
     AscensionBossCombatProfile MakeAscensionBossCombatProfile(
@@ -378,6 +396,174 @@ namespace
             return nullptr;
 
         return &ASCENSION_BOSS_COMBAT_PROFILES[(entry - ASCENSION_CHAIN_BOSS_FIRST) % ASCENSION_COMBAT_ARCHETYPE_COUNT];
+    }
+
+    bool AutoStoreAscensionBossLoot(Creature* creature, Player* fallbackPlayer)
+    {
+        if (!creature || !fallbackPlayer || creature->loot.items.empty())
+            return false;
+
+        Player* rewardPlayer = creature->GetLootRecipient();
+        if (!rewardPlayer)
+            rewardPlayer = fallbackPlayer;
+
+        bool storedAny = false;
+        for (uint8 lootSlot = 0; lootSlot < creature->loot.items.size(); ++lootSlot)
+        {
+            LootItem& lootItem = creature->loot.items[lootSlot];
+            if (lootItem.is_looted || lootItem.count == 0)
+                continue;
+
+            ItemPosCountVec dest;
+            InventoryResult msg = rewardPlayer->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, lootItem.itemid, lootItem.count);
+            if (!lootItem.AllowedForPlayer(rewardPlayer, creature->loot.sourceWorldObjectGUID))
+                msg = EQUIP_ERR_YOU_CAN_NEVER_USE_THAT_ITEM;
+
+            if (msg != EQUIP_ERR_OK)
+                return storedAny;
+
+            AllowedLooterSet looters = lootItem.GetAllowedLooters();
+            Item* newItem = rewardPlayer->StoreNewItem(dest, lootItem.itemid, true, lootItem.randomPropertyId, looters);
+            if (!newItem)
+                return storedAny;
+
+            rewardPlayer->SendNewItem(newItem, uint32(lootItem.count), false, false, true);
+
+            lootItem.count = 0;
+            lootItem.is_looted = true;
+            if (creature->loot.unlootedCount > 0)
+                --creature->loot.unlootedCount;
+
+            storedAny = true;
+        }
+
+        if (creature->loot.isLooted())
+        {
+            creature->loot.clear();
+            creature->SetLootRecipient(nullptr);
+        }
+
+        return storedAny;
+    }
+
+    ItemSetEffect* FindAscensionItemSetEffect(Player* player, uint32 setId)
+    {
+        if (!player || setId == 0)
+            return nullptr;
+
+        for (ItemSetEffect* effect : player->ItemSetEff)
+            if (effect && effect->setid == setId)
+                return effect;
+
+        return nullptr;
+    }
+
+    ItemSetEffect* FindOrCreateAscensionItemSetEffect(Player* player, uint32 setId)
+    {
+        if (!player || setId == 0)
+            return nullptr;
+
+        if (ItemSetEffect* effect = FindAscensionItemSetEffect(player, setId))
+            return effect;
+
+        ItemSetEffect* effect = new ItemSetEffect();
+        effect->setid = setId;
+        effect->item_count = 0;
+        for (SpellInfo const*& spellInfo : effect->spells)
+            spellInfo = nullptr;
+
+        for (std::size_t index = 0; index < player->ItemSetEff.size(); ++index)
+        {
+            if (!player->ItemSetEff[index])
+            {
+                player->ItemSetEff[index] = effect;
+                return effect;
+            }
+        }
+
+        player->ItemSetEff.push_back(effect);
+        return effect;
+    }
+
+    void MakeAscensionAuraPermanent(Player* player, uint32 spellId)
+    {
+        if (!player || spellId == 0)
+            return;
+
+        if (Aura* aura = player->GetAura(spellId))
+        {
+            aura->SetMaxDuration(-1);
+            aura->SetDuration(-1);
+        }
+    }
+
+    void MakeAscensionItemSetSpellPermanent(Player* player, uint32 spellId)
+    {
+        MakeAscensionAuraPermanent(player, spellId);
+
+        if (std::vector<int32> const* linkedSpells = sSpellMgr->GetSpellLinked(spellId + SPELL_LINK_AURA))
+        {
+            for (int32 linkedSpellId : *linkedSpells)
+                if (linkedSpellId > 0)
+                    MakeAscensionAuraPermanent(player, uint32(linkedSpellId));
+        }
+    }
+
+    void CastAscensionEquipSpell(Player* player, Item* item, SpellInfo const* spellInfo)
+    {
+        (void)item;
+
+        if (!player || !spellInfo)
+            return;
+
+        player->CastSpell(player, spellInfo, true);
+        MakeAscensionItemSetSpellPermanent(player, spellInfo->Id);
+    }
+
+    bool HasAscensionEquipSpell(Player* player, uint32 spellId)
+    {
+        if (!player || spellId == 0)
+            return false;
+
+        PlayerAscensionStatus* status = sAscensionManager->GetPlayerStatus(player->GetGUID().GetCounter());
+        if (!status)
+            return false;
+
+        for (auto const& slotPair : status->slots)
+        {
+            ItemTemplate const* proto = sObjectMgr->GetItemTemplate(slotPair.second.itemId);
+            if (!proto)
+                continue;
+
+            for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+            {
+                if (proto->Spells[i].SpellId == int32(spellId) && proto->Spells[i].SpellTrigger == ITEM_SPELLTRIGGER_ON_EQUIP)
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool ShouldKeepAscensionTriggeredAuraPermanent(Player* player, uint32 spellId)
+    {
+        switch (spellId)
+        {
+            case 64413: // 远古王者的庇护，由 64411 远古王者的祝福触发
+                return HasAscensionEquipSpell(player, 64411);
+            case 33649: // 诺森德神群力量，由 60066 装备效果触发
+                return HasAscensionEquipSpell(player, 60066);
+            case 89028: // 深渊冲锋毁灭爆发，由深渊装备触发
+            {
+                if (!player)
+                    return false;
+
+                PlayerAscensionStatus* status = sAscensionManager->GetPlayerStatus(player->GetGUID().GetCounter());
+                return status && !status->slots.empty();
+            }
+            default:
+                return false;
+        }
     }
 }
 
@@ -896,10 +1082,7 @@ void AscensionManager::ValidateEquippedItems(Player* player)
         if (slotDataIt != status->slots.end())
         {
             if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(slotDataIt->second.itemId))
-            {
-                if (proto->ItemSet != 0)
-                    RemoveItemsSetItem(player, proto);
-            }
+                RemoveAscensionItemSet(player, proto->ItemSet, 1);
         }
 
         // 【关键修复】移除该槽位已应用的属性，防止属性叠加bug
@@ -1208,8 +1391,10 @@ bool AscensionManager::EquipItem(Player* player, uint8 slot, uint32 itemId, uint
     LOG_INFO("module", "飞升系统: 装备物品 槽位={} 物品ID={} GUID={} OwnerGUID={}",
         slot, itemId, itemGuid, player->GetGUID().GetCounter());
 
-    // 应用属性
+    // 应用属性与套装贡献
     ApplyItemEffect(player, itemId, slot, true);
+    if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId))
+        ApplyAscensionItemSet(player, proto->ItemSet, 1);
 
     // 保存数据
     SavePlayerData(player);
@@ -1250,8 +1435,8 @@ bool AscensionManager::UnequipItem(Player* player, uint8 slot)
     Item* item = it->second.itemPtr;
     ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
 
-    if (proto && proto->ItemSet != 0)
-        RemoveItemsSetItem(player, proto);
+    if (ItemTemplate const* equippedProto = sObjectMgr->GetItemTemplate(itemId))
+        RemoveAscensionItemSet(player, equippedProto->ItemSet, 1);
 
     // 【修复】使用 slotStats 记录的值精确移除该槽位的属性，防止属性漂移
     auto statIt = status->slotStats.find(slot);
@@ -1294,6 +1479,11 @@ bool AscensionManager::UnequipItem(Player* player, uint8 slot)
         }
         status->slotSpells.erase(spellIt);
     }
+
+#ifdef MODULE_HUANJING_SYSTEM
+    if (item && sHuanJingSystem)
+        sHuanJingSystem->RemoveHuanJingEnhancement(player, item);
+#endif
 
     // 更新玩家属性
     UpdatePlayerStats(player);
@@ -1472,21 +1662,22 @@ void AscensionManager::ApplyAllEffects(Player* player)
 
     uint32 appliedCount = 0;
 
+    bool restoreCanModifyStats = player->CanModifyStats();
+    if (restoreCanModifyStats)
+        player->SetCanModifyStats(false);
+
     for (const auto& pair : status->slots)
     {
-        ApplyItemEffect(player, pair.second.itemId, pair.first, true);
+        ApplyItemEffect(player, pair.second.itemId, pair.first, true, false);
         ++appliedCount;
     }
 
-    size_t statRecordCount = 0;
-    for (auto const& slotStats : status->slotStats)
-        statRecordCount += slotStats.second.size();
+    ApplyAscensionItemSets(player);
 
-    size_t spellRecordCount = 0;
-    for (auto const& slotSpells : status->slotSpells)
-        spellRecordCount += slotSpells.second.size();
+    if (restoreCanModifyStats)
+        player->SetCanModifyStats(true);
 
-    if (appliedCount > 0 || statRecordCount > 0 || spellRecordCount > 0)
+    if (appliedCount > 0 || !status->slotStats.empty() || !status->slotSpells.empty())
         UpdatePlayerStats(player);
 
     if (sAscensionConfig->IsDebugMode())
@@ -1505,14 +1696,7 @@ void AscensionManager::RemoveAllEffects(Player* player)
     if (!status)
         return;
 
-    for (const auto& slotPair : status->slots)
-    {
-        if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(slotPair.second.itemId))
-        {
-            if (proto->ItemSet != 0)
-                RemoveItemsSetItem(player, proto);
-        }
-    }
+    RemoveAscensionItemSets(player);
 
     // 【修复】移除所有已应用的法术 - 遍历按槽位记录的法术
     for (const auto& slotPair : status->slotSpells)
@@ -1535,6 +1719,14 @@ void AscensionManager::RemoveAllEffects(Player* player)
     }
     status->slotStats.clear();
 
+#ifdef MODULE_HUANJING_SYSTEM
+    for (const auto& slotPair : status->slots)
+    {
+        if (slotPair.second.itemPtr && sHuanJingSystem)
+            sHuanJingSystem->RemoveHuanJingEnhancement(player, slotPair.second.itemPtr);
+    }
+#endif
+
     UpdatePlayerStats(player);
 
     if (sAscensionConfig->IsDebugMode())
@@ -1552,7 +1744,7 @@ void AscensionManager::RefreshEffects(Player* player)
     ApplyAllEffects(player);
 }
 
-void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot, bool apply)
+void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot, bool apply, bool updateStats)
 {
     if (!player)
         return;
@@ -1607,19 +1799,6 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
     float globalMultiplier = sAscensionConfig->GetStatMultiplier();
     float totalMultiplier = slotMultiplier * globalMultiplier;
 
-    if (proto->ItemSet != 0 && apply)
-    {
-        if (item)
-        {
-            AddItemsSetItem(player, item);
-        }
-        else if (sAscensionConfig->IsDebugMode())
-        {
-            LOG_WARN("module", "飞升系统: 槽位 {} 的套装物品 {} 缺少实例指针，无法应用套装效果",
-                slot, itemId);
-        }
-    }
-
     // 应用物品属性 - 使用正确的属性类型映射
     for (uint8 i = 0; i < MAX_ITEM_PROTO_STATS; ++i)
     {
@@ -1628,7 +1807,7 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
 
         if (proto->ItemStat[i].ItemStatValue != 0)
         {
-            int32 val = int32(proto->ItemStat[i].ItemStatValue * totalMultiplier);
+            int64 val = static_cast<int64>(static_cast<long double>(proto->ItemStat[i].ItemStatValue) * static_cast<long double>(totalMultiplier));
             uint32 statType = proto->ItemStat[i].ItemStatType;
 
             // 根据属性类型正确应用
@@ -1661,90 +1840,90 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
                     player->ApplyStatBuffMod(STAT_STAMINA, float(val), apply);
                     break;
                 case ITEM_MOD_DEFENSE_SKILL_RATING:
-                    player->ApplyRatingMod(CR_DEFENSE_SKILL, int32(val), apply);
+                    player->ApplyRatingMod(CR_DEFENSE_SKILL, val, apply);
                     break;
                 case ITEM_MOD_DODGE_RATING:
-                    player->ApplyRatingMod(CR_DODGE, int32(val), apply);
+                    player->ApplyRatingMod(CR_DODGE, val, apply);
                     break;
                 case ITEM_MOD_PARRY_RATING:
-                    player->ApplyRatingMod(CR_PARRY, int32(val), apply);
+                    player->ApplyRatingMod(CR_PARRY, val, apply);
                     break;
                 case ITEM_MOD_BLOCK_RATING:
-                    player->ApplyRatingMod(CR_BLOCK, int32(val), apply);
+                    player->ApplyRatingMod(CR_BLOCK, val, apply);
                     break;
                 case ITEM_MOD_HIT_MELEE_RATING:
-                    player->ApplyRatingMod(CR_HIT_MELEE, int32(val), apply);
+                    player->ApplyRatingMod(CR_HIT_MELEE, val, apply);
                     break;
                 case ITEM_MOD_HIT_RANGED_RATING:
-                    player->ApplyRatingMod(CR_HIT_RANGED, int32(val), apply);
+                    player->ApplyRatingMod(CR_HIT_RANGED, val, apply);
                     break;
                 case ITEM_MOD_HIT_SPELL_RATING:
-                    player->ApplyRatingMod(CR_HIT_SPELL, int32(val), apply);
+                    player->ApplyRatingMod(CR_HIT_SPELL, val, apply);
                     break;
                 case ITEM_MOD_CRIT_MELEE_RATING:
-                    player->ApplyRatingMod(CR_CRIT_MELEE, int32(val), apply);
+                    player->ApplyRatingMod(CR_CRIT_MELEE, val, apply);
                     break;
                 case ITEM_MOD_CRIT_RANGED_RATING:
-                    player->ApplyRatingMod(CR_CRIT_RANGED, int32(val), apply);
+                    player->ApplyRatingMod(CR_CRIT_RANGED, val, apply);
                     break;
                 case ITEM_MOD_CRIT_SPELL_RATING:
-                    player->ApplyRatingMod(CR_CRIT_SPELL, int32(val), apply);
+                    player->ApplyRatingMod(CR_CRIT_SPELL, val, apply);
                     break;
                 case ITEM_MOD_HIT_TAKEN_MELEE_RATING:
-                    player->ApplyRatingMod(CR_HIT_TAKEN_MELEE, int32(val), apply);
+                    player->ApplyRatingMod(CR_HIT_TAKEN_MELEE, val, apply);
                     break;
                 case ITEM_MOD_HIT_TAKEN_RANGED_RATING:
-                    player->ApplyRatingMod(CR_HIT_TAKEN_RANGED, int32(val), apply);
+                    player->ApplyRatingMod(CR_HIT_TAKEN_RANGED, val, apply);
                     break;
                 case ITEM_MOD_HIT_TAKEN_SPELL_RATING:
-                    player->ApplyRatingMod(CR_HIT_TAKEN_SPELL, int32(val), apply);
+                    player->ApplyRatingMod(CR_HIT_TAKEN_SPELL, val, apply);
                     break;
                 case ITEM_MOD_CRIT_TAKEN_MELEE_RATING:
-                    player->ApplyRatingMod(CR_CRIT_TAKEN_MELEE, int32(val), apply);
+                    player->ApplyRatingMod(CR_CRIT_TAKEN_MELEE, val, apply);
                     break;
                 case ITEM_MOD_CRIT_TAKEN_RANGED_RATING:
-                    player->ApplyRatingMod(CR_CRIT_TAKEN_RANGED, int32(val), apply);
+                    player->ApplyRatingMod(CR_CRIT_TAKEN_RANGED, val, apply);
                     break;
                 case ITEM_MOD_CRIT_TAKEN_SPELL_RATING:
-                    player->ApplyRatingMod(CR_CRIT_TAKEN_SPELL, int32(val), apply);
+                    player->ApplyRatingMod(CR_CRIT_TAKEN_SPELL, val, apply);
                     break;
                 case ITEM_MOD_HASTE_MELEE_RATING:
-                    player->ApplyRatingMod(CR_HASTE_MELEE, int32(val), apply);
+                    player->ApplyRatingMod(CR_HASTE_MELEE, val, apply);
                     break;
                 case ITEM_MOD_HASTE_RANGED_RATING:
-                    player->ApplyRatingMod(CR_HASTE_RANGED, int32(val), apply);
+                    player->ApplyRatingMod(CR_HASTE_RANGED, val, apply);
                     break;
                 case ITEM_MOD_HASTE_SPELL_RATING:
-                    player->ApplyRatingMod(CR_HASTE_SPELL, int32(val), apply);
+                    player->ApplyRatingMod(CR_HASTE_SPELL, val, apply);
                     break;
                 case ITEM_MOD_HIT_RATING:
-                    player->ApplyRatingMod(CR_HIT_MELEE, int32(val), apply);
-                    player->ApplyRatingMod(CR_HIT_RANGED, int32(val), apply);
-                    player->ApplyRatingMod(CR_HIT_SPELL, int32(val), apply);
+                    player->ApplyRatingMod(CR_HIT_MELEE, val, apply);
+                    player->ApplyRatingMod(CR_HIT_RANGED, val, apply);
+                    player->ApplyRatingMod(CR_HIT_SPELL, val, apply);
                     break;
                 case ITEM_MOD_CRIT_RATING:
-                    player->ApplyRatingMod(CR_CRIT_MELEE, int32(val), apply);
-                    player->ApplyRatingMod(CR_CRIT_RANGED, int32(val), apply);
-                    player->ApplyRatingMod(CR_CRIT_SPELL, int32(val), apply);
+                    player->ApplyRatingMod(CR_CRIT_MELEE, val, apply);
+                    player->ApplyRatingMod(CR_CRIT_RANGED, val, apply);
+                    player->ApplyRatingMod(CR_CRIT_SPELL, val, apply);
                     break;
                 case ITEM_MOD_HIT_TAKEN_RATING:
-                    player->ApplyRatingMod(CR_HIT_TAKEN_MELEE, int32(val), apply);
-                    player->ApplyRatingMod(CR_HIT_TAKEN_RANGED, int32(val), apply);
-                    player->ApplyRatingMod(CR_HIT_TAKEN_SPELL, int32(val), apply);
+                    player->ApplyRatingMod(CR_HIT_TAKEN_MELEE, val, apply);
+                    player->ApplyRatingMod(CR_HIT_TAKEN_RANGED, val, apply);
+                    player->ApplyRatingMod(CR_HIT_TAKEN_SPELL, val, apply);
                     break;
                 case ITEM_MOD_CRIT_TAKEN_RATING:
                 case ITEM_MOD_RESILIENCE_RATING:
-                    player->ApplyRatingMod(CR_CRIT_TAKEN_MELEE, int32(val), apply);
-                    player->ApplyRatingMod(CR_CRIT_TAKEN_RANGED, int32(val), apply);
-                    player->ApplyRatingMod(CR_CRIT_TAKEN_SPELL, int32(val), apply);
+                    player->ApplyRatingMod(CR_CRIT_TAKEN_MELEE, val, apply);
+                    player->ApplyRatingMod(CR_CRIT_TAKEN_RANGED, val, apply);
+                    player->ApplyRatingMod(CR_CRIT_TAKEN_SPELL, val, apply);
                     break;
                 case ITEM_MOD_HASTE_RATING:
-                    player->ApplyRatingMod(CR_HASTE_MELEE, int32(val), apply);
-                    player->ApplyRatingMod(CR_HASTE_RANGED, int32(val), apply);
-                    player->ApplyRatingMod(CR_HASTE_SPELL, int32(val), apply);
+                    player->ApplyRatingMod(CR_HASTE_MELEE, val, apply);
+                    player->ApplyRatingMod(CR_HASTE_RANGED, val, apply);
+                    player->ApplyRatingMod(CR_HASTE_SPELL, val, apply);
                     break;
                 case ITEM_MOD_EXPERTISE_RATING:
-                    player->ApplyRatingMod(CR_EXPERTISE, int32(val), apply);
+                    player->ApplyRatingMod(CR_EXPERTISE, val, apply);
                     break;
                 case ITEM_MOD_ATTACK_POWER:
                     player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, float(val), apply);
@@ -1754,19 +1933,19 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
                     player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, float(val), apply);
                     break;
                 case ITEM_MOD_MANA_REGENERATION:
-                    player->ApplyManaRegenBonus(int32(val), apply);
+                    player->ApplyManaRegenBonus(ClampAscensionInt64ToInt32(val), apply);
                     break;
                 case ITEM_MOD_ARMOR_PENETRATION_RATING:
-                    player->ApplyRatingMod(CR_ARMOR_PENETRATION, int32(val), apply);
+                    player->ApplyRatingMod(CR_ARMOR_PENETRATION, val, apply);
                     break;
                 case ITEM_MOD_SPELL_POWER:
-                    player->ApplySpellPowerBonus(int32(val), apply);
+                    player->ApplySpellPowerBonus(val, apply);
                     break;
                 case ITEM_MOD_HEALTH_REGEN:
-                    player->ApplyHealthRegenBonus(int32(val), apply);
+                    player->ApplyHealthRegenBonus(ClampAscensionInt64ToInt32(val), apply);
                     break;
                 case ITEM_MOD_SPELL_PENETRATION:
-                    player->ApplySpellPenetrationBonus(val, apply);
+                    player->ApplySpellPenetrationBonus(ClampAscensionInt64ToInt32(val), apply);
                     break;
                 case ITEM_MOD_BLOCK_VALUE:
                     player->HandleBaseModValue(SHIELD_BLOCK_VALUE, FLAT_MOD, float(val), apply);
@@ -1890,7 +2069,8 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
                         {
                             if (apply)
                             {
-                                player->CastSpell(player, enchant->spellid[s], true);
+                                if (SpellInfo const* enchantSpellInfo = sSpellMgr->GetSpellInfo(enchant->spellid[s]))
+                                    CastAscensionEquipSpell(player, item, enchantSpellInfo);
                                 status->slotSpells[slot].push_back(enchant->spellid[s]);
                             }
                             else
@@ -1913,7 +2093,9 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
                                     if (spellFromOtherSlot) break;
                                 }
                                 if (!spellFromOtherSlot)
+                                {
                                     player->RemoveAurasDueToSpell(enchant->spellid[s]);
+                                }
                             }
                         }
                         break;
@@ -1927,7 +2109,7 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
                             if (apply)
                             {
                                 AppliedStatEffect e;
-                                e.statType = 2000 + enchantSlot * 100 + s;  // 附魔属性标识
+                                e.statType = statType;
                                 e.statValue = amount;
                                 status->slotStats[slot].push_back(e);
                             }
@@ -1964,7 +2146,7 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
 
             if (apply)
             {
-                player->CastSpell(player, spellInfo, true);
+                CastAscensionEquipSpell(player, item, spellInfo);
                 // 按槽位记录法术，便于单件卸下时精确移除
                 status->slotSpells[slot].push_back(spellId);
             }
@@ -2013,7 +2195,7 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
         if (apply)
         {
             // 应用鉴定系统的自定义属性（包含倍率计算）
-            sHuanJingSystem->ApplyHuanJingEnhancement(player, item, true);
+            sHuanJingSystem->ApplyHuanJingEnhancement(player, item, updateStats);
 
             if (sAscensionConfig->IsDebugMode())
             {
@@ -2036,7 +2218,8 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
 #endif
 
     // 更新玩家属性
-    UpdatePlayerStats(player);
+    if (updateStats)
+        UpdatePlayerStats(player);
 }
 
 bool AscensionManager::CanEquipItemInSlot(Player* player, uint8 slot, uint32 itemId)
@@ -2339,12 +2522,203 @@ std::string AscensionManager::GetSlotName(uint8 slot) const
     return "未知";
 }
 
-void AscensionManager::ApplyEnchantStatMod(Player* player, uint32 statType, int32 amount, bool apply)
+void AscensionManager::ApplyAscensionItemSets(Player* player)
+{
+    if (!player)
+        return;
+
+    PlayerAscensionStatus* status = GetPlayerStatus(player->GetGUID().GetCounter());
+    if (!status)
+        return;
+
+    if (!status->itemSetCounts.empty())
+        RemoveAscensionItemSets(player);
+
+    std::map<uint32, uint32> setCounts;
+    for (auto const& slotPair : status->slots)
+    {
+        uint8 slot = slotPair.first;
+        auto ctrlIt = _slotControls.find(slot);
+        if (ctrlIt != _slotControls.end() && !ctrlIt->second.enabled)
+            continue;
+
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(slotPair.second.itemId);
+        if (!proto || proto->ItemSet == 0)
+            continue;
+
+        ++setCounts[proto->ItemSet];
+    }
+
+    for (auto const& setPair : setCounts)
+        ApplyAscensionItemSet(player, setPair.first, setPair.second);
+}
+
+void AscensionManager::RemoveAscensionItemSets(Player* player)
+{
+    if (!player)
+        return;
+
+    PlayerAscensionStatus* status = GetPlayerStatus(player->GetGUID().GetCounter());
+    if (!status || status->itemSetCounts.empty())
+        return;
+
+    std::map<uint32, uint32> appliedCounts = status->itemSetCounts;
+    for (auto const& setPair : appliedCounts)
+        RemoveAscensionItemSet(player, setPair.first, setPair.second);
+}
+
+bool AscensionManager::ApplyAscensionItemSet(Player* player, uint32 itemSetId, uint32 itemCount)
+{
+    if (!player || itemSetId == 0 || itemCount == 0)
+        return false;
+
+    ItemSetEntry const* set = sItemSetStore.LookupEntry(itemSetId);
+    if (!set)
+    {
+        LOG_ERROR("sql.sql", "飞升系统: ItemSet {} not found, mods not applied.", itemSetId);
+        return false;
+    }
+
+    if (set->required_skill_id && player->GetSkillValue(set->required_skill_id) < set->required_skill_value)
+        return false;
+
+    PlayerAscensionStatus* status = GetPlayerStatus(player->GetGUID().GetCounter());
+    if (!status)
+        return false;
+
+    ItemSetEffect* effect = FindOrCreateAscensionItemSetEffect(player, itemSetId);
+    if (!effect)
+        return false;
+
+    uint32 oldCount = effect->item_count;
+    effect->item_count += itemCount;
+    status->itemSetCounts[itemSetId] += itemCount;
+
+    for (uint32 spellIndex = 0; spellIndex < MAX_ITEM_SET_SPELLS; ++spellIndex)
+    {
+        uint32 spellId = set->spells[spellIndex];
+        uint32 requiredCount = set->items_to_triggerspell[spellIndex];
+        if (!spellId || requiredCount == 0 || oldCount >= requiredCount || effect->item_count < requiredCount)
+            continue;
+
+        bool alreadyActive = false;
+        for (SpellInfo const* activeSpell : effect->spells)
+        {
+            if (activeSpell && activeSpell->Id == spellId)
+            {
+                alreadyActive = true;
+                break;
+            }
+        }
+
+        if (alreadyActive)
+            continue;
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+        if (!spellInfo)
+        {
+            LOG_ERROR("entities.item", "飞升系统: unknown spell id {} in aggregated item set {}.", spellId, itemSetId);
+            continue;
+        }
+
+        for (uint32 slot = 0; slot < MAX_ITEM_SET_SPELLS; ++slot)
+        {
+            if (!effect->spells[slot])
+            {
+                effect->spells[slot] = spellInfo;
+                if (sScriptMgr->OnPlayerCanApplyEquipSpellsItemSet(player, effect))
+                {
+                    player->ApplyEquipSpell(spellInfo, nullptr, true);
+                    MakeAscensionItemSetSpellPermanent(player, spellId);
+                }
+                break;
+            }
+        }
+    }
+
+    return true;
+}
+
+void AscensionManager::RemoveAscensionItemSet(Player* player, uint32 itemSetId, uint32 itemCount)
+{
+    if (!player || itemSetId == 0 || itemCount == 0)
+        return;
+
+    PlayerAscensionStatus* status = GetPlayerStatus(player->GetGUID().GetCounter());
+    if (!status)
+        return;
+
+    auto appliedIt = status->itemSetCounts.find(itemSetId);
+    if (appliedIt == status->itemSetCounts.end())
+        return;
+
+    uint32 removeCount = std::min(itemCount, appliedIt->second);
+
+    ItemSetEntry const* set = sItemSetStore.LookupEntry(itemSetId);
+    if (!set)
+    {
+        LOG_ERROR("sql.sql", "飞升系统: ItemSet {} not found, mods not removed.", itemSetId);
+        appliedIt->second -= removeCount;
+        if (appliedIt->second == 0)
+            status->itemSetCounts.erase(appliedIt);
+        return;
+    }
+
+    ItemSetEffect* effect = FindAscensionItemSetEffect(player, itemSetId);
+    if (!effect)
+    {
+        appliedIt->second -= removeCount;
+        if (appliedIt->second == 0)
+            status->itemSetCounts.erase(appliedIt);
+        return;
+    }
+
+    uint32 oldCount = effect->item_count;
+    effect->item_count = oldCount > removeCount ? oldCount - removeCount : 0;
+
+    for (uint32 spellIndex = 0; spellIndex < MAX_ITEM_SET_SPELLS; ++spellIndex)
+    {
+        uint32 spellId = set->spells[spellIndex];
+        uint32 requiredCount = set->items_to_triggerspell[spellIndex];
+        if (!spellId || requiredCount == 0 || oldCount < requiredCount || effect->item_count >= requiredCount)
+            continue;
+
+        for (uint32 slot = 0; slot < MAX_ITEM_SET_SPELLS; ++slot)
+        {
+            if (effect->spells[slot] && effect->spells[slot]->Id == spellId)
+            {
+                player->ApplyEquipSpell(effect->spells[slot], nullptr, false);
+                effect->spells[slot] = nullptr;
+                break;
+            }
+        }
+    }
+
+    if (effect->item_count == 0)
+    {
+        for (std::size_t index = 0; index < player->ItemSetEff.size(); ++index)
+        {
+            if (player->ItemSetEff[index] == effect)
+            {
+                delete effect;
+                player->ItemSetEff[index] = nullptr;
+                break;
+            }
+        }
+    }
+
+    appliedIt->second -= removeCount;
+    if (appliedIt->second == 0)
+        status->itemSetCounts.erase(appliedIt);
+
+}
+
+void AscensionManager::ApplyEnchantStatMod(Player* player, uint32 statType, int64 amount, bool apply)
 {
     if (!player || amount == 0)
         return;
 
-    int32 val = apply ? amount : -amount;
+    int64 val = amount;
 
     switch (statType)
     {
@@ -2435,7 +2809,7 @@ void AscensionManager::ApplyEnchantStatMod(Player* player, uint32 statType, int3
             player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, float(val), apply);
             break;
         case ITEM_MOD_MANA_REGENERATION:
-            player->ApplyManaRegenBonus(amount, apply);
+            player->ApplyManaRegenBonus(ClampAscensionInt64ToInt32(amount), apply);
             break;
         case ITEM_MOD_ARMOR_PENETRATION_RATING:
             player->ApplyRatingMod(CR_ARMOR_PENETRATION, amount, apply);
@@ -2444,10 +2818,10 @@ void AscensionManager::ApplyEnchantStatMod(Player* player, uint32 statType, int3
             player->ApplySpellPowerBonus(amount, apply);
             break;
         case ITEM_MOD_HEALTH_REGEN:
-            player->ApplyHealthRegenBonus(amount, apply);
+            player->ApplyHealthRegenBonus(ClampAscensionInt64ToInt32(amount), apply);
             break;
         case ITEM_MOD_SPELL_PENETRATION:
-            player->ApplySpellPenetrationBonus(val, apply);
+            player->ApplySpellPenetrationBonus(ClampAscensionInt64ToInt32(amount), apply);
             break;
         case ITEM_MOD_BLOCK_VALUE:
             player->HandleBaseModValue(SHIELD_BLOCK_VALUE, FLAT_MOD, float(val), apply);
@@ -2457,7 +2831,7 @@ void AscensionManager::ApplyEnchantStatMod(Player* player, uint32 statType, int3
     }
 }
 
-void AscensionManager::RemoveStatEffect(Player* player, uint32 statType, int32 statValue)
+void AscensionManager::RemoveStatEffect(Player* player, uint32 statType, int64 statValue)
 {
     if (!player || statValue == 0)
         return;
@@ -2552,7 +2926,7 @@ void AscensionManager::RemoveStatEffect(Player* player, uint32 statType, int32 s
             player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, float(statValue), false);
             break;
         case ITEM_MOD_MANA_REGENERATION:
-            player->ApplyManaRegenBonus(statValue, false);
+            player->ApplyManaRegenBonus(ClampAscensionInt64ToInt32(statValue), false);
             break;
         case ITEM_MOD_ARMOR_PENETRATION_RATING:
             player->ApplyRatingMod(CR_ARMOR_PENETRATION, statValue, false);
@@ -2561,10 +2935,10 @@ void AscensionManager::RemoveStatEffect(Player* player, uint32 statType, int32 s
             player->ApplySpellPowerBonus(statValue, false);
             break;
         case ITEM_MOD_HEALTH_REGEN:
-            player->ApplyHealthRegenBonus(statValue, false);
+            player->ApplyHealthRegenBonus(ClampAscensionInt64ToInt32(statValue), false);
             break;
         case ITEM_MOD_SPELL_PENETRATION:
-            player->ApplySpellPenetrationBonus(statValue, false);
+            player->ApplySpellPenetrationBonus(ClampAscensionInt64ToInt32(statValue), false);
             break;
         case ITEM_MOD_BLOCK_VALUE:
             player->HandleBaseModValue(SHIELD_BLOCK_VALUE, FLAT_MOD, float(statValue), false);
@@ -2698,7 +3072,7 @@ void AscensionManager::SendAscensionDataToClient(Player* player)
     }
 
     // 构建压缩的数据字符串
-    // 格式: ASC:U=解锁槽位位图;E=槽位:物品ID:GUID,槽位:物品ID:GUID...
+    // 格式: ASC:U=解锁槽位位图;E=槽位:物品ID:GUID:套装ID,槽位:物品ID:GUID:套装ID...
 
     // 计算解锁槽位位图
     uint32 unlockedBitmap = 0;
@@ -2717,7 +3091,12 @@ void AscensionManager::SendAscensionDataToClient(Player* player)
     {
         if (!first)
             equipStr << ",";
-        equipStr << (int)pair.first << ":" << pair.second.itemId << ":" << pair.second.itemGuid;
+
+        uint32 itemSet = 0;
+        if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(pair.second.itemId))
+            itemSet = proto->ItemSet;
+
+        equipStr << (int)pair.first << ":" << pair.second.itemId << ":" << pair.second.itemGuid << ":" << itemSet;
         first = false;
     }
 
@@ -2844,9 +3223,6 @@ void AscensionPlayerScript::OnPlayerLogin(Player* player)
     if (!sAscensionConfig->IsEnabled() || !player)
         return;
 
-    using namespace std::chrono;
-    auto loginStart = high_resolution_clock::now();
-
     sAscensionManager->LoadPlayerData(player);
 
     sAscensionManager->ValidateEquippedItems(player);
@@ -2869,17 +3245,6 @@ void AscensionPlayerScript::OnPlayerLogin(Player* player)
             "检测到 {} 件深渊修仙装备仍在官方装备栏。后续不能再直接穿戴，请手动卸下后放入飞升装备槽。",
             restrictedEquippedCount);
     }
-
-    PlayerAscensionStatus* status = sAscensionManager->GetPlayerStatus(player->GetGUID().GetCounter());
-    auto totalMs = duration_cast<milliseconds>(high_resolution_clock::now() - loginStart).count();
-    LOG_INFO("module",
-        "飞升系统: 玩家 {} OnPlayerLogin 完成 GUID={} 解锁槽位={} 飞升装备={} 官方栏深渊装备={} 总耗时={}ms",
-        player->GetName(),
-        player->GetGUID().ToString(),
-        status ? status->unlockedSlots.size() : 0,
-        status ? status->slots.size() : 0,
-        restrictedEquippedCount,
-        totalMs);
 
     if (sAscensionConfig->IsDebugMode())
     {
@@ -2946,6 +3311,36 @@ bool AscensionPlayerScript::OnPlayerCanEquipItem(Player* player, uint8 slot, uin
 
     return false;
 }
+
+class AscensionUnitScript : public UnitScript
+{
+public:
+    AscensionUnitScript() : UnitScript("AscensionUnitScript", true, {
+        UNITHOOK_ON_AURA_APPLY
+    })
+    {
+    }
+
+    void OnAuraApply(Unit* unit, Aura* aura) override
+    {
+        if (!sAscensionConfig->IsEnabled() || !unit || !aura)
+            return;
+
+        Player* targetPlayer = unit->ToPlayer();
+        Player* sourcePlayer = aura->GetCaster() ? aura->GetCaster()->ToPlayer() : nullptr;
+        if (!sourcePlayer)
+            sourcePlayer = targetPlayer;
+
+        if (!sourcePlayer)
+            return;
+
+        if (!ShouldKeepAscensionTriggeredAuraPermanent(sourcePlayer, aura->GetId()))
+            return;
+
+        aura->SetMaxDuration(-1);
+        aura->SetDuration(-1);
+    }
+};
 
 //=============================================================================
 // AscensionCommandScript 实现
@@ -3290,6 +3685,8 @@ public:
     {
         explicit npc_ascension_chain_bossAI(Creature* creature) : ScriptedAI(creature)
         {
+            me->SetCorpseDelay(ASCENSION_CHAIN_BOSS_CORPSE_DELAY_SEC);
+
             scheduler.SetValidator([this]
             {
                 return !me->HasUnitState(UNIT_STATE_CASTING);
@@ -3303,16 +3700,29 @@ public:
         {
             scheduler.CancelAll();
             SetAutoAttackAllowed(true);
+            me->SetCorpseDelay(ASCENSION_CHAIN_BOSS_CORPSE_DELAY_SEC);
             _phaseTwoTriggered = false;
             _phaseThreeTriggered = false;
 
-            uint32 maxHealth = GetAscensionBossMaxHealth(me->GetEntry());
+            uint64 maxHealth = GetAscensionBossMaxHealth(me->GetEntry());
             if (maxHealth > 0)
             {
-                me->SetCreateHealth(maxHealth);
-                me->SetMaxHealth(maxHealth);
-                me->SetHealth(maxHealth);
+                uint32 clientHealth = ToAscensionClientHealth(maxHealth);
+                me->SetCreateHealth(clientHealth);
+                me->SetMaxHealth(clientHealth);
+
+                if (maxHealth > clientHealth)
+                {
+                    me->SetExtendedMaxHealth(maxHealth);
+                    me->SetExtendedHealth(maxHealth);
+                    me->SyncClientHealthFromExtended();
+                }
+                else
+                    me->SetHealth(clientHealth);
             }
+
+            // 扩展血量首领会把核心半血伤害需求抬得过高，这里只解除奖励判定门槛，掉落仍由 creature_template.lootid 正常生成。
+            me->LowerPlayerDamageReq(me->GetMaxHealthForCombat(), true);
 
             if (me->HasWeapon(OFF_ATTACK))
                 me->SetCanDualWield(true);
@@ -3391,9 +3801,9 @@ public:
             if (!victim || !victim->IsAlive())
                 return;
 
-            uint32 damage = GetAscensionBossTrueStrikeDamage(me->GetEntry());
+            uint64 damage = GetAscensionBossTrueStrikeDamage(me->GetEntry());
             if (comboFinisher)
-                damage = std::max<uint32>(damage * 3, victim->GetMaxHealth() * 75 / 100);
+                damage = std::max<uint64>(damage * 3, victim->GetMaxHealthForCombat() * 75 / 100);
 
             Unit::DealDamage(me, victim, damage, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW, nullptr, false);
         }
@@ -3402,13 +3812,21 @@ public:
         {
             scheduler.CancelAll();
 
+            ObjectGuid killerGuid = killer ? killer->GetGUID() : ObjectGuid::Empty;
+            Player* killerPlayer = killer ? killer->GetCharmerOrOwnerPlayerOrPlayerItself() : nullptr;
+            if (killerPlayer)
+            {
+                AutoStoreAscensionBossLoot(me, killerPlayer);
+            }
+
             uint32 nextBossEntry = GetNextAscensionChainBossEntry(me->GetEntry());
             if (nextBossEntry == 0)
                 return;
 
             Position anchorPos = me->GetHomePosition();
-            ObjectGuid killerGuid = killer ? killer->GetGUID() : ObjectGuid::Empty;
-            Player* killerPlayer = killer ? killer->GetCharmerOrOwnerPlayerOrPlayerItself() : nullptr;
+            ObjectGuid killerPlayerGuid = killerPlayer ? killerPlayer->GetGUID() : ObjectGuid::Empty;
+            uint32 mapId = me->GetMapId();
+            uint32 instanceId = me->GetInstanceId();
 
             if (killerPlayer)
             {
@@ -3417,13 +3835,19 @@ public:
                 handler.SendNotification("5秒后将召唤更强大的飞升BOSS：{}。", nextBossName);
                 handler.PSendSysMessage("飞升锚点已被击破，5秒后将召唤更强大的飞升BOSS：{}。", nextBossName);
             }
-
-            me->m_Events.AddEventAtOffset([this, nextBossEntry, anchorPos, killerGuid]()
+            else
             {
-                if (!me->IsInWorld())
+                LOG_ERROR("module", "飞升系统: 无法安排下一阶段首领召唤，没有有效击杀玩家 entry={}", nextBossEntry);
+                return;
+            }
+
+            killerPlayer->m_Events.AddEventAtOffset([nextBossEntry, anchorPos, killerGuid, killerPlayerGuid, mapId, instanceId]()
+            {
+                Player* player = ObjectAccessor::FindPlayer(killerPlayerGuid);
+                if (!player || !player->IsInWorld() || player->GetMapId() != mapId || player->GetInstanceId() != instanceId)
                     return;
 
-                Creature* nextBoss = me->SummonCreature(nextBossEntry, anchorPos, TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, ASCENSION_CHAIN_SUMMON_MS);
+                Creature* nextBoss = player->SummonCreature(nextBossEntry, anchorPos, TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, ASCENSION_CHAIN_SUMMON_MS);
                 if (!nextBoss)
                 {
                     LOG_ERROR("module", "飞升系统: 无法召唤下一阶段首领 entry={}", nextBossEntry);
@@ -3434,7 +3858,7 @@ public:
 
                 if (!killerGuid.IsEmpty())
                 {
-                    if (Unit* killerUnit = ObjectAccessor::GetUnit(*me, killerGuid))
+                    if (Unit* killerUnit = ObjectAccessor::GetUnit(*player, killerGuid))
                     {
                         nextBoss->SetInCombatWith(killerUnit);
                         nextBoss->AddThreat(killerUnit, 1000.0f);
@@ -3495,6 +3919,7 @@ void AddAscensionSystemScripts()
 {
     new AscensionWorldScript();
     new AscensionPlayerScript();
+    new AscensionUnitScript();
     new AscensionCommandScript();
     new AscensionItemScript();
     new npc_ascension_chain_boss();

@@ -28,7 +28,7 @@ CREATE TABLE `guild_member_withdraw` (
   `tab3` int unsigned NOT NULL DEFAULT '0',
   `tab4` int unsigned NOT NULL DEFAULT '0',
   `tab5` int unsigned NOT NULL DEFAULT '0',
-  `money` int unsigned NOT NULL DEFAULT '0',
+  `money` bigint unsigned NOT NULL DEFAULT '0',
   PRIMARY KEY (`guid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Guild Member Daily Withdraws';
 /*!40101 SET character_set_client = @saved_cs_client */;
@@ -51,4 +51,3 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2024-12-17 22:33:08
-

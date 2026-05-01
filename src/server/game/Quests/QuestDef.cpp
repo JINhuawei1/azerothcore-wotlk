@@ -20,6 +20,40 @@
 #include "Opcodes.h"
 #include "Player.h"
 #include "World.h"
+#include <limits>
+
+namespace
+{
+int64 ClampToInt64(long double value)
+{
+    if (value > static_cast<long double>(std::numeric_limits<int64>::max()))
+        return std::numeric_limits<int64>::max();
+
+    if (value < static_cast<long double>(std::numeric_limits<int64>::min()))
+        return std::numeric_limits<int64>::min();
+
+    return static_cast<int64>(value);
+}
+
+int32 ToClientQuestMoneySigned(int64 value)
+{
+    if (value > std::numeric_limits<int32>::max())
+        return std::numeric_limits<int32>::max();
+
+    if (value < std::numeric_limits<int32>::min())
+        return std::numeric_limits<int32>::min();
+
+    return static_cast<int32>(value);
+}
+
+uint32 ToClientQuestMoneyUnsigned(int64 value)
+{
+    if (value <= 0)
+        return 0;
+
+    return value > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(value);
+}
+}
 
 Quest::Quest(Field* questRecord)
 {
@@ -45,8 +79,8 @@ Quest::Quest(Field* questRecord)
     RequiredFactionValue2 = questRecord[12].Get<int32>();
     RewardNextQuest = questRecord[13].Get<uint32>();
     RewardXPDifficulty = questRecord[14].Get<uint8>();
-    RewardMoney = questRecord[15].Get<int32>();
-    RewardMoneyDifficulty = questRecord[16].Get<uint32>();
+    RewardMoney = questRecord[15].Get<int64>();
+    RewardMoneyDifficulty = questRecord[16].Get<uint64>();
     RewardDisplaySpell = questRecord[17].Get<uint32>();
     RewardSpell = questRecord[18].Get<int32>();
     RewardHonor = questRecord[19].Get<uint32>();
@@ -235,9 +269,9 @@ uint32 Quest::XPValue(uint8 playerLevel) const
     return xp;
 }
 
-int32 Quest::GetRewOrReqMoney(uint8 playerLevel) const
+int64 Quest::GetRewOrReqMoney(uint8 playerLevel) const
 {
-    int32 rewardedMoney = RewardMoney;
+    int64 rewardedMoney = RewardMoney;
     if (rewardedMoney < 0)
     {
         return rewardedMoney;
@@ -245,25 +279,25 @@ int32 Quest::GetRewOrReqMoney(uint8 playerLevel) const
 
     if (playerLevel && RewardMoneyDifficulty)
     {
-        if (uint32 questRewardedMoney = sObjectMgr->GetQuestMoneyReward(playerLevel, RewardMoneyDifficulty))
+        if (uint64 questRewardedMoney = sObjectMgr->GetQuestMoneyReward(playerLevel, RewardMoneyDifficulty))
         {
             rewardedMoney = questRewardedMoney;
         }
     }
 
-    return static_cast<int32>(rewardedMoney * sWorld->getRate(RATE_REWARD_QUEST_MONEY));
+    return ClampToInt64(static_cast<long double>(rewardedMoney) * static_cast<long double>(sWorld->getRate(RATE_REWARD_QUEST_MONEY)));
 }
 
-uint32 Quest::GetRewMoneyMaxLevel() const
+int64 Quest::GetRewMoneyMaxLevel() const
 {
-    uint32 rewMoney = 0;
+    int64 rewMoney = 0;
 
     if (HasFlag(QUEST_FLAGS_NO_MONEY_FROM_XP))
         return rewMoney;
 
     rewMoney = (XPValue(sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL)) * (6 * COPPER));
     // https://wowpedia.fandom.com/wiki/Quest?oldid=1035002 Formula is XP gained * 6c
-    return static_cast<int32>(rewMoney * sWorld->getRate(RATE_REWARD_BONUS_MONEY));
+    return ClampToInt64(static_cast<long double>(rewMoney) * static_cast<long double>(sWorld->getRate(RATE_REWARD_BONUS_MONEY)));
 }
 
 bool Quest::IsAutoAccept() const
@@ -349,9 +383,9 @@ void Quest::InitializeQueryData()
     if (HasFlag(QUEST_FLAGS_HIDDEN_REWARDS))
         queryData << uint32(0);                           // Hide money rewarded
     else
-        queryData << int32(GetRewOrReqMoney());           // reward money (below max lvl)
+        queryData << ToClientQuestMoneySigned(GetRewOrReqMoney()); // reward money (below max lvl)
 
-    queryData << uint32(GetRewMoneyMaxLevel());           // used in XP calculation at client
+    queryData << ToClientQuestMoneyUnsigned(GetRewMoneyMaxLevel()); // used in XP calculation at client
     queryData << uint32(GetRewSpell());                   // reward spell, this spell will display (icon) (casted if RewSpellCast == 0)
     queryData << int32(GetRewSpellCast());                // casted spell
 

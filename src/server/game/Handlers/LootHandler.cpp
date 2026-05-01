@@ -29,6 +29,21 @@
 #include "ScriptMgr.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
+#include <algorithm>
+#include <limits>
+
+namespace
+{
+uint32 ToClientLootMoney(uint64 money)
+{
+    return money > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(money);
+}
+
+void AddLootMoney(Player* player, uint64 money)
+{
+    player->ModifyMoney(money > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(money));
+}
+}
 
 void WorldSession::HandleAutostoreLootItemOpcode(WorldPacket& recvData)
 {
@@ -196,15 +211,15 @@ void WorldSession::HandleLootMoneyOpcode(WorldPacket& /*recvData*/)
                     playersNear.push_back(member);
             }
 
-            uint32 goldPerPlayer = uint32((loot->gold) / (playersNear.size()));
+            uint64 goldPerPlayer = loot->gold / playersNear.size();
 
             for (std::vector<Player*>::const_iterator i = playersNear.begin(); i != playersNear.end(); ++i)
             {
-                (*i)->ModifyMoney(goldPerPlayer);
-                (*i)->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_LOOT_MONEY, goldPerPlayer);
+                AddLootMoney(*i, goldPerPlayer);
+                (*i)->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_LOOT_MONEY, ToClientLootMoney(goldPerPlayer));
 
                 WorldPacket data(SMSG_LOOT_MONEY_NOTIFY, 4 + 1);
-                data << uint32(goldPerPlayer);
+                data << uint32(ToClientLootMoney(goldPerPlayer));
                 data << uint8(playersNear.size() > 1 ? 0 : 1);     // Controls the text displayed in chat. 0 is "Your share is..." and 1 is "You loot..."
                 (*i)->GetSession()->SendPacket(&data);
             }
@@ -212,11 +227,11 @@ void WorldSession::HandleLootMoneyOpcode(WorldPacket& /*recvData*/)
         else
         {
             sScriptMgr->OnPlayerAfterCreatureLootMoney(player);
-            player->ModifyMoney(loot->gold);
-            player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_LOOT_MONEY, loot->gold);
+            AddLootMoney(player, loot->gold);
+            player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_LOOT_MONEY, ToClientLootMoney(loot->gold));
 
             WorldPacket data(SMSG_LOOT_MONEY_NOTIFY, 4 + 1);
-            data << uint32(loot->gold);
+            data << uint32(ToClientLootMoney(loot->gold));
             data << uint8(1);   // "You loot..."
             SendPacket(&data);
         }

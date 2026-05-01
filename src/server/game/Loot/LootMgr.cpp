@@ -43,6 +43,27 @@ static Rates const qualityToRate[MAX_ITEM_QUALITY] =
     RATE_DROP_ITEM_ARTIFACT,                                // ITEM_QUALITY_ARTIFACT
 };
 
+namespace
+{
+uint64 RandomUInt64(uint64 minAmount, uint64 maxAmount)
+{
+    if (maxAmount <= minAmount)
+        return minAmount;
+
+    uint64 range = maxAmount - minAmount;
+    uint64 roll = (uint64(urand(0, std::numeric_limits<uint32>::max())) << 32) | urand(0, std::numeric_limits<uint32>::max());
+    if (range == std::numeric_limits<uint64>::max())
+        return roll;
+
+    return minAmount + (roll % (range + 1));
+}
+
+uint32 ToClientMoney(uint64 money)
+{
+    return money > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(money);
+}
+}
+
 LootStore LootTemplates_Creature("creature_loot_template",           "creature entry",                  true);
 LootStore LootTemplates_Disenchant("disenchant_loot_template",       "item disenchant id",              true);
 LootStore LootTemplates_Fishing("fishing_loot_template",             "area id",                         true);
@@ -840,15 +861,15 @@ void Loot::generateMoneyLoot(uint64 minAmount, uint64 maxAmount)
 {
     if (maxAmount > 0)
     {
-        minAmount = std::min<uint64>(minAmount, std::numeric_limits<uint32>::max());
-        maxAmount = std::min<uint64>(maxAmount, std::numeric_limits<uint32>::max());
-
+        long double rate = sWorld->getRate(RATE_DROP_MONEY);
+        uint64 rolled = 0;
         if (maxAmount <= minAmount)
-            gold = uint32(maxAmount * sWorld->getRate(RATE_DROP_MONEY));
-        else if ((maxAmount - minAmount) < 32700)
-            gold = uint32(urand(static_cast<uint32>(minAmount), static_cast<uint32>(maxAmount)) * sWorld->getRate(RATE_DROP_MONEY));
+            rolled = maxAmount;
         else
-            gold = uint32(urand(static_cast<uint32>(minAmount >> 8), static_cast<uint32>(maxAmount >> 8)) * sWorld->getRate(RATE_DROP_MONEY)) << 8;
+            rolled = RandomUInt64(minAmount, maxAmount);
+
+        long double ratedGold = static_cast<long double>(rolled) * rate;
+        gold = ratedGold >= static_cast<long double>(std::numeric_limits<uint64>::max()) ? std::numeric_limits<uint64>::max() : static_cast<uint64>(ratedGold);
     }
 }
 
@@ -1018,7 +1039,7 @@ ByteBuffer& operator<<(ByteBuffer& b, LootView const& lv)
 
     uint8 itemsShown = 0;
 
-    b << uint32(l.gold);                                    //gold
+    b << uint32(ToClientMoney(l.gold));                     //gold
 
     std::size_t count_pos = b.wpos();                            // pos of item count byte
     b << uint8(0);                                          // item count placeholder

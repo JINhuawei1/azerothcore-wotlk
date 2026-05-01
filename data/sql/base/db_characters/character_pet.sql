@@ -33,8 +33,8 @@ CREATE TABLE `character_pet` (
   `name` varchar(21) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'Pet',
   `renamed` tinyint unsigned NOT NULL DEFAULT '0',
   `slot` tinyint unsigned NOT NULL DEFAULT '0',
-  `curhealth` int unsigned NOT NULL DEFAULT '1',
-  `curmana` int unsigned NOT NULL DEFAULT '0',
+  `curhealth` bigint unsigned NOT NULL DEFAULT '1',
+  `curmana` bigint unsigned NOT NULL DEFAULT '0',
   `curhappiness` int unsigned NOT NULL DEFAULT '0',
   `savetime` int unsigned NOT NULL DEFAULT '0',
   `abdata` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
@@ -64,4 +64,3 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2024-12-17 22:33:02
-
