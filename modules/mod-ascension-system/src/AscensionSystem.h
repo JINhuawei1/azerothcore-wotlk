@@ -170,6 +170,7 @@ public:
     // 检查物品是否已装备到飞升槽位
     bool IsItemEquippedInAscension(Player* player, uint32 itemGuid);
     int8 GetAscensionSlotByItemGuid(Player* player, uint32 itemGuid);
+    Item* FindItemInBags(Player* player, uint32 itemGuid);
 
     // 发送数据到客户端
     void SendAscensionDataToClient(Player* player);
@@ -183,7 +184,6 @@ private:
     void ApplyEnchantStatMod(Player* player, uint32 statType, int64 amount, bool apply);
     void RemoveStatEffect(Player* player, uint32 statType, int64 statValue);
     void UpdatePlayerStats(Player* player);
-    Item* FindItemInBags(Player* player, uint32 itemGuid);
 
     std::map<uint8, AscensionSlotControl> _slotControls;
     std::map<uint32, PlayerAscensionStatus> _playerStatus;

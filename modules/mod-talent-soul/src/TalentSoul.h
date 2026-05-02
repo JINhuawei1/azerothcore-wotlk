@@ -22,6 +22,7 @@
 #include <sstream>
 #include <vector>
 #include <shared_mutex>
+#include <unordered_set>
 
 /**
  * @enum TalentSoulUpgradeType
@@ -109,6 +110,8 @@ public:
     // 玩家数据管理
     void LoadPlayerData(Player* player);
     void SavePlayerData(Player* player);
+    void SavePlayerData(uint32 playerGuid);
+    void FlushDirtyPlayerData();
     void OnPlayerLogout(uint32 playerGuid);
 
     // 获取玩家数据
@@ -152,6 +155,7 @@ private:
 
     // 玩家数据，键为玩家GUID
     std::unordered_map<uint32, PlayerTalentSoulData> _playerData;
+    std::unordered_set<uint32> _dirtyPlayers;
 
     // 线程安全保护
     mutable std::shared_mutex _configMutex;     // 配置数据读写锁

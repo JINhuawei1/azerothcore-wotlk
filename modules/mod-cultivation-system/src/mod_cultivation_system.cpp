@@ -39,6 +39,20 @@
 
 using namespace Acore::ChatCommands;
 
+namespace
+{
+int64 ScaleRatingForCultivation(int64 amount, float bonusPercent)
+{
+    long double scaled = static_cast<long double>(amount) * (1.0L + static_cast<long double>(bonusPercent) / 100.0L);
+    if (scaled <= 0.0L)
+        return 0;
+    if (scaled >= static_cast<long double>(std::numeric_limits<int64>::max()))
+        return std::numeric_limits<int64>::max();
+
+    return static_cast<int64>(scaled);
+}
+}
+
 // Addon消息通信常量
 static constexpr const char* CULTIVATION_ADDON_PREFIX = "CULT_SYS";
 static constexpr size_t CULTIVATION_MAX_ADDON_PAYLOAD = 220;
@@ -1185,14 +1199,14 @@ public:
     }
 
     // 评级属性（命中、急速、精准等）
-    void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int32& amount) override
+    void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int64& amount) override
     {
         if (!player || !sConfigMgr->GetOption("Cultivation.Enable", true))
             return;
 
         float bonus = sCultivationMgr->GetPlayerStatBonus(player->GetGUID().GetCounter());
         if (bonus > 0 && amount > 0)
-            amount = int32(amount * (1.0f + bonus / 100.0f));
+            amount = ScaleRatingForCultivation(amount, bonus);
     }
 };
 

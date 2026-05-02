@@ -1488,14 +1488,6 @@ bool AscensionManager::UnequipItem(Player* player, uint8 slot)
     // 更新玩家属性
     UpdatePlayerStats(player);
 
-    // 【新方案】先从 character_inventory 表删除 bag=200 的记录
-    CharacterDatabase.Execute(
-        "DELETE FROM character_inventory WHERE guid = {} AND bag = {} AND slot = {}",
-        playerGuid, ASCENSION_VIRTUAL_BAG, slot);
-
-    LOG_INFO("module", "飞升系统: 从 character_inventory 删除记录 玩家={} bag={} slot={}",
-        playerGuid, ASCENSION_VIRTUAL_BAG, slot);
-
     // 将物品放回背包
     if (item)
     {
@@ -1507,21 +1499,28 @@ bool AscensionManager::UnequipItem(Player* player, uint8 slot)
         InventoryResult result = player->CanStoreItem(NULL_BAG, NULL_SLOT, dest, item, false);
         if (result == EQUIP_ERR_OK)
         {
-            // 存入背包 - StoreItem 会自动处理 character_inventory 记录
-            player->StoreItem(dest, item, true);
+            // 存入背包，并使用核心库存保存流程同步 character_inventory 位置
+            player->MoveItemToInventory(dest, item, true, true);
 
-            // 保存物品实例到数据库
             CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-            item->SaveToDB(trans);
+            CharacterDatabasePreparedStatement* delStmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHAR_INVENTORY_BY_BAG_SLOT);
+            delStmt->SetData(0, ASCENSION_VIRTUAL_BAG);
+            delStmt->SetData(1, slot);
+            delStmt->SetData(2, playerGuid);
+            trans->Append(delStmt);
+            player->SaveInventoryAndGoldToDB(trans);
             CharacterDatabase.CommitTransaction(trans);
-
-            LOG_INFO("module", "飞升系统: 物品 {} (GUID:{}) 已放回背包", itemId, itemGuid);
         }
         else
         {
             // 背包已满，发送邮件
             MailDraft draft("飞升系统", "您的背包已满，飞升装备已通过邮件返还。");
             CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+            CharacterDatabasePreparedStatement* delStmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHAR_INVENTORY_BY_BAG_SLOT);
+            delStmt->SetData(0, ASCENSION_VIRTUAL_BAG);
+            delStmt->SetData(1, slot);
+            delStmt->SetData(2, playerGuid);
+            trans->Append(delStmt);
             draft.AddItem(item);
             draft.SendMailTo(trans, MailReceiver(player, playerGuid), MailSender(MAIL_NORMAL, 0, MAIL_STATIONERY_GM), MAIL_CHECK_MASK_COPIED, 0);
             CharacterDatabase.CommitTransaction(trans);
@@ -1572,18 +1571,18 @@ void AscensionManager::UnequipAllItems(Player* player)
     // 移除所有属性
     RemoveAllEffects(player);
 
-    // 【新方案】先从 character_inventory 表删除所有 bag=200 的记录
-    CharacterDatabase.Execute(
-        "DELETE FROM character_inventory WHERE guid = {} AND bag = {}",
-        playerGuid, ASCENSION_VIRTUAL_BAG);
-
-    LOG_INFO("module", "飞升系统: 从 character_inventory 删除所有飞升记录 玩家={} bag={}",
-        playerGuid, ASCENSION_VIRTUAL_BAG);
-
     // 将所有物品放回背包
     std::vector<Item*> itemsToMail;
+    CharacterDatabaseTransaction inventoryTrans = CharacterDatabase.BeginTransaction();
+
     for (auto& pair : status->slots)
     {
+        CharacterDatabasePreparedStatement* delStmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHAR_INVENTORY_BY_BAG_SLOT);
+        delStmt->SetData(0, ASCENSION_VIRTUAL_BAG);
+        delStmt->SetData(1, pair.first);
+        delStmt->SetData(2, playerGuid);
+        inventoryTrans->Append(delStmt);
+
         Item* item = pair.second.itemPtr;
         if (!item)
             continue;
@@ -1596,11 +1595,7 @@ void AscensionManager::UnequipAllItems(Player* player)
         InventoryResult result = player->CanStoreItem(NULL_BAG, NULL_SLOT, dest, item, false);
         if (result == EQUIP_ERR_OK)
         {
-            player->StoreItem(dest, item, true);
-
-            CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-            item->SaveToDB(trans);
-            CharacterDatabase.CommitTransaction(trans);
+            player->MoveItemToInventory(dest, item, true, true);
         }
         else
         {
@@ -1608,6 +1603,9 @@ void AscensionManager::UnequipAllItems(Player* player)
             itemsToMail.push_back(item);
         }
     }
+
+    player->SaveInventoryAndGoldToDB(inventoryTrans);
+    CharacterDatabase.CommitTransaction(inventoryTrans);
 
     // 【修复】邮寄无法放入背包的物品 - 分批发送，每封邮件最多12件物品
     // 注意：MAX_MAIL_ITEMS 已在 Mail.h 中定义为 12
@@ -3403,7 +3401,7 @@ bool AscensionCommandScript::HandleAscensionEquip(ChatHandler* handler, const ch
 
     if (!*args)
     {
-        handler->SendSysMessage("用法: .飞升 装备 <槽位> <背包ID> <背包槽位>");
+        handler->SendSysMessage("用法: .飞升 装备 <槽位> <背包ID> <背包槽位> [物品GUID]");
         handler->SendSysMessage("槽位: 0=头部, 1=颈部, 2=肩部, 3=衬衣, 4=胸甲, 5=腰带, 6=腿部, 7=脚部");
         handler->SendSysMessage("      8=手腕, 9=手套, 10=戒指1, 11=戒指2, 12=饰品1, 13=饰品2");
         handler->SendSysMessage("      14=披风, 15=主手, 16=副手, 17=远程");
@@ -3414,13 +3412,15 @@ bool AscensionCommandScript::HandleAscensionEquip(ChatHandler* handler, const ch
     int ascensionSlotInt = 0;
     int bagIdInt = 0;
     int bagSlotInt = 0;
+    uint32 requestedItemGuid = 0;
 
     std::istringstream iss(args);
     if (!(iss >> ascensionSlotInt >> bagIdInt >> bagSlotInt))
     {
-        handler->SendSysMessage("参数错误。用法: .飞升 装备 <槽位> <背包ID> <背包槽位>");
+        handler->SendSysMessage("参数错误。用法: .飞升 装备 <槽位> <背包ID> <背包槽位> [物品GUID]");
         return true;
     }
+    iss >> requestedItemGuid;
 
     uint8 ascensionSlot = static_cast<uint8>(ascensionSlotInt);
     uint8 bagId = static_cast<uint8>(bagIdInt);
@@ -3471,6 +3471,25 @@ bool AscensionCommandScript::HandleAscensionEquip(ChatHandler* handler, const ch
     {
         handler->SendSysMessage("背包中未找到该物品。");
         return true;
+    }
+
+    if (requestedItemGuid && item->GetGUID().GetCounter() != requestedItemGuid)
+    {
+        Item* requestedItem = sAscensionManager->FindItemInBags(player, requestedItemGuid);
+        if (!requestedItem)
+        {
+            handler->PSendSysMessage("背包中未找到指定GUID的物品: {}", requestedItemGuid);
+            return true;
+        }
+
+        if (sAscensionConfig->IsDebugMode())
+        {
+            LOG_INFO("module",
+                "飞升系统: 客户端传入位置与GUID不一致，按GUID修正装备目标 玩家={} 位置GUID={} 请求GUID={}",
+                player->GetName(), item->GetGUID().GetCounter(), requestedItemGuid);
+        }
+
+        item = requestedItem;
     }
 
     uint32 itemId = item->GetEntry();

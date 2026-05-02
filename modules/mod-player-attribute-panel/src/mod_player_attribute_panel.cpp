@@ -173,6 +173,15 @@ int64 GetPanelCombatRating(Player* player, CombatRating combatRating)
     return fieldValue > 0 ? fieldValue : 0;
 }
 
+int64 GetPanelBaseSpellPowerBonus(Player* player)
+{
+    uint64 baseSpellPower = player->GetBaseSpellPowerBonus();
+    if (baseSpellPower > static_cast<uint64>(std::numeric_limits<int64>::max()))
+        return std::numeric_limits<int64>::max();
+
+    return static_cast<int64>(baseSpellPower);
+}
+
 int64 GetPanelHealingBonus(Player* player)
 {
     int64 extendedValue = player->GetExtendedHealingBonus();
@@ -180,6 +189,65 @@ int64 GetPanelHealingBonus(Player* player)
         return extendedValue;
 
     int32 fieldValue = player->GetInt32Value(PLAYER_FIELD_MOD_HEALING_DONE_POS);
+    if (fieldValue > 0)
+        return fieldValue;
+
+    return GetPanelBaseSpellPowerBonus(player);
+}
+
+int64 GetPanelSpellDamageBonus(Player* player)
+{
+    int64 extendedValue = player->GetExtendedSpellDamageBonus();
+    if (extendedValue > 0)
+        return extendedValue;
+
+    int32 fieldValue = 0;
+    for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
+    {
+        int32 schoolBonus = player->GetInt32Value(PLAYER_FIELD_MOD_DAMAGE_DONE_POS + i);
+        if (schoolBonus > fieldValue)
+            fieldValue = schoolBonus;
+    }
+
+    if (fieldValue > 0)
+        return fieldValue;
+
+    return GetPanelBaseSpellPowerBonus(player);
+}
+
+int64 GetPanelSpellPowerBonus(Player* player)
+{
+    int64 extendedValue = player->GetExtendedSpellPowerBonus();
+    if (extendedValue > 0)
+        return extendedValue;
+
+    int32 fieldValue = player->GetInt32Value(PLAYER_FIELD_MOD_HEALING_DONE_POS);
+    if (fieldValue < 0)
+        fieldValue = 0;
+
+    for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
+    {
+        int32 schoolBonus = player->GetInt32Value(PLAYER_FIELD_MOD_DAMAGE_DONE_POS + i);
+        if (schoolBonus > fieldValue)
+            fieldValue = schoolBonus;
+    }
+
+    if (fieldValue > 0)
+        return fieldValue;
+
+    return GetPanelBaseSpellPowerBonus(player);
+}
+
+int64 GetPanelSpellPenetration(Player* player)
+{
+    int32 itemMod = player->GetSpellPenetrationItemMod();
+    if (itemMod > 0)
+        return itemMod;
+
+    int64 fieldValue = static_cast<int64>(player->GetInt32Value(PLAYER_FIELD_MOD_TARGET_RESISTANCE));
+    if (fieldValue < 0)
+        return -fieldValue;
+
     return fieldValue > 0 ? fieldValue : 0;
 }
 
@@ -245,6 +313,10 @@ void SendPlayerAttributePanelData(Player* player)
     for (PlayerAttributePanelStatDef const& statDef : PLAYER_ATTRIBUTE_PANEL_STATS)
         AddPanelStat(stats, statDef.id, ToPanelValue(GetPanelStat(player, statDef.stat)));
 
+    AddPanelStat(stats, 8, ToPanelValue(player->GetTrueDamageBonus()));
+    AddPanelStat(stats, 9, ToPanelValue(player->GetCuttingDamageBonus()));
+    AddPanelStat(stats, 10, ToPanelValue(player->GetCooldownReductionBonus()));
+    AddPanelStat(stats, 11, ToPanelValue(player->GetSkillDamageBonus()));
     AddPanelStat(stats, 12, ToPanelValue(GetPanelCombatRating(player, CR_DEFENSE_SKILL)));
     AddPanelStat(stats, 13, ToPanelValue(GetPanelCombatRating(player, CR_DODGE)));
     AddPanelStat(stats, 14, ToPanelValue(GetPanelCombatRating(player, CR_PARRY)));
@@ -274,12 +346,12 @@ void SendPlayerAttributePanelData(Player* player)
     AddPanelStat(stats, 38, ToPanelValue(SaturateToUInt64(player->GetExtendedTotalAttackPowerValue(BASE_ATTACK))));
     AddPanelStat(stats, 39, ToPanelValue(SaturateToUInt64(player->GetExtendedTotalAttackPowerValue(RANGED_ATTACK))));
     AddPanelStat(stats, 41, ToPanelValue(GetPanelHealingBonus(player)));
-    AddPanelStat(stats, 42, ToPanelValue(player->GetExtendedSpellDamageBonus()));
-    AddPanelStat(stats, 43, "0");
+    AddPanelStat(stats, 42, ToPanelValue(GetPanelSpellDamageBonus(player)));
+    AddPanelStat(stats, 43, ToPanelValue(static_cast<uint64>(player->GetBaseManaRegenBonus())));
     AddPanelStat(stats, 44, ToPanelValue(GetPanelCombatRating(player, CR_ARMOR_PENETRATION)));
-    AddPanelStat(stats, 45, ToPanelValue(player->GetExtendedSpellPowerBonus()));
-    AddPanelStat(stats, 46, "0");
-    AddPanelStat(stats, 47, ToPanelValue(static_cast<int64>(player->GetInt32Value(PLAYER_FIELD_MOD_TARGET_RESISTANCE))));
+    AddPanelStat(stats, 45, ToPanelValue(GetPanelSpellPowerBonus(player)));
+    AddPanelStat(stats, 46, ToPanelValue(static_cast<uint64>(player->GetBaseHealthRegenBonus())));
+    AddPanelStat(stats, 47, ToPanelValue(GetPanelSpellPenetration(player)));
     AddPanelStat(stats, 48, ToPanelValue(static_cast<int64>(player->GetShieldBlockValue())));
     stats.push_back(std::string("MAINHAND_DAMAGE=") + BuildRangePayload(player->GetExtendedDamageMin(BASE_ATTACK), player->GetExtendedDamageMax(BASE_ATTACK)));
     stats.push_back(std::string("OFFHAND_DAMAGE=") + (player->HasOffhandWeaponForAttack() ? BuildRangePayload(player->GetExtendedDamageMin(OFF_ATTACK), player->GetExtendedDamageMax(OFF_ATTACK)) : "0~0"));

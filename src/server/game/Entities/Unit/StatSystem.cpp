@@ -49,6 +49,28 @@ inline bool _ModifyUInt32(bool apply, uint32& baseValue, int32& amount)
     return apply;
 }
 
+static void ModifyUInt64ItemBonus(uint64& baseValue, int64 amount, bool apply)
+{
+    uint64 value = 0;
+    if (amount < 0)
+    {
+        apply = !apply;
+        value = amount == std::numeric_limits<int64>::min() ? static_cast<uint64>(std::numeric_limits<int64>::max()) + 1 : static_cast<uint64>(-amount);
+    }
+    else
+        value = static_cast<uint64>(amount);
+
+    if (apply)
+    {
+        if (value > std::numeric_limits<uint64>::max() - baseValue)
+            baseValue = std::numeric_limits<uint64>::max();
+        else
+            baseValue += value;
+    }
+    else
+        baseValue = value > baseValue ? 0 : baseValue - value;
+}
+
 /*#######################################
 ########                         ########
 ########    UNIT STAT SYSTEM     ########
@@ -320,6 +342,26 @@ void Player::ApplySpellPowerBonus(int64 amount, bool apply)
         applyClientIntMod(PLAYER_FIELD_MOD_DAMAGE_DONE_POS + i, displayAmount, apply);
 
     UpdateSpellDamageAndHealingBonus();
+}
+
+void Player::ApplyTrueDamageBonus(int64 amount, bool apply)
+{
+    ModifyUInt64ItemBonus(m_trueDamageBonus, amount, apply);
+}
+
+void Player::ApplyCuttingDamageBonus(int64 amount, bool apply)
+{
+    ModifyUInt64ItemBonus(m_cuttingDamageBonus, amount, apply);
+}
+
+void Player::ApplyCooldownReductionBonus(int64 amount, bool apply)
+{
+    ModifyUInt64ItemBonus(m_cooldownReductionBonus, amount, apply);
+}
+
+void Player::ApplySkillDamageBonus(int64 amount, bool apply)
+{
+    ModifyUInt64ItemBonus(m_skillDamageBonus, amount, apply);
 }
 
 void Player::UpdateSpellDamageAndHealingBonus()
@@ -1924,7 +1966,6 @@ void Player::UpdateExpertise(WeaponAttackType attack)
 void Player::ApplyManaRegenBonus(int32 amount, bool apply)
 {
     _ModifyUInt32(apply, m_baseManaRegen, amount);
-    UpdateManaRegen();
 }
 
 void Player::ApplyHealthRegenBonus(int32 amount, bool apply)
@@ -1957,7 +1998,7 @@ void Player::UpdateManaRegen()
     power_regen *= GetTotalAuraMultiplierByMiscValue(SPELL_AURA_MOD_POWER_REGEN_PERCENT, POWER_MANA);
 
     // Mana regen from SPELL_AURA_MOD_POWER_REGEN aura
-    float power_regen_mp5 = (GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_POWER_REGEN, POWER_MANA) + m_baseManaRegen) / 5.0f;
+    float power_regen_mp5 = GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_POWER_REGEN, POWER_MANA) / 5.0f;
 
     // Get bonus from SPELL_AURA_MOD_MANA_REGEN_FROM_STAT aura
     AuraEffectList const& regenAura = GetAuraEffectsByType(SPELL_AURA_MOD_MANA_REGEN_FROM_STAT);

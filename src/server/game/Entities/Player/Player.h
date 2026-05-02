@@ -1959,6 +1959,10 @@ public:
     void UpdateAttackPowerAndDamage(bool ranged = false) override;
     void UpdateShieldBlockValue();
     void ApplySpellPowerBonus(int64 amount, bool apply);
+    void ApplyTrueDamageBonus(int64 amount, bool apply);
+    void ApplyCuttingDamageBonus(int64 amount, bool apply);
+    void ApplyCooldownReductionBonus(int64 amount, bool apply);
+    void ApplySkillDamageBonus(int64 amount, bool apply);
     void UpdateSpellDamageAndHealingBonus();
     void ApplyRatingMod(CombatRating cr, int64 value, bool apply);
     void UpdateRating(CombatRating cr);
@@ -1977,6 +1981,12 @@ public:
     [[nodiscard]] float GetRatingMultiplier(CombatRating cr) const;
     [[nodiscard]] float GetRatingBonusValue(CombatRating cr) const;
     uint64 GetBaseSpellPowerBonus() const { return m_baseSpellPower; }
+    [[nodiscard]] uint32 GetBaseManaRegenBonus() const { return m_baseManaRegen; }
+    [[nodiscard]] uint32 GetBaseHealthRegenBonus() const { return m_baseHealthRegen; }
+    [[nodiscard]] uint64 GetTrueDamageBonus() const { return m_trueDamageBonus; }
+    [[nodiscard]] uint64 GetCuttingDamageBonus() const { return m_cuttingDamageBonus; }
+    [[nodiscard]] uint64 GetCooldownReductionBonus() const { return m_cooldownReductionBonus; }
+    [[nodiscard]] uint64 GetSkillDamageBonus() const { return m_skillDamageBonus; }
     [[nodiscard]] int32 GetSpellPenetrationItemMod() const { return m_spellPenetrationItemMod; }
 
     [[nodiscard]] float GetExpertiseDodgeOrParryReduction(WeaponAttackType attType) const;
@@ -2829,6 +2839,7 @@ protected:
     uint32 m_AreaID;
     uint64 m_money;  // 扩展金币存储，支持40万金上限
     uint32 m_regenTimerCount;
+    uint32 m_itemRegenTimerCount;
     uint32 m_foodEmoteTimerCount;
     float m_powerFraction[MAX_POWERS];
     uint32 m_contestedPvPTimer;
@@ -2995,6 +3006,10 @@ protected:
     uint32 m_baseFeralAP;
     uint32 m_baseManaRegen;
     uint32 m_baseHealthRegen;
+    uint64 m_trueDamageBonus;
+    uint64 m_cuttingDamageBonus;
+    uint64 m_cooldownReductionBonus;
+    uint64 m_skillDamageBonus;
     int32 m_spellPenetrationItemMod;
 
     SpellModList m_spellMods[MAX_SPELLMOD];

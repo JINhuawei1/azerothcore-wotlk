@@ -261,6 +261,7 @@ Player::Player(WorldSession* session): Unit(true), m_mover(this)
 
     m_regenTimer = 0;
     m_regenTimerCount = 0;
+    m_itemRegenTimerCount = 0;
     m_money = 0;  // 初始化金币
     m_foodEmoteTimerCount = 0;
     m_weaponChangeTimer = 0;
@@ -404,6 +405,10 @@ Player::Player(WorldSession* session): Unit(true), m_mover(this)
     m_baseFeralAP = 0;
     m_baseManaRegen = 0;
     m_baseHealthRegen = 0;
+    m_trueDamageBonus = 0;
+    m_cuttingDamageBonus = 0;
+    m_cooldownReductionBonus = 0;
+    m_skillDamageBonus = 0;
     m_spellPenetrationItemMod = 0;
 
     // Honor System
@@ -1990,6 +1995,7 @@ void Player::RegenerateAll()
     //    return;
 
     m_regenTimerCount += m_regenTimer;
+    m_itemRegenTimerCount += m_regenTimer;
     m_foodEmoteTimerCount += m_regenTimer;
 
     Regenerate(POWER_ENERGY);
@@ -2019,7 +2025,7 @@ void Player::RegenerateAll()
     if (m_regenTimerCount >= 2000)
     {
         // Not in combat or they have regeneration
-        if (!IsInCombat() || IsPolymorphed() || m_baseHealthRegen ||
+        if (!IsInCombat() || IsPolymorphed() ||
                 HasRegenDuringCombatAura() ||
                 HasHealthRegenInCombatAura())
         {
@@ -2031,6 +2037,20 @@ void Player::RegenerateAll()
             Regenerate(POWER_RUNIC_POWER);
 
         m_regenTimerCount -= 2000;
+    }
+
+    if (m_itemRegenTimerCount >= 3000)
+    {
+        if (IsAlive())
+        {
+            if (m_baseHealthRegen)
+                ModifyHealth(static_cast<int64>(m_baseHealthRegen));
+
+            if (m_baseManaRegen && GetMaxPowerForCombat(POWER_MANA))
+                ModifyPower64(POWER_MANA, static_cast<int64>(m_baseManaRegen));
+        }
+
+        m_itemRegenTimerCount -= 3000;
     }
 
     m_regenTimer = 0;
@@ -2289,7 +2309,6 @@ void Player::RegenerateHealth()
 
     // always regeneration bonus (including combat)
     addvalue += GetTotalAuraModifier(SPELL_AURA_MOD_HEALTH_REGEN_IN_COMBAT);
-    addvalue += m_baseHealthRegen / 2.5f;
 
     if (addvalue < 0)
         addvalue = 0;
@@ -7015,6 +7034,18 @@ void Player::_ApplyItemBonuses(ItemTemplate const* proto, uint8 slot, bool apply
                 HandleStatModifier(UNIT_MOD_STAT_STAMINA, BASE_VALUE, float(val), apply);
                 ApplyStatBuffMod(STAT_STAMINA, float(val), apply);
                 break;
+            case ITEM_MOD_TRUE_DAMAGE:
+                ApplyTrueDamageBonus(val, apply);
+                break;
+            case ITEM_MOD_CUTTING_DAMAGE:
+                ApplyCuttingDamageBonus(val, apply);
+                break;
+            case ITEM_MOD_COOLDOWN_REDUCTION:
+                ApplyCooldownReductionBonus(val, apply);
+                break;
+            case ITEM_MOD_SKILL_DAMAGE:
+                ApplySkillDamageBonus(val, apply);
+                break;
             case ITEM_MOD_DEFENSE_SKILL_RATING:
                 ApplyRatingMod(CR_DEFENSE_SKILL, val, apply);
                 break;
@@ -11300,6 +11331,21 @@ void Player::AddSpellAndCategoryCooldowns(SpellInfo const* spellInfo, uint32 ite
                 needsCooldownPacket = true;
                 rec += cooldownMod * IN_MILLISECONDS;   // SPELL_AURA_MOD_COOLDOWN does not affect category cooldows, verified with shaman shocks
             }
+        }
+
+        if (m_cooldownReductionBonus)
+        {
+            int64 reduction = m_cooldownReductionBonus > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(m_cooldownReductionBonus);
+            auto reduceCooldown = [reduction](int32 cooldown) -> int32
+            {
+                if (cooldown <= 0)
+                    return cooldown;
+
+                return cooldown > reduction ? static_cast<int32>(cooldown - reduction) : 0;
+            };
+
+            rec = reduceCooldown(rec);
+            catrec = reduceCooldown(catrec);
         }
 
         // replace negative cooldowns by 0

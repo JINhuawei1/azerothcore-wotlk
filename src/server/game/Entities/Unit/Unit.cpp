@@ -465,6 +465,19 @@ namespace
         return static_cast<uint64>(damage);
     }
 
+    uint64 AddUInt64Damage(uint64 left, uint64 right)
+    {
+        return left > std::numeric_limits<uint64>::max() - right ? std::numeric_limits<uint64>::max() : left + right;
+    }
+
+    uint64 GetCustomBypassDamageBonus(Unit const* attacker)
+    {
+        if (!attacker)
+            return 0;
+
+        return AddUInt64Damage(attacker->GetCustomTrueDamageBonus(), attacker->GetCustomCuttingDamageBonus());
+    }
+
     int32 ToClientStatValue(long double value)
     {
         if (std::isnan(static_cast<double>(value)))
@@ -1293,6 +1306,24 @@ void Unit::DealDamageMods(Unit const* victim, uint32& damage, uint32* absorb)
         *absorb = ToUInt32Damage(wideAbsorb);
 }
 
+uint64 Unit::GetCustomTrueDamageBonus() const
+{
+    Player* player = GetSpellModOwner();
+    return player ? player->GetTrueDamageBonus() : 0;
+}
+
+uint64 Unit::GetCustomCuttingDamageBonus() const
+{
+    Player* player = GetSpellModOwner();
+    return player ? player->GetCuttingDamageBonus() : 0;
+}
+
+uint64 Unit::GetCustomSkillDamageBonus() const
+{
+    Player* player = GetSpellModOwner();
+    return player ? player->GetSkillDamageBonus() : 0;
+}
+
 uint64 Unit::DealDamage(Unit* attacker, Unit* victim, uint64 damage, CleanDamage const* cleanDamage, DamageEffectType damagetype, SpellSchoolMask damageSchoolMask, SpellInfo const* spellProto, bool durabilityLoss, bool /*allowGM*/, Spell const* damageSpell /*= nullptr*/)
 {
     // Xinef: initialize damage done for rage calculations
@@ -1986,6 +2017,9 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int64 dama
         damageInfo->resist = dmgInfo.GetResist();
         damageInfo->damage = dmgInfo.GetDamage();
     }
+
+    if (uint64 bypassDamage = GetCustomBypassDamageBonus(this))
+        damageInfo->damage = AddUInt64Damage(damageInfo->damage, bypassDamage);
 }
 
 void Unit::DealSpellDamage(SpellNonMeleeDamage* damageInfo, bool durabilityLoss, Spell const* spell /*= nullptr*/)
@@ -2138,7 +2172,10 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
         }
     }
 
+    bool const hasTrueDamageBonus = GetCustomTrueDamageBonus() > 0;
     damageInfo->hitOutCome = RollMeleeOutcomeAgainst(damageInfo->target, damageInfo->attackType);
+    if (hasTrueDamageBonus && (damageInfo->hitOutCome == MELEE_HIT_DODGE || damageInfo->hitOutCome == MELEE_HIT_PARRY || damageInfo->hitOutCome == MELEE_HIT_BLOCK))
+        damageInfo->hitOutCome = MELEE_HIT_NORMAL;
 
     // If the victim was a sitting player and we didn't roll a miss, then crit.
     if (sittingVictim && damageInfo->hitOutCome != MELEE_HIT_MISS)
@@ -2355,6 +2392,15 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
             }
 
             damageInfo->damages[i].damage = dmgInfo.GetDamage();
+        }
+    }
+
+    if (!(damageInfo->HitInfo & HITINFO_MISS) && damageInfo->TargetState != VICTIMSTATE_EVADES && damageInfo->TargetState != VICTIMSTATE_IS_IMMUNE)
+    {
+        if (uint64 bypassDamage = GetCustomBypassDamageBonus(this))
+        {
+            damageInfo->damages[0].damage = AddUInt64Damage(damageInfo->damages[0].damage, bypassDamage);
+            damageInfo->procVictim |= PROC_FLAG_TAKEN_DAMAGE;
         }
     }
 
@@ -3782,6 +3828,9 @@ SpellMissInfo Unit::MeleeSpellHitResult(Unit* victim, SpellInfo const* spellInfo
     if (roll < tmp)
         return SPELL_MISS_MISS;
 
+    if (GetCustomTrueDamageBonus() > 0)
+        return SPELL_MISS_NONE;
+
     bool canDodge = !spellInfo->HasAttribute(SPELL_ATTR7_NO_ATTACK_DODGE);
     bool canParry = !spellInfo->HasAttribute(SPELL_ATTR7_NO_ATTACK_PARRY);
     bool canBlock = spellInfo->HasAttribute(SPELL_ATTR3_COMPLETELY_BLOCKED) && !spellInfo->HasAttribute(SPELL_ATTR0_CU_DIRECT_DAMAGE);
@@ -4014,6 +4063,9 @@ SpellMissInfo Unit::MagicSpellHitResult(Unit* victim, SpellInfo const* spellInfo
 
     if (rand < tmp)
         return SPELL_MISS_MISS;
+
+    if (GetCustomTrueDamageBonus() > 0)
+        return SPELL_MISS_NONE;
 
     // Chance resist mechanic (select max value from every mechanic spell effect)
     int32 resist_chance = victim->GetMechanicResistChance(spellInfo) * 100;
@@ -12482,6 +12534,9 @@ uint64 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, uin
     if (Player* modOwner = GetSpellModOwner())
         modOwner->ApplySpellMod(spellProto->Id, damagetype == DOT ? SPELLMOD_DOT : SPELLMOD_DAMAGE, tmpDamage);
 
+    if (uint64 skillDamageBonus = GetCustomSkillDamageBonus())
+        tmpDamage += static_cast<long double>(skillDamageBonus);
+
     return ToUInt64Damage(tmpDamage);
 }
 
@@ -14045,6 +14100,10 @@ uint64 Unit::MeleeDamageBonusDone(Unit* victim, uint64 pdamage, WeaponAttackType
     if (spellProto)
         if (Player* modOwner = GetSpellModOwner())
             modOwner->ApplySpellMod(spellProto->Id, SPELLMOD_DAMAGE, tmpDamage);
+
+    if (spellProto)
+        if (uint64 skillDamageBonus = GetCustomSkillDamageBonus())
+            tmpDamage += static_cast<long double>(skillDamageBonus);
 
     // bonus result can be negative
     if (tmpDamage <= 0.0L || std::isnan(static_cast<double>(tmpDamage)))

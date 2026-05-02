@@ -393,6 +393,9 @@ public:
     // 配置加载后触发
     void OnAfterConfigLoad(bool reload) override;
 
+    // 世界初始化完成前触发
+    void OnBeforeWorldInitialized() override;
+
     // 服务器更新时触发
     void OnUpdate(uint32 diff) override;
 

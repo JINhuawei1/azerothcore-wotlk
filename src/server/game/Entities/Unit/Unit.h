@@ -1195,6 +1195,9 @@ public:
     void DealSpellDamage(SpellNonMeleeDamage* damageInfo, bool durabilityLoss, Spell const* spell = nullptr);
     static void DealDamageMods(Unit const* victim, uint64& damage, uint64* absorb);
     static void DealDamageMods(Unit const* victim, uint32& damage, uint32* absorb);
+    [[nodiscard]] uint64 GetCustomTrueDamageBonus() const;
+    [[nodiscard]] uint64 GetCustomCuttingDamageBonus() const;
+    [[nodiscard]] uint64 GetCustomSkillDamageBonus() const;
 
     static void Kill(Unit* killer, Unit* victim, bool durabilityLoss = true, WeaponAttackType attackType = BASE_ATTACK, SpellInfo const* spellProto = nullptr, Spell const* spell = nullptr);
     void KillSelf(bool durabilityLoss = true, WeaponAttackType attackType = BASE_ATTACK, SpellInfo const* spellProto = nullptr, Spell const* spell = nullptr) { Kill(this, this, durabilityLoss, attackType, spellProto, spell); };

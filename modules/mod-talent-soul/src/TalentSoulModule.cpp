@@ -35,35 +35,46 @@
 class TalentSoulWorldScript : public WorldScript
 {
 public:
-    TalentSoulWorldScript() : WorldScript("TalentSoulWorldScript"), _loaded(false), _updateTimer(0)
+    TalentSoulWorldScript() : WorldScript("TalentSoulWorldScript"), _loaded(false), _updateTimer(0), _saveTimer(0)
     {
     }
 
     void OnUpdate(uint32 diff) override
     {
-        if (_loaded)
-            return;
-
-        _updateTimer += diff;
-
-        // 等待1秒后加载数据
-        if (_updateTimer >= 1000)
+        if (!_loaded)
         {
-            bool enabled = sConfigMgr->GetOption("TalentSoul.Enable", true);
-            if (!enabled)
+            _updateTimer += diff;
+
+            // 等待1秒后加载数据
+            if (_updateTimer >= 1000)
             {
-                LOG_INFO("server.loading", ">> 天赋之魂模块已禁用");
+                bool enabled = sConfigMgr->GetOption("TalentSoul.Enable", true);
+                if (!enabled)
+                {
+                    LOG_INFO("server.loading", ">> 天赋之魂模块已禁用");
+                    _loaded = true;
+                    return;
+                }
+
+                sTalentSoulMgr->LoadTalentSoulData();
+
+                // 设置独立GCD类别，使每个配置了GCD减少的技能有独立的GCD计时器
+                sTalentSoulMgr->SetupIndependentGCDCategories();
+
+                LOG_INFO("server.loading", "→天赋之魂系统加载成功√");
                 _loaded = true;
-                return;
+                _updateTimer = 0;
             }
 
-            sTalentSoulMgr->LoadTalentSoulData();
+            return;
+        }
 
-            // 设置独立GCD类别，使每个配置了GCD减少的技能有独立的GCD计时器
-            sTalentSoulMgr->SetupIndependentGCDCategories();
-
-            LOG_INFO("server.loading", "→天赋之魂系统加载成功√");
-            _loaded = true;
+        _saveTimer += diff;
+        if (_saveTimer >= 5000)
+        {
+            _saveTimer = 0;
+            if (sConfigMgr->GetOption("TalentSoul.Enable", true))
+                sTalentSoulMgr->FlushDirtyPlayerData();
         }
     }
 
@@ -92,6 +103,7 @@ public:
 private:
     bool _loaded;
     uint32 _updateTimer;
+    uint32 _saveTimer;
 };
 
 // 玩家脚本类，用于处理玩家登录/登出事件

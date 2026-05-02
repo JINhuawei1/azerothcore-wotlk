@@ -805,13 +805,12 @@ public:
                 summons.DespawnAll();
                 me->SetReactState(REACT_PASSIVE);
                 me->AttackStop();
-                me->GetMap()->SetZoneMusic(AREA_THE_FROZEN_THRONE, MUSIC_FURY_OF_FROSTMOURNE);
                 me->InterruptNonMeleeSpells(true);
-                me->CastSpell((Unit*)nullptr, SPELL_FURY_OF_FROSTMOURNE, false);
-                me->SetWalk(true);
 
-                if (Creature* tirion = ObjectAccessor::GetCreature(*me, instance->GetGuidData(DATA_HIGHLORD_TIRION_FORDRING)))
-                    tirion->AI()->DoAction(ACTION_OUTRO);
+                // 跳过 outro 剧情：直接安排死亡动画与胜利电影
+                damage = me->GetHealth() - 1;
+                me->m_Events.AddEvent(new LichKingDeathEvent(*me), me->m_Events.CalculateTime(2500));
+                me->m_Events.AddEvent(new LichKingMovieEvent(*me), me->m_Events.CalculateTime(11500));
                 return;
             }
 
@@ -1378,8 +1377,26 @@ public:
                 if (me->GetMap()->IsHeroic() && !_instance->GetData(DATA_LK_HC_AVAILABLE))
                     return;
                 me->RemoveNpcFlag(UNIT_NPC_FLAG_GOSSIP);
-                me->SetWalk(true);
-                me->GetMotionMaster()->MovePoint(POINT_TIRION_INTRO, TirionIntro);
+
+                // 跳过 intro 剧情，直接开战
+                me->GetMap()->SetZoneMusic(AREA_THE_FROZEN_THRONE, MUSIC_FROZEN_THRONE);
+
+                // Tirion 进入战斗姿态并冲到攻击位置
+                me->SetUInt32Value(UNIT_NPC_EMOTESTATE, EMOTE_STATE_READY2H);
+                me->SetWalk(false);
+                me->GetMotionMaster()->MovePoint(0, TirionCharge);
+
+                // 巫妖王脱离坐姿，传送到平台中央并立即进入战斗
+                theLichKing->SetStandState(UNIT_STAND_STATE_STAND);
+                theLichKing->SetSheath(SHEATH_STATE_MELEE);
+                theLichKing->RemoveAurasDueToSpell(SPELL_EMOTE_SIT_NO_SHEATH);
+                theLichKing->NearTeleportTo(LichKingIntro[2].GetPositionX(), LichKingIntro[2].GetPositionY(), LichKingIntro[2].GetPositionZ(), LichKingIntro[2].GetOrientation());
+                theLichKing->SetWalk(false);
+                theLichKing->SetImmuneToPC(false);
+                theLichKing->SetReactState(REACT_AGGRESSIVE);
+                theLichKing->SetInCombatWithZone();
+                if (!theLichKing->IsInCombat())
+                    theLichKing->AI()->EnterEvadeMode();
             }
         }
 

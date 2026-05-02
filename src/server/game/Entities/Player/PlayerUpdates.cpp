@@ -40,6 +40,7 @@
 #include "WeatherMgr.h"
 #include "WorldState.h"
 #include "WorldStatePackets.h"
+#include <limits>
 
 /// @todo: this import is not necessary for compilation and marked as unused by the IDE
 //  however, for some reasons removing it would cause a damn linking issue
@@ -620,6 +621,30 @@ void Player::UpdateRating(CombatRating cr)
         return static_cast<int32>(value);
     };
 
+    auto normalizeRating = [](int64 value) -> int64
+    {
+        return value > 0 ? value : 0;
+    };
+
+    auto toRatingValue = [](long double value) -> int64
+    {
+        if (value <= 0.0L)
+            return 0;
+        if (value >= static_cast<long double>(std::numeric_limits<int64>::max()))
+            return std::numeric_limits<int64>::max();
+
+        return static_cast<int64>(value);
+    };
+
+    auto saturatingAddRating = [](int64 left, int64 right) -> int64
+    {
+        if (right > 0 && left > std::numeric_limits<int64>::max() - right)
+            return std::numeric_limits<int64>::max();
+        if (right < 0 && left < std::numeric_limits<int64>::min() - right)
+            return std::numeric_limits<int64>::min();
+        return left + right;
+    };
+
     if (!CanModifyStats())
     {
         int32 amount = clampClientRating(m_baseRatingValue[cr]);
@@ -632,7 +657,7 @@ void Player::UpdateRating(CombatRating cr)
         return;
     }
 
-    int32 amount = clampClientRating(m_baseRatingValue[cr]);
+    int64 amount = normalizeRating(m_baseRatingValue[cr]);
     int64 extendedAmount = _extendedBaseRatingValue[cr] > 0 ? _extendedBaseRatingValue[cr] : m_baseRatingValue[cr];
     // Apply bonus from SPELL_AURA_MOD_RATING_FROM_STAT
     // stat used stored in miscValueB for this aura
@@ -650,13 +675,13 @@ void Player::UpdateRating(CombatRating cr)
                     extendedStatValue = static_cast<int64>(displayStatValue);
             }
 
-            int64 displayRatingBonus = static_cast<int64>(
+            int64 displayRatingBonus = toRatingValue(
                 static_cast<long double>(std::max<int32>(GetStat(Stats((*i)->GetMiscValueB())), 0)) *
                 static_cast<long double>((*i)->GetAmount()) / 100.0L);
-            amount = clampClientRating(static_cast<int64>(amount) + displayRatingBonus);
-            extendedAmount += static_cast<int64>(
+            amount = saturatingAddRating(amount, displayRatingBonus);
+            extendedAmount = saturatingAddRating(extendedAmount, toRatingValue(
                 static_cast<long double>(extendedStatValue) *
-                static_cast<long double>((*i)->GetAmount()) / 100.0L);
+                static_cast<long double>((*i)->GetAmount()) / 100.0L));
         }
     if (amount < 0)
         amount = 0;
@@ -664,13 +689,13 @@ void Player::UpdateRating(CombatRating cr)
         extendedAmount = 0;
 
     // 调用钩子允许模块修改评级值
-    int32 preHookAmount = amount;
+    int64 preHookAmount = amount;
     sScriptMgr->OnPlayerAfterUpdateRating(this, cr, amount);
     if (extendedAmount > 0 && preHookAmount > 0 && amount != preHookAmount)
-        extendedAmount = static_cast<int64>(static_cast<long double>(extendedAmount) * static_cast<long double>(amount) / static_cast<long double>(preHookAmount));
+        extendedAmount = toRatingValue(static_cast<long double>(extendedAmount) * static_cast<long double>(amount) / static_cast<long double>(preHookAmount));
     else if (extendedAmount == 0 && amount > 0)
         extendedAmount = amount;
-    amount = clampClientRating(amount);
+    amount = normalizeRating(amount);
 
     // 【重要】在钩子之后应用评级上限限制，防止溢出
     // 从数据库读取对应类型的上限
@@ -681,9 +706,9 @@ void Player::UpdateRating(CombatRating cr)
         {
             Field* fields = result->Fetch();
             int64 hitLimit = fields[0].Get<int64>();
-            if (hitLimit > 0 && amount > clampClientRating(static_cast<int64>(hitLimit)))
+            if (hitLimit > 0 && amount > hitLimit)
             {
-                amount = clampClientRating(static_cast<int64>(hitLimit));
+                amount = hitLimit;
             }
             if (hitLimit > 0 && extendedAmount > static_cast<int64>(hitLimit))
                 extendedAmount = static_cast<int64>(hitLimit);
@@ -696,8 +721,8 @@ void Player::UpdateRating(CombatRating cr)
         {
             Field* fields = result->Fetch();
             int64 hitLimit = fields[0].Get<int64>();
-            if (hitLimit > 0 && amount > clampClientRating(static_cast<int64>(hitLimit)))
-                amount = clampClientRating(static_cast<int64>(hitLimit));
+            if (hitLimit > 0 && amount > hitLimit)
+                amount = hitLimit;
             if (hitLimit > 0 && extendedAmount > static_cast<int64>(hitLimit))
                 extendedAmount = static_cast<int64>(hitLimit);
         }
@@ -710,9 +735,9 @@ void Player::UpdateRating(CombatRating cr)
         {
             Field* fields = result->Fetch();
             int64 limit = fields[0].Get<int64>();
-            if (limit > 0 && amount > clampClientRating(static_cast<int64>(limit)))
+            if (limit > 0 && amount > limit)
             {
-                amount = clampClientRating(static_cast<int64>(limit));
+                amount = limit;
             }
             if (limit > 0 && extendedAmount > static_cast<int64>(limit))
                 extendedAmount = static_cast<int64>(limit);
@@ -726,9 +751,9 @@ void Player::UpdateRating(CombatRating cr)
         {
             Field* fields = result->Fetch();
             int64 limit = fields[0].Get<int64>();
-            if (limit > 0 && amount > clampClientRating(static_cast<int64>(limit)))
+            if (limit > 0 && amount > limit)
             {
-                amount = clampClientRating(static_cast<int64>(limit));
+                amount = limit;
             }
             if (limit > 0 && extendedAmount > static_cast<int64>(limit))
                 extendedAmount = static_cast<int64>(limit);
@@ -742,9 +767,9 @@ void Player::UpdateRating(CombatRating cr)
         {
             Field* fields = result->Fetch();
             int64 limit = fields[0].Get<int64>();
-            if (limit > 0 && amount > clampClientRating(static_cast<int64>(limit)))
+            if (limit > 0 && amount > limit)
             {
-                amount = clampClientRating(static_cast<int64>(limit));
+                amount = limit;
             }
             if (limit > 0 && extendedAmount > static_cast<int64>(limit))
                 extendedAmount = static_cast<int64>(limit);
@@ -752,7 +777,8 @@ void Player::UpdateRating(CombatRating cr)
     }
 
     _extendedCombatRatings[cr] = extendedAmount > 0 ? extendedAmount : 0;
-    SetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + static_cast<uint16>(cr), uint32(amount));
+    int32 clientAmount = clampClientRating(amount);
+    SetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + static_cast<uint16>(cr), uint32(clientAmount));
 
     bool affectStats = CanModifyStats();
 
@@ -825,7 +851,7 @@ void Player::UpdateRating(CombatRating cr)
         break;
     case CR_ARMOR_PENETRATION:
         if (affectStats)
-            UpdateArmorPenetration(amount);
+            UpdateArmorPenetration(clientAmount);
         break;
     }
 }

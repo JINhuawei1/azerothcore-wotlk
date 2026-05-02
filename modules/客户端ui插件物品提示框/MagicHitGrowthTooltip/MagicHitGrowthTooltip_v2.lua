@@ -834,7 +834,7 @@ local function ApplyHuanJingToOfficialTooltip(tooltip)
     if not tooltip or not tooltip:IsShown() then return end
 
     local state = HuanJingOfficialTooltips[tooltip]
-    if not state or state.applied then return end
+    if not state then return end
 
     -- 【关键修复】幻境缓存使用GUID格式的key，但state.key可能是位置格式
     -- 需要同时尝试两种格式的key来查找幻境数据
@@ -896,6 +896,10 @@ local function ApplyHuanJingToOfficialTooltip(tooltip)
     local numLines = tooltip:NumLines()
     local changed = false
 
+    local function escapePattern(text)
+        return tostring(text or ""):gsub("([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1")
+    end
+
     for i = 1, numLines do
         local leftText = _G[tooltip:GetName() .. "TextLeft" .. i]
         if leftText then
@@ -907,8 +911,12 @@ local function ApplyHuanJingToOfficialTooltip(tooltip)
                 local clean = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
 
                 for name, info in pairs(baseAttrsByName) do
-                    -- 匹配类似 “+156 力量” 的官方属性行
-                    local amountStr = clean:match("^%+?(%-?%d+)%s*" .. name .. "%s*$")
+                    -- 匹配 “+156 力量” 或 “+1.56百 力量” 这类官方属性行
+                    local escapedName = escapePattern(name)
+                    local amountStr = clean:match("^[%+%-]?%s*([%d%.]+)%s*" .. escapedName .. "%s*$")
+                        or clean:match("^[%+%-]?%s*([%d%.]+%S*)%s+" .. escapedName .. "%s*$")
+                        or clean:match("^" .. escapedName .. "%s*[%+%-]?%s*([%d%.]+)%s*$")
+                        or clean:match("^" .. escapedName .. "%s+[%+%-]?%s*([%d%.]+%S*)%s*$")
                     if amountStr then
                         local original = info.original or tonumber(amountStr) or 0
                         local enhanced = info.enhanced or CalculateHuanJingEnhancedValue(original, mult, mode)
@@ -2188,7 +2196,7 @@ function Parsers.BatchQuery(message)
 
             -- 【关键】同时更新幻境缓存，保持与原有幻境查询系统的兼容性
             local key = "G:" .. itemID .. ":" .. guid
-            HuanJingState.cache[key] = {
+            local huanjingCacheData = {
                 itemID = itemID,
                 guid = guid,
                 multiplier = multiplier,
@@ -2197,6 +2205,14 @@ function Parsers.BatchQuery(message)
                 identificationData = "",
                 timestamp = GetTime()
             }
+            HuanJingState.cache[key] = huanjingCacheData
+            HuanJingState.pending[key] = nil
+
+            if bag ~= nil and slot ~= nil then
+                local positionKey = MakeKey(itemID, nil, bag, slot, bag == 255)
+                HuanJingState.cache[positionKey] = huanjingCacheData
+                HuanJingState.pending[positionKey] = nil
+            end
         end
     end
 
@@ -4400,6 +4416,15 @@ ProcessServerResponse = function(message, receiveTime)
             CacheData(batchData.itemID, batchData.guid, systemData, key)
         end
 
+        if key and batchData.guid and batchData.guid > 0 then
+            local guidHuanJingKey = MakeKey(batchData.itemID, batchData.guid, nil, nil, false)
+            local guidHuanJingData = HuanJingGetData(guidHuanJingKey)
+            if guidHuanJingData and guidHuanJingKey ~= key then
+                HuanJingState.cache[key] = guidHuanJingData
+                HuanJingState.pending[key] = nil
+            end
+        end
+
         -- 【临时调试 - 已关闭】输出缓存数据统计
         -- print(string.format("|cff00ffff[响应处理]|r hasAnyData=%s", tostring(hasAnyData)))
 
@@ -4461,6 +4486,7 @@ ProcessServerResponse = function(message, receiveTime)
                     HideTooltipPendingIdentifyLines(tooltip)
                 end
                 RenderTooltip(tooltip, batchData.itemID, batchData.guid)
+                ApplyHuanJingToOfficialTooltip(tooltip)
                 renderCount = renderCount + 1
             end
         end
@@ -6371,6 +6397,7 @@ local function OnTooltipSetItem(tooltip)
         GetTooltipMeta(tooltip, key)
     end
     RenderTooltip(tooltip, itemID, guid, renderBag, renderSlot)
+    ApplyHuanJingToOfficialTooltip(tooltip)
 
     local tooltipMeta = State.tooltips[tooltip]
     local hasCustomData = tooltipMeta and tooltipMeta.key == key and (

@@ -382,7 +382,7 @@ public: /* PlayerScript */
     void OnPlayerAfterUpdateSpellCritChance(Player* player, uint32 school, float& value);
     void OnPlayerAfterUpdateHitChances(Player* player, float& meleeHit, float& rangedHit, float& spellHit);
     void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int32& healingBonus, int32 spellDamage[7]);
-    void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int32& amount);
+    void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int64& amount);
     void OnPlayerBeforeInitTalentForLevel(Player* player, uint8& level, uint32& talentPointsForLevel);
     void OnPlayerFirstLogin(Player* player);
     void OnPlayerSetMaxLevel(Player* player, uint32& maxPlayerLevel);

@@ -101,7 +101,8 @@ enum Events
     EVENT_CHECK_MORTAR              = 14,
     EVENT_CLEAVE                    = 15,
     EVENT_BLADESTORM                = 16,
-    EVENT_WOUNDING_STRIKE           = 17
+    EVENT_WOUNDING_STRIKE           = 17,
+    EVENT_AUTO_DESTROY_ENEMY_SHIP   = 18
 };
 
 #define EVENT_CHARGE_PREPATH 13371337
@@ -826,13 +827,11 @@ public:
                 _instance->SetBossState(DATA_ICECROWN_GUNSHIP_BATTLE, IN_PROGRESS);
                 me->GetMap()->SetZoneMusic(AREA_ICECROWN_CITADEL, MUSIC_ENCOUNTER);
 
-                if (Creature* muradin = me->FindNearestCreature(NPC_IGB_MURADIN_BRONZEBEARD, 200.0f))
-                    muradin->AI()->DoAction(ACTION_SPAWN_ALL_ADDS);
-
+                // 自动获胜：跳过敌方 add 召唤与玩家强制战斗，剧情对白结束后炸毁敌方船只
                 Talk(SAY_SAURFANG_INTRO_5);
                 _events.ScheduleEvent(EVENT_INTRO_H_5, 4s);
                 _events.ScheduleEvent(EVENT_INTRO_H_6, 11s);
-                _events.ScheduleEvent(EVENT_KEEP_PLAYER_IN_COMBAT, 1ms);
+                _events.ScheduleEvent(EVENT_AUTO_DESTROY_ENEMY_SHIP, 13s);
 
                 if (Creature* skybreaker = _instance->GetCreature(DATA_THE_SKYBREAKER))
                     _instance->SendEncounterUnit(ENCOUNTER_FRAME_ENGAGE, skybreaker, 1);
@@ -1044,6 +1043,11 @@ public:
                     _events.ScheduleEvent(EVENT_CLEAVE, 4s, 8s);
                     break;
 
+                case EVENT_AUTO_DESTROY_ENEMY_SHIP:
+                    if (Creature* enemyShip = _instance->GetCreature(_instance->GetData(DATA_TEAMID_IN_INSTANCE) == TEAM_HORDE ? DATA_THE_SKYBREAKER : DATA_ORGRIMS_HAMMER))
+                        Creature::Kill(me, enemyShip);
+                    break;
+
                 default:
                     break;
             }
@@ -1162,13 +1166,11 @@ public:
                 _instance->SetBossState(DATA_ICECROWN_GUNSHIP_BATTLE, IN_PROGRESS);
                 me->GetMap()->SetZoneMusic(AREA_ICECROWN_CITADEL, MUSIC_ENCOUNTER);
 
-                if (Creature* saurfang = me->FindNearestCreature(NPC_IGB_HIGH_OVERLORD_SAURFANG, 200.0f))
-                    saurfang->AI()->DoAction(ACTION_SPAWN_ALL_ADDS);
-
+                // 自动获胜：跳过敌方 add 召唤与玩家强制战斗，剧情对白结束后炸毁敌方船只
                 Talk(SAY_MURADIN_INTRO_6);
                 _events.ScheduleEvent(EVENT_INTRO_A_6, 5s);
                 _events.ScheduleEvent(EVENT_INTRO_A_7, 11s);
-                _events.ScheduleEvent(EVENT_KEEP_PLAYER_IN_COMBAT, 1ms);
+                _events.ScheduleEvent(EVENT_AUTO_DESTROY_ENEMY_SHIP, 13s);
 
                 if (Creature* orgrimsHammer = _instance->GetCreature(DATA_ORGRIMS_HAMMER))
                     _instance->SendEncounterUnit(ENCOUNTER_FRAME_ENGAGE, orgrimsHammer, 1);
@@ -1381,6 +1383,11 @@ public:
                     if (me->GetVictim())
                         me->CastSpell(me->GetVictim(), SPELL_CLEAVE, false);
                     _events.ScheduleEvent(EVENT_CLEAVE, 4s, 8s);
+                    break;
+
+                case EVENT_AUTO_DESTROY_ENEMY_SHIP:
+                    if (Creature* enemyShip = _instance->GetCreature(_instance->GetData(DATA_TEAMID_IN_INSTANCE) == TEAM_HORDE ? DATA_THE_SKYBREAKER : DATA_ORGRIMS_HAMMER))
+                        Creature::Kill(me, enemyShip);
                     break;
 
                 default:

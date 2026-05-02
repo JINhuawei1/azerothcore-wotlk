@@ -292,6 +292,7 @@ void TalentSoulMgr::LoadPlayerData(Player* player)
     {
         std::unique_lock<std::shared_mutex> lock(_playerDataMutex);
         _playerData[playerGuid] = std::move(newData);
+        _dirtyPlayers.erase(playerGuid);
     }
 
     LOG_DEBUG("module", "天赋之魂: 为玩家 {} 加载了 {} 条技能数据，已使用天赋点: {}",
@@ -304,6 +305,15 @@ void TalentSoulMgr::SavePlayerData(Player* player)
         return;
 
     uint32 playerGuid = player->GetGUID().GetCounter();
+    SavePlayerData(playerGuid);
+
+    LOG_DEBUG("module", "天赋之魂: 为玩家 {} 保存数据", player->GetName());
+}
+
+void TalentSoulMgr::SavePlayerData(uint32 playerGuid)
+{
+    if (!playerGuid)
+        return;
 
     std::string compactData;
     uint32 usedPoints = 0;
@@ -325,8 +335,28 @@ void TalentSoulMgr::SavePlayerData(Player* player)
         "REPLACE INTO `_天赋之魂_玩家数据` (`角色id`, `天赋点`, `技能数据`) VALUES ({}, {}, '{}')",
         playerGuid, usedPoints, compactData);
 
-    LOG_DEBUG("module", "天赋之魂: 为玩家 {} 保存数据，紧凑格式: {}",
-        player->GetName(), compactData);
+    {
+        std::unique_lock<std::shared_mutex> lock(_playerDataMutex);
+        _dirtyPlayers.erase(playerGuid);
+    }
+
+    LOG_DEBUG("module", "天赋之魂: 为玩家GUID {} 保存数据，紧凑格式: {}",
+        playerGuid, compactData);
+}
+
+void TalentSoulMgr::FlushDirtyPlayerData()
+{
+    std::vector<uint32> dirtyPlayers;
+
+    {
+        std::shared_lock<std::shared_mutex> lock(_playerDataMutex);
+        dirtyPlayers.reserve(_dirtyPlayers.size());
+        for (uint32 playerGuid : _dirtyPlayers)
+            dirtyPlayers.push_back(playerGuid);
+    }
+
+    for (uint32 playerGuid : dirtyPlayers)
+        SavePlayerData(playerGuid);
 }
 
 void TalentSoulMgr::OnPlayerLogout(uint32 playerGuid)
@@ -334,6 +364,7 @@ void TalentSoulMgr::OnPlayerLogout(uint32 playerGuid)
     // 加写锁保护玩家数据
     std::unique_lock<std::shared_mutex> lock(_playerDataMutex);
     _playerData.erase(playerGuid);
+    _dirtyPlayers.erase(playerGuid);
 }
 
 PlayerTalentSoulData* TalentSoulMgr::GetPlayerData(uint32 playerGuid)
@@ -432,8 +463,6 @@ bool TalentSoulMgr::UpgradePlayerSpell(Player* player, uint32 spellId, TalentSou
 
     uint32 playerGuid = player->GetGUID().GetCounter();
     bool success = false;
-    std::string compactData;
-    uint32 usedPoints = 0;
 
     // 加写锁修改玩家数据
     {
@@ -503,20 +532,8 @@ bool TalentSoulMgr::UpgradePlayerSpell(Player* player, uint32 spellId, TalentSou
         {
             // 每次升级都消耗1点天赋点
             playerData.usedTalentPoints += 1;
-
-            // 准备保存数据（在锁内生成）
-            compactData = GenerateCompactData(playerData);
-            usedPoints = playerData.usedTalentPoints;
+            _dirtyPlayers.insert(playerGuid);
         }
-    }
-
-    // 在锁外执行数据库操作
-    if (success)
-    {
-        CharacterDatabase.EscapeString(compactData);
-        CharacterDatabase.Execute(
-            "REPLACE INTO `_天赋之魂_玩家数据` (`角色id`, `天赋点`, `技能数据`) VALUES ({}, {}, '{}')",
-            playerGuid, usedPoints, compactData);
     }
 
     return success;

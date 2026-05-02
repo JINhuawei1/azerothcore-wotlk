@@ -310,6 +310,7 @@ public:
             me->ApplySpellImmune(0, IMMUNITY_ID, 56131, true);
             _instance->SendEncounterUnit(ENCOUNTER_FRAME_DISENGAGE, me);
             _missedPortals = 0;
+            _autoHealTimer = 0;
             _under25PercentTalkDone = false;
             _over75PercentTalkDone = false;
             _justDied = false;
@@ -317,7 +318,47 @@ public:
         }
 
         void AttackStart(Unit* /*target*/) override {}
-        void MoveInLineOfSight(Unit* /*who*/) override {}
+
+        void MoveInLineOfSight(Unit* who) override
+        {
+            if (_instance->GetBossState(DATA_VALITHRIA_DREAMWALKER) != NOT_STARTED)
+                return;
+            if (!who || !who->IsPlayer() || !who->IsAlive())
+                return;
+            if (Player* player = who->ToPlayer())
+                if (player->IsGameMaster())
+                    return;
+            if (me->GetExactDist(who) > 40.0f)
+                return;
+
+            if (Creature* trigger = ObjectAccessor::GetCreature(*me, _instance->GetGuidData(DATA_VALITHRIA_TRIGGER)))
+            {
+                trigger->AI()->DoAction(ACTION_ENTER_COMBAT);
+                _instance->SetBossState(DATA_VALITHRIA_DREAMWALKER, IN_PROGRESS);
+            }
+        }
+
+        void TriggerSuccess()
+        {
+            if (_done)
+                return;
+
+            _done = true;
+            Talk(SAY_VALITHRIA_SUCCESS);
+            _instance->SendEncounterUnit(ENCOUNTER_FRAME_DISENGAGE, me);
+            _instance->DoRemoveAurasDueToSpellOnPlayers(70766);
+            me->RemoveAurasDueToSpell(SPELL_CORRUPTION_VALITHRIA);
+            me->CastSpell(me, SPELL_ACHIEVEMENT_CHECK, true);
+            me->CastSpell((Unit*)nullptr, SPELL_DREAMWALKERS_RAGE, false);
+            _events.Reset();
+            _events.ScheduleEvent(EVENT_DREAM_SLIP, 3500ms);
+            _instance->SetBossState(DATA_VALITHRIA_DREAMWALKER, DONE);
+
+            if (Creature* trigger = ObjectAccessor::GetCreature(*me, _instance->GetGuidData(DATA_VALITHRIA_TRIGGER)))
+                trigger->AI()->EnterEvadeMode();
+            if (Creature* lichKing = ObjectAccessor::GetCreature(*me, _instance->GetGuidData(DATA_VALITHRIA_LICH_KING)))
+                lichKing->AI()->Reset();
+        }
 
         void DoAction(int32 action) override
         {
@@ -341,21 +382,7 @@ public:
             // encounter complete
             if (me->HealthAbovePctHealed(100, heal) && !_done)
             {
-                _done = true;
-                Talk(SAY_VALITHRIA_SUCCESS);
-                _instance->SendEncounterUnit(ENCOUNTER_FRAME_DISENGAGE, me);
-                _instance->DoRemoveAurasDueToSpellOnPlayers(70766);
-                me->RemoveAurasDueToSpell(SPELL_CORRUPTION_VALITHRIA);
-                me->CastSpell(me, SPELL_ACHIEVEMENT_CHECK, true);
-                me->CastSpell((Unit*)nullptr, SPELL_DREAMWALKERS_RAGE, false);
-                _events.Reset();
-                _events.ScheduleEvent(EVENT_DREAM_SLIP, 3500ms);
-                _instance->SetBossState(DATA_VALITHRIA_DREAMWALKER, DONE);
-
-                if (Creature* trigger = ObjectAccessor::GetCreature(*me, _instance->GetGuidData(DATA_VALITHRIA_TRIGGER)))
-                    trigger->AI()->EnterEvadeMode();
-                if (Creature* lichKing = ObjectAccessor::GetCreature(*me, _instance->GetGuidData(DATA_VALITHRIA_LICH_KING)))
-                    lichKing->AI()->Reset();
+                TriggerSuccess();
             }
             else if (!_over75PercentTalkDone && me->HealthAbovePctHealed(75, heal))
             {
@@ -445,6 +472,39 @@ public:
                 return;
             }
 
+            // 自动回血：剧情进行中每秒恢复 5% 最大生命值，直到满血触发胜利
+            if (!_done && _instance->GetBossState(DATA_VALITHRIA_DREAMWALKER) == IN_PROGRESS)
+            {
+                if (_autoHealTimer <= diff)
+                {
+                    _autoHealTimer = 1000;
+                    uint32 maxHealth = me->GetMaxHealth();
+                    uint32 healAmount = maxHealth / 20;
+                    uint32 newHealth = me->GetHealth() + healAmount;
+                    if (newHealth >= maxHealth)
+                    {
+                        me->SetHealth(maxHealth);
+                        if (!_over75PercentTalkDone)
+                        {
+                            _over75PercentTalkDone = true;
+                            Talk(SAY_VALITHRIA_75_PERCENT);
+                        }
+                        TriggerSuccess();
+                    }
+                    else
+                    {
+                        me->SetHealth(newHealth);
+                        if (!_over75PercentTalkDone && me->GetHealthPct() >= 75.0f)
+                        {
+                            _over75PercentTalkDone = true;
+                            Talk(SAY_VALITHRIA_75_PERCENT);
+                        }
+                    }
+                }
+                else
+                    _autoHealTimer -= diff;
+            }
+
             _events.Update(diff);
 
             if (me->HasUnitState(UNIT_STATE_CASTING))
@@ -486,6 +546,7 @@ public:
         InstanceScript* _instance;
         uint32 const _portalCount;
         uint32 _missedPortals;
+        uint32 _autoHealTimer;
         bool _under25PercentTalkDone;
         bool _over75PercentTalkDone;
         bool _justDied;

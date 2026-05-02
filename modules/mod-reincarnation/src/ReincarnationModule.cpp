@@ -15,6 +15,21 @@
 #include "Player.h"
 #include "Unit.h"
 #include "Chat.h"
+#include <limits>
+
+namespace
+{
+int64 ScaleRatingForReincarnation(int64 amount, float bonusPercent)
+{
+    long double scaled = static_cast<long double>(amount) * (1.0L + static_cast<long double>(bonusPercent) / 100.0L);
+    if (scaled <= 0.0L)
+        return 0;
+    if (scaled >= static_cast<long double>(std::numeric_limits<int64>::max()))
+        return std::numeric_limits<int64>::max();
+
+    return static_cast<int64>(scaled);
+}
+}
 
 // 辅助函数：保留空实现以避免链接错误（这些函数在头文件中声明，可能被其他地方调用）
 void ApplyReincarnationStats(Player* player, float bonusPercent)
@@ -284,7 +299,7 @@ public:
     // CR_HIT_TAKEN_MELEE, CR_HIT_TAKEN_RANGED, CR_HIT_TAKEN_SPELL, CR_CRIT_TAKEN_MELEE,
     // CR_CRIT_TAKEN_RANGED, CR_CRIT_TAKEN_SPELL, CR_HASTE_MELEE, CR_HASTE_RANGED, CR_HASTE_SPELL,
     // CR_WEAPON_SKILL_MAINHAND, CR_WEAPON_SKILL_OFFHAND, CR_WEAPON_SKILL_RANGED, CR_EXPERTISE, CR_ARMOR_PENETRATION
-    void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int32& amount) override
+    void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int64& amount) override
     {
         if (!player || !sConfigMgr->GetOption("Reincarnation.Enable", true))
             return;
@@ -293,7 +308,7 @@ public:
         if (bonusPercent > 0 && amount > 0)
         {
             // 对评级属性应用百分比加成
-            amount = int32(amount * (1.0f + bonusPercent / 100.0f));
+            amount = ScaleRatingForReincarnation(amount, bonusPercent);
         }
     }
 

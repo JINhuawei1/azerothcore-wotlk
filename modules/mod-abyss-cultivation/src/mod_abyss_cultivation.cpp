@@ -525,6 +525,16 @@ int64 ScaleIntValue(int64 value, float scale)
     return static_cast<int64>(std::llround(scaledValue));
 }
 
+int64 AddInt64Saturated(int64 left, int64 right)
+{
+    if (right > 0 && left > std::numeric_limits<int64>::max() - right)
+        return std::numeric_limits<int64>::max();
+    if (right < 0 && left < std::numeric_limits<int64>::min() - right)
+        return std::numeric_limits<int64>::min();
+
+    return left + right;
+}
+
 constexpr uint32 ABYSS_RELIC_MANAGED_SPELL_START = 89101;
 constexpr uint32 ABYSS_RELIC_MANAGED_SPELL_END = 89181;
 constexpr uint32 ABYSS_RELIC_THEFT_KEY_ITEM = 950035;
@@ -9738,15 +9748,18 @@ public:
             return;
 
         float bonusPct = sAbyssCultivationMgr->GetPlayerRuntimeSpellBonusPct(player);
-        if (bonusPct == 0.0f)
+        int32 flatSpellPower = sAbyssCultivationMgr->GetPlayerRuntimeRelicSpellPowerBonus(player);
+        if (bonusPct == 0.0f && flatSpellPower == 0)
             return;
 
-        float multiplier = 1.0f + bonusPct / 100.0f;
-        healingBonus = static_cast<int32>(static_cast<float>(healingBonus) * multiplier);
-        for (uint8 school = 0; school < 7; ++school)
-            spellDamage[school] = static_cast<int32>(static_cast<float>(spellDamage[school]) * multiplier);
+        if (bonusPct != 0.0f)
+        {
+            float multiplier = 1.0f + bonusPct / 100.0f;
+            healingBonus = static_cast<int32>(static_cast<float>(healingBonus) * multiplier);
+            for (uint8 school = 0; school < 7; ++school)
+                spellDamage[school] = static_cast<int32>(static_cast<float>(spellDamage[school]) * multiplier);
+        }
 
-        int32 flatSpellPower = sAbyssCultivationMgr->GetPlayerRuntimeRelicSpellPowerBonus(player);
         if (flatSpellPower != 0)
         {
             healingBonus += flatSpellPower;
@@ -9755,12 +9768,12 @@ public:
         }
     }
 
-    void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int32& amount) override
+    void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int64& amount) override
     {
         if (!player || !IsModuleEnabled())
             return;
 
-        amount += sAbyssCultivationMgr->GetPlayerRuntimeRelicRatingBonus(player, cr);
+        amount = AddInt64Saturated(amount, sAbyssCultivationMgr->GetPlayerRuntimeRelicRatingBonus(player, cr));
     }
 
     void OnPlayerCompleteQuest(Player* player, Quest const* quest) override

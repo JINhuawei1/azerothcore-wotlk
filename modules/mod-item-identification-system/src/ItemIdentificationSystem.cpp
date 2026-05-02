@@ -244,6 +244,42 @@ namespace
         return nullptr;
     }
 
+    std::unordered_map<uint32, Item*> BuildPlayerItemGuidIndex(Player* player)
+    {
+        std::unordered_map<uint32, Item*> itemsByGuid;
+        if (!player)
+            return itemsByGuid;
+
+        itemsByGuid.reserve(128);
+
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        {
+            if (Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                itemsByGuid[item->GetGUID().GetCounter()] = item;
+        }
+
+        for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+        {
+            if (Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                itemsByGuid[item->GetGUID().GetCounter()] = item;
+        }
+
+        for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+        {
+            Bag* bag = player->GetBagByPos(bagSlot);
+            if (!bag)
+                continue;
+
+            for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
+            {
+                if (Item* item = bag->GetItemByPos(slot))
+                    itemsByGuid[item->GetGUID().GetCounter()] = item;
+            }
+        }
+
+        return itemsByGuid;
+    }
+
     void QueueAllModuleDataAddonRefresh(Player* player, uint32 itemID, uint32 guid, Milliseconds delay)
     {
         if (!player || itemID == 0 || guid == 0)
@@ -2232,6 +2268,13 @@ void ItemIdentificationSystemModuleLoader::OnAfterConfigLoad(bool reload)
     }
 }
 
+void ItemIdentificationSystemModuleLoader::OnBeforeWorldInitialized()
+{
+    // 此时 world 网络监听尚未启动，玩家还无法进入游戏。
+    // 启动全量清理放在这里，避免与玩家登录/小退/拾取/保存事务并发。
+    CleanupOrphanedItemData();
+}
+
 void ItemIdentificationSystemModuleLoader::OnUpdate(uint32 diff)
 {
     // 延迟1秒初始化模块，确保服务器完全启动
@@ -2252,27 +2295,8 @@ void ItemIdentificationSystemModuleLoader::OnUpdate(uint32 diff)
             // 初始化模块
             sItemIdentificationSystem->Initialize();
 
-            // 【启动清理】不在启动阶段立刻清理（易与登录/保存 item_instance 冲突触发 1213）
-            // 改为：服务器运行一段时间后、且无人在线时再执行一次清理。
-
             // 显示加载信息
             LOG_INFO("server.loading", "→物品鉴定系统√");
-        }
-    }
-
-    // 启动后延迟清理孤立数据：避免与玩家登录/保存事务竞争锁导致 [1213] Deadlock
-    static bool orphanCleanupDone = false;
-    static uint32 orphanCleanupStartMs = 0;
-    if (_loaded && !orphanCleanupDone)
-    {
-        if (orphanCleanupStartMs == 0)
-            orphanCleanupStartMs = getMSTime();
-
-        // 延迟 5 分钟，并且无人在线时才清理
-        if (getMSTime() - orphanCleanupStartMs >= 300000 && sWorldSessionMgr->GetPlayerCount() == 0)
-        {
-            orphanCleanupDone = true;
-            CleanupOrphanedItemData();
         }
     }
 
@@ -2288,8 +2312,9 @@ void ItemIdentificationSystemModuleLoader::OnUpdate(uint32 diff)
 
     // ★★★ 定期清理待鉴定物品标记表的孤立数据 ★★★
     // 原因：玩家拾取物品后没有手动鉴定就删除/出售/交易物品，导致待鉴定标记永久保留
-    // 规则：每30分钟进入一次“待清理”状态，但只有在全服无人在线时才真正执行，避免在线时清理造成卡顿
+    // 规则：每30分钟进入一次“待清理”状态，但只有连续无人在线5分钟才真正执行
     static uint32 pendingCleanTimer = 0;
+    static uint32 pendingEmptyTimer = 0;
     static bool pendingCleanupDue = false;
     static bool pendingCleanupDeferredLogged = false;
 
@@ -2306,17 +2331,26 @@ void ItemIdentificationSystemModuleLoader::OnUpdate(uint32 diff)
         uint32 onlinePlayerCount = sWorldSessionMgr->GetPlayerCount();
         if (onlinePlayerCount == 0)
         {
-            pendingCleanTimer = 0;
-            pendingCleanupDue = false;
-            pendingCleanupDeferredLogged = false;
-            CleanupPendingIdentificationData();
+            pendingEmptyTimer += diff;
+            if (pendingEmptyTimer >= 300000)
+            {
+                pendingCleanTimer = 0;
+                pendingEmptyTimer = 0;
+                pendingCleanupDue = false;
+                pendingCleanupDeferredLogged = false;
+                CleanupPendingIdentificationData();
+            }
         }
-        else if (!pendingCleanupDeferredLogged)
+        else
         {
-            pendingCleanupDeferredLogged = true;
-            LOG_INFO("module.itemidentification",
-                "[定期清理] 当前仍有 {} 名玩家在线，延后执行待鉴定孤立数据清理。",
-                onlinePlayerCount);
+            pendingEmptyTimer = 0;
+            if (!pendingCleanupDeferredLogged)
+            {
+                pendingCleanupDeferredLogged = true;
+                LOG_INFO("module.itemidentification",
+                    "[定期清理] 当前仍有 {} 名玩家在线，延后执行待鉴定孤立数据清理。",
+                    onlinePlayerCount);
+            }
         }
     }
 }
@@ -2331,48 +2365,79 @@ void ItemIdentificationSystemModuleLoader::CleanupOrphanedItemData()
 
     // 说明：
     // 1) 用 JOIN 代替 NOT IN 子查询，降低锁竞争
-    // 2) 用事务提交，让框架对 1213 自动重试（TransactionTask::Execute）
+    // 2) 启动阶段同步提交，确保 world 网络监听开始前清理已经完成
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
 
     // ★★★ 关键修复：清理待鉴定物品标记表的孤立数据 ★★★
     // 原因：玩家拾取物品后没有手动鉴定就删除/出售/交易物品，导致待鉴定标记永久保留
+    // 注意：bag=200 是飞升系统虚拟背包，清理时必须视为有效引用，避免误删飞升装备扩展属性
     trans->Append(
-        "DELETE p FROM `待鉴定物品标记` p LEFT JOIN `item_instance` i ON p.`物品GUID` = i.`guid` WHERE i.`guid` IS NULL");
+        "DELETE p FROM `待鉴定物品标记` p "
+        "LEFT JOIN `item_instance` i ON p.`物品GUID` = i.`guid` "
+        "LEFT JOIN `character_inventory` ci ON ci.`item` = p.`物品GUID` AND ci.`bag` = 200 "
+        "WHERE i.`guid` IS NULL AND ci.`item` IS NULL");
 
     trans->Append(
-        "DELETE r FROM `物品_鉴定记录` r LEFT JOIN `item_instance` i ON r.`物品GUID` = i.`guid` WHERE i.`guid` IS NULL");
+        "DELETE r FROM `物品_鉴定记录` r "
+        "LEFT JOIN `item_instance` i ON r.`物品GUID` = i.`guid` "
+        "LEFT JOIN `character_inventory` ci ON ci.`item` = r.`物品GUID` AND ci.`bag` = 200 "
+        "WHERE i.`guid` IS NULL AND ci.`item` IS NULL");
 
     trans->Append(
-        "DELETE a FROM `物品属性_数据` a LEFT JOIN `item_instance` i ON a.`物品GUID` = i.`guid` WHERE i.`guid` IS NULL");
+        "DELETE a FROM `物品属性_数据` a "
+        "LEFT JOIN `item_instance` i ON a.`物品GUID` = i.`guid` "
+        "LEFT JOIN `character_inventory` ci ON ci.`item` = a.`物品GUID` AND ci.`bag` = 200 "
+        "WHERE i.`guid` IS NULL AND ci.`item` IS NULL");
 
     trans->Append(
-        "DELETE g FROM `物品成长_玩家记录` g LEFT JOIN `item_instance` i ON g.`物品GUID` = i.`guid` WHERE i.`guid` IS NULL");
+        "DELETE g FROM `物品成长_玩家记录` g "
+        "LEFT JOIN `item_instance` i ON g.`物品GUID` = i.`guid` "
+        "LEFT JOIN `character_inventory` ci ON ci.`item` = g.`物品GUID` AND ci.`bag` = 200 "
+        "WHERE i.`guid` IS NULL AND ci.`item` IS NULL");
 
     trans->Append(
-        "DELETE e FROM `物品强化_记录` e LEFT JOIN `item_instance` i ON e.`guid` = i.`guid` WHERE i.`guid` IS NULL");
+        "DELETE e FROM `物品强化_记录` e "
+        "LEFT JOIN `item_instance` i ON e.`guid` = i.`guid` "
+        "LEFT JOIN `character_inventory` ci ON ci.`item` = e.`guid` AND ci.`bag` = 200 "
+        "WHERE i.`guid` IS NULL AND ci.`item` IS NULL");
 
     trans->Append(
-        "DELETE s FROM `_物品技能_数据` s LEFT JOIN `item_instance` i ON s.`物品GUID` = i.`guid` WHERE i.`guid` IS NULL");
+        "DELETE s FROM `_物品技能_数据` s "
+        "LEFT JOIN `item_instance` i ON s.`物品GUID` = i.`guid` "
+        "LEFT JOIN `character_inventory` ci ON ci.`item` = s.`物品GUID` AND ci.`bag` = 200 "
+        "WHERE i.`guid` IS NULL AND ci.`item` IS NULL");
 
     trans->Append(
-        "DELETE m FROM `魔次系统_数据` m LEFT JOIN `item_instance` i ON m.`物品GUID` = i.`guid` WHERE i.`guid` IS NULL");
+        "DELETE m FROM `魔次系统_数据` m "
+        "LEFT JOIN `item_instance` i ON m.`物品GUID` = i.`guid` "
+        "LEFT JOIN `character_inventory` ci ON ci.`item` = m.`物品GUID` AND ci.`bag` = 200 "
+        "WHERE i.`guid` IS NULL AND ci.`item` IS NULL");
 
     trans->Append(
-        "DELETE r FROM `符文系统_数据` r LEFT JOIN `item_instance` i ON r.`物品GUID` = i.`guid` WHERE i.`guid` IS NULL");
+        "DELETE r FROM `符文系统_数据` r "
+        "LEFT JOIN `item_instance` i ON r.`物品GUID` = i.`guid` "
+        "LEFT JOIN `character_inventory` ci ON ci.`item` = r.`物品GUID` AND ci.`bag` = 200 "
+        "WHERE i.`guid` IS NULL AND ci.`item` IS NULL");
 
     trans->Append(
-        "DELETE p FROM `_物品套装_数据` p LEFT JOIN `item_instance` i ON p.`物品GUID` = i.`guid` WHERE i.`guid` IS NULL");
+        "DELETE p FROM `_物品套装_数据` p "
+        "LEFT JOIN `item_instance` i ON p.`物品GUID` = i.`guid` "
+        "LEFT JOIN `character_inventory` ci ON ci.`item` = p.`物品GUID` AND ci.`bag` = 200 "
+        "WHERE i.`guid` IS NULL AND ci.`item` IS NULL");
 
     trans->Append(
-        "DELETE h FROM `玩家装备属性增强` h LEFT JOIN `item_instance` i ON h.`装备GUID` = i.`guid` WHERE i.`guid` IS NULL");
+        "DELETE h FROM `玩家装备属性增强` h "
+        "LEFT JOIN `item_instance` i ON h.`装备GUID` = i.`guid` "
+        "LEFT JOIN `character_inventory` ci ON ci.`item` = h.`装备GUID` AND ci.`bag` = 200 "
+        "WHERE i.`guid` IS NULL AND ci.`item` IS NULL");
 
-    CharacterDatabase.CommitTransaction(trans);
+    CharacterDatabase.DirectCommitTransaction(trans);
 
     auto endTime = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
 
     LOG_INFO("module.itemidentification",
-        "[启动清理] 全量孤立数据清理已提交到数据库队列，提交耗时 {} ms",
+        "[启动清理] 全量孤立数据清理已同步完成，耗时 {} ms",
         duration);
 }
 
@@ -2399,7 +2464,8 @@ void ItemIdentificationSystemModuleLoader::CleanupPendingIdentificationData()
             "SELECT p.`物品GUID` "
             "FROM `待鉴定物品标记` p "
             "LEFT JOIN `item_instance` i ON p.`物品GUID` = i.`guid` "
-            "WHERE i.`guid` IS NULL "
+            "LEFT JOIN `character_inventory` ci ON ci.`item` = p.`物品GUID` AND ci.`bag` = 200 "
+            "WHERE i.`guid` IS NULL AND ci.`item` IS NULL "
             "ORDER BY p.`物品GUID` ASC "
             "LIMIT {}",
             kBatchSize);
@@ -3615,6 +3681,7 @@ private:
         uint32 failCount = 0;
         uint32 skipCount = 0;
         std::vector<uint32> processedGuids;
+        std::unordered_map<uint32, Item*> itemsByGuid = BuildPlayerItemGuidIndex(player);
 
         do
         {
@@ -3627,8 +3694,9 @@ private:
 
             processedGuids.push_back(itemGuid);
 
-            // 在玩家背包中查找物品
-            Item* item = FindItemByGuid(player, itemGuid);
+            // 从本次请求的一次性背包索引中查找物品，避免每个GUID重复扫描背包
+            auto itemItr = itemsByGuid.find(itemGuid);
+            Item* item = itemItr != itemsByGuid.end() ? itemItr->second : nullptr;
             if (!item || item->GetEntry() != itemId)
             {
                 skipCount++;
@@ -3650,7 +3718,7 @@ private:
             bool success = true;
             if (identificationGroupId > 0)
             {
-                success = sItemIdentificationSystem->ApplyIdentification(player, item, identificationGroupId);
+                success = sItemIdentificationSystem->IdentifyItem(player, item, identificationGroupId);
             }
 
             if (success)
@@ -3722,6 +3790,7 @@ private:
         // 格式：bag,slot,itemId,mode,multi,group
         std::vector<std::string> itemEntries;
         uint32 dbCount = 0;
+        std::unordered_map<uint32, Item*> itemsByGuid = BuildPlayerItemGuidIndex(player);
 
         do
         {
@@ -3734,7 +3803,8 @@ private:
             dbCount++;
 
             // 检查物品是否还在背包中，并获取位置信息
-            Item* item = FindItemByGuid(player, guid);
+            auto itemItr = itemsByGuid.find(guid);
+            Item* item = itemItr != itemsByGuid.end() ? itemItr->second : nullptr;
             if (item)
             {
                 // 获取物品的背包位置
@@ -3858,6 +3928,8 @@ public:
     // 返回 true 表示允许删除，false 表示阻止删除
     bool CanItemRemove(Player* player, Item* item) override
     {
+        (void)player;
+
         if (!item)
             return true;
 
@@ -3865,6 +3937,11 @@ public:
 
         // 检查是否是已鉴定物品
         if (!sItemIdentificationSystem->IsItemIdentified(itemGuid))
+            return true;
+
+        // 飞升系统将装备暂存到 character_inventory.bag=200。
+        // 这类物品可能被核心库存保存流程临时判定为不在官方槽位，但并未真正删除。
+        if (IsAscensionVirtualBagItem(itemGuid))
             return true;
 
         // 清理该物品的所有相关数据
@@ -3964,49 +4041,78 @@ public:
     }
 
 private:
+    bool IsAscensionVirtualBagItem(uint32 itemGuid) const
+    {
+        QueryResult result = CharacterDatabase.Query(
+            "SELECT 1 FROM `character_inventory` WHERE `item` = {} AND `bag` = 200 LIMIT 1",
+            itemGuid);
+
+        return static_cast<bool>(result);
+    }
+
     // 清理单个物品的所有相关数据
     void CleanupItemData(uint32 itemGuid, uint32 itemEntry)
     {
         // 使用异步执行，避免阻塞主线程
         // 0. 待鉴定物品标记表（物品删除时同步清理）
         CharacterDatabase.DirectExecute(
-            "DELETE FROM `待鉴定物品标记` WHERE `物品GUID` = {}", itemGuid);
+            "DELETE FROM `待鉴定物品标记` WHERE `物品GUID` = {} "
+            "AND NOT EXISTS (SELECT 1 FROM `character_inventory` ci WHERE ci.`item` = {} AND ci.`bag` = 200)",
+            itemGuid, itemGuid);
 
         // 1. 鉴定记录表
         CharacterDatabase.Execute(
-            "DELETE FROM `物品_鉴定记录` WHERE `物品GUID` = {}", itemGuid);
+            "DELETE FROM `物品_鉴定记录` WHERE `物品GUID` = {} "
+            "AND NOT EXISTS (SELECT 1 FROM `character_inventory` ci WHERE ci.`item` = {} AND ci.`bag` = 200)",
+            itemGuid, itemGuid);
 
         // 2. 物品属性数据表
         CharacterDatabase.Execute(
-            "DELETE FROM `物品属性_数据` WHERE `物品GUID` = {}", itemGuid);
+            "DELETE FROM `物品属性_数据` WHERE `物品GUID` = {} "
+            "AND NOT EXISTS (SELECT 1 FROM `character_inventory` ci WHERE ci.`item` = {} AND ci.`bag` = 200)",
+            itemGuid, itemGuid);
 
         // 3. 物品成长记录表
         CharacterDatabase.Execute(
-            "DELETE FROM `物品成长_玩家记录` WHERE `物品GUID` = {}", itemGuid);
+            "DELETE FROM `物品成长_玩家记录` WHERE `物品GUID` = {} "
+            "AND NOT EXISTS (SELECT 1 FROM `character_inventory` ci WHERE ci.`item` = {} AND ci.`bag` = 200)",
+            itemGuid, itemGuid);
 
         // 4. 物品强化记录表（字段名是guid）
         CharacterDatabase.Execute(
-            "DELETE FROM `物品强化_记录` WHERE `guid` = {}", itemGuid);
+            "DELETE FROM `物品强化_记录` WHERE `guid` = {} "
+            "AND NOT EXISTS (SELECT 1 FROM `character_inventory` ci WHERE ci.`item` = {} AND ci.`bag` = 200)",
+            itemGuid, itemGuid);
 
         // 5. 物品技能数据表
         CharacterDatabase.Execute(
-            "DELETE FROM `_物品技能_数据` WHERE `物品GUID` = {}", itemGuid);
+            "DELETE FROM `_物品技能_数据` WHERE `物品GUID` = {} "
+            "AND NOT EXISTS (SELECT 1 FROM `character_inventory` ci WHERE ci.`item` = {} AND ci.`bag` = 200)",
+            itemGuid, itemGuid);
 
         // 6. 魔次系统数据表
         CharacterDatabase.Execute(
-            "DELETE FROM `魔次系统_数据` WHERE `物品GUID` = {}", itemGuid);
+            "DELETE FROM `魔次系统_数据` WHERE `物品GUID` = {} "
+            "AND NOT EXISTS (SELECT 1 FROM `character_inventory` ci WHERE ci.`item` = {} AND ci.`bag` = 200)",
+            itemGuid, itemGuid);
 
         // 7. 符文系统数据表
         CharacterDatabase.Execute(
-            "DELETE FROM `符文系统_数据` WHERE `物品GUID` = {}", itemGuid);
+            "DELETE FROM `符文系统_数据` WHERE `物品GUID` = {} "
+            "AND NOT EXISTS (SELECT 1 FROM `character_inventory` ci WHERE ci.`item` = {} AND ci.`bag` = 200)",
+            itemGuid, itemGuid);
 
         // 8. 玩家套装状态表
         CharacterDatabase.Execute(
-            "DELETE FROM `_物品套装_数据` WHERE `物品GUID` = {}", itemGuid);
+            "DELETE FROM `_物品套装_数据` WHERE `物品GUID` = {} "
+            "AND NOT EXISTS (SELECT 1 FROM `character_inventory` ci WHERE ci.`item` = {} AND ci.`bag` = 200)",
+            itemGuid, itemGuid);
 
         // 9. 玩家装备属性增强表
         CharacterDatabase.Execute(
-            "DELETE FROM `玩家装备属性增强` WHERE `装备GUID` = {}", itemGuid);
+            "DELETE FROM `玩家装备属性增强` WHERE `装备GUID` = {} "
+            "AND NOT EXISTS (SELECT 1 FROM `character_inventory` ci WHERE ci.`item` = {} AND ci.`bag` = 200)",
+            itemGuid, itemGuid);
 
         // 清理内存缓存
         sItemIdentificationSystem->ClearIdentifiedCache(itemGuid);
@@ -5422,6 +5528,7 @@ bool ItemIdentificationCommandScript::HandleListPendingCommand(ChatHandler* hand
 
     uint32 count = 0;
     uint32 validCount = 0;
+    std::unordered_map<uint32, Item*> itemsByGuid = BuildPlayerItemGuidIndex(player);
 
     // 遍历结果，同时查找物品在背包中的位置
     do
@@ -5440,34 +5547,33 @@ bool ItemIdentificationCommandScript::HandleListPendingCommand(ChatHandler* hand
         uint8 foundBag = 0;
         uint8 foundSlot = 0;
 
-        // 搜索主背包
-        for (uint8 i = INVENTORY_SLOT_ITEM_START; i < INVENTORY_SLOT_ITEM_END && !found; ++i)
+        auto itemItr = itemsByGuid.find(guid);
+        Item* item = itemItr != itemsByGuid.end() ? itemItr->second : nullptr;
+        if (item)
         {
-            Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i);
-            if (item && item->GetGUID().GetCounter() == guid)
+            uint8 serverBag = item->GetBagSlot();
+            uint8 serverSlot = item->GetSlot();
+
+            if (serverBag == INVENTORY_SLOT_BAG_0)
+            {
+                if (serverSlot >= INVENTORY_SLOT_ITEM_START && serverSlot < INVENTORY_SLOT_ITEM_END)
+                {
+                    found = true;
+                    foundBag = 0;
+                    foundSlot = serverSlot - INVENTORY_SLOT_ITEM_START;
+                }
+                else if (serverSlot >= EQUIPMENT_SLOT_START && serverSlot < EQUIPMENT_SLOT_END)
+                {
+                    found = true;
+                    foundBag = 255;
+                    foundSlot = serverSlot + 1;
+                }
+            }
+            else if (serverBag >= INVENTORY_SLOT_BAG_START && serverBag < INVENTORY_SLOT_BAG_END)
             {
                 found = true;
-                foundBag = 0;
-                foundSlot = i - INVENTORY_SLOT_ITEM_START;
-            }
-        }
-
-        // 搜索额外背包
-        for (uint8 bag = 0; bag < 4 && !found; ++bag)
-        {
-            Bag* pBag = player->GetBagByPos(INVENTORY_SLOT_BAG_START + bag);
-            if (pBag)
-            {
-                for (uint32 slot = 0; slot < pBag->GetBagSize() && !found; ++slot)
-                {
-                    Item* item = pBag->GetItemByPos(slot);
-                    if (item && item->GetGUID().GetCounter() == guid)
-                    {
-                        found = true;
-                        foundBag = bag + 1;
-                        foundSlot = slot;
-                    }
-                }
+                foundBag = serverBag - INVENTORY_SLOT_BAG_START + 1;
+                foundSlot = serverSlot;
             }
         }
 
@@ -5529,6 +5635,7 @@ bool ItemIdentificationCommandScript::HandleBatchIdentifyCommand(ChatHandler* ha
     uint32 failCount = 0;
     uint32 skipCount = 0;
     std::vector<uint32> processedGuids;
+    std::unordered_map<uint32, Item*> itemsByGuid = BuildPlayerItemGuidIndex(player);
 
     do
     {
@@ -5536,14 +5643,14 @@ bool ItemIdentificationCommandScript::HandleBatchIdentifyCommand(ChatHandler* ha
         uint32 itemGuid = fields[0].Get<uint32>();
         uint32 itemId = fields[1].Get<uint32>();
         uint32 huanJingMultiplier = fields[2].Get<uint32>();
-        std::string huanJingModeText = fields[3].Get<std::string>();
-        char huanJingMode = huanJingModeText.empty() ? 'x' : NormalizeHuanJingMode(huanJingModeText[0]);
+        char huanJingMode = DbValueToHuanJingMode(fields[3].Get<int32>());
         uint32 identificationGroupId = fields[4].Get<uint32>();
 
         processedGuids.push_back(itemGuid);
 
-        // 在玩家背包中查找物品
-        Item* item = FindItemByGuidInBags(player, itemGuid);
+        // 从本次请求的一次性背包索引中查找物品，避免每个GUID重复扫描背包
+        auto itemItr = itemsByGuid.find(itemGuid);
+        Item* item = itemItr != itemsByGuid.end() ? itemItr->second : nullptr;
         if (!item)
         {
             skipCount++;

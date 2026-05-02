@@ -717,8 +717,6 @@ private:
             std::ostringstream failResponse;
             failResponse << "TALENTSOUL_UPGRADE_FAIL:" << spellId << ":" << upgradeType << ":NOT_ENOUGH_POINTS";
             SendAddonMessage(player, failResponse.str());
-
-            ChatHandler(player->GetSession()).PSendSysMessage("|cffff0000[天赋之魂]|r {}", errorMsg.c_str());
             return;
         }
 
@@ -761,10 +759,6 @@ private:
             std::ostringstream successResponse;
             successResponse << "TALENTSOUL_UPGRADE:" << spellId << ":" << upgradeType << ":" << currentLevel << ":" << remainPoints;
             SendAddonMessage(player, successResponse.str());
-
-            const char* typeNames[] = { "公共CD", "技能冷却", "技能消耗", "伤害加成" };
-            ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff00[天赋之魂]|r 技能 {} 的{}升级成功，当前等级: {}",
-                spellId, typeNames[type], currentLevel);
         }
         else
         {
@@ -772,8 +766,6 @@ private:
             std::ostringstream failResponse;
             failResponse << "TALENTSOUL_UPGRADE_FAIL:" << spellId << ":" << upgradeType << ":MAX_LEVEL";
             SendAddonMessage(player, failResponse.str());
-
-            ChatHandler(player->GetSession()).PSendSysMessage("|cffffff00[天赋之魂]|r 该属性已达到最大等级");
         }
     }
 

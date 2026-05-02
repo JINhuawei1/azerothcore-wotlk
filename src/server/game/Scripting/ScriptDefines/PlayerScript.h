@@ -482,7 +482,7 @@ public:
     virtual void OnPlayerAfterUpdateHitChances(Player* /*player*/, float& /*meleeHit*/, float& /*rangedHit*/, float& /*spellHit*/) { }
     virtual void OnPlayerAfterUpdateSpellDamageAndHealing(Player* /*player*/, int32& /*healingBonus*/, int32 /*spellDamage*/[7]) { }
     // 评级属性钩子 - 用于修改命中、急速、精准等评级
-    virtual void OnPlayerAfterUpdateRating(Player* /*player*/, CombatRating /*cr*/, int32& /*amount*/) { }
+    virtual void OnPlayerAfterUpdateRating(Player* /*player*/, CombatRating /*cr*/, int64& /*amount*/) { }
 
     virtual void OnPlayerBeforeInitTalentForLevel(Player* /*player*/, uint8& /*level*/, uint32& /*talentPointsForLevel*/) { }
 

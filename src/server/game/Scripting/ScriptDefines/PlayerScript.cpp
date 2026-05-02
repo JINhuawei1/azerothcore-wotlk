@@ -530,7 +530,7 @@ void ScriptMgr::OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int32& 
     CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_AFTER_UPDATE_SPELL_DAMAGE_AND_HEALING, script->OnPlayerAfterUpdateSpellDamageAndHealing(player, healingBonus, spellDamage));
 }
 
-void ScriptMgr::OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int32& amount)
+void ScriptMgr::OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int64& amount)
 {
     CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_AFTER_UPDATE_RATING, script->OnPlayerAfterUpdateRating(player, cr, amount));
 }

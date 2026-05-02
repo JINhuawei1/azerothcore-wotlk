@@ -6870,6 +6870,13 @@ void AuraEffect::HandlePeriodicDamageAurasTick(Unit* target, Unit* caster) const
     uint64 absorb = dmgInfo.GetAbsorb();
     uint64 resist = dmgInfo.GetResist();
     uint64 tickDamage = dmgInfo.GetDamage();
+    if (caster)
+    {
+        uint64 originalTickDamage = tickDamage;
+        tickDamage = AddUInt64Saturated(AddUInt64Saturated(tickDamage, caster->GetCustomTrueDamageBonus()), caster->GetCustomCuttingDamageBonus());
+        if (tickDamage > originalTickDamage)
+            dmgInfo.ModifyDamage(tickDamage - originalTickDamage > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(tickDamage - originalTickDamage));
+    }
 
     LOG_DEBUG("spells.aura.effect", "PeriodicTick: {} attacked {} for {} dmg inflicted by {} abs is {}",
                     GetCasterGUID().ToString(), target->GetGUID().ToString(), tickDamage, GetId(), absorb);
@@ -6973,6 +6980,13 @@ void AuraEffect::HandlePeriodicHealthLeechAuraTick(Unit* target, Unit* caster) c
     uint64 absorb = dmgInfo.GetAbsorb();
     uint64 resist = dmgInfo.GetResist();
     uint64 tickDamage = dmgInfo.GetDamage();
+    if (caster)
+    {
+        uint64 originalTickDamage = tickDamage;
+        tickDamage = AddUInt64Saturated(AddUInt64Saturated(tickDamage, caster->GetCustomTrueDamageBonus()), caster->GetCustomCuttingDamageBonus());
+        if (tickDamage > originalTickDamage)
+            dmgInfo.ModifyDamage(tickDamage - originalTickDamage > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(tickDamage - originalTickDamage));
+    }
 
     // Set trigger flag
     uint32 procAttacker = PROC_FLAG_DONE_PERIODIC;
