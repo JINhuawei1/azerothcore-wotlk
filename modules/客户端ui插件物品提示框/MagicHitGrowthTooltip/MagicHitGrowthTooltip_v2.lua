@@ -88,7 +88,8 @@ end
 -- 属性名称映射
 local ATTR_NAMES = {
     [0] = "法力值", [1] = "生命值", [3] = "敏捷", [4] = "力量",
-    [5] = "智力", [6] = "精神", [7] = "耐力", [12] = "防御等级",
+    [5] = "智力", [6] = "精神", [7] = "耐力", [8] = "真实伤害",
+    [9] = "切割伤害", [10] = "冷却缩减", [11] = "技能伤害", [12] = "防御等级",
     [13] = "躲闪等级", [14] = "招架等级", [15] = "格挡等级",
     [16] = "近战命中等级", [17] = "远程命中等级", [18] = "法术命中等级",
     [19] = "近战暴击等级", [20] = "远程暴击等级", [21] = "法术暴击等级",
@@ -97,9 +98,20 @@ local ATTR_NAMES = {
     [28] = "近战急速等级", [29] = "远程急速等级", [30] = "法术急速等级",
     [31] = "命中等级", [32] = "暴击等级", [33] = "命中躲避等级", [34] = "暴击躲避等级", [35] = "韧性等级",
     [36] = "急速等级", [37] = "精准等级", [38] = "攻击强度",
-    [39] = "远程强度", [43] = "法力回复", [44] = "护甲穿透",
-    [45] = "法术强度", [46] = "生命回复", [47] = "法术穿透",
+    [39] = "远程强度", [43] = "每3秒法力回复", [44] = "护甲穿透",
+    [45] = "法术强度", [46] = "每3秒生命回复", [47] = "法术穿透",
     [48] = "格挡值"
+}
+
+local ATTR_NAME_ALIASES = {
+    [19] = { "近战爆击等级" },
+    [20] = { "远程爆击等级" },
+    [21] = { "法术爆击等级" },
+    [25] = { "近战爆击躲避等级" },
+    [26] = { "远程爆击躲避等级" },
+    [27] = { "法术爆击躲避等级" },
+    [32] = { "爆击等级" },
+    [34] = { "爆击躲避等级" },
 }
 
 -- 颜色常量：粉色/红色/重置
@@ -853,15 +865,6 @@ local function ApplyHuanJingToOfficialTooltip(tooltip)
     local mult = hjData.multiplier
     local mode = hjData.mode
 
-    -- 只处理主属性：敏捷(3)、力量(4)、智力(5)、精神(6)、耐力(7)
-    local baseTypes = {
-        [3] = true, -- 敏捷
-        [4] = true, -- 力量
-        [5] = true, -- 智力
-        [6] = true, -- 精神
-        [7] = true, -- 耐力
-    }
-
     local baseAttrsByName = {}
 
     if hjData.attributeData and hjData.attributeData ~= "" then
@@ -876,13 +879,23 @@ local function ApplyHuanJingToOfficialTooltip(tooltip)
                 local originalValue = tonumber(parts[2])
                 local enhancedValue = tonumber(parts[3])
 
-                if attrTypeNum and originalValue and enhancedValue and baseTypes[attrTypeNum] then
+                if attrTypeNum and originalValue and enhancedValue then
                     local name = ATTR_NAMES[attrTypeNum]
                     if name then
-                        baseAttrsByName[name] = {
+                        local info = {
+                            type = attrTypeNum,
+                            name = name,
                             original = originalValue,
                             enhanced = enhancedValue
                         }
+                        baseAttrsByName[name] = info
+
+                        local aliases = ATTR_NAME_ALIASES[attrTypeNum]
+                        if aliases then
+                            for _, alias in ipairs(aliases) do
+                                baseAttrsByName[alias] = info
+                            end
+                        end
                     end
                 end
             end
@@ -911,18 +924,30 @@ local function ApplyHuanJingToOfficialTooltip(tooltip)
                 local clean = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
 
                 for name, info in pairs(baseAttrsByName) do
-                    -- 匹配 “+156 力量” 或 “+1.56百 力量” 这类官方属性行
+                    -- 匹配 “+156 力量”、“装备: 命中等级提高42.”、“每3秒恢复法力值”等官方属性行
                     local escapedName = escapePattern(name)
                     local amountStr = clean:match("^[%+%-]?%s*([%d%.]+)%s*" .. escapedName .. "%s*$")
                         or clean:match("^[%+%-]?%s*([%d%.]+%S*)%s+" .. escapedName .. "%s*$")
                         or clean:match("^" .. escapedName .. "%s*[%+%-]?%s*([%d%.]+)%s*$")
                         or clean:match("^" .. escapedName .. "%s+[%+%-]?%s*([%d%.]+%S*)%s*$")
+                        or clean:match("^装备[:：]?%s*" .. escapedName .. "提高([%d%.]+%S*)")
+                        or clean:match("^装备[:：]?.*提高([%d%.]+%S*).*" .. escapedName)
+                        or clean:match("^装备[:：]?.*" .. escapedName .. ".*提高([%d%.]+%S*)")
+                    if not amountStr and (info.type == 43 or info.type == 46) then
+                        local hasEquipPrefix = clean:find("装备", 1, true)
+                        local hasRegenText = clean:find("恢复", 1, true) or clean:find("回复", 1, true)
+                        local hasResource = (info.type == 43 and clean:find("法力", 1, true))
+                            or (info.type == 46 and clean:find("生命", 1, true))
+                        if hasEquipPrefix and hasRegenText and hasResource then
+                            amountStr = clean:match("([%d%.]+%S*)")
+                        end
+                    end
                     if amountStr then
                         local original = info.original or tonumber(amountStr) or 0
                         local enhanced = info.enhanced or CalculateHuanJingEnhancedValue(original, mult, mode)
 
                         -- 与右侧“基础/追加属性”保持一致的配色：倍率为粉色，最终值为红色
-                        local newCoreText = FormatTooltipStatLine(name, original, mult, mode)
+                        local newCoreText = FormatTooltipStatLine(info.name or name, original, mult, mode)
 
                         leftText:SetText(newCoreText)
                         changed = true
@@ -1700,7 +1725,7 @@ function Parsers.BatchQuery(message)
         dataStartIndex = 4
     end
 
-    if not itemID or not guid or guid == 0 then
+    if not itemID or guid == nil then
         return nil
     end
 
@@ -2427,6 +2452,7 @@ local function IsOfficialStatLine(text)
         "护甲",                             -- 护甲属性
         "攻击强度",                         -- 攻击强度
         "暴击",                             -- 暴击相关
+        "爆击",                             -- 客户端原生本地化用词
         "命中",                             -- 命中相关
         "闪躲",                             -- 闪躲相关
         "格挡",                             -- 格挡相关
@@ -2446,12 +2472,73 @@ local function EscapePattern(text)
     return tostring(text or ""):gsub("([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1")
 end
 
+local function GetAttrNameAliases(attrType)
+    local names = {}
+    local primary = ATTR_NAMES[attrType] or ("属性" .. tostring(attrType))
+    names[#names + 1] = primary
+
+    local aliases = ATTR_NAME_ALIASES[attrType]
+    if aliases then
+        for _, alias in ipairs(aliases) do
+            if alias ~= primary then
+                names[#names + 1] = alias
+            end
+        end
+    end
+
+    return names
+end
+
+local function CleanTextHasAttrName(cleanText, attrType)
+    local text = tostring(cleanText or "")
+    for _, name in ipairs(GetAttrNameAliases(attrType)) do
+        if text:find(name, 1, true) then
+            return true, name
+        end
+    end
+    return false, nil
+end
+
 local function FormatOfficialSignedStatLine(name, value)
     local rawText = tostring(value or "0")
     if rawText:sub(1, 1) == "-" then
         return string.format("-%s %s", FormatCompactNumber(rawText:sub(2)), name)
     end
     return string.format("+%s %s", FormatCompactNumber(rawText), name)
+end
+
+local function FormatOfficialEquipStyleLine(attrType, value)
+    local amount = FormatCompactNumber(value)
+
+    if attrType == 46 then
+        return string.format("|cff00ff00装备: 每3秒恢复%s点生命值.|r", amount)
+    end
+
+    if attrType == 43 then
+        return string.format("|cff00ff00装备: 每3秒恢复%s点法力值.|r", amount)
+    end
+
+    local name = ATTR_NAMES[attrType] or ("属性" .. tostring(attrType))
+    return string.format("|cff00ff00装备: %s提高%s.|r", name, amount)
+end
+
+local function IsOfficialRegenLine(cleanText, attrType)
+    local text = tostring(cleanText or "")
+    local hasEquipPrefix = text:find("装备:", 1, true) or text:find("装备：", 1, true) or text:find("装备", 1, true)
+    local hasRegenText = text:find("恢复", 1, true) or text:find("回复", 1, true)
+    if attrType == 46 then
+        return hasEquipPrefix
+            and hasRegenText
+            and text:find("生命值", 1, true)
+    end
+
+    if attrType == 43 then
+        return hasEquipPrefix
+            and hasRegenText
+            and text:find("法力值", 1, true)
+    end
+
+    return false
 end
 
 local function ReplaceFirstNumber(text, value)
@@ -2481,6 +2568,56 @@ local function FindUnusedTemplateAttr(templateData, usedAttrs, predicate)
     return nil, nil
 end
 
+local function IsCustomClientOnlyStatType(attrType)
+    return attrType == 8 or attrType == 9 or attrType == 10 or attrType == 11
+end
+
+local function AnnotateCustomCompareLines(tooltip, templateData)
+    if not tooltip or not templateData or not templateData.attributes then
+        return
+    end
+
+    local tooltipName = tooltip:GetName()
+    if not tooltipName then
+        return
+    end
+
+    local customAttrs = {}
+    for _, attr in ipairs(templateData.attributes) do
+        if attr.type and IsCustomClientOnlyStatType(attr.type) then
+            customAttrs[#customAttrs + 1] = attr
+        end
+    end
+
+    if #customAttrs == 0 then
+        return
+    end
+
+    local inCompareBlock = false
+    local customIndex = 1
+
+    for i = 1, tooltip:NumLines() do
+        local leftText = _G[tooltipName .. "TextLeft" .. i]
+        if leftText then
+            local text = leftText:GetText()
+            local clean = StripColorCodes(text or "") or ""
+
+            if clean:find("如果你替换", 1, true) or clean:find("属性变更", 1, true) then
+                inCompareBlock = true
+            elseif inCompareBlock and customIndex <= #customAttrs and clean:match("^[%+%-]%s*[%d%.]+%s*$") then
+                local attr = customAttrs[customIndex]
+                local name = ATTR_NAMES[attr.type] or ("属性" .. tostring(attr.type))
+                leftText:SetText(clean .. " " .. name)
+                customIndex = customIndex + 1
+            elseif inCompareBlock and clean == "" then
+                -- 保持在同一个替换属性块内，跳过空行。
+            elseif inCompareBlock and not clean:match("^[%+%-]") and not clean:find("每", 1, true) then
+                inCompareBlock = false
+            end
+        end
+    end
+end
+
 local function ApplyTemplateStatsToOfficialLines(tooltip, templateData)
     local usedAttrs = {}
     local usedArmor = false
@@ -2503,12 +2640,29 @@ local function ApplyTemplateStatsToOfficialLines(tooltip, templateData)
             if clean and clean ~= "" then
                 local replaced = false
 
-                local primaryIndex, primaryAttr = FindUnusedTemplateAttr(templateData, usedAttrs, function(attr)
-                    local name = ATTR_NAMES[attr.type] or ("属性" .. tostring(attr.type))
-                    local escapedName = EscapePattern(name)
-                    return clean:match("^[%+%-]?%s*%d+%s*" .. escapedName .. "%s*$") ~= nil
-                        or clean:match("^" .. escapedName .. "%s*[%+%-]?%s*%d+%s*$") ~= nil
+                local regenIndex, regenAttr = FindUnusedTemplateAttr(templateData, usedAttrs, function(attr)
+                    return (attr.type == 43 or attr.type == 46) and IsOfficialRegenLine(clean, attr.type)
                 end)
+
+                if regenAttr then
+                    leftText:SetText(FormatOfficialEquipStyleLine(regenAttr.type, regenAttr.value))
+                    usedAttrs[regenIndex] = true
+                    replaced = true
+                end
+
+                local primaryIndex, primaryAttr
+                if not replaced then
+                    primaryIndex, primaryAttr = FindUnusedTemplateAttr(templateData, usedAttrs, function(attr)
+                        for _, name in ipairs(GetAttrNameAliases(attr.type)) do
+                            local escapedName = EscapePattern(name)
+                            if clean:match("^[%+%-]?%s*%d+%s*" .. escapedName .. "%s*$") ~= nil
+                                or clean:match("^" .. escapedName .. "%s*[%+%-]?%s*%d+%s*$") ~= nil then
+                                return true
+                            end
+                        end
+                        return false
+                    end)
+                end
 
                 if primaryAttr then
                     local name = ATTR_NAMES[primaryAttr.type] or ("属性" .. tostring(primaryAttr.type))
@@ -2519,16 +2673,22 @@ local function ApplyTemplateStatsToOfficialLines(tooltip, templateData)
 
                 if not replaced then
                     local equipIndex, equipAttr = FindUnusedTemplateAttr(templateData, usedAttrs, function(attr)
-                        local name = ATTR_NAMES[attr.type] or ("属性" .. tostring(attr.type))
-                        return clean:find(name, 1, true) and (clean:find("装备", 1, true) or clean:find("提高", 1, true))
+                        local hasName = CleanTextHasAttrName(clean, attr.type)
+                        return hasName and (clean:find("装备", 1, true) or clean:find("提高", 1, true))
                     end)
 
                     if equipAttr then
-                        local newText, didReplace = ReplaceFirstNumber(clean, equipAttr.value)
-                        if didReplace then
-                            leftText:SetText(newText)
+                        if equipAttr.type == 43 or equipAttr.type == 46 then
+                            leftText:SetText(FormatOfficialEquipStyleLine(equipAttr.type, equipAttr.value))
                             usedAttrs[equipIndex] = true
                             replaced = true
+                        else
+                            local newText, didReplace = ReplaceFirstNumber(clean, equipAttr.value)
+                            if didReplace then
+                                leftText:SetText(newText)
+                                usedAttrs[equipIndex] = true
+                                replaced = true
+                            end
                         end
                     end
                 end
@@ -2556,7 +2716,85 @@ local function ApplyTemplateStatsToOfficialLines(tooltip, templateData)
         end
     end
 
+    AnnotateCustomCompareLines(tooltip, templateData)
+
     return usedAttrs, usedArmor, usedDamage
+end
+
+local function InsertTemplateLinesBeforeDescription(tooltip, lines)
+    if not tooltip or not lines or #lines == 0 or not tooltip.GetName or not tooltip.NumLines then
+        return false
+    end
+
+    local tooltipName = tooltip:GetName()
+    if not tooltipName then
+        return false
+    end
+
+    local captured = {}
+    local descriptionIndex = nil
+
+    for i = 1, tooltip:NumLines() do
+        local left = _G[tooltipName .. "TextLeft" .. i]
+        local right = _G[tooltipName .. "TextRight" .. i]
+        local leftText = left and left:GetText() or ""
+        local rightText = right and right:GetText() or ""
+        -- 【修复】GetTextColor() 返回 r,g,b,a 四个值，
+        -- 但放在逗号分隔列表的非末位时，只会取首个返回值（红色分量），
+        -- 导致绿字 (0,1,0) 被读成 (0,0,0) 显示成黑色。必须先调用一次再解构。
+        local lr, lg, lb = 1, 1, 1
+        if left and left.GetTextColor then
+            lr, lg, lb = left:GetTextColor()
+        end
+        local rr, rg, rb = 1, 1, 1
+        if right and right.GetTextColor then
+            rr, rg, rb = right:GetTextColor()
+        end
+
+        captured[#captured + 1] = {
+            leftText = leftText,
+            rightText = rightText,
+            leftColor = { lr, lg, lb },
+            rightColor = { rr, rg, rb }
+        }
+
+        if not descriptionIndex and leftText and leftText ~= "" then
+            local plain = StripColorCodes(leftText) or leftText
+            if plain:sub(1, 1) == "\"" or plain:sub(1, 1) == "“" then
+                descriptionIndex = i
+            end
+        end
+    end
+
+    if not descriptionIndex then
+        return false
+    end
+
+    tooltip:ClearLines()
+
+    for i, entry in ipairs(captured) do
+        if i == descriptionIndex then
+            for _, line in ipairs(lines) do
+                tooltip:AddLine(line, 0, 1, 0)
+            end
+        end
+
+        if entry.leftText ~= "" or entry.rightText ~= "" then
+            if entry.rightText ~= "" then
+                tooltip:AddDoubleLine(
+                    entry.leftText,
+                    entry.rightText,
+                    entry.leftColor[1], entry.leftColor[2], entry.leftColor[3],
+                    entry.rightColor[1], entry.rightColor[2], entry.rightColor[3]
+                )
+            else
+                tooltip:AddLine(entry.leftText, entry.leftColor[1], entry.leftColor[2], entry.leftColor[3])
+            end
+        end
+    end
+
+    tooltip:Show()
+    return true
 end
 
 -- 渲染鉴定基础属性
@@ -3131,6 +3369,82 @@ local function DoSendQuery(itemID, bag, slot, key, guid, fingerprint, isInspectO
     end)
 end
 
+local function SendTemplateQuery(itemID, key, fingerprint)
+    if not itemID or not key then
+        return
+    end
+
+    local shouldSkip = ShouldSkipQuery(key)
+    if shouldSkip then
+        return
+    end
+
+    local now = GetTime()
+    State.queryId = State.queryId + 1
+    local queryId = State.queryId
+
+    State.lastQuery[key] = now
+    State.pending[key] = {
+        started = now,
+        systems = {
+            templateStats = now
+        },
+        queryId = queryId,
+        queryStartTime = now,
+        bag = nil,
+        slot = nil,
+        itemID = itemID,
+        guid = 0,
+        fingerprint = fingerprint,
+        isTemplateOnly = true
+    }
+
+    if not State.itemIdToKeys then
+        State.itemIdToKeys = {}
+    end
+    if not State.itemIdToKeys[itemID] then
+        State.itemIdToKeys[itemID] = {}
+    end
+
+    local found = false
+    for _, mappedKey in ipairs(State.itemIdToKeys[itemID]) do
+        if mappedKey == key then
+            found = true
+            break
+        end
+    end
+    if not found then
+        table.insert(State.itemIdToKeys[itemID], key)
+    end
+
+    local addonMessage = string.format("QUERY_TEMPLATE:%d", itemID)
+    TraceLog(itemID, "SendTemplateQuery queryId=%s key=%s msg=%s", tostring(queryId), tostring(key), tostring(addonMessage))
+
+    if SendAddonMessage then
+        SendAddonMessage(ADDON_PREFIX, addonMessage, "WHISPER", UnitName("player"))
+    elseif C_ChatInfo and C_ChatInfo.SendAddonMessage then
+        C_ChatInfo.SendAddonMessage(ADDON_PREFIX, addonMessage, "WHISPER", UnitName("player"))
+    end
+
+    C_Timer.After(DB.timeout, function()
+        if State.pending[key] and State.pending[key].started == now then
+            State.cache[key] = State.cache[key] or {
+                itemID = itemID,
+                guid = 0,
+                systems = {}
+            }
+            State.cache[key].systems.templateStats = State.cache[key].systems.templateStats or {
+                type = "templateStats",
+                itemID = itemID,
+                guid = 0,
+                isEmpty = true
+            }
+            State.pending[key] = nil
+            State.noDataUntil[key] = nil
+        end
+    end)
+end
+
 -- 发送查询（已移除限流机制）
 -- 【修改】使用 bag:slot:itemID 作为查询参数，而不是GUID
 -- 【新增】guid参数用于精确匹配服务器响应
@@ -3223,6 +3537,225 @@ local function ClearTooltipMeta(tooltip)
     State.tooltips[tooltip] = nil
 end
 
+local DeferredTooltipLayoutFrame = CreateFrame("Frame")
+local PendingTooltipLayouts = {}
+
+local function CaptureTooltipLines(tooltip)
+    local tooltipName = tooltip and tooltip.GetName and tooltip:GetName()
+    if not tooltipName then
+        return nil
+    end
+
+    local captured = {}
+    for i = 1, tooltip:NumLines() do
+        local left = _G[tooltipName .. "TextLeft" .. i]
+        local right = _G[tooltipName .. "TextRight" .. i]
+        local lr, lg, lb = 1, 1, 1
+        local rr, rg, rb = 1, 1, 1
+
+        if left and left.GetTextColor then
+            lr, lg, lb = left:GetTextColor()
+        end
+        if right and right.GetTextColor then
+            rr, rg, rb = right:GetTextColor()
+        end
+
+        captured[#captured + 1] = {
+            leftText = left and left:GetText() or "",
+            rightText = right and right:GetText() or "",
+            leftColor = { lr, lg, lb },
+            rightColor = { rr, rg, rb }
+        }
+    end
+
+    return captured
+end
+
+local function RebuildTooltipFromCaptured(tooltip, captured)
+    if not tooltip or not captured then
+        return
+    end
+
+    tooltip:ClearLines()
+
+    for _, entry in ipairs(captured) do
+        if entry.leftText ~= "" or entry.rightText ~= "" then
+            if entry.rightText ~= "" then
+                tooltip:AddDoubleLine(
+                    entry.leftText,
+                    entry.rightText,
+                    entry.leftColor[1], entry.leftColor[2], entry.leftColor[3],
+                    entry.rightColor[1], entry.rightColor[2], entry.rightColor[3]
+                )
+            else
+                tooltip:AddLine(entry.leftText, entry.leftColor[1], entry.leftColor[2], entry.leftColor[3])
+            end
+        end
+    end
+
+    tooltip:Show()
+end
+
+local function NormalizeRegenLineText(text)
+    local normalized = tostring(text or "")
+    normalized = normalized:gsub("每5秒恢复([%d%.]+)点生命值", "每3秒恢复%1点生命值")
+    normalized = normalized:gsub("每5秒恢复([%d%.]+)点法力值", "每3秒恢复%1点法力值")
+    normalized = normalized:gsub("每5秒回复([%d%.]+)点生命值", "每3秒恢复%1点生命值")
+    normalized = normalized:gsub("每5秒回复([%d%.]+)点法力值", "每3秒恢复%1点法力值")
+    return normalized
+end
+
+local function IsAllIDInfoLine(text)
+    local plain = StripColorCodes(text or "") or tostring(text or "")
+    return plain:find("物品 ID", 1, true)
+        or plain:find("图标名称", 1, true)
+        or plain:find("槽位编号", 1, true)
+end
+
+local function IsDescriptionLine(text)
+    local plain = StripColorCodes(text or "") or tostring(text or "")
+    local first = plain:sub(1, 1)
+    return first == "\"" or first == "“"
+end
+
+local function IsCustomInsertedLine(text)
+    local plain = StripColorCodes(text or "") or tostring(text or "")
+    return plain:find("每3秒恢复", 1, true)
+        or plain:find("真实伤害提高", 1, true)
+        or plain:find("切割伤害提高", 1, true)
+        or plain:find("冷却缩减提高", 1, true)
+        or plain:find("技能伤害提高", 1, true)
+end
+
+local function IsRegenLine(text)
+    local plain = StripColorCodes(text or "") or tostring(text or "")
+    return plain:find("恢复", 1, true)
+        and (plain:find("生命值", 1, true) or plain:find("法力值", 1, true))
+end
+
+local function FinalizeTooltipLayout(tooltip)
+    if not tooltip or not tooltip.IsShown or not tooltip:IsShown() then
+        return
+    end
+
+    local captured = CaptureTooltipLines(tooltip)
+    if not captured or #captured == 0 then
+        return
+    end
+
+    local descriptionIndex = nil
+    local allIdIndex = nil
+    -- 标记本次扫描中是否真的改动了任何文本（NormalizeRegenLineText 把"每5秒"改写成"每3秒"）
+    -- 只有真的改动过才需要重建 tooltip，避免与 AllID 等其他 tooltip 插件每帧互相刷新闪烁
+    local needsRegenRewrite = false
+
+    for i, entry in ipairs(captured) do
+        local origLeft = entry.leftText
+        local origRight = entry.rightText
+        entry.leftText = NormalizeRegenLineText(origLeft)
+        entry.rightText = NormalizeRegenLineText(origRight)
+        if entry.leftText ~= origLeft or entry.rightText ~= origRight then
+            needsRegenRewrite = true
+        end
+
+        if not descriptionIndex and IsDescriptionLine(entry.leftText) then
+            descriptionIndex = i
+        end
+        if not allIdIndex and IsAllIDInfoLine(entry.leftText) then
+            allIdIndex = i
+        end
+    end
+
+    local insertIndex = nil
+    if descriptionIndex and allIdIndex then
+        insertIndex = math.min(descriptionIndex, allIdIndex)
+    else
+        insertIndex = descriptionIndex or allIdIndex
+    end
+
+    -- 没有可作为锚点的描述/AllID 行：除非有 regen 文本要改写，否则直接返回，
+    -- 不再无谓地 ClearLines + 重建（这是 AllID 与本插件来回刷新闪烁的根因）
+    if not insertIndex then
+        if needsRegenRewrite then
+            RebuildTooltipFromCaptured(tooltip, captured)
+        end
+        return
+    end
+
+    local movedLines = {}
+    local rebuilt = {}
+
+    for i, entry in ipairs(captured) do
+        local customInserted = IsCustomInsertedLine(entry.leftText)
+        if customInserted and i >= insertIndex then
+            if not IsRegenLine(entry.leftText) then
+                movedLines[#movedLines + 1] = entry
+            end
+        else
+            rebuilt[#rebuilt + 1] = entry
+        end
+    end
+
+    -- 没有需要前移的自定义属性行：等价于 rebuilt == captured；
+    -- 没有任何变化时直接返回，避免每帧 ClearLines→Show 触发与 AllID 相互刷新的闪烁
+    if #movedLines == 0 then
+        if needsRegenRewrite then
+            RebuildTooltipFromCaptured(tooltip, rebuilt)
+        end
+        return
+    end
+
+    local finalLines = {}
+    local inserted = false
+    for _, entry in ipairs(rebuilt) do
+        if not inserted and (IsDescriptionLine(entry.leftText) or IsAllIDInfoLine(entry.leftText)) then
+            for _, moved in ipairs(movedLines) do
+                finalLines[#finalLines + 1] = moved
+            end
+            inserted = true
+        end
+        finalLines[#finalLines + 1] = entry
+    end
+
+    if not inserted then
+        for _, moved in ipairs(movedLines) do
+            finalLines[#finalLines + 1] = moved
+        end
+    end
+
+    RebuildTooltipFromCaptured(tooltip, finalLines)
+end
+
+local function ScheduleTooltipLayoutFix(tooltip)
+    if not tooltip then
+        return
+    end
+
+    PendingTooltipLayouts[tooltip] = 4
+
+    DeferredTooltipLayoutFrame:SetScript("OnUpdate", function(self)
+        local stillPending = false
+
+        for pendingTooltip, remaining in pairs(PendingTooltipLayouts) do
+            if pendingTooltip and pendingTooltip.IsShown and pendingTooltip:IsShown() then
+                FinalizeTooltipLayout(pendingTooltip)
+            end
+
+            remaining = (remaining or 0) - 1
+            if remaining > 0 then
+                PendingTooltipLayouts[pendingTooltip] = remaining
+                stillPending = true
+            else
+                PendingTooltipLayouts[pendingTooltip] = nil
+            end
+        end
+
+        if not stillPending then
+            self:SetScript("OnUpdate", nil)
+        end
+    end)
+end
+
 -- 统一渲染所有基础属性（鉴定、强化、成长）
 local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
     -- 收集所有基础属性相关的数据
@@ -3239,13 +3772,9 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
     -- 只收集鉴定系统的属性（不混入强化和成长）
     local baseAttributes = {}
     local additionalAttributes = {}
-
     if templateData and not templateData.isEmpty then
         ApplyTemplateStatsToOfficialLines(tooltip, templateData)
     end
-
-    -- 官方基础属性（如力量/敏捷/智力/耐力/精神），用于和幻境倍率一起显示
-    local officialBaseAttributes = {}
 
     -- 1. 收集鉴定系统的基础属性
     if identData and identData.baseAttributes and #identData.baseAttributes > 0 then
@@ -3274,32 +3803,6 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
     do
         local key = MakeKey(cached.itemID, cached.guid, nil, nil, false)
         hjData = HuanJingGetData and HuanJingGetData(key) or nil
-    end
-
-    -- 从提示框元数据中获取官方基础属性（力量/敏捷/智力/耐力/精神），配合幻境倍率展示
-    if meta and meta.officialStats and hjData and HasHuanJingEffect(hjData.multiplier, hjData.mode) then
-        local stats = meta.officialStats
-        local mult = hjData.multiplier
-
-        local baseStatConfig = {
-            { key = "ITEM_MOD_STRENGTH_SHORT",  name = ITEM_MOD_STRENGTH_SHORT or "力量" },
-            { key = "ITEM_MOD_AGILITY_SHORT",   name = ITEM_MOD_AGILITY_SHORT or "敏捷" },
-            { key = "ITEM_MOD_INTELLECT_SHORT", name = ITEM_MOD_INTELLECT_SHORT or "智力" },
-            { key = "ITEM_MOD_STAMINA_SHORT",   name = ITEM_MOD_STAMINA_SHORT or "耐力" },
-            { key = "ITEM_MOD_SPIRIT_SHORT",    name = ITEM_MOD_SPIRIT_SHORT or "精神" },
-        }
-
-        for _, conf in ipairs(baseStatConfig) do
-            local amount = stats[conf.key]
-            if amount and amount ~= 0 then
-                table.insert(officialBaseAttributes, {
-                    name = conf.name,
-                    value = amount,
-                    multiplier = mult,
-                    mode = hjData.mode
-                })
-            end
-        end
     end
 
     -- 结合幻境系统数据：按顺序为基础属性和追加属性记录“原值/增强值”
@@ -3355,16 +3858,12 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
     end
 
     -- 直接在官方属性之后追加展示鉴定系统的基础属性
-    local hasBaseSection = (#officialBaseAttributes > 0) or (#baseAttributes > 0)
+    local hasVisibleBaseSection = (#baseAttributes > 0)
+    local hasBaseSection = hasVisibleBaseSection
     if hasBaseSection then
-        tooltip:AddLine(" ")
-        tooltip:AddLine(DB.colors.header .. "基础属性" .. DB.colors.reset)
-
-        for _, attr in ipairs(officialBaseAttributes) do
-            local baseValue = attr.value
-            local mult = attr.multiplier
-            local mode = attr.mode
-            tooltip:AddLine(FormatTooltipStatLine(attr.name, baseValue, mult, mode), 0, 1, 0)
+        if hasVisibleBaseSection then
+            tooltip:AddLine(" ")
+            tooltip:AddLine(DB.colors.header .. "基础属性" .. DB.colors.reset)
         end
 
         for index, attr in ipairs(baseAttributes) do
@@ -3474,6 +3973,7 @@ local function RenderUnifiedBaseAttributes(tooltip, cached, meta)
     meta.rendered.templateStats = true
 
     tooltip:Show()
+    ScheduleTooltipLayoutFix(tooltip)
 end
 
 local function TooltipHasPendingIdentifyLine(tooltip)
@@ -3789,7 +4289,7 @@ local function OnAddonMessage(self, event, prefix, message, channel, sender)
     local receiveTime = GetTime()
     
     -- 修复：忽略自己发出的查询消息（格式：QUERY:itemID:guid）
-    if message:match("^QUERY:") or message:match("^INSPECT_ITEM_GUID:") then
+    if message:match("^QUERY:") or message:match("^QUERY_TEMPLATE:") or message:match("^INSPECT_ITEM_GUID:") then
         return
     end
 
@@ -6076,6 +6576,7 @@ local function OnTooltipSetItem(tooltip)
     -- 统一使用位置信息生成缓存键
     local key
     local isChatLink = false  -- 标记是否为聊天框链接
+    local isTemplateOnly = false
     -- 【飞升系统支持】飞升系统的物品强制使用GUID格式
     if isInspectOther and guid and guid > 0 then
         isChatLink = true
@@ -6091,10 +6592,11 @@ local function OnTooltipSetItem(tooltip)
         isChatLink = true
         key = MakeKey(itemID, guid, nil, nil, false)
     else
-        -- 没有位置信息且没有有效GUID，可能是聊天框链接
-        -- 使用物品指纹作为缓存键（仅用于显示提示，不进行查询）
+        -- 没有位置信息且没有有效GUID，例如任务奖励预览。
+        -- 使用 itemID 级模板缓存，并向服务端查询 item_template 的 TPL64 数据。
         isChatLink = true
-        key = "CHAT:" .. tooltipItemString
+        isTemplateOnly = true
+        key = "T:" .. itemID
     end
 
     -- 【调试日志】缓存键生成结果
@@ -6288,7 +6790,9 @@ local function OnTooltipSetItem(tooltip)
 
     if not hasCompleteCache then
         -- 聊天框链接处理：如果有有效GUID可以使用GUID格式查询
-        if isChatLink then
+        if isTemplateOnly then
+            SendTemplateQuery(itemID, key, tooltipItemString)
+        elseif isChatLink then
             -- 【修复】聊天框链接也可以查询，只要有有效GUID
             if guid and guid > 0 then
                 -- 【调试日志】聊天框链接有GUID，尝试查询
@@ -6393,7 +6897,7 @@ local function OnTooltipSetItem(tooltip)
         renderSlot = nil
     end
 
-    if key and guid and guid > 0 and (isInspectOther or (renderBag == nil and renderSlot == nil)) then
+    if key and (isTemplateOnly or (guid and guid > 0 and (isInspectOther or (renderBag == nil and renderSlot == nil)))) then
         GetTooltipMeta(tooltip, key)
     end
     RenderTooltip(tooltip, itemID, guid, renderBag, renderSlot)

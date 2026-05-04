@@ -237,6 +237,24 @@ public:
 
         uint32 entry = quest->GetQuestId();
 
+        // 黑名单: 禁止 .quest complete 直接完成 modules/物品数据 模块下的任务.
+        // 这些任务 (远古战袍 70001-71000, 远古衬衫 71001-72000) 需求量极大且物品可出售换钱,
+        // 用 .quest complete 一键完成会被反复利用刷金币 (接取->complete->卖出->放弃->再接取).
+        // 如需新增其他黑名单区段, 在下方数组追加 {start, end} 即可.
+        static constexpr struct { uint32 start; uint32 end; } kBlockedQuestRanges[] = {
+            { 70001, 72000 }, // modules/物品数据 (远古战袍/衬衫任务框架)
+        };
+        for (auto const& range : kBlockedQuestRanges)
+        {
+            if (entry >= range.start && entry <= range.end)
+            {
+                handler->PSendSysMessage("[.quest complete] 任务 [{}] (entry {}) 属于受保护区段 [{}, {}], 命令拒绝执行. 请让玩家正常完成任务.",
+                    quest->GetTitle(), entry, range.start, range.end);
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+        }
+
         if (Player* player = playerTarget->GetConnectedPlayer())
         {
             // If player doesn't have the quest
@@ -246,7 +264,9 @@ public:
                 return false;
             }
 
-            // Add quest items for quests that require items
+            // Add quest items strictly based on the quest's RequiredItemCount.
+            // 严格按照任务 RequiredItemCount 补足玩家持有量, 不依赖物品堆叠上限,
+            // 防止玩家通过 接取->.quest complete->出售->放弃->再接取 的循环刷金币.
             for (uint8 x = 0; x < QUEST_ITEM_OBJECTIVES_COUNT; ++x)
             {
                 uint32 id    = quest->RequiredItemId[x];
@@ -256,19 +276,84 @@ public:
                     continue;
                 }
 
-                uint32 curItemCount = player->GetItemCount(id, true);
-
-                // Only add items if player doesn't have enough
-                if (curItemCount < count)
+                // 校验物品模板, 缺失的物品直接告警跳过, 避免 CreateItem 失败后吞掉错误.
+                ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(id);
+                if (!itemTemplate)
                 {
-                    uint32 needCount = count - curItemCount;
-                    ItemPosCountVec dest;
-                    uint8 msg = player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, id, needCount);
-                    if (msg == EQUIP_ERR_OK)
+                    handler->PSendSysMessage("[.quest complete] 任务 {} 物品 entry={}: 物品模板不存在, 已跳过.",
+                        entry, id);
+                    continue;
+                }
+
+                // 统计玩家当前持有数 (背包 + 银行 + 钥匙链/货币槽), 与任务要求做严格比较.
+                uint32 curItemCount = player->GetItemCount(id, true);
+                if (curItemCount >= count)
+                {
+                    // 已经满足或超出任务要求, 不再补任何物品 (避免被反复刷出再卖钱).
+                    continue;
+                }
+
+                // 仅补足差额, 使用无符号差防止下溢.
+                uint32 needCount = count - curItemCount;
+
+                // 受 item_template.MaxCount (单人持有上限) 约束: <= 0 表示无限制.
+                if (itemTemplate->MaxCount > 0)
+                {
+                    uint32 ownerLimit = static_cast<uint32>(itemTemplate->MaxCount);
+                    if (curItemCount >= ownerLimit)
                     {
-                        Item* item = player->StoreNewItem(dest, id, true);
-                        player->SendNewItem(item, needCount, true, false);
+                        handler->PSendSysMessage("[.quest complete] 物品 [{}] (entry {}): 已达单人持有上限 MaxCount={}, 跳过补充.",
+                            itemTemplate->Name1, id, ownerLimit);
+                        continue;
                     }
+                    uint32 allowedAdd = ownerLimit - curItemCount;
+                    if (needCount > allowedAdd)
+                    {
+                        handler->PSendSysMessage("[.quest complete] 物品 [{}] (entry {}): 受 MaxCount={} 限制, 任务需求差额 {} 但只能补 {}.",
+                            itemTemplate->Name1, id, ownerLimit, needCount, allowedAdd);
+                        needCount = allowedAdd;
+                    }
+                }
+
+                // 尝试占位; no_space_count 反馈出无法放下的数量, 便于做部分补充.
+                ItemPosCountVec dest;
+                uint32 noSpaceCount = 0;
+                InventoryResult msg = player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, id, needCount, &noSpaceCount);
+
+                if (msg != EQUIP_ERR_OK)
+                {
+                    // 完全放不下: 尝试只补可放下的部分, 仍放不下则报错放弃该物品.
+                    if (noSpaceCount >= needCount)
+                    {
+                        handler->PSendSysMessage("[.quest complete] 物品 [{}] (entry {}): 玩家背包/银行已满, 无法补充 {} 个 (错误码 {}).",
+                            itemTemplate->Name1, id, needCount, uint32(msg));
+                        continue;
+                    }
+
+                    uint32 fitCount = needCount - noSpaceCount;
+                    dest.clear();
+                    msg = player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, id, fitCount);
+                    if (msg != EQUIP_ERR_OK || fitCount == 0)
+                    {
+                        handler->PSendSysMessage("[.quest complete] 物品 [{}] (entry {}): 无法存储任意数量 (错误码 {}).",
+                            itemTemplate->Name1, id, uint32(msg));
+                        continue;
+                    }
+
+                    if (Item* item = player->StoreNewItem(dest, id, true))
+                    {
+                        player->SendNewItem(item, fitCount, true, false);
+                        handler->PSendSysMessage("[.quest complete] 物品 [{}] (entry {}): 部分补充 {}/{} (剩余 {} 个空间不足).",
+                            itemTemplate->Name1, id, fitCount, needCount, noSpaceCount);
+                    }
+                    continue;
+                }
+
+                if (Item* item = player->StoreNewItem(dest, id, true))
+                {
+                    player->SendNewItem(item, needCount, true, false);
+                    handler->PSendSysMessage("[.quest complete] 物品 [{}] (entry {}): 已补充 {} 个 (持有 {}/{}).",
+                        itemTemplate->Name1, id, needCount, curItemCount + needCount, count);
                 }
             }
 
@@ -368,7 +453,58 @@ public:
                     continue;
                 }
 
-                questItems.emplace_back(id, count);
+                ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(id);
+                if (!itemTemplate)
+                {
+                    handler->PSendSysMessage("[.quest complete] (离线) 任务 {} 物品 entry={}: 物品模板不存在, 已跳过.",
+                        entry, id);
+                    continue;
+                }
+
+                // 离线场景下查 character_inventory + item_instance, 统计玩家已持有的同类物品总量.
+                // 仅按差额补发, 防止反复执行后角色登录时累积过多物品被卖出换金.
+                uint32 curItemCount = 0;
+                if (QueryResult invResult = CharacterDatabase.Query(
+                    "SELECT CAST(COALESCE(SUM(ii.count), 0) AS UNSIGNED) FROM character_inventory ci "
+                    "INNER JOIN item_instance ii ON ii.guid = ci.item "
+                    "WHERE ii.itemEntry = {} AND ii.owner_guid = {}", id, guid))
+                {
+                    Field* fields = invResult->Fetch();
+                    uint64 raw = fields[0].Get<uint64>();
+                    curItemCount = raw > std::numeric_limits<uint32>::max()
+                        ? std::numeric_limits<uint32>::max()
+                        : static_cast<uint32>(raw);
+                }
+
+                if (curItemCount >= count)
+                {
+                    continue;
+                }
+
+                uint32 needCount = count - curItemCount;
+
+                // 受 item_template.MaxCount 单人持有上限约束.
+                if (itemTemplate->MaxCount > 0)
+                {
+                    uint32 ownerLimit = static_cast<uint32>(itemTemplate->MaxCount);
+                    if (curItemCount >= ownerLimit)
+                    {
+                        handler->PSendSysMessage("[.quest complete] (离线) 物品 [{}] (entry {}): 已达单人持有上限 MaxCount={}, 跳过补发.",
+                            itemTemplate->Name1, id, ownerLimit);
+                        continue;
+                    }
+                    uint32 allowedAdd = ownerLimit - curItemCount;
+                    if (needCount > allowedAdd)
+                    {
+                        handler->PSendSysMessage("[.quest complete] (离线) 物品 [{}] (entry {}): 受 MaxCount={} 限制, 差额 {} 但只能补 {}.",
+                            itemTemplate->Name1, id, ownerLimit, needCount, allowedAdd);
+                        needCount = allowedAdd;
+                    }
+                }
+
+                questItems.emplace_back(id, needCount);
+                handler->PSendSysMessage("[.quest complete] (离线) 物品 [{}] (entry {}): 准备邮件补发 {} 个 (已有 {}/{}).",
+                    itemTemplate->Name1, id, needCount, curItemCount, count);
             }
 
             if (!questItems.empty())

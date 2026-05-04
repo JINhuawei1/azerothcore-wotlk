@@ -236,9 +236,9 @@ local ENTRY_DEFS = {
     AttrEntry(44, "armorPenetrationRating", "护甲穿透", "melee", { "ARMOR_PENETRATION", "ARMOR_PENETRATION_RATING" }, function() return GetCombatRatingValue(CR_ARMOR_PENETRATION or 25) end),
     AttrEntry(41, "spellHealingDone", "法术治疗", "spell", { "SPELL_HEALING", "SPELL_HEALING_DONE" }, function() return math.floor(tonumber(GetSpellBonusHealing and GetSpellBonusHealing()) or 0) end),
     AttrEntry(42, "spellDamageDone", "法术伤害", "spell", { "SPELL_DAMAGE", "SPELL_DAMAGE_DONE" }, GetSpellPowerValue),
-    AttrEntry(43, "manaRegen", "法力回复", "resource", { "MANA_REGENERATION", "MANA_REGEN" }, nil),
+    AttrEntry(43, "manaRegen", "每3秒法力回复", "resource", { "MANA_REGENERATION", "MANA_REGEN" }, nil),
     AttrEntry(45, "spellPower", "法术强度", "spell", { "SPELL_POWER" }, GetSpellPowerValue),
-    AttrEntry(46, "healthRegen", "生命回复", "resource", { "HEALTH_REGEN" }, nil),
+    AttrEntry(46, "healthRegen", "每3秒生命回复", "resource", { "HEALTH_REGEN" }, nil),
     AttrEntry(47, "spellPenetration", "法术穿透", "spell", { "SPELL_PENETRATION" }, function()
         if GetSpellPenetration then
             return math.floor(tonumber(GetSpellPenetration()) or 0)

@@ -23,6 +23,8 @@
 #include <chrono>
 #include <set>
 #include <iomanip>
+#include <algorithm>
+#include <cmath>
 
 // 模块集成 - 自动检测可用的模块并定义宏
 // 使用 __has_include 检测头文件是否存在，避免依赖CMake宏定义
@@ -1139,6 +1141,254 @@ uint32 GetIdentificationTemplateMatchLevel(Item* item)
 }
 
 #ifdef MODULE_ITEM_ATTRIBUTES
+uint32 GetOfficialStatReferenceValue(Item* item, uint32 attributeType)
+{
+    if (!item || !item->GetTemplate())
+        return 1;
+
+    ItemTemplate const* proto = item->GetTemplate();
+    std::vector<uint32> values;
+    uint32 matchedValue = 0;
+
+    for (uint32 i = 0; i < proto->StatsCount && i < MAX_ITEM_PROTO_STATS; ++i)
+    {
+        uint32 statType = proto->ItemStat[i].ItemStatType;
+        int32 statValue = proto->ItemStat[i].ItemStatValue;
+
+        if (statType == 0 || statValue <= 0)
+            continue;
+
+        uint32 value = static_cast<uint32>(statValue);
+        values.push_back(value);
+
+        if (statType == attributeType)
+            matchedValue = std::max(matchedValue, value);
+    }
+
+    if (matchedValue > 0)
+        return matchedValue;
+
+    if (!values.empty())
+    {
+        std::sort(values.begin(), values.end());
+        size_t middle = values.size() / 2;
+
+        if (values.size() % 2 == 1)
+            return values[middle];
+
+        uint64 median = (static_cast<uint64>(values[middle - 1]) + values[middle]) / 2;
+        return std::max<uint64>(1, median);
+    }
+
+    uint32 itemLevelFallback = proto->ItemLevel / 4;
+    return std::max<uint32>(1, itemLevelFallback);
+}
+
+int32 CalculateOfficialPercentAttributeValue(Item* item, uint32 attributeType, uint32 minPercent, uint32 maxPercent)
+{
+    if (minPercent > maxPercent)
+        std::swap(minPercent, maxPercent);
+
+    uint32 percent = GenerateRandomNumber(minPercent, maxPercent);
+    uint32 referenceValue = GetOfficialStatReferenceValue(item, attributeType);
+    double scaledValue = static_cast<double>(referenceValue) * static_cast<double>(percent) / 100.0;
+    int64 value = static_cast<int64>(std::llround(scaledValue));
+
+    if (percent > 0 && value < 1)
+        value = 1;
+
+    if (value > std::numeric_limits<int32>::max())
+        value = std::numeric_limits<int32>::max();
+
+    return static_cast<int32>(value);
+}
+
+std::vector<ItemAttributeTemplate const*> GetIdentificationAttributeCandidates(
+    Item* item,
+    std::vector<uint32> const& attributeGroups,
+    std::set<uint32> const& selectedTypes,
+    bool allowDuplicateTypes,
+    bool respectChance)
+{
+    std::vector<ItemAttributeTemplate const*> candidates;
+    std::vector<ItemAttributeTemplate const*> chanceFiltered;
+    std::set<uint32> seenTemplateIds;
+
+    if (!item || !sItemAttributesLoader)
+        return candidates;
+
+    for (uint32 groupId : attributeGroups)
+    {
+        std::vector<ItemAttributeTemplate const*> groupTemplates = sItemAttributesLoader->GetItemAttributeTemplatesByGroup(groupId);
+        for (ItemAttributeTemplate const* attributeTemplate : groupTemplates)
+        {
+            if (!attributeTemplate || seenTemplateIds.find(attributeTemplate->id) != seenTemplateIds.end())
+                continue;
+
+            seenTemplateIds.insert(attributeTemplate->id);
+
+            if (!allowDuplicateTypes && selectedTypes.find(attributeTemplate->attributeType) != selectedTypes.end())
+                continue;
+
+            if (attributeTemplate->qualityRequirement > 0 && item->GetTemplate()->Quality < attributeTemplate->qualityRequirement)
+                continue;
+
+            if (attributeTemplate->levelRequirement > 0 && item->GetTemplate()->ItemLevel < attributeTemplate->levelRequirement)
+                continue;
+
+            if (attributeTemplate->classRequirement > 0 && !(item->GetTemplate()->AllowableClass & attributeTemplate->classRequirement))
+                continue;
+
+            if (item->GetTemplate()->Class == ITEM_CLASS_WEAPON && attributeTemplate->attributeType == 12)
+                continue;
+
+            if (item->GetTemplate()->Class == ITEM_CLASS_ARMOR &&
+                attributeTemplate->attributeType >= 121 && attributeTemplate->attributeType <= 134)
+                continue;
+
+            candidates.push_back(attributeTemplate);
+
+            if (!respectChance || GenerateRandomNumber(1, 100) <= attributeTemplate->chance)
+                chanceFiltered.push_back(attributeTemplate);
+        }
+    }
+
+    if (!chanceFiltered.empty())
+        candidates = chanceFiltered;
+
+    std::shuffle(candidates.begin(), candidates.end(), sItemIdentificationSystem->GetRandomGenerator());
+    return candidates;
+}
+
+uint32 ApplyOfficialPercentAdditionalAttributes(
+    Item* item,
+    IdentificationTemplate const& tmpl,
+    std::vector<uint32> const& attributeGroups,
+    uint32 attrCount)
+{
+    if (!item || !sItemAttributesLoader || attrCount == 0)
+        return 0;
+
+    uint32 appliedCount = 0;
+    std::set<uint32> selectedTypes;
+    uint32 maxAttempts = std::max<uint32>(attrCount * 8, 8);
+
+    for (uint32 attempt = 0; appliedCount < attrCount && attempt < maxAttempts; ++attempt)
+    {
+        std::vector<ItemAttributeTemplate const*> candidates = GetIdentificationAttributeCandidates(
+            item,
+            attributeGroups,
+            selectedTypes,
+            tmpl.additionalAttrAllowDuplicate,
+            true);
+
+        if (candidates.empty())
+            break;
+
+        for (ItemAttributeTemplate const* attributeTemplate : candidates)
+        {
+            if (!attributeTemplate)
+                continue;
+
+            int32 value = CalculateOfficialPercentAttributeValue(
+                item,
+                attributeTemplate->attributeType,
+                tmpl.additionalAttrMinValue,
+                tmpl.additionalAttrMaxValue);
+
+            ItemAttributeResult result = sItemAttributesLoader->ApplyAttributeToItem(
+                item,
+                attributeTemplate->id,
+                nullptr,
+                AttributeCategory::ADDITIONAL,
+                value,
+                value);
+
+            if (result == ItemAttributeResult::SUCCESS)
+            {
+                selectedTypes.insert(attributeTemplate->attributeType);
+                ++appliedCount;
+                break;
+            }
+        }
+    }
+
+    return appliedCount;
+}
+
+uint32 ApplyOfficialPercentBaseAttributes(
+    Item* item,
+    IdentificationTemplate const& tmpl,
+    std::vector<uint32> const& attributeGroups,
+    uint32 attrCount,
+    std::string& outAttrDetails)
+{
+    if (!item || !sItemAttributesLoader || attrCount == 0)
+        return 0;
+
+    uint32 appliedCount = 0;
+    std::set<uint32> selectedTypes;
+    std::vector<uint32> baseAttributes;
+    std::vector<int32> baseValues;
+    uint32 maxAttempts = std::max<uint32>(attrCount * 8, 8);
+
+    for (uint32 attempt = 0; appliedCount < attrCount && attempt < maxAttempts; ++attempt)
+    {
+        std::vector<ItemAttributeTemplate const*> candidates = GetIdentificationAttributeCandidates(
+            item,
+            attributeGroups,
+            selectedTypes,
+            tmpl.baseAttrAllowDuplicate,
+            true);
+
+        if (candidates.empty())
+            break;
+
+        for (ItemAttributeTemplate const* attributeTemplate : candidates)
+        {
+            if (!attributeTemplate)
+                continue;
+
+            int32 value = CalculateOfficialPercentAttributeValue(
+                item,
+                attributeTemplate->attributeType,
+                tmpl.baseAttrMinValue,
+                tmpl.baseAttrMaxValue);
+
+            ItemAttributeResult result = sItemAttributesLoader->ApplyAttributeToItem(
+                item,
+                attributeTemplate->id,
+                nullptr,
+                AttributeCategory::BASE,
+                value,
+                value);
+
+            if (result == ItemAttributeResult::SUCCESS)
+            {
+                selectedTypes.insert(attributeTemplate->attributeType);
+                baseAttributes.push_back(attributeTemplate->attributeType);
+                baseValues.push_back(value);
+                ++appliedCount;
+                break;
+            }
+        }
+    }
+
+    if (!baseAttributes.empty() && baseAttributes.size() == baseValues.size())
+    {
+        std::ostringstream oss;
+        for (size_t i = 0; i < baseAttributes.size(); ++i)
+        {
+            oss << baseAttributes[i] << " " << baseValues[i];
+            if (i < baseAttributes.size() - 1)
+                oss << ",";
+        }
+        outAttrDetails = oss.str();
+    }
+
+    return appliedCount;
+}
+
 std::set<uint32> GetAllowedAttributeTypesByGroups(const std::vector<uint32>& attributeGroups)
 {
     std::set<uint32> allowedTypes;
@@ -1431,6 +1681,26 @@ void ItemIdentificationSystem::ApplyBaseAttributes(Player* player, Item* item, c
     DebugLog("属性数量: {}", attrCount);
     DebugLog("=================================");
 
+    // 百分比模式：基础属性最小/最大值表示官方属性百分比，和追加属性使用同一套数值口径。
+    if (tmpl.baseAttrMaxValue > 0 && tmpl.baseAttrMaxValue <= 300)
+    {
+        uint32 appliedCount = ApplyOfficialPercentBaseAttributes(item, tmpl, attributeGroups, attrCount, outAttrDetails);
+        if (appliedCount > 0)
+        {
+            outAttrCount = appliedCount;
+            outAttrGroup = selectedGroup;
+            DebugLog("成功应用基础属性百分比模式，组: {}，数量: {}", selectedGroup, appliedCount);
+        }
+        else
+        {
+            DebugLog("基础属性百分比模式应用失败");
+            outAttrDetails = "";
+            outAttrCount = 0;
+            outAttrGroup = 0;
+        }
+        return;
+    }
+
     ItemAttributeGenerateOptions options;
     options.minAttributes = attrCount;        // 最少属性数量
     options.maxAttributes = attrCount;        // 最多属性数量
@@ -1544,8 +1814,15 @@ uint32 ItemIdentificationSystem::ApplyAdditionalAttributes(Player* player, Item*
             }
         }
 
+        // 百分比模式：追加属性最小/最大值表示官方属性百分比，而不是固定属性值。
+        // 用于幻境鉴定模板，避免鉴定组随幻境等级平方级膨胀。
+        if (tmpl.additionalAttrMaxValue > 0 && tmpl.additionalAttrMaxValue <= 300)
+        {
+            appliedCount = ApplyOfficialPercentAdditionalAttributes(item, tmpl, attributeGroups, attrCount);
+            appliedCount = FilterItemAdditionalAttributesByGroups(item, attributeGroups);
+        }
         // 判断是单组还是多组模式
-        if (attributeGroups.size() == 1)
+        else if (attributeGroups.size() == 1)
         {
             // 单组模式：从同一个组生成多个属性
             ItemAttributeGenerateOptions options;
@@ -3011,6 +3288,12 @@ public:
             return;
         }
 
+        if (command.find("QUERY_TEMPLATE:") == 0)
+        {
+            HandleTemplateStatsRequest(player, command.substr(15));
+            return;
+        }
+
         // 解析QUERY命令
         if (command.find("QUERY:") != 0)
             return;
@@ -3202,6 +3485,49 @@ public:
     }
 
 private:
+    void HandleTemplateStatsRequest(Player* player, const std::string& params)
+    {
+        if (!player || !sItemIdentificationSystem || !sItemIdentificationSystem->_enabled)
+            return;
+
+        uint32 itemID = 0;
+        try
+        {
+            itemID = std::stoul(params);
+        }
+        catch (...)
+        {
+            return;
+        }
+
+        if (!itemID)
+            return;
+
+        std::string templateStatsData = BuildTemplateStatsData(itemID);
+        if (templateStatsData.empty())
+            return;
+
+        std::ostringstream response;
+        response << "ALL_MODULE_DATA:" << itemID << ":0:"
+                 << ":"  // baseAttributes
+                 << ":"  // additionalAttributes
+                 << ":"  // identificationDisplayData
+                 << ":"  // growthData
+                 << ":"  // enhancementData
+                 << ":"  // skillsData
+                 << ":"  // magicHitData
+                 << ":"  // runeData
+                 << ":"  // setData
+                 << ":"  // huanjingData
+                 << templateStatsData;
+
+        std::string fullMessage = "UITQ\t" + response.str();
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON,
+                                     player, player, fullMessage, 0);
+        player->SendDirectMessage(&data);
+    }
+
     // 处理查询其他玩家装备GUID的请求
     // 【安全修复】添加权限校验，防止未授权查看他人装备
     void HandleInspectItemGuidRequest(Player* requester, const std::string& params)
