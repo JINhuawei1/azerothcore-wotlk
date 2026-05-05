@@ -1,0 +1,27 @@
+[worldserver]
+
+#############################################
+#     物品回收模块配置
+#############################################
+
+# 是否启用物品回收模块
+ItemRecycle.Enable = 1
+
+# 是否启用调试模式
+ItemRecycle.DebugMode = 0
+
+# 自动回收检查间隔（毫秒）
+ItemRecycle.AutoCheckInterval = 5000
+
+# 默认自动回收间隔（秒）
+ItemRecycle.DefaultInterval = 60
+
+# 是否允许玩家自定义回收设置
+ItemRecycle.AllowCustomSettings = 1
+
+# 最小回收间隔（秒）
+ItemRecycle.MinInterval = 10
+
+# 最大回收间隔（秒）
+ItemRecycle.MaxInterval = 3600
+

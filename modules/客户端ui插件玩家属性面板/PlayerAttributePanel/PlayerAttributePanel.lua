@@ -55,7 +55,8 @@ local OFFICIAL_TARGET_POWER_TEXT_NAMES = {
     "TargetFrameTextureFrameManaBarTextRight"
 }
 
-local TARGET_REFRESH_INTERVAL = 0.35
+local TARGET_REFRESH_INTERVAL = 1.0
+local TARGET_HEARTBEAT_INTERVAL = 5.0
 local CUSTOM_PLAYER_FRAME_WIDTH = 372
 local CUSTOM_PLAYER_FRAME_HEIGHT = 92
 local CUSTOM_PLAYER_FRAME_X_OFFSET = 16
@@ -732,6 +733,8 @@ local function ResetTargetData()
     State.targetData.currentMana = nil
     State.targetData.maxMana = nil
     State.targetData.powerType = nil
+    State.targetSyncSnapshot = nil
+    State.targetHeartbeatElapsed = 0
 end
 
 local function GetTargetMaxHealthText()
@@ -2703,7 +2706,8 @@ local function HandlePlayerUpdateRequest(force)
 end
 
 local function OnEventFrameUpdate(self, elapsed)
-    State.targetRefreshElapsed = (State.targetRefreshElapsed or 0) + (elapsed or 0)
+    elapsed = elapsed or 0
+    State.targetRefreshElapsed = (State.targetRefreshElapsed or 0) + elapsed
     if State.targetRefreshElapsed < TARGET_REFRESH_INTERVAL then
         return
     end
@@ -2712,8 +2716,35 @@ local function OnEventFrameUpdate(self, elapsed)
     if UnitExists and UnitExists("target") then
         EnsureTargetFrameTexts()
         UpdateCustomTargetDebuffs()
-        SendTargetRequest(false)
+
+        -- 仅当目标 / HP / MP / 功率类型 真有变化时才轮询服务端；
+        -- 否则只跑兜底心跳（覆盖 HuanJingSystem 这种本地 UnitHealth 不可见的虚拟血蓝）。
+        local guid  = UnitGUID and UnitGUID("target") or nil
+        local curHP = UnitHealth and UnitHealth("target") or 0
+        local maxHP = UnitHealthMax and UnitHealthMax("target") or 0
+        local curMP = UnitMana and UnitMana("target") or (UnitPower and UnitPower("target") or 0)
+        local maxMP = (UnitManaMax and UnitManaMax("target")) or (UnitPowerMax and UnitPowerMax("target") or 0)
+        local pType = UnitPowerType and UnitPowerType("target") or 0
+
+        local snap = State.targetSyncSnapshot
+        local changed = (not snap)
+            or snap.guid ~= guid
+            or snap.curHP ~= curHP or snap.maxHP ~= maxHP
+            or snap.curMP ~= curMP or snap.maxMP ~= maxMP
+            or snap.pType ~= pType
+
+        State.targetHeartbeatElapsed = (State.targetHeartbeatElapsed or 0) + TARGET_REFRESH_INTERVAL
+        if changed or State.targetHeartbeatElapsed >= TARGET_HEARTBEAT_INTERVAL then
+            State.targetSyncSnapshot = {
+                guid = guid, curHP = curHP, maxHP = maxHP,
+                curMP = curMP, maxMP = maxMP, pType = pType,
+            }
+            State.targetHeartbeatElapsed = 0
+            SendTargetRequest(false)
+        end
     else
+        State.targetSyncSnapshot = nil
+        State.targetHeartbeatElapsed = 0
         HideCustomTargetDebuffs()
     end
 end

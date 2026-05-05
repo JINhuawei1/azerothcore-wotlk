@@ -222,6 +222,23 @@ public:
         return true;
     }
 
+    static bool CanQuestCompleteSupplyRequiredItem(Quest const* quest, ItemTemplate const* itemTemplate, uint32 itemId)
+    {
+        if (!quest || !itemTemplate || !itemId)
+            return false;
+
+        if (quest->GetSrcItemId() == itemId)
+            return false;
+
+        if (itemTemplate->Class != ITEM_CLASS_QUEST)
+            return false;
+
+        if (itemTemplate->SellPrice > 0 || itemTemplate->InventoryType != INVTYPE_NON_EQUIP)
+            return false;
+
+        return true;
+    }
+
     static bool HandleQuestComplete(ChatHandler* handler, Quest const* quest, Optional<PlayerIdentifier> playerTarget)
     {
         if (!playerTarget)
@@ -282,6 +299,13 @@ public:
                 {
                     handler->PSendSysMessage("[.quest complete] 任务 {} 物品 entry={}: 物品模板不存在, 已跳过.",
                         entry, id);
+                    continue;
+                }
+
+                if (!CanQuestCompleteSupplyRequiredItem(quest, itemTemplate, id))
+                {
+                    handler->PSendSysMessage("[.quest complete] 任务 {} 物品 [{}] (entry {}): 不是安全任务物品, 命令不会自动补发. 请通过正常任务流程获取.",
+                        entry, itemTemplate->Name1, id);
                     continue;
                 }
 
@@ -458,6 +482,13 @@ public:
                 {
                     handler->PSendSysMessage("[.quest complete] (离线) 任务 {} 物品 entry={}: 物品模板不存在, 已跳过.",
                         entry, id);
+                    continue;
+                }
+
+                if (!CanQuestCompleteSupplyRequiredItem(quest, itemTemplate, id))
+                {
+                    handler->PSendSysMessage("[.quest complete] (离线) 任务 {} 物品 [{}] (entry {}): 不是安全任务物品, 命令不会自动补发. 请通过正常任务流程获取.",
+                        entry, itemTemplate->Name1, id);
                     continue;
                 }
 

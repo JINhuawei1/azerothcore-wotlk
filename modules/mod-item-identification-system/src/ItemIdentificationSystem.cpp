@@ -2705,8 +2705,28 @@ void ItemIdentificationSystemModuleLoader::CleanupOrphanedItemData()
     trans->Append(
         "DELETE h FROM `玩家装备属性增强` h "
         "LEFT JOIN `item_instance` i ON h.`装备GUID` = i.`guid` "
-        "LEFT JOIN `character_inventory` ci ON ci.`item` = h.`装备GUID` AND ci.`bag` = 200 "
-        "WHERE i.`guid` IS NULL AND ci.`item` IS NULL");
+        "LEFT JOIN `character_inventory` ci ON ci.`item` = h.`装备GUID` "
+        "LEFT JOIN `mail_items` mi ON mi.`item_guid` = h.`装备GUID` "
+        "LEFT JOIN `auctionhouse` ah ON ah.`itemguid` = h.`装备GUID` "
+        "LEFT JOIN `guild_bank_item` gbi ON gbi.`item_guid` = h.`装备GUID` "
+        "LEFT JOIN `item_refund_instance` iri ON iri.`item_guid` = h.`装备GUID` "
+        "LEFT JOIN `character_gifts` cg ON cg.`item_guid` = h.`装备GUID` "
+        "LEFT JOIN `character_equipmentsets` ces ON h.`装备GUID` IN ("
+        "ces.`item0`, ces.`item1`, ces.`item2`, ces.`item3`, ces.`item4`, ces.`item5`, "
+        "ces.`item6`, ces.`item7`, ces.`item8`, ces.`item9`, ces.`item10`, ces.`item11`, "
+        "ces.`item12`, ces.`item13`, ces.`item14`, ces.`item15`, ces.`item16`, ces.`item17`, "
+        "ces.`item18`) "
+        // 双保险：item_instance 不存在 + 所有持久化引用表也不存在，才允许删除倍率行。
+        // 之前只看 item_instance + bag=200，一旦上游清理误删 item_instance，
+        // 这里就会把上架/邮件中装备的倍率属性一起清掉，玩家重启后会反映"装备倍率丢了"。
+        "WHERE i.`guid` IS NULL "
+        "AND ci.`item` IS NULL "
+        "AND mi.`item_guid` IS NULL "
+        "AND ah.`itemguid` IS NULL "
+        "AND gbi.`item_guid` IS NULL "
+        "AND iri.`item_guid` IS NULL "
+        "AND cg.`item_guid` IS NULL "
+        "AND ces.`setguid` IS NULL");
 
     CharacterDatabase.DirectCommitTransaction(trans);
 
