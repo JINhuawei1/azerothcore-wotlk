@@ -419,12 +419,12 @@ public:
                 }
             }
 
-            // If the quest requires money
-            int64 ReqOrRewMoney = quest->GetRewOrReqMoney(player->GetLevel());
-            if (ReqOrRewMoney < 0)
-            {
-                player->ModifyMoney(ReqOrRewMoney == std::numeric_limits<int64>::min() ? std::numeric_limits<int64>::max() : -ReqOrRewMoney);
-            }
+            // 修复刷金 bug:
+            // 旧代码在 RewardMoney < 0 (任务需要玩家"付钱"才能交) 时,
+            // 反而调用 ModifyMoney(-ReqOrRewMoney) 把这笔钱"赠送"给玩家,
+            // 导致 .quest complete 9211 之类的命令可被反复使用刷金币.
+            // 这里直接移除该分支: GM 秒任务命令不再发放/扣除任何金币,
+            // 真正的金币奖励/扣除由正常的任务接受/交付流程处理.
 
             player->CompleteQuest(entry);
         }
