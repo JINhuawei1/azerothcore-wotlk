@@ -2172,7 +2172,12 @@ private:
     [[nodiscard]] uint32 GetCombatRatingDamageReduction(CombatRating cr, float rate, float cap, uint32 damage) const;
 
     void PatchValuesUpdate(ByteBuffer& valuesUpdateBuf, BuildValuesCachePosPointers& posPointers, Player* target);
+public:
+    // 暴露给派生类 (尤其是 Player) 在直接修改 m_uint32Values 后失效缓存. 例如 Player::SetQuestSlotState
+    // 走 Object::SetFlag / SetUInt64Value 路径不经过 Unit::SetUInt32Value, 必须显式调用此函数,
+    // 否则同帧内已有 BuildValuesUpdate 写入的 _valuesUpdateCache 会让客户端永远收不到新字段.
     void InvalidateValuesUpdateCache() { _valuesUpdateCache.clear(); }
+private:
 
     [[nodiscard]] float processDummyAuras(float TakenTotalMod) const;
 

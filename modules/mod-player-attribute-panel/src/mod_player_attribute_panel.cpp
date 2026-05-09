@@ -144,6 +144,15 @@ uint32 ScalePanelCombatValueToClient(uint64 currentValue, uint64 maxValue, uint3
     return clientValue > clientMaxValue ? clientMaxValue : clientValue;
 }
 
+uint32 GetPanelClientPowerValue(Powers power, uint64 currentValue, uint64 maxValue, uint32 clientMaxValue)
+{
+    uint32 clientPower = ScalePanelCombatValueToClient(currentValue, maxValue, clientMaxValue);
+    if (power == POWER_MANA && maxValue > clientMaxValue && clientPower >= clientMaxValue && clientMaxValue > 1)
+        return clientMaxValue - 1;
+
+    return clientPower;
+}
+
 std::string SanitizePayloadValue(std::string value)
 {
     value.erase(std::remove_if(value.begin(), value.end(), [](unsigned char ch)
@@ -633,7 +642,7 @@ private:
 
         if ((player->HasExtendedPowerForCombat(POWER_MANA) || extendedMaxMana > clientMaxMana) && clientMaxMana > 0)
         {
-            uint32 expectedClientMana = ScalePanelCombatValueToClient(extendedMana, extendedMaxMana, clientMaxMana);
+            uint32 expectedClientMana = GetPanelClientPowerValue(POWER_MANA, extendedMana, extendedMaxMana, clientMaxMana);
             uint32 actualClientMana = player->GetPower(POWER_MANA);
             if (actualClientMana != expectedClientMana)
             {

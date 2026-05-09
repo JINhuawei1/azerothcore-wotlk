@@ -368,18 +368,9 @@ void Player::UpdateSpellDamageAndHealingBonus()
 {
     // Magic damage modifiers implemented in Unit::SpellDamageBonusDone
     // This information for client side use only
-    // Get healing bonus for all schools
-    int32 healingBonus = SpellBaseHealingBonusDone(SPELL_SCHOOL_MASK_ALL);
-
-    // Get damage bonus for all schools
-    int32 spellDamage[MAX_SPELL_SCHOOL];
-    spellDamage[SPELL_SCHOOL_NORMAL] = 0;  // 物理学派不计算法术伤害
-    for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
-        spellDamage[i] = SpellBaseDamageBonusDone(SpellSchoolMask(1 << i));
-
     auto getServerStatValue = [this](Stats stat) -> double
     {
-        uint64 extendedValue = GetExtendedStat(stat);
+        int64 extendedValue = GetExtendedStat(stat);
         if (extendedValue > 0)
             return static_cast<double>(extendedValue);
 
@@ -387,13 +378,23 @@ void Player::UpdateSpellDamageAndHealingBonus()
         return displayValue > 0 ? static_cast<double>(displayValue) : 0.0;
     };
 
-    auto toExtendedValue = [](double value) -> uint64
+    auto toExtendedValue = [](double value) -> int64
     {
         if (std::isnan(value) || value <= 0.0)
             return 0;
-        if (std::isinf(value) || value >= static_cast<double>(std::numeric_limits<uint64>::max()))
-            return std::numeric_limits<uint64>::max();
-        return static_cast<uint64>(value);
+        if (std::isinf(value) || value >= static_cast<double>(std::numeric_limits<int64>::max()))
+            return std::numeric_limits<int64>::max();
+        return static_cast<int64>(value);
+    };
+
+    auto toClientValue = [](int64 value) -> int32
+    {
+        constexpr int32 MAX_CLIENT_SPELL_POWER = 2000000000;
+        if (value <= 0)
+            return 0;
+        if (value >= MAX_CLIENT_SPELL_POWER)
+            return MAX_CLIENT_SPELL_POWER;
+        return static_cast<int32>(value);
     };
 
     double extendedHealingBonus = 0.0;
@@ -504,30 +505,23 @@ void Player::UpdateSpellDamageAndHealingBonus()
     if (healingMultiplier > 0.0 && healingMultiplier != 100.0)
         extendedHealingBonus = extendedHealingBonus * healingMultiplier / 100.0;
 
-    int32 preHookHealingBonus = healingBonus;
-    std::array<int32, MAX_SPELL_SCHOOL> preHookSpellDamage = { };
-    for (int i = SPELL_SCHOOL_NORMAL; i < MAX_SPELL_SCHOOL; ++i)
-        preHookSpellDamage[i] = spellDamage[i];
+    int64 healingBonus = toExtendedValue(extendedHealingBonus);
+    int64 spellDamage[MAX_SPELL_SCHOOL] = { };
+    for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
+        spellDamage[i] = toExtendedValue(extendedSpellDamage[i]);
 
     // 调用钩子允许模块修改法术强度和治疗强度
     sScriptMgr->OnPlayerAfterUpdateSpellDamageAndHealing(this, healingBonus, spellDamage);
 
-    if (extendedHealingBonus > 0.0 && preHookHealingBonus > 0 && healingBonus != preHookHealingBonus)
-        extendedHealingBonus = extendedHealingBonus * static_cast<double>(healingBonus) / static_cast<double>(preHookHealingBonus);
-
-    for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
-        if (extendedSpellDamage[i] > 0.0 && preHookSpellDamage[i] > 0 && spellDamage[i] != preHookSpellDamage[i])
-            extendedSpellDamage[i] = extendedSpellDamage[i] * static_cast<double>(spellDamage[i]) / static_cast<double>(preHookSpellDamage[i]);
-
-    _extendedHealingBonus = toExtendedValue(extendedHealingBonus);
+    _extendedHealingBonus = healingBonus > 0 ? healingBonus : 0;
     _extendedSpellDamageBonuses[SPELL_SCHOOL_NORMAL] = 0;
     for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
-        _extendedSpellDamageBonuses[i] = toExtendedValue(extendedSpellDamage[i]);
+        _extendedSpellDamageBonuses[i] = spellDamage[i] > 0 ? spellDamage[i] : 0;
 
     // 设置最终值到客户端显示字段
-    SetStatInt32Value(PLAYER_FIELD_MOD_HEALING_DONE_POS, healingBonus);
+    SetStatInt32Value(PLAYER_FIELD_MOD_HEALING_DONE_POS, toClientValue(_extendedHealingBonus));
     for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
-        SetStatInt32Value(PLAYER_FIELD_MOD_DAMAGE_DONE_POS + i, spellDamage[i]);
+        SetStatInt32Value(PLAYER_FIELD_MOD_DAMAGE_DONE_POS + i, toClientValue(_extendedSpellDamageBonuses[i]));
 }
 
 bool Player::UpdateAllStats()

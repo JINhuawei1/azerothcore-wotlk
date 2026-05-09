@@ -89,6 +89,7 @@ public:
             // ok, normal (creature/GO starting) quest
             if (player->CanAddQuest(quest, true))
             {
+                player->RemoveRewardedQuest(entry, false);
                 player->AddQuestAndCheckCompletion(quest, nullptr);
             }
         }
@@ -103,9 +104,14 @@ public:
                 return false;
             }
 
+            CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHAR_QUESTSTATUS_REWARDED_BY_QUEST);
+            stmt->SetData(0, guid);
+            stmt->SetData(1, entry);
+            CharacterDatabase.Execute(stmt);
+
             uint8 index = 0;
 
-            CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_REP_CHAR_QUESTSTATUS);
+            stmt = CharacterDatabase.GetPreparedStatement(CHAR_REP_CHAR_QUESTSTATUS);
             stmt->SetData(index++, guid);
             stmt->SetData(index++, entry);
             stmt->SetData(index++, 1);
@@ -162,6 +168,7 @@ public:
                 if (logQuest == entry)
                 {
                     player->SetQuestSlot(slot, 0);
+                    player->SendQuestSlotUpdate(slot);
 
                     // we ignore unequippable quest items in this case, its' still be equipped
                     player->TakeQuestSourceItem(logQuest, false);
@@ -174,8 +181,8 @@ public:
                 }
             }
 
-            player->RemoveRewardedQuest(entry);
-            player->RemoveActiveQuest(entry, false);
+            player->RemoveRewardedQuest(entry, false);
+            player->RemoveActiveQuest(entry);
         }
         else
         {
@@ -275,7 +282,7 @@ public:
         if (Player* player = playerTarget->GetConnectedPlayer())
         {
             // If player doesn't have the quest
-            if (player->GetQuestStatus(entry) == QUEST_STATUS_NONE)
+            if (!player->IsActiveQuest(entry))
             {
                 handler->SendErrorMessage(LANG_COMMAND_QUEST_NOTFOUND, entry);
                 return false;
@@ -284,6 +291,8 @@ public:
             // Add quest items strictly based on the quest's RequiredItemCount.
             // 严格按照任务 RequiredItemCount 补足玩家持有量, 不依赖物品堆叠上限,
             // 防止玩家通过 接取->.quest complete->出售->放弃->再接取 的循环刷金币.
+            bool canComplete = true;
+
             for (uint8 x = 0; x < QUEST_ITEM_OBJECTIVES_COUNT; ++x)
             {
                 uint32 id    = quest->RequiredItemId[x];
@@ -297,45 +306,52 @@ public:
                 ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(id);
                 if (!itemTemplate)
                 {
-                    handler->PSendSysMessage("[.quest complete] 任务 {} 物品 entry={}: 物品模板不存在, 已跳过.",
+                    handler->PSendSysMessage("[.quest complete] 任务 {} 物品 entry={}: 物品模板不存在, 已拒绝完成.",
                         entry, id);
+                    canComplete = false;
                     continue;
                 }
 
                 if (!CanQuestCompleteSupplyRequiredItem(quest, itemTemplate, id))
                 {
-                    handler->PSendSysMessage("[.quest complete] 任务 {} 物品 [{}] (entry {}): 不是安全任务物品, 命令不会自动补发. 请通过正常任务流程获取.",
+                    handler->PSendSysMessage("[.quest complete] 任务 {} 物品 [{}] (entry {}): 不是安全任务物品, 已拒绝完成. 请通过正常任务流程获取.",
                         entry, itemTemplate->Name1, id);
+                    canComplete = false;
                     continue;
                 }
 
-                // 统计玩家当前持有数 (背包 + 银行 + 钥匙链/货币槽), 与任务要求做严格比较.
+                // 修复 "秒任务后任务品丢失 + .quest reward 报 NOTFOUND":
+                // 旧逻辑 "curItemCount >= count 则 continue" 在玩家恰好已凑齐任务品时, 跳过补发,
+                // 但随后 RewardQuest::DestroyItemCount 仍会按 RequiredItemCount 扣物品, 直接吃掉玩家私人库存,
+                // 玩家感知是 GM 秒任务后任务品凭空消失. 与此同时 CompleteQuest 已经把 m_QuestStatus 设成 COMPLETE,
+                // 中间任一钩子 (例如 mod-abyss-cultivation::HandleQuestCompletion) 触发额外路径就可能让客户端
+                // 任务栏与服务端状态分歧, 触发 "需要小退才刷新" 现象.
+                //
+                // 改为强制覆盖: 先把同 entry 任务品全部销毁, 再补满 count 个.
+                // 因为 CanQuestCompleteSupplyRequiredItem 已经把这条路径限制在
+                // ITEM_CLASS_QUEST + SellPrice == 0 + INVTYPE_NON_EQUIP, 这类物品本身不可出售/装备/交易,
+                // 销毁玩家原有库存不会造成经济损失, 也彻底切断 "complete -> sell -> abandon -> add" 刷金循环.
                 uint32 curItemCount = player->GetItemCount(id, true);
-                if (curItemCount >= count)
+                if (curItemCount > 0)
                 {
-                    // 已经满足或超出任务要求, 不再补任何物品 (避免被反复刷出再卖钱).
-                    continue;
+                    player->DestroyItemCount(id, curItemCount, true);
+                    handler->PSendSysMessage("[.quest complete] 物品 [{}] (entry {}): 已先清空原持有 {} 个, 改为按任务需求重发 {} 个.",
+                        itemTemplate->Name1, id, curItemCount, count);
                 }
 
-                // 仅补足差额, 使用无符号差防止下溢.
-                uint32 needCount = count - curItemCount;
+                uint32 needCount = count;
 
                 // 受 item_template.MaxCount (单人持有上限) 约束: <= 0 表示无限制.
+                // 销毁后 curItemCount 已清零, 只需校验 count 本身是否在上限内.
                 if (itemTemplate->MaxCount > 0)
                 {
                     uint32 ownerLimit = static_cast<uint32>(itemTemplate->MaxCount);
-                    if (curItemCount >= ownerLimit)
+                    if (needCount > ownerLimit)
                     {
-                        handler->PSendSysMessage("[.quest complete] 物品 [{}] (entry {}): 已达单人持有上限 MaxCount={}, 跳过补充.",
-                            itemTemplate->Name1, id, ownerLimit);
+                        handler->PSendSysMessage("[.quest complete] 物品 [{}] (entry {}): 任务需求 {} 超过单人持有上限 MaxCount={}, 已拒绝完成.",
+                            itemTemplate->Name1, id, needCount, ownerLimit);
+                        canComplete = false;
                         continue;
-                    }
-                    uint32 allowedAdd = ownerLimit - curItemCount;
-                    if (needCount > allowedAdd)
-                    {
-                        handler->PSendSysMessage("[.quest complete] 物品 [{}] (entry {}): 受 MaxCount={} 限制, 任务需求差额 {} 但只能补 {}.",
-                            itemTemplate->Name1, id, ownerLimit, needCount, allowedAdd);
-                        needCount = allowedAdd;
                     }
                 }
 
@@ -349,8 +365,9 @@ public:
                     // 完全放不下: 尝试只补可放下的部分, 仍放不下则报错放弃该物品.
                     if (noSpaceCount >= needCount)
                     {
-                        handler->PSendSysMessage("[.quest complete] 物品 [{}] (entry {}): 玩家背包/银行已满, 无法补充 {} 个 (错误码 {}).",
+                        handler->PSendSysMessage("[.quest complete] 物品 [{}] (entry {}): 玩家背包/银行已满, 无法补充 {} 个 (错误码 {}), 已拒绝完成.",
                             itemTemplate->Name1, id, needCount, uint32(msg));
+                        canComplete = false;
                         continue;
                     }
 
@@ -359,17 +376,19 @@ public:
                     msg = player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, id, fitCount);
                     if (msg != EQUIP_ERR_OK || fitCount == 0)
                     {
-                        handler->PSendSysMessage("[.quest complete] 物品 [{}] (entry {}): 无法存储任意数量 (错误码 {}).",
+                        handler->PSendSysMessage("[.quest complete] 物品 [{}] (entry {}): 无法存储任意数量 (错误码 {}), 已拒绝完成.",
                             itemTemplate->Name1, id, uint32(msg));
+                        canComplete = false;
                         continue;
                     }
 
                     if (Item* item = player->StoreNewItem(dest, id, true))
                     {
                         player->SendNewItem(item, fitCount, true, false);
-                        handler->PSendSysMessage("[.quest complete] 物品 [{}] (entry {}): 部分补充 {}/{} (剩余 {} 个空间不足).",
+                        handler->PSendSysMessage("[.quest complete] 物品 [{}] (entry {}): 只能部分补充 {}/{} (剩余 {} 个空间不足), 已拒绝完成.",
                             itemTemplate->Name1, id, fitCount, needCount, noSpaceCount);
                     }
+                    canComplete = false;
                     continue;
                 }
 
@@ -377,8 +396,20 @@ public:
                 {
                     player->SendNewItem(item, needCount, true, false);
                     handler->PSendSysMessage("[.quest complete] 物品 [{}] (entry {}): 已补充 {} 个 (持有 {}/{}).",
-                        itemTemplate->Name1, id, needCount, curItemCount + needCount, count);
+                        itemTemplate->Name1, id, needCount, needCount, count);
                 }
+                else
+                {
+                    handler->PSendSysMessage("[.quest complete] 物品 [{}] (entry {}): 创建失败, 已拒绝完成.",
+                        itemTemplate->Name1, id);
+                    canComplete = false;
+                }
+            }
+
+            if (!canComplete)
+            {
+                handler->SetSentErrorMessage(true);
+                return false;
             }
 
             // All creature/GO slain/casted (not required, but otherwise it will display "Creature slain 0/10")
@@ -450,6 +481,7 @@ public:
             // 这里直接移除该分支: GM 秒任务命令不再发放/扣除任何金币,
             // 真正的金币奖励/扣除由正常的任务接受/交付流程处理.
 
+            player->RemoveRewardedQuest(entry, false);
             player->CompleteQuest(entry);
         }
         else
@@ -464,9 +496,14 @@ public:
             }
 
             CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+            CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHAR_QUESTSTATUS_REWARDED_BY_QUEST);
+            stmt->SetData(0, guid);
+            stmt->SetData(1, entry);
+            trans->Append(stmt);
 
             typedef std::pair<uint32, uint32> items;
             std::vector<items> questItems;
+            bool canComplete = true;
 
             for (uint8 x = 0; x < QUEST_ITEM_OBJECTIVES_COUNT; ++x)
             {
@@ -480,15 +517,17 @@ public:
                 ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(id);
                 if (!itemTemplate)
                 {
-                    handler->PSendSysMessage("[.quest complete] (离线) 任务 {} 物品 entry={}: 物品模板不存在, 已跳过.",
+                    handler->PSendSysMessage("[.quest complete] (离线) 任务 {} 物品 entry={}: 物品模板不存在, 已拒绝完成.",
                         entry, id);
+                    canComplete = false;
                     continue;
                 }
 
                 if (!CanQuestCompleteSupplyRequiredItem(quest, itemTemplate, id))
                 {
-                    handler->PSendSysMessage("[.quest complete] (离线) 任务 {} 物品 [{}] (entry {}): 不是安全任务物品, 命令不会自动补发. 请通过正常任务流程获取.",
+                    handler->PSendSysMessage("[.quest complete] (离线) 任务 {} 物品 [{}] (entry {}): 不是安全任务物品, 已拒绝完成. 请通过正常任务流程获取.",
                         entry, itemTemplate->Name1, id);
+                    canComplete = false;
                     continue;
                 }
 
@@ -520,16 +559,18 @@ public:
                     uint32 ownerLimit = static_cast<uint32>(itemTemplate->MaxCount);
                     if (curItemCount >= ownerLimit)
                     {
-                        handler->PSendSysMessage("[.quest complete] (离线) 物品 [{}] (entry {}): 已达单人持有上限 MaxCount={}, 跳过补发.",
+                        handler->PSendSysMessage("[.quest complete] (离线) 物品 [{}] (entry {}): 已达单人持有上限 MaxCount={}, 已拒绝完成.",
                             itemTemplate->Name1, id, ownerLimit);
+                        canComplete = false;
                         continue;
                     }
                     uint32 allowedAdd = ownerLimit - curItemCount;
                     if (needCount > allowedAdd)
                     {
-                        handler->PSendSysMessage("[.quest complete] (离线) 物品 [{}] (entry {}): 受 MaxCount={} 限制, 差额 {} 但只能补 {}.",
+                        handler->PSendSysMessage("[.quest complete] (离线) 物品 [{}] (entry {}): 受 MaxCount={} 限制, 差额 {} 但只能补 {}, 已拒绝完成.",
                             itemTemplate->Name1, id, ownerLimit, needCount, allowedAdd);
-                        needCount = allowedAdd;
+                        canComplete = false;
+                        continue;
                     }
                 }
 
@@ -538,11 +579,18 @@ public:
                     itemTemplate->Name1, id, needCount, curItemCount, count);
             }
 
+            if (!canComplete)
+            {
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+
             if (!questItems.empty())
             {
                 MailSender sender(MAIL_NORMAL, guid, MAIL_STATIONERY_GM);
                 // fill mail
                 MailDraft draft(quest->GetTitle(), std::string());
+                bool mailItemsCreated = true;
 
                 for (auto const& itr : questItems)
                 {
@@ -551,6 +599,17 @@ public:
                         item->SaveToDB(trans);
                         draft.AddItem(item);
                     }
+                    else
+                    {
+                        mailItemsCreated = false;
+                    }
+                }
+
+                if (!mailItemsCreated)
+                {
+                    handler->PSendSysMessage("[.quest complete] (离线) 任务 {}: 邮件补发任务物品失败, 已拒绝完成.", entry);
+                    handler->SetSentErrorMessage(true);
+                    return false;
                 }
 
                 draft.SendMailTo(trans, MailReceiver(nullptr, guid), sender);
@@ -558,7 +617,7 @@ public:
 
             uint8 index = 0;
 
-            CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_REP_CHAR_QUESTSTATUS);
+            stmt = CharacterDatabase.GetPreparedStatement(CHAR_REP_CHAR_QUESTSTATUS);
             stmt->SetData(index++, guid);
             stmt->SetData(index++, entry);
             stmt->SetData(index++, 1);
@@ -887,10 +946,13 @@ public:
                 trans->Append(stmt);
             }
 
-            stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHAR_QUESTSTATUS_REWARDED);
-            stmt->SetData(0, guid);
-            stmt->SetData(1, entry);
-            trans->Append(stmt);
+            if (!quest->IsDFQuest() && !quest->IsDailyOrWeekly() && !quest->IsMonthly())
+            {
+                stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHAR_QUESTSTATUS_REWARDED);
+                stmt->SetData(0, guid);
+                stmt->SetData(1, entry);
+                trans->Append(stmt);
+            }
 
             stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHAR_QUESTSTATUS_BY_QUEST);
             stmt->SetData(0, guid);

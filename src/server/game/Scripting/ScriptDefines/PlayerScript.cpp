@@ -525,7 +525,7 @@ void ScriptMgr::OnPlayerAfterUpdateHitChances(Player* player, float& meleeHit, f
     CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_AFTER_UPDATE_HIT_CHANCES, script->OnPlayerAfterUpdateHitChances(player, meleeHit, rangedHit, spellHit));
 }
 
-void ScriptMgr::OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int32& healingBonus, int32 spellDamage[7])
+void ScriptMgr::OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int64& healingBonus, int64 spellDamage[7])
 {
     CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_AFTER_UPDATE_SPELL_DAMAGE_AND_HEALING, script->OnPlayerAfterUpdateSpellDamageAndHealing(player, healingBonus, spellDamage));
 }

@@ -51,6 +51,17 @@ int64 ScaleRatingForCultivation(int64 amount, float bonusPercent)
 
     return static_cast<int64>(scaled);
 }
+
+int64 ScaleSpellPowerForCultivation(int64 amount, long double multiplier)
+{
+    long double scaled = static_cast<long double>(amount) * multiplier;
+    if (scaled <= 0.0L)
+        return 0;
+    if (scaled >= static_cast<long double>(std::numeric_limits<int64>::max()))
+        return std::numeric_limits<int64>::max();
+
+    return static_cast<int64>(scaled);
+}
 }
 
 // Addon消息通信常量
@@ -1151,7 +1162,7 @@ public:
     }
 
     // 法术强度和治疗强度
-    void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int32& healingBonus, int32 spellDamage[7]) override
+    void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int64& healingBonus, int64 spellDamage[7]) override
     {
         if (!player || !sConfigMgr->GetOption("Cultivation.Enable", true))
             return;
@@ -1161,17 +1172,17 @@ public:
 
         if (bonus > 0 || hasXianshen)
         {
-            float multiplier = 1.0f;
-            if (bonus > 0) multiplier += bonus / 100.0f;
-            if (hasXianshen) multiplier *= 2.0f;
+            long double multiplier = 1.0L;
+            if (bonus > 0) multiplier += static_cast<long double>(bonus) / 100.0L;
+            if (hasXianshen) multiplier *= 2.0L;
 
             if (healingBonus > 0)
-                healingBonus = int32(healingBonus * multiplier);
+                healingBonus = ScaleSpellPowerForCultivation(healingBonus, multiplier);
 
             for (int i = 1; i < 7; ++i)
             {
                 if (spellDamage[i] > 0)
-                    spellDamage[i] = int32(spellDamage[i] * multiplier);
+                    spellDamage[i] = ScaleSpellPowerForCultivation(spellDamage[i], multiplier);
             }
         }
     }

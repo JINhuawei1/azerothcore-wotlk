@@ -480,7 +480,7 @@ public:
     virtual void OnPlayerAfterUpdateCritPercentage(Player* /*player*/, WeaponAttackType /*attType*/, float& /*value*/) { }
     virtual void OnPlayerAfterUpdateSpellCritChance(Player* /*player*/, uint32 /*school*/, float& /*value*/) { }
     virtual void OnPlayerAfterUpdateHitChances(Player* /*player*/, float& /*meleeHit*/, float& /*rangedHit*/, float& /*spellHit*/) { }
-    virtual void OnPlayerAfterUpdateSpellDamageAndHealing(Player* /*player*/, int32& /*healingBonus*/, int32 /*spellDamage*/[7]) { }
+    virtual void OnPlayerAfterUpdateSpellDamageAndHealing(Player* /*player*/, int64& /*healingBonus*/, int64 /*spellDamage*/[7]) { }
     // 评级属性钩子 - 用于修改命中、急速、精准等评级
     virtual void OnPlayerAfterUpdateRating(Player* /*player*/, CombatRating /*cr*/, int64& /*amount*/) { }
 

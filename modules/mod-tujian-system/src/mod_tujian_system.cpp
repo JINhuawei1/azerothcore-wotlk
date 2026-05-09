@@ -480,11 +480,11 @@ namespace
         for (uint8 i = 0; i < MAX_ITEM_PROTO_STATS && i < proto->StatsCount; ++i)
         {
             uint32 statType = proto->ItemStat[i].ItemStatType;
-            int32 val = proto->ItemStat[i].ItemStatValue;
+            int64 val = proto->ItemStat[i].ItemStatValue;
             if (val == 0)
                 continue;
 
-            cache.itemStatTotals[statType] += static_cast<int64>(val) * applyCount;
+            cache.itemStatTotals[statType] += val * applyCount;
         }
 
         uint32 armor = proto->Armor;

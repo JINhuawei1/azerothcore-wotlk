@@ -1,0 +1,25 @@
+[worldserver]
+
+########################################
+#
+#    宣传奖励系统 (mod-promotion-reward)
+#
+#    玩家完成外部宣传后,GM 用 .宣传奖励 发放 命令给玩家累计宣传天数
+#    并生成专属兑换码 (CDK),玩家用 .宣传奖励 兑换 [CDK] 获取专属武器
+#    武器随累计宣传天数动态加全属性,无上限
+#
+########################################
+
+#
+#    PromotionReward.Enable
+#        是否启用本模块。0=关闭 1=开启
+#        Default: 1
+
+PromotionReward.Enable = 1
+
+#
+#    PromotionReward.DebugLog
+#        是否输出调试日志(stat 应用、CDK 生成等细节)
+#        Default: 0
+
+PromotionReward.DebugLog = 0

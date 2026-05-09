@@ -1481,6 +1481,7 @@ public:
     void RemoveActiveQuest(uint32 questId, bool update = true);
     void RemoveRewardedQuest(uint32 questId, bool update = true);
     void SendQuestUpdate(uint32 questId);
+    void SendQuestSlotUpdate(uint16 slot);
     QuestGiverStatus GetQuestDialogStatus(Object* questGiver);
     float GetQuestRate(bool isDFQuest = false);
     void SetDailyQuestStatus(uint32 quest_id);
@@ -1512,9 +1513,22 @@ public:
         val &= ~((uint64)0xFFFF << (counter * 16));
         val |= ((uint64)count << (counter * 16));
         SetUInt64Value(PLAYER_QUEST_LOG_1_1 + slot * MAX_QUEST_OFFSET + QUEST_COUNTS_OFFSET, val);
+        // SetUInt64Value 走 Object::SetUInt64Value, 不经过 Unit::SetUInt32Value, 必须手动失效缓存,
+        // 否则同帧内 _valuesUpdateCache 命中后客户端永远拿不到新进度.
+        InvalidateValuesUpdateCache();
     }
-    void SetQuestSlotState(uint16 slot, uint32 state) { SetFlag(PLAYER_QUEST_LOG_1_1 + slot * MAX_QUEST_OFFSET + QUEST_STATE_OFFSET, state); }
-    void RemoveQuestSlotState(uint16 slot, uint32 state) { RemoveFlag(PLAYER_QUEST_LOG_1_1 + slot * MAX_QUEST_OFFSET + QUEST_STATE_OFFSET, state); }
+    void SetQuestSlotState(uint16 slot, uint32 state)
+    {
+        SetFlag(PLAYER_QUEST_LOG_1_1 + slot * MAX_QUEST_OFFSET + QUEST_STATE_OFFSET, state);
+        // SetFlag 走 Object::SetFlag, 不经过 Unit::SetUInt32Value, 必须手动失效缓存.
+        InvalidateValuesUpdateCache();
+    }
+    void RemoveQuestSlotState(uint16 slot, uint32 state)
+    {
+        RemoveFlag(PLAYER_QUEST_LOG_1_1 + slot * MAX_QUEST_OFFSET + QUEST_STATE_OFFSET, state);
+        // RemoveFlag 走 Object::RemoveFlag, 不经过 Unit::SetUInt32Value, 必须手动失效缓存.
+        InvalidateValuesUpdateCache();
+    }
     void SetQuestSlotTimer(uint16 slot, uint32 timer) { SetUInt32Value(PLAYER_QUEST_LOG_1_1 + slot * MAX_QUEST_OFFSET + QUEST_TIME_OFFSET, timer); }
     void SwapQuestSlot(uint16 slot1, uint16 slot2)
     {

@@ -602,6 +602,7 @@ void Player::AddQuest(Quest const* quest, Object* questGiver)
     }
 
     SetQuestSlot(log_slot, quest_id, qtime);
+    SendQuestSlotUpdate(log_slot);
 
     m_QuestStatusSave[quest_id] = true;
 
@@ -646,6 +647,7 @@ void Player::CompleteQuest(uint32 quest_id)
     if (log_slot < MAX_QUEST_LOG_SIZE)
     {
         SetQuestSlotState(log_slot, QUEST_STATE_COMPLETE);
+        SendQuestSlotUpdate(log_slot);
     }
 
     Quest const* qInfo = sObjectMgr->GetQuestTemplate(quest_id);
@@ -680,7 +682,10 @@ void Player::IncompleteQuest(uint32 quest_id)
 
         uint16 log_slot = FindQuestSlot(quest_id);
         if (log_slot < MAX_QUEST_LOG_SIZE)
+        {
             RemoveQuestSlotState(log_slot, QUEST_STATE_COMPLETE);
+            SendQuestSlotUpdate(log_slot);
+        }
 
         // Xinef: area auras may change on quest completion!
         UpdateZoneDependentAuras(GetZoneId());
@@ -771,9 +776,12 @@ void Player::RewardQuest(Quest const* quest, uint32 reward, Object* questGiver, 
 
     uint16 log_slot = FindQuestSlot(quest_id);
     if (log_slot < MAX_QUEST_LOG_SIZE)
+    {
         SetQuestSlot(log_slot, 0);
+        SendQuestSlotUpdate(log_slot);
+    }
 
-    bool rewarded = IsQuestRewarded(quest_id) && !quest->IsDFQuest();
+    bool rewarded = IsQuestRewarded(quest_id) && !quest->IsDFQuest() && !quest->IsDailyOrWeekly() && !quest->IsMonthly();
 
     // Not give XP in case already completed once repeatable quest
     uint32 XP = rewarded ? 0 : CalculateQuestRewardXP(quest);
@@ -853,7 +861,8 @@ void Player::RewardQuest(Quest const* quest, uint32 reward, Object* questGiver, 
         SetSeasonalQuestStatus(quest_id);
 
     RemoveActiveQuest(quest_id, false);
-    SetRewardedQuest(quest_id);
+    if (!quest->IsDFQuest() && !quest->IsDailyOrWeekly() && !quest->IsMonthly())
+        SetRewardedQuest(quest_id);
 
     if (announce)
         SendQuestReward(quest, XP);
@@ -897,8 +906,6 @@ void Player::RewardQuest(Quest const* quest, uint32 reward, Object* questGiver, 
     }
 
     SendQuestUpdate(quest_id);
-
-    SendQuestGiverStatusMultiple();
 
     //lets remove flag for delayed teleports
     SetMustDelayTeleport(false);
@@ -1556,6 +1563,52 @@ void Player::RemoveRewardedQuest(uint32 questId, bool update /*= true*/)
         SendQuestUpdate(questId);
 }
 
+void Player::SendQuestSlotUpdate(uint16 slot)
+{
+    // 主动发一份完整 quest log 槽位快照给玩家自己。
+    // 这不是只发本槽: 如果客户端曾经漏掉 slot0/旧槽位的更新, 只继续发新槽位会形成
+    // "服务端 slot1 有任务, 客户端任务日志仍 0/25" 的错位。全量推 25 槽能把客户端拉回
+    // 服务端当前状态, 小退重载本质上也是做了一次类似的全量同步。
+    if (slot >= MAX_QUEST_LOG_SIZE)
+        return;
+
+    if (!GetSession())
+        return;
+
+    if (PlayerTalkClass)
+    {
+        for (uint16 questSlot = 0; questSlot < MAX_QUEST_LOG_SIZE; ++questSlot)
+        {
+            if (uint32 questId = GetQuestSlotQuestId(questSlot))
+            {
+                if (Quest const* quest = sObjectMgr->GetQuestTemplate(questId))
+                    PlayerTalkClass->SendQuestQueryResponse(quest);
+            }
+        }
+    }
+
+    for (uint16 questSlot = 0; questSlot < MAX_QUEST_LOG_SIZE; ++questSlot)
+    {
+        uint16 base = PLAYER_QUEST_LOG_1_1 + questSlot * MAX_QUEST_OFFSET;
+        ForceValuesUpdateAtIndex(base + QUEST_ID_OFFSET);
+        ForceValuesUpdateAtIndex(base + QUEST_STATE_OFFSET);
+        ForceValuesUpdateAtIndex(base + QUEST_COUNTS_OFFSET);
+        ForceValuesUpdateAtIndex(base + QUEST_COUNTS_OFFSET + 1);
+        ForceValuesUpdateAtIndex(base + QUEST_TIME_OFFSET);
+    }
+    InvalidateValuesUpdateCache();
+
+    UpdateData updateData;
+    BuildValuesUpdateBlockForPlayer(&updateData, this);
+
+    if (!updateData.HasData())
+        return;
+
+    WorldPacket packet;
+    updateData.BuildPacket(packet);
+    GetSession()->SendPacket(&packet);
+}
+
 void Player::SendQuestUpdate(uint32 questId)
 {
     uint32 zone = 0, area = 0;
@@ -1623,6 +1676,9 @@ void Player::SendQuestUpdate(uint32 questId)
     }
 
     UpdateForQuestWorldObjects();
+
+    // Quest accept/complete/abandon changes visible quest giver markers without a relog.
+    SendQuestGiverStatusMultiple();
 }
 
 QuestGiverStatus Player::GetQuestDialogStatus(Object* questgiver)

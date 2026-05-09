@@ -441,6 +441,7 @@ void WorldSession::HandleQuestLogRemoveQuest(WorldPacket& recvData)
         }
 
         _player->SetQuestSlot(slot, 0);
+        _player->SendQuestSlotUpdate(slot);
 
         _player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_QUEST_ABANDONED, 1);
     }

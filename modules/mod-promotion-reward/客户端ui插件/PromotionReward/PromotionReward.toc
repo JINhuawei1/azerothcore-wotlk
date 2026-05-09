@@ -1,0 +1,11 @@
+## Interface: 30300
+## Title: |cffff9900宣传奖励|r
+## Title-zhCN: |cffff9900宣传奖励|r
+## Notes: 暗黑风格宣传奖励界面 - 配合 mod-promotion-reward 服务端模块
+## Notes-zhCN: 暗黑风格宣传奖励界面 - 配合 mod-promotion-reward 服务端模块
+## Author: AzerothCore Mod
+## Version: 1.1.0
+## SavedVariables: PromotionRewardDB
+
+PromotionReward.lua
+PromotionReward.xml

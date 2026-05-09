@@ -497,7 +497,10 @@ void ItemAttributesLoader::CleanupOrphanedAttributeData()
     try
     {
         CharacterDatabase.Execute(
-            "DELETE FROM `物品属性_数据` WHERE `物品GUID` NOT IN (SELECT `guid` FROM `item_instance`)"
+            "DELETE a FROM `物品属性_数据` a "
+            "LEFT JOIN `item_instance` i ON a.`物品GUID` = i.`guid` "
+            "LEFT JOIN `character_inventory` ci ON ci.`item` = a.`物品GUID` AND ci.`bag` = 200 "
+            "WHERE i.`guid` IS NULL AND ci.`item` IS NULL"
         );
         ItemAttributesDBHelper::FlushCache();
         LOG_DEBUG("module.item-attributes", "CleanupOrphanedAttributeData 完成");
@@ -508,4 +511,3 @@ void ItemAttributesLoader::CleanupOrphanedAttributeData()
                   ex.what());
     }
 }
-

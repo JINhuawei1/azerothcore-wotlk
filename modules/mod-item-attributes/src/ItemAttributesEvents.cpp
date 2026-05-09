@@ -75,20 +75,9 @@ void ItemAttributesEvents::OnPlayerLogout(Player* player)
         _equippedItems.erase(playerGuid);
     }
 
-    // 玩家登出时清理孤立的属性数据（频率限制）
-    // 说明：该清理会触发对 item_instance 的子查询/删除，容易与物品保存事务产生锁竞争。
-    // 为减少 [1213] deadlock，改为按时间间隔执行。
-    static std::chrono::steady_clock::time_point lastCleanup;
-    auto now = std::chrono::steady_clock::now();
-    if (lastCleanup.time_since_epoch().count() == 0 || (now - lastCleanup) > std::chrono::minutes(30))
-    {
-        lastCleanup = now;
-        // 【审计修复】添加空指针保护和模块启用检查
-        if (sConfigMgr->GetOption<bool>("ItemAttributes.Enable", true) && sItemAttributesLoader)
-        {
-            sItemAttributesLoader->CleanupOrphanedAttributeData();
-        }
-    }
+    // 不在登出流程做全表孤立属性清理。
+    // 登出时核心正在保存 item_instance，清理线程读取/删除同表会与保存事务竞争，
+    // 造成 [1213] Deadlock。孤立数据清理保留给 GM 手动命令执行。
 }
 
 void ItemAttributesEvents::OnPlayerDeleteFromDB(CharacterDatabaseTransaction trans, uint32 guid)
@@ -301,4 +290,3 @@ void ItemAttributesEvents::OnGossipSelect(Player* player, Item* item, uint32 sen
 {
     // 这里可以处理物品对话选择时的逻辑
 }
-

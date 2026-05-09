@@ -53,6 +53,7 @@
 #include "Vehicle.h"
 #include "World.h"
 #include "WorldPacket.h"
+#include <limits>
 
 /// @todo: this import is not necessary for compilation and marked as unused by the IDE
 //  however, for some reasons removing it would cause a damn linking issue
@@ -892,18 +893,24 @@ void Object::SetStatInt32Value(uint16 index, int32 value)
 
 void Object::ApplyModUInt32Value(uint16 index, int32 val, bool apply)
 {
-    int32 cur = GetUInt32Value(index);
+    int64 cur = GetUInt32Value(index);
     cur += (apply ? val : -val);
     if (cur < 0)
         cur = 0;
-    SetUInt32Value(index, cur);
+    else if (cur > std::numeric_limits<uint32>::max())
+        cur = std::numeric_limits<uint32>::max();
+    SetUInt32Value(index, static_cast<uint32>(cur));
 }
 
 void Object::ApplyModInt32Value(uint16 index, int32 val, bool apply)
 {
-    int32 cur = GetInt32Value(index);
+    int64 cur = GetInt32Value(index);
     cur += (apply ? val : -val);
-    SetInt32Value(index, cur);
+    if (cur > std::numeric_limits<int32>::max())
+        cur = std::numeric_limits<int32>::max();
+    else if (cur < std::numeric_limits<int32>::min())
+        cur = std::numeric_limits<int32>::min();
+    SetInt32Value(index, static_cast<int32>(cur));
 }
 
 void Object::ApplyModSignedFloatValue(uint16 index, float  val, bool apply)

@@ -313,7 +313,7 @@ public:
     }
 
     // 计算法术强度和治疗强度时调用
-    void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int32& healingBonus, int32 spellDamage[7]) override
+    void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int64& healingBonus, int64 spellDamage[7]) override
     {
         if (!player || !sConfigMgr->GetOption("Reincarnation.Enable", true))
             return;
@@ -323,14 +323,14 @@ public:
         {
             // 对治疗强度应用百分比加成
             if (healingBonus > 0)
-                healingBonus = int32(healingBonus * (1.0f + bonusPercent / 100.0f));
+                healingBonus = ScaleRatingForReincarnation(healingBonus, bonusPercent);
 
             // 对所有学派的法术强度应用百分比加成
             // spellDamage[0] = 物理(不处理), [1]=神圣, [2]=火焰, [3]=自然, [4]=冰霜, [5]=暗影, [6]=奥术
             for (int i = 1; i < 7; ++i)
             {
                 if (spellDamage[i] > 0)
-                    spellDamage[i] = int32(spellDamage[i] * (1.0f + bonusPercent / 100.0f));
+                    spellDamage[i] = ScaleRatingForReincarnation(spellDamage[i], bonusPercent);
             }
         }
     }

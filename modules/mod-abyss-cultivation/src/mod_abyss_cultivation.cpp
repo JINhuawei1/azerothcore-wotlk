@@ -9742,7 +9742,7 @@ public:
             value *= (1.0f + bonusPct / 100.0f);
     }
 
-    void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int32& healingBonus, int32 spellDamage[7]) override
+    void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int64& healingBonus, int64 spellDamage[7]) override
     {
         if (!player || !IsModuleEnabled())
             return;
@@ -9755,16 +9755,16 @@ public:
         if (bonusPct != 0.0f)
         {
             float multiplier = 1.0f + bonusPct / 100.0f;
-            healingBonus = static_cast<int32>(static_cast<float>(healingBonus) * multiplier);
+            healingBonus = ScaleIntValue(healingBonus, multiplier);
             for (uint8 school = 0; school < 7; ++school)
-                spellDamage[school] = static_cast<int32>(static_cast<float>(spellDamage[school]) * multiplier);
+                spellDamage[school] = ScaleIntValue(spellDamage[school], multiplier);
         }
 
         if (flatSpellPower != 0)
         {
-            healingBonus += flatSpellPower;
+            healingBonus = AddInt64Saturated(healingBonus, flatSpellPower);
             for (uint8 school = 0; school < 7; ++school)
-                spellDamage[school] += flatSpellPower;
+                spellDamage[school] = AddInt64Saturated(spellDamage[school], flatSpellPower);
         }
     }
 

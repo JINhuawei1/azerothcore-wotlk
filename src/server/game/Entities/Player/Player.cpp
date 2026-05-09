@@ -15722,7 +15722,12 @@ uint32 Player::GetReputation(uint32 factionentry) const
 
 std::string const& Player::GetGuildName()
 {
-    return sGuildMgr->GetGuildById(GetGuildId())->GetName();
+    static std::string const emptyGuildName;
+
+    if (Guild* guild = GetGuild())
+        return guild->GetName();
+
+    return emptyGuildName;
 }
 
 void Player::SendDuelCountdown(uint32 counter)

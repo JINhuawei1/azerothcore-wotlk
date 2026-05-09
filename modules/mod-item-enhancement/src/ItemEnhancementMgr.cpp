@@ -1350,7 +1350,7 @@ std::string ItemEnhancementMgr::GenerateEnhancementStats(Item* item, uint32 leve
     for (uint8 i = 0; i < proto->StatsCount && i < MAX_ITEM_PROTO_STATS; ++i)
     {
         uint32 statType = proto->ItemStat[i].ItemStatType;
-        int32 originalValue = proto->ItemStat[i].ItemStatValue;
+        int64 originalValue = proto->ItemStat[i].ItemStatValue;
 
         // 强制显示调试信息
         // ChatHandler(item->GetOwner()->GetSession()).PSendSysMessage("调试：属性{}: 类型={}, 值={}",
@@ -1532,7 +1532,7 @@ std::string ItemEnhancementMgr::GenerateIncrementalEnhancementStats(Item* item, 
     for (uint8 i = 0; i < proto->StatsCount && i < MAX_ITEM_PROTO_STATS; ++i)
     {
         uint32 statType = proto->ItemStat[i].ItemStatType;
-        int32 originalValue = proto->ItemStat[i].ItemStatValue;
+        int64 originalValue = proto->ItemStat[i].ItemStatValue;
 
         if (originalValue <= 0)
         {

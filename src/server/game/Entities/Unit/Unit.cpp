@@ -22549,7 +22549,16 @@ void Unit::SetUInt32Value(uint16 index, uint32 value)
             InvalidateValuesUpdateCache();
             break;
         default:
-            if (IsClientResourceUpdateField(index))
+            // PLAYER_QUEST_LOG_* (25 槽 × 5 字段 = 125 字段) 也必须让 _valuesUpdateCache 失效,
+            // 否则同帧内若先有别的 BuildValuesUpdate 命中并写入缓存 (visibleFlag/updateType 相同),
+            // 后续 SetQuestSlot/SetQuestSlotState 改字段后,SendObjectUpdates 会复用旧缓存,
+            // 导致客户端任务栏永远不刷新 (提交后任务残留 / 新接的任务不显示).
+            if (GetTypeId() == TYPEID_PLAYER &&
+                index >= PLAYER_QUEST_LOG_1_1 && index <= PLAYER_QUEST_LOG_25_5)
+            {
+                InvalidateValuesUpdateCache();
+            }
+            else if (IsClientResourceUpdateField(index))
                 InvalidateValuesUpdateCache();
             break;
     }

@@ -1153,12 +1153,12 @@ uint32 GetOfficialStatReferenceValue(Item* item, uint32 attributeType)
     for (uint32 i = 0; i < proto->StatsCount && i < MAX_ITEM_PROTO_STATS; ++i)
     {
         uint32 statType = proto->ItemStat[i].ItemStatType;
-        int32 statValue = proto->ItemStat[i].ItemStatValue;
+        int64 statValue = proto->ItemStat[i].ItemStatValue;
 
         if (statType == 0 || statValue <= 0)
             continue;
 
-        uint32 value = static_cast<uint32>(statValue);
+        uint32 value = statValue > static_cast<int64>(std::numeric_limits<uint32>::max()) ? std::numeric_limits<uint32>::max() : static_cast<uint32>(statValue);
         values.push_back(value);
 
         if (statType == attributeType)
