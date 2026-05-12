@@ -244,12 +244,12 @@ bool PromotionRewardMgr::IsWeaponHeld(Player* player) const
     if (!player)
         return false;
 
-    if (_cfg.weaponEntry != 0 && player->HasItemCount(_cfg.weaponEntry, 1, false))
+    if (_cfg.weaponEntry != 0 && player->HasItemCount(_cfg.weaponEntry, 1, true))
         return true;
 
     for (uint32 entry = PROMO_WEAPON_MIN_ENTRY; entry <= PROMO_WEAPON_MAX_ENTRY; ++entry)
     {
-        if (player->HasItemCount(entry, 1, false))
+        if (player->HasItemCount(entry, 1, true))
             return true;
     }
 
@@ -338,8 +338,6 @@ bool PromotionRewardMgr::RedeemPromotionCode(Player* player, uint32& outRewardId
         }
     }
 
-    RemoveHeldBuff(player);
-
     uint32 removedCount = 0;
     for (uint32 entry = PROMO_WEAPON_MIN_ENTRY; entry <= PROMO_WEAPON_MAX_ENTRY; ++entry)
     {
@@ -378,131 +376,12 @@ bool PromotionRewardMgr::RedeemPromotionCode(Player* player, uint32& outRewardId
         newLevel,
         newLevel);
 
-    RefreshHeldBuff(player);
     SendInfoToClient(player);
 
     if (_cfg.debugLog)
         LOG_INFO("module.promotion", "[宣传奖励] 玩家 {} 使用宣传CDK升级到 {} 级,物品={}", player->GetName(), newLevel, newEntry);
 
     return true;
-}
-
-void PromotionRewardMgr::ApplyAllStats(Player* player, int32 value, bool apply)
-{
-    if (!player || value == 0)
-        return;
-
-    float fv = float(value);
-
-    player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, BASE_VALUE, fv, apply);
-    player->ApplyStatBuffMod(STAT_STRENGTH, fv, apply);
-    player->UpdateStats(STAT_STRENGTH);
-
-    player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, BASE_VALUE, fv, apply);
-    player->ApplyStatBuffMod(STAT_AGILITY, fv, apply);
-    player->UpdateStats(STAT_AGILITY);
-
-    player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, BASE_VALUE, fv, apply);
-    player->ApplyStatBuffMod(STAT_INTELLECT, fv, apply);
-    player->UpdateStats(STAT_INTELLECT);
-    player->UpdateMaxPower(POWER_MANA);
-
-    player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, BASE_VALUE, fv, apply);
-    player->ApplyStatBuffMod(STAT_SPIRIT, fv, apply);
-    player->UpdateStats(STAT_SPIRIT);
-
-    player->HandleStatModifier(UNIT_MOD_ATTACK_POWER,        TOTAL_VALUE, fv, apply);
-    player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, fv, apply);
-    player->UpdateAttackPowerAndDamage();
-    player->UpdateAttackPowerAndDamage(true);
-
-    player->ApplyRatingMod(CR_HIT_MELEE,    value, apply);
-    player->ApplyRatingMod(CR_HIT_RANGED,   value, apply);
-    player->ApplyRatingMod(CR_HIT_SPELL,    value, apply);
-    player->ApplyRatingMod(CR_CRIT_MELEE,   value, apply);
-    player->ApplyRatingMod(CR_CRIT_RANGED,  value, apply);
-    player->ApplyRatingMod(CR_CRIT_SPELL,   value, apply);
-    player->ApplyRatingMod(CR_HASTE_MELEE,  value, apply);
-    player->ApplyRatingMod(CR_HASTE_RANGED, value, apply);
-    player->ApplyRatingMod(CR_HASTE_SPELL,  value, apply);
-
-    player->ApplySpellPowerBonus(value, apply);
-    player->ApplySpellPenetrationBonus(value, apply);
-
-    player->UpdateAllStats();
-}
-
-void PromotionRewardMgr::ApplyHeldBuff(Player* player)
-{
-    if (!_cfg.enabled || !player)
-        return;
-
-    if (!IsWeaponHeld(player) || IsPromotionWeaponEquipped(player))
-    {
-        RemoveHeldBuff(player);
-        return;
-    }
-
-    uint32 guid = player->GetGUID().GetCounter();
-    PromotionPlayerData* d = GetPlayerData(guid);
-    if (!d || d->days == 0)
-    {
-        RemoveHeldBuff(player);
-        return;
-    }
-
-    int32 attr = CalcTotalAttr(d->days);
-    if (attr <= 0)
-    {
-        RemoveHeldBuff(player);
-        return;
-    }
-
-    auto it = _appliedAttr.find(guid);
-    if (it != _appliedAttr.end())
-    {
-        if (it->second == attr)
-            return;
-        ApplyAllStats(player, it->second, false);
-        _appliedAttr.erase(it);
-    }
-
-    ApplyAllStats(player, attr, true);
-    _appliedAttr[guid] = attr;
-
-    if (_cfg.debugLog)
-        LOG_INFO("module.promotion", "[宣传奖励] 玩家 {} 应用全属性 +{}", player->GetName(), attr);
-}
-
-void PromotionRewardMgr::RemoveHeldBuff(Player* player)
-{
-    if (!player)
-        return;
-
-    uint32 guid = player->GetGUID().GetCounter();
-    auto it = _appliedAttr.find(guid);
-    if (it == _appliedAttr.end())
-        return;
-
-    int32 prev = it->second;
-    _appliedAttr.erase(it);
-
-    if (prev > 0)
-        ApplyAllStats(player, prev, false);
-
-    if (_cfg.debugLog)
-        LOG_INFO("module.promotion", "[宣传奖励] 玩家 {} 移除全属性 -{}", player->GetName(), prev);
-}
-
-void PromotionRewardMgr::RefreshHeldBuff(Player* player)
-{
-    if (!player)
-        return;
-
-    if (IsWeaponHeld(player) && !IsPromotionWeaponEquipped(player))
-        ApplyHeldBuff(player);
-    else
-        RemoveHeldBuff(player);
 }
 
 // ============================================================
@@ -525,7 +404,7 @@ void PromotionReward_WorldScript::OnStartup()
 }
 
 // ============================================================
-// PlayerScript - 持有武器即生效
+// PlayerScript - 只刷新 UI 状态,属性交给物品/背包加成模块
 // ============================================================
 
 PromotionReward_PlayerScript::PromotionReward_PlayerScript()
@@ -535,15 +414,12 @@ void PromotionReward_PlayerScript::OnPlayerLogin(Player* player)
 {
     if (!sPromotionRewardMgr->IsEnabled() || !player)
         return;
-    sPromotionRewardMgr->RefreshHeldBuff(player);
     sPromotionRewardMgr->SendInfoToClient(player);
 }
 
 void PromotionReward_PlayerScript::OnPlayerLogout(Player* player)
 {
-    if (!player)
-        return;
-    sPromotionRewardMgr->RemoveHeldBuff(player);
+    (void)player;
 }
 
 void PromotionReward_PlayerScript::OnPlayerStoreNewItem(Player* player, Item* item, uint32 /*count*/)
@@ -552,7 +428,6 @@ void PromotionReward_PlayerScript::OnPlayerStoreNewItem(Player* player, Item* it
         return;
     if (!sPromotionRewardMgr->IsPromotionWeaponEntry(item->GetEntry()))
         return;
-    sPromotionRewardMgr->RefreshHeldBuff(player);
     sPromotionRewardMgr->SendInfoToClient(player);
 }
 
@@ -562,7 +437,6 @@ void PromotionReward_PlayerScript::OnPlayerEquip(Player* player, Item* item, uin
         return;
     if (!sPromotionRewardMgr->IsPromotionWeaponEntry(item->GetEntry()))
         return;
-    sPromotionRewardMgr->RefreshHeldBuff(player);
     sPromotionRewardMgr->SendInfoToClient(player);
 }
 
@@ -573,7 +447,6 @@ void PromotionReward_PlayerScript::OnPlayerAfterMoveItemFromInventory(Player* pl
     if (!sPromotionRewardMgr->IsPromotionWeaponEntry(item->GetEntry()))
         return;
 
-    sPromotionRewardMgr->RefreshHeldBuff(player);
     sPromotionRewardMgr->SendInfoToClient(player);
 }
 
@@ -597,11 +470,6 @@ void PromotionReward_PlayerScript::OnPlayerChat(Player* player, uint32 type, uin
         sPromotionRewardMgr->SendInfoToClient(player);
         return;
     }
-    if (cmd == "REQ_CODES")
-    {
-        sPromotionRewardMgr->SendCodesToClient(player);
-        return;
-    }
     if (cmd.compare(0, 7, "REDEEM:") == 0)
     {
         std::string code = cmd.substr(7);
@@ -622,10 +490,8 @@ void PromotionReward_PlayerScript::OnPlayerChat(Player* player, uint32 type, uin
 // ============================================================
 // 客户端 UI 通信 (Addon Message)
 //   prefix: PROMOREWARD
-//   Client → Server:  REQ_INFO | REQ_CODES | REDEEM:<CDK>
+//   Client → Server:  REQ_INFO | REDEEM:<CDK>
 //   Server → Client:  INFO:days|attr|weapon|base|perDay|claimed|nextWeapon|level|nextLevel|nextAttr|minDmg|maxDmg|nextMinDmg|nextMaxDmg
-//                     CODES:CDK1,CDK2,...   (可能多包)
-//                     CODES_END
 //                     OPEN
 //                     REDEEM_OK:CDK | REDEEM_FAIL:CDK:reason
 // ============================================================
@@ -679,52 +545,6 @@ void PromotionRewardMgr::SendInfoToClient(Player* player)
       << '|' << nextMinDmg
       << '|' << nextMaxDmg;
     SendAddonMsg(player, o.str());
-}
-
-void PromotionRewardMgr::SendCodesToClient(Player* player)
-{
-    if (!player)
-        return;
-
-    uint32 myGuid = player->GetGUID().GetCounter();
-    QueryResult r = WorldDatabase.Query(
-        "SELECT `兑换码` FROM `_奖励_兑换码` "
-        "WHERE `组`={} AND `兑换次数`>0 AND `注释` LIKE '宣传奖励-%' "
-        "AND (`兑换角色` IS NULL OR `兑换角色` NOT LIKE '%,{},%') "
-        "LIMIT 50",
-        _cfg.groupId, myGuid);
-
-    if (!r)
-    {
-        SendAddonMsg(player, "CODES:");
-        return;
-    }
-
-    constexpr size_t MaxPayload = 190;
-    std::string payload = "CODES:";
-    bool first = true;
-    do
-    {
-        Field* f = r->Fetch();
-        std::string code = f[0].Get<std::string>();
-
-        size_t addLen = code.size() + (first ? 0 : 1);
-        if (payload.size() + addLen > MaxPayload && payload != "CODES:")
-        {
-            SendAddonMsg(player, payload);
-            payload = "CODES:";
-            first = true;
-            addLen = code.size();
-        }
-
-        if (!first)
-            payload += ',';
-        payload += code;
-        first = false;
-    } while (r->NextRow());
-
-    SendAddonMsg(player, payload);
-    SendAddonMsg(player, "CODES_END");
 }
 
 void PromotionRewardMgr::SendOpenUIToClient(Player* player)

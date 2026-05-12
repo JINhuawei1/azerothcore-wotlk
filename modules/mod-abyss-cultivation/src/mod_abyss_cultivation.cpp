@@ -535,6 +535,17 @@ int64 AddInt64Saturated(int64 left, int64 right)
     return left + right;
 }
 
+int32 ToInt32Saturated(int64 value)
+{
+    if (value > std::numeric_limits<int32>::max())
+        return std::numeric_limits<int32>::max();
+
+    if (value < std::numeric_limits<int32>::min())
+        return std::numeric_limits<int32>::min();
+
+    return static_cast<int32>(value);
+}
+
 constexpr uint32 ABYSS_RELIC_MANAGED_SPELL_START = 89101;
 constexpr uint32 ABYSS_RELIC_MANAGED_SPELL_END = 89181;
 constexpr uint32 ABYSS_RELIC_THEFT_KEY_ITEM = 950035;
@@ -6015,7 +6026,7 @@ private:
         }
     }
 
-    int32 GetRelicAttributeContribution(AbyssRelicConfig const& relic, uint8 slot, RelicRuntimeAttribute attribute, float modeScale) const
+    int64 GetRelicAttributeContribution(AbyssRelicConfig const& relic, uint8 slot, RelicRuntimeAttribute attribute, float modeScale) const
     {
         uint32 totalWeight = GetRelicWeightTotal(relic);
         uint32 weight = GetRelicAttributeWeight(relic, attribute);
@@ -6026,12 +6037,15 @@ private:
         if (slotScale <= 0.0f)
             return 0;
 
-        float budget = GetRelicBaseBudget(relic) * slotScale * std::max(modeScale, 0.1f);
-        float value = budget * (static_cast<float>(weight) / static_cast<float>(totalWeight));
-        return static_cast<int32>(std::lround(value));
+        long double budget = static_cast<long double>(GetRelicBaseBudget(relic)) * static_cast<long double>(slotScale) * static_cast<long double>(std::max(modeScale, 0.1f));
+        long double value = budget * (static_cast<long double>(weight) / static_cast<long double>(totalWeight));
+        if (value >= static_cast<long double>(std::numeric_limits<int64>::max()))
+            return std::numeric_limits<int64>::max();
+
+        return static_cast<int64>(std::llround(value));
     }
 
-    int32 GetPlayerRuntimeRelicAttributeBonus(Player* player, RelicRuntimeAttribute attribute) const
+    int64 GetPlayerRuntimeRelicAttributeBonus(Player* player, RelicRuntimeAttribute attribute) const
     {
         if (!player)
             return 0;
@@ -6053,7 +6067,7 @@ private:
         }};
 
         float modeScale = GetRelicModeScale(player);
-        int32 total = 0;
+        int64 total = 0;
         for (auto const& slotEntry : slots)
         {
             if (slotEntry.second == 0)
@@ -6063,7 +6077,7 @@ private:
             if (!relic)
                 continue;
 
-            total += GetRelicAttributeContribution(*relic, slotEntry.first, attribute, modeScale);
+            total = AddInt64Saturated(total, GetRelicAttributeContribution(*relic, slotEntry.first, attribute, modeScale));
         }
 
         return total;
@@ -6150,16 +6164,16 @@ public:
     {
         switch (stat)
         {
-            case STAT_AGILITY: return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_AGILITY);
-            case STAT_STRENGTH: return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_STRENGTH);
-            case STAT_INTELLECT: return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_INTELLECT);
-            case STAT_SPIRIT: return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_SPIRIT);
-            case STAT_STAMINA: return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_STAMINA);
+            case STAT_AGILITY: return ToInt32Saturated(GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_AGILITY));
+            case STAT_STRENGTH: return ToInt32Saturated(GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_STRENGTH));
+            case STAT_INTELLECT: return ToInt32Saturated(GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_INTELLECT));
+            case STAT_SPIRIT: return ToInt32Saturated(GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_SPIRIT));
+            case STAT_STAMINA: return ToInt32Saturated(GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_STAMINA));
             default: return 0;
         }
     }
 
-    int32 GetPlayerRuntimeRelicRatingBonus(Player* player, CombatRating cr) const
+    int64 GetPlayerRuntimeRelicRatingBonus(Player* player, CombatRating cr) const
     {
         switch (cr)
         {
@@ -6182,12 +6196,12 @@ public:
 
     int32 GetPlayerRuntimeRelicAttackPowerBonus(Player* player) const
     {
-        return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_ATTACK_POWER);
+        return ToInt32Saturated(GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_ATTACK_POWER));
     }
 
     int32 GetPlayerRuntimeRelicSpellPowerBonus(Player* player) const
     {
-        return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_SPELL_POWER);
+        return ToInt32Saturated(GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_SPELL_POWER));
     }
 
     float GetPlayerRuntimeStatBonusPct(Player* player) const

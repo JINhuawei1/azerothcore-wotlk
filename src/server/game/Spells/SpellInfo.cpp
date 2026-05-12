@@ -2408,14 +2408,20 @@ uint32 SpellInfo::CalcCastTime(Unit* caster, Spell* spell) const
     if (!CastTimeEntry)
         return 0;
 
-    int32 castTime = CastTimeEntry->CastTime;
+    int64 castTime = CastTimeEntry->CastTime;
     if (HasAttribute(SPELL_ATTR0_USES_RANGED_SLOT) && (!IsAutoRepeatRangedSpell()))
         castTime += 500;
 
     if (caster)
         caster->ModSpellCastTime(this, castTime, spell);
 
-    return (castTime > 0) ? uint32(castTime) : 0;
+    if (castTime <= 0)
+        return 0;
+
+    if (castTime >= static_cast<int64>(std::numeric_limits<int32>::max()))
+        return std::numeric_limits<int32>::max();
+
+    return static_cast<uint32>(castTime);
 }
 
 uint32 SpellInfo::GetMaxTicks() const

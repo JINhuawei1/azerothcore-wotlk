@@ -1032,8 +1032,8 @@ public:
     }
 
     bool HandleStatModifier(UnitMods unitMod, UnitModifierType modifierType, float amount, bool apply);
-    void SetModifierValue(UnitMods unitMod, UnitModifierType modifierType, float value) { m_auraModifiersGroup[unitMod][modifierType] = value; }
-    [[nodiscard]] float GetModifierValue(UnitMods unitMod, UnitModifierType modifierType) const;
+    void SetModifierValue(UnitMods unitMod, UnitModifierType modifierType, double value) { m_auraModifiersGroup[unitMod][modifierType] = value; }
+    [[nodiscard]] double GetModifierValue(UnitMods unitMod, UnitModifierType modifierType) const;
     [[nodiscard]] float GetTotalStatValue(Stats stat, float additionalValue = 0.0f) const;
 
     void SetCanModifyStats(bool modifyStats) { m_canModifyStats = modifyStats; }
@@ -1618,7 +1618,7 @@ public:
     float ApplyEffectModifiers(SpellInfo const* spellProto, uint8 effect_index, float value) const;
     int32 CalcSpellDuration(SpellInfo const* spellProto);
     int32 ModSpellDuration(SpellInfo const* spellProto, Unit const* target, int32 duration, bool positive, uint32 effectMask);
-    void  ModSpellCastTime(SpellInfo const* spellProto, int32& castTime, Spell* spell = nullptr);
+    void  ModSpellCastTime(SpellInfo const* spellProto, int64& castTime, Spell* spell = nullptr);
     float CalculateLevelPenalty(SpellInfo const* spellProto) const;
 
     uint32 GetCastingTimeForBonus(SpellInfo const* spellProto, DamageEffectType damagetype, uint32 CastingTime) const;
@@ -2124,7 +2124,9 @@ protected:
     AuraStateAurasMap m_auraStateAuras;        // Used for improve performance of aura state checks on aura apply/remove
     uint32 m_interruptMask;
 
-    float m_auraModifiersGroup[UNIT_MOD_END][MODIFIER_TYPE_END];
+    // double 存储：float 精度不足以表达 1e12 级别的属性值
+    // (float32 在 1e12 附近 ULP≈65536，add/remove 小值会被吞掉导致卸装后属性残留)
+    double m_auraModifiersGroup[UNIT_MOD_END][MODIFIER_TYPE_END];
     float m_weaponDamage[MAX_ATTACK][MAX_WEAPON_DAMAGE_RANGE][MAX_ITEM_PROTO_DAMAGES];
     bool m_canModifyStats;
     VisibleAuraMap m_visibleAuras;

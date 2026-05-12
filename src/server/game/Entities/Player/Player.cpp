@@ -5466,7 +5466,7 @@ void Player::GetDodgeFromAgility(float& diminishing, float& nondiminishing)
         return;
 
     /// @todo: research if talents/effects that increase total agility by x% should increase non-diminishing part
-    float base_agility = GetCreateStat(STAT_AGILITY) * m_auraModifiersGroup[UNIT_MOD_STAT_START + static_cast<uint16>(STAT_AGILITY)][BASE_PCT];
+    float base_agility = GetCreateStat(STAT_AGILITY) * float(m_auraModifiersGroup[UNIT_MOD_STAT_START + static_cast<uint16>(STAT_AGILITY)][BASE_PCT]);
     float bonus_agility = GetStat(STAT_AGILITY) - base_agility;
 
     // Apply agility to dodge conversion rate from database

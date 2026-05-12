@@ -26,6 +26,9 @@
         "${workspaceFolder}/deps/**",
         "${workspaceFolder}/build/**"
     ],
+    "json.trustedSchemaHosts": [
+        "raw.githubusercontent.com"
+    ],
     "Lua.runtime.version":  "Lua 5.1",
     "Lua.diagnostics.globals":  [
                                     "ASCENSION_TOOLTIP_ITEM_GUID",

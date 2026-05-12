@@ -18,13 +18,14 @@ static RequirementInterface* GetRequirementModule()
     return mgr->GetRequirementModule();
 }
 
-ReincarnationMgr::ReincarnationMgr()
+ReincarnationMgr::ReincarnationMgr() : _maxConfiguredLevel(0)
 {
 }
 
 ReincarnationMgr::~ReincarnationMgr()
 {
     _configs.clear();
+    _maxConfiguredLevel = 0;
     _playerData.clear();
 }
 
@@ -71,15 +72,20 @@ void ReincarnationMgr::LoadReincarnationConfig()
         config.bonusTalentPoints = fields[4].Get<uint32>();
 
         _configs[config.reincarnationLevel] = config;
+        if (config.reincarnationLevel > _maxConfiguredLevel)
+            _maxConfiguredLevel = config.reincarnationLevel;
         ++count;
 
     } while (result->NextRow());
 
-    LOG_INFO("server.loading", ">> 转身系统: 加载 {} 条配置数据，耗时 {} ms", count, GetMSTimeDiffToNow(oldMSTime));
+    LOG_INFO("server.loading", ">> 转身系统: 加载 {} 条配置数据，最高转身等级 {}，耗时 {} ms", count, _maxConfiguredLevel, GetMSTimeDiffToNow(oldMSTime));
 }
 
 ReincarnationConfig const* ReincarnationMgr::GetConfigForLevel(uint32 level) const
 {
+    if (level > _maxConfiguredLevel)
+        return nullptr;
+
     // 优先查找特定等级的配置
     auto itr = _configs.find(level);
     if (itr != _configs.end())
@@ -136,6 +142,15 @@ void ReincarnationMgr::LoadPlayerData(Player* player)
     _playerData[playerGuid].reincarnationLevel = fields[0].Get<uint32>();
     _playerData[playerGuid].totalBonusStats = fields[1].Get<float>();
     _playerData[playerGuid].totalBonusTalentPoints = fields[2].Get<uint32>();
+
+    if (_playerData[playerGuid].reincarnationLevel > _maxConfiguredLevel)
+    {
+        LOG_INFO("server.loading", ">> 转身系统: 玩家 {} 转身等级 {} 超过上限 {}，已修正",
+            player->GetName(), _playerData[playerGuid].reincarnationLevel, _maxConfiguredLevel);
+
+        RecalculatePlayerBonus(_playerData[playerGuid], _maxConfiguredLevel);
+        SavePlayerData(player);
+    }
 
     LOG_DEBUG("module", "转身系统: 为玩家 {} 加载数据，转身等级: {}，属性加成: {:.1f}%，天赋点: {}",
         player->GetName(),
@@ -199,6 +214,12 @@ bool ReincarnationMgr::CanReincarnate(Player* player, std::string& errorMsg) con
 
     // 获取下一转的配置
     uint32 nextLevel = currentLevel + 1;
+    if (nextLevel > _maxConfiguredLevel)
+    {
+        errorMsg = "已达到转身等级上限";
+        return false;
+    }
+
     ReincarnationConfig const* config = GetConfigForLevel(nextLevel);
     if (!config)
     {
@@ -317,6 +338,8 @@ bool ReincarnationMgr::ModifyReincarnationLevel(Player* player, int32 delta)
     int32 newLevel = static_cast<int32>(playerData.reincarnationLevel) + delta;
     if (newLevel < 0)
         newLevel = 0;
+    if (static_cast<uint32>(newLevel) > _maxConfiguredLevel)
+        newLevel = static_cast<int32>(_maxConfiguredLevel);
 
     // 重新计算奖励
     RecalculatePlayerBonus(playerData, static_cast<uint32>(newLevel));
@@ -333,6 +356,9 @@ bool ReincarnationMgr::ModifyReincarnationLevel(Player* player, int32 delta)
 bool ReincarnationMgr::SetReincarnationLevel(Player* player, uint32 level)
 {
     if (!player)
+        return false;
+
+    if (level > _maxConfiguredLevel)
         return false;
 
     uint32 playerGuid = player->GetGUID().GetCounter();

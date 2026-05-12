@@ -5,7 +5,7 @@
  *   - 兑换码:对接 mod-redemption-code 的 `_奖励_兑换码` 表(直接 INSERT,不依赖其代码)
  *   - 奖励:对接 mod-reward-template 的 `_模板_奖励` 表(由 mod-redemption-code 兑换流程负责发放)
  *   - 玩家用 .兑换码 兑换 [CDK] 走 mod-redemption-code 现有命令拿到武器与其它奖励
- *   - 宣传神器在装备槽时使用物品模板属性,仅背包持有时由模块补足同等隐藏属性
+ *   - 宣传神器属性由 mod-item-backpack-bonus / 装备系统生效,本模块只负责发放和升级物品
  *
  * 数据流:
  *   GM `.宣传奖励 发放 玩家A 1`
@@ -18,11 +18,10 @@
  *     → 玩家收到武器
  *
  *   持有宣传神器的玩家:
- *     OnPlayerStoreNewItem  → 入手武器 → 刷新属性状态
- *     OnPlayerEquip         → 装备武器 → 移除隐藏属性,使用物品模板属性
- *     OnPlayerAfterMoveItem → 移走武器 → 根据是否仍持有/装备刷新
+ *     OnPlayerStoreNewItem  → 入手武器 → 刷新 UI 状态
+ *     OnPlayerEquip         → 装备武器 → 刷新 UI 状态
+ *     OnPlayerAfterMoveItem → 移走武器 → 刷新 UI 状态
  *     OnPlayerLogin/Logout  → 加载/清除
- *     `.宣传奖励 发放` 时若玩家在线 → 主动 RefreshHeldBuff 让属性立即按新天数刷新
  */
 
 #ifndef PROMOTION_REWARD_MODULE_H
@@ -93,15 +92,9 @@ public:
     // 成功后会增加该角色宣传天数,回收旧宣传神器,发放下一等级宣传神器。
     bool RedeemPromotionCode(Player* player, uint32& outRewardId);
 
-    // 持有武器时按当前天数应用属性,刷新差异(天数变化时也用)
-    void ApplyHeldBuff(Player* player);
-    void RemoveHeldBuff(Player* player);
-    void RefreshHeldBuff(Player* player);
-
     // 客户端 UI 通信 (Addon Message, prefix=PROMOREWARD)
     void SendAddonMsg(Player* player, std::string const& payload);
     void SendInfoToClient(Player* player);
-    void SendCodesToClient(Player* player);
     void SendOpenUIToClient(Player* player);
 
     // 给客户端 UI 用的兑换接口(直接走流程,不依赖 mod-redemption-code 命令)
@@ -113,11 +106,8 @@ private:
     PromotionRewardMgr(PromotionRewardMgr const&) = delete;
     PromotionRewardMgr& operator=(PromotionRewardMgr const&) = delete;
 
-    void ApplyAllStats(Player* player, int32 value, bool apply);
-
     PromotionConfig                                  _cfg;
     std::unordered_map<uint32, PromotionPlayerData>  _players;
-    std::unordered_map<uint32, int32>                _appliedAttr;
 };
 
 #define sPromotionRewardMgr PromotionRewardMgr::instance()

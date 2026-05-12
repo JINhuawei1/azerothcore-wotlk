@@ -215,7 +215,6 @@ bool PromotionReward_CommandScript::HandleOpenUICommand(ChatHandler* handler, ch
     }
 
     sPromotionRewardMgr->SendInfoToClient(player);
-    sPromotionRewardMgr->SendCodesToClient(player);
     sPromotionRewardMgr->SendOpenUIToClient(player);
     return true;
 }

@@ -126,6 +126,13 @@ public:
         if (!player)
             return false;
 
+        uint32 maxLevel = sReincarnationMgr->GetMaxReincarnationLevel();
+        if (level > maxLevel)
+        {
+            handler->PSendSysMessage("|cffff0000设置失败: 转身等级不能超过当前上限 {}|r", maxLevel);
+            return true;
+        }
+
         if (sReincarnationMgr->SetReincarnationLevel(player, level))
         {
             uint32 playerGuid = player->GetGUID().GetCounter();
@@ -149,7 +156,8 @@ public:
     {
         sReincarnationMgr->LoadReincarnationConfig();
 
-        handler->PSendSysMessage("|cff00ff00转身系统配置已重载，共 {} 条配置|r", sReincarnationMgr->GetConfigCount());
+        handler->PSendSysMessage("|cff00ff00转身系统配置已重载，共 {} 条配置，最高转身等级 {}|r",
+            sReincarnationMgr->GetConfigCount(), sReincarnationMgr->GetMaxReincarnationLevel());
 
         return true;
     }
@@ -177,18 +185,27 @@ public:
         handler->PSendSysMessage("|cffffd700全属性加成:|r +{:.1f}%", bonusStats);
         handler->PSendSysMessage("|cffffd700额外天赋点:|r +{}", bonusTalent);
         handler->PSendSysMessage("|cffffd700当前角色等级:|r {}级", player->GetLevel());
+        handler->PSendSysMessage("|cffffd700转身等级上限:|r {} 转", sReincarnationMgr->GetMaxReincarnationLevel());
 
         // 显示下一转信息
         uint32 nextLevel = reincarnationLevel + 1;
-        ReincarnationConfig const* nextConfig = sReincarnationMgr->GetConfigForLevel(nextLevel);
-        if (nextConfig)
+        uint32 maxLevel = sReincarnationMgr->GetMaxReincarnationLevel();
+        if (reincarnationLevel >= maxLevel)
         {
-            handler->PSendSysMessage("|cff00ffff--- 下一转({}转)奖励 ---|r", nextLevel);
-            handler->PSendSysMessage("|cff00ffff全属性加成:|r +{:.1f}%", nextConfig->bonusStats);
-            handler->PSendSysMessage("|cff00ffff天赋点奖励:|r +{}", nextConfig->bonusTalentPoints);
-            if (nextConfig->requirementTemplateId > 0)
+            handler->PSendSysMessage("|cff00ffff已达到转身等级上限|r");
+        }
+        else
+        {
+            ReincarnationConfig const* nextConfig = sReincarnationMgr->GetConfigForLevel(nextLevel);
+            if (nextConfig)
             {
-                handler->PSendSysMessage("|cff00ffff需求模板ID:|r {}", nextConfig->requirementTemplateId);
+                handler->PSendSysMessage("|cff00ffff--- 下一转({}转)奖励 ---|r", nextLevel);
+                handler->PSendSysMessage("|cff00ffff全属性加成:|r +{:.1f}%", nextConfig->bonusStats);
+                handler->PSendSysMessage("|cff00ffff天赋点奖励:|r +{}", nextConfig->bonusTalentPoints);
+                if (nextConfig->requirementTemplateId > 0)
+                {
+                    handler->PSendSysMessage("|cff00ffff需求模板ID:|r {}", nextConfig->requirementTemplateId);
+                }
             }
         }
 

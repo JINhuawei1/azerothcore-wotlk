@@ -1,3 +1,4 @@
+---@diagnostic disable: undefined-global
 local ADDON_NAME = "PlayerAttributePanel"
 local ADDON_PREFIX = "PATTRPANEL"
 local REPLACE_OFFICIAL_STATS = true

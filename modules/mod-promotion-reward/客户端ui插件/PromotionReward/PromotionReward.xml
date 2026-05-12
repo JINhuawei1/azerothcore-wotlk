@@ -1,7 +1,7 @@
 <Ui xmlns="http://www.blizzard.com/wow/ui/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
 
     <!-- ============================================================ -->
-    <!-- 暗黑金按钮模板                                              -->
+    <!-- 暗黑金按钮模板                                                -->
     <!-- ============================================================ -->
     <Button name="PromoDarkGoldButtonTemplate" virtual="true">
         <Size x="120" y="28"/>
@@ -13,7 +13,7 @@
                 <AbsValue val="12"/>
             </EdgeSize>
             <Color r="0.08" g="0.06" b="0.03" a="0.95"/>
-            <BorderColor r="0.62" g="0.48" b="0.18" a="1.0"/>
+            <BorderColor r="0.70" g="0.54" b="0.20" a="1.0"/>
         </Backdrop>
 
         <Layers>
@@ -23,7 +23,7 @@
                         <Anchor point="TOPLEFT" x="3" y="-3"/>
                         <Anchor point="BOTTOMRIGHT" x="-3" y="3"/>
                     </Anchors>
-                    <Color r="0.85" g="0.65" b="0.20" a="0.10"/>
+                    <Color r="0.95" g="0.72" b="0.22" a="0.14"/>
                 </Texture>
             </Layer>
             <Layer level="ARTWORK">
@@ -31,27 +31,27 @@
                     <Anchors>
                         <Anchor point="CENTER" x="0" y="0"/>
                     </Anchors>
-                    <Color r="1.0" g="0.82" b="0.0"/>
+                    <Color r="1.0" g="0.84" b="0.10"/>
                 </FontString>
             </Layer>
         </Layers>
 
         <Scripts>
             <OnEnter>
-                this:SetBackdropColor(0.18, 0.14, 0.06, 1.0)
-                this:SetBackdropBorderColor(1.0, 0.82, 0.0, 1.0)
+                this:SetBackdropColor(0.20, 0.15, 0.06, 1.0)
+                this:SetBackdropBorderColor(1.0, 0.85, 0.10, 1.0)
                 local hl = getglobal(this:GetName() .. "Highlight")
                 if hl then hl:Show() end
                 local text = getglobal(this:GetName() .. "Text")
-                if text then text:SetTextColor(1.0, 1.0, 0.85) end
+                if text then text:SetTextColor(1.0, 1.0, 0.90) end
             </OnEnter>
             <OnLeave>
                 this:SetBackdropColor(0.08, 0.06, 0.03, 0.95)
-                this:SetBackdropBorderColor(0.62, 0.48, 0.18, 1.0)
+                this:SetBackdropBorderColor(0.70, 0.54, 0.20, 1.0)
                 local hl = getglobal(this:GetName() .. "Highlight")
                 if hl then hl:Hide() end
                 local text = getglobal(this:GetName() .. "Text")
-                if text then text:SetTextColor(1.0, 0.82, 0.0) end
+                if text then text:SetTextColor(1.0, 0.84, 0.10) end
             </OnLeave>
             <OnMouseDown>
                 this:SetBackdropColor(0.04, 0.03, 0.01, 1.0)
@@ -67,86 +67,129 @@
     </Button>
 
     <!-- ============================================================ -->
-    <!-- CDK 列表行模板                                              -->
+    <!-- AI 素材按钮模板 (所有底部按钮统一用它)                        -->
     <!-- ============================================================ -->
-    <Frame name="PromoCodeRowTemplate" virtual="true" enableMouse="true">
-        <Size x="380" y="28"/>
-        <Backdrop bgFile="Interface\ChatFrame\ChatFrameBackground" tile="false">
-            <BackgroundInsets>
-                <AbsInset left="0" right="0" top="0" bottom="0"/>
-            </BackgroundInsets>
-            <Color r="0.10" g="0.07" b="0.04" a="0.55"/>
-        </Backdrop>
+    <Button name="PromoAIButtonTemplate" virtual="true">
+        <Size x="120" y="28"/>
+
+        <NormalTexture file="Interface\AddOns\PromotionReward\Assets\button_bg.tga">
+            <Anchors>
+                <Anchor point="TOPLEFT"/>
+                <Anchor point="BOTTOMRIGHT"/>
+            </Anchors>
+        </NormalTexture>
+        <HighlightTexture file="Interface\Buttons\ButtonHilight-Square" alphaMode="ADD"/>
 
         <Layers>
-            <Layer level="BACKGROUND">
-                <Texture name="$parentTag">
-                    <Size x="3" y="22"/>
+            <Layer level="OVERLAY">
+                <FontString name="$parentText" inherits="GameFontNormal" justifyH="CENTER">
                     <Anchors>
-                        <Anchor point="LEFT" x="2" y="0"/>
+                        <Anchor point="CENTER" x="0" y="0"/>
                     </Anchors>
-                    <Color r="0.90" g="0.72" b="0.30" a="1.0"/>
-                </Texture>
-            </Layer>
-            <Layer level="ARTWORK">
-                <Texture name="$parentIcon" file="Interface\Common\ReputationStar">
-                    <Size x="16" y="16"/>
-                    <Anchors>
-                        <Anchor point="LEFT" x="12" y="0"/>
-                    </Anchors>
-                    <Color r="1.0" g="0.85" b="0.35"/>
-                </Texture>
-                <FontString name="$parentCode" inherits="GameFontNormal">
-                    <Anchors>
-                        <Anchor point="LEFT" relativeTo="$parentIcon" relativePoint="RIGHT" x="8" y="0"/>
-                    </Anchors>
-                    <Color r="1.0" g="0.90" b="0.55"/>
+                    <Color r="1.0" g="0.88" b="0.22"/>
                 </FontString>
             </Layer>
         </Layers>
 
-        <Frames>
-            <Button name="$parentBtn" inherits="PromoDarkGoldButtonTemplate">
-                <Size x="62" y="22"/>
-                <Anchors>
-                    <Anchor point="RIGHT" x="-6" y="0"/>
-                </Anchors>
-                <Scripts>
-                    <OnLoad>
-                        getglobal(this:GetName() .. "Text"):SetText("兑 换")
-                    </OnLoad>
-                </Scripts>
-            </Button>
-        </Frames>
+        <Scripts>
+            <OnEnter>
+                local tex = this:GetNormalTexture()
+                if tex then tex:SetVertexColor(1.25, 1.25, 1.1) end
+                local t = getglobal(this:GetName() .. "Text")
+                if t then t:SetTextColor(1.0, 1.0, 0.95) end
+            </OnEnter>
+            <OnLeave>
+                local tex = this:GetNormalTexture()
+                if tex then tex:SetVertexColor(1.0, 1.0, 1.0) end
+                local t = getglobal(this:GetName() .. "Text")
+                if t then t:SetTextColor(1.0, 0.88, 0.22) end
+            </OnLeave>
+            <OnMouseDown>
+                local tex = this:GetNormalTexture()
+                if tex then tex:SetVertexColor(0.70, 0.70, 0.70) end
+                local t = getglobal(this:GetName() .. "Text")
+                if t then t:SetPoint("CENTER", 1, -1) end
+            </OnMouseDown>
+            <OnMouseUp>
+                local tex = this:GetNormalTexture()
+                if tex then tex:SetVertexColor(1.0, 1.0, 1.0) end
+                local t = getglobal(this:GetName() .. "Text")
+                if t then t:SetPoint("CENTER", 0, 0) end
+            </OnMouseUp>
+        </Scripts>
+    </Button>
+
+    <!-- ============================================================ -->
+    <!-- 紫金强调按钮模板 (用于兑换按钮)                                -->
+    <!-- ============================================================ -->
+    <Button name="PromoRoyalPurpleButtonTemplate" virtual="true">
+        <Size x="120" y="28"/>
+        <Backdrop bgFile="Interface\ChatFrame\ChatFrameBackground" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="false">
+            <BackgroundInsets>
+                <AbsInset left="3" right="3" top="3" bottom="3"/>
+            </BackgroundInsets>
+            <EdgeSize>
+                <AbsValue val="12"/>
+            </EdgeSize>
+            <Color r="0.16" g="0.06" b="0.18" a="0.95"/>
+            <BorderColor r="0.78" g="0.48" b="0.92" a="1.0"/>
+        </Backdrop>
+
+        <Layers>
+            <Layer level="BACKGROUND">
+                <Texture name="$parentHighlight" file="Interface\ChatFrame\ChatFrameBackground" alphaMode="ADD" hidden="true">
+                    <Anchors>
+                        <Anchor point="TOPLEFT" x="3" y="-3"/>
+                        <Anchor point="BOTTOMRIGHT" x="-3" y="3"/>
+                    </Anchors>
+                    <Color r="0.90" g="0.55" b="1.0" a="0.18"/>
+                </Texture>
+            </Layer>
+            <Layer level="ARTWORK">
+                <FontString name="$parentText" inherits="GameFontNormal" justifyH="CENTER">
+                    <Anchors>
+                        <Anchor point="CENTER" x="0" y="0"/>
+                    </Anchors>
+                    <Color r="0.96" g="0.78" b="1.0"/>
+                </FontString>
+            </Layer>
+        </Layers>
 
         <Scripts>
             <OnEnter>
-                this:SetBackdropColor(0.32, 0.24, 0.09, 0.90)
-                local tag = getglobal(this:GetName() .. "Tag")
-                if tag then tag:SetVertexColor(1.0, 0.90, 0.40, 1.0) end
-                local code = getglobal(this:GetName() .. "Code")
-                if code then code:SetTextColor(1.0, 1.0, 0.70) end
+                this:SetBackdropColor(0.28, 0.12, 0.32, 1.0)
+                this:SetBackdropBorderColor(1.0, 0.85, 0.10, 1.0)
+                local hl = getglobal(this:GetName() .. "Highlight")
+                if hl then hl:Show() end
+                local text = getglobal(this:GetName() .. "Text")
+                if text then text:SetTextColor(1.0, 1.0, 0.95) end
             </OnEnter>
             <OnLeave>
-                local odd = this.isOdd
-                if odd then
-                    this:SetBackdropColor(0.12, 0.08, 0.04, 0.55)
-                else
-                    this:SetBackdropColor(0.08, 0.05, 0.02, 0.55)
-                end
-                local tag = getglobal(this:GetName() .. "Tag")
-                if tag then tag:SetVertexColor(0.90, 0.72, 0.30, 1.0) end
-                local code = getglobal(this:GetName() .. "Code")
-                if code then code:SetTextColor(1.0, 0.90, 0.55) end
+                this:SetBackdropColor(0.16, 0.06, 0.18, 0.95)
+                this:SetBackdropBorderColor(0.78, 0.48, 0.92, 1.0)
+                local hl = getglobal(this:GetName() .. "Highlight")
+                if hl then hl:Hide() end
+                local text = getglobal(this:GetName() .. "Text")
+                if text then text:SetTextColor(0.96, 0.78, 1.0) end
             </OnLeave>
+            <OnMouseDown>
+                this:SetBackdropColor(0.08, 0.03, 0.10, 1.0)
+                local text = getglobal(this:GetName() .. "Text")
+                if text then text:SetPoint("CENTER", 1, -1) end
+            </OnMouseDown>
+            <OnMouseUp>
+                this:SetBackdropColor(0.28, 0.12, 0.32, 1.0)
+                local text = getglobal(this:GetName() .. "Text")
+                if text then text:SetPoint("CENTER", 0, 0) end
+            </OnMouseUp>
         </Scripts>
-    </Frame>
+    </Button>
 
     <!-- ============================================================ -->
-    <!-- 主框架 - 暗黑金风格 宣传奖励界面                           -->
+    <!-- 主框架 - 暗黑金 + 皇室紫 · 英雄展示式宣传奖励界面             -->
     <!-- ============================================================ -->
     <Frame name="PromotionRewardFrame" parent="UIParent" movable="true" enableMouse="true" hidden="true" frameStrata="HIGH">
-        <Size x="460" y="580"/>
+        <Size x="520" y="504"/>
         <Anchors>
             <Anchor point="CENTER"/>
         </Anchors>
@@ -164,36 +207,32 @@
         </Backdrop>
 
         <Frames>
-            <!-- ─────── 标题栏 ─────── -->
+
+            <!-- ============================================================ -->
+            <!-- 标题栏                                                        -->
+            <!-- ============================================================ -->
             <Frame name="$parentTitleBar">
-                <Size x="440" y="44"/>
+                <Size x="500" y="52"/>
                 <Anchors>
                     <Anchor point="TOP" x="0" y="-10"/>
                 </Anchors>
 
                 <Layers>
-                    <Layer level="ARTWORK">
-                        <Texture name="$parentIconLeft" file="Interface\Icons\INV_Misc_Coin_17">
-                            <Size x="28" y="28"/>
+                    <Layer level="BACKGROUND">
+                        <!-- AI 生成的小徽章（皇冠造型），真实比例 3.33:1，不拉伸 -->
+                        <Texture name="$parentBadge" file="Interface\AddOns\PromotionReward\Assets\title_badge.tga">
+                            <Size x="180" y="54"/>
                             <Anchors>
-                                <Anchor point="LEFT" x="14" y="0"/>
+                                <Anchor point="BOTTOM" x="0" y="-2"/>
                             </Anchors>
-                            <TexCoord left="0.07" right="0.93" top="0.07" bottom="0.93"/>
                         </Texture>
-
-                        <FontString name="$parentTitle" inherits="GameFontNormalLarge" text="宣 传 奖 励">
-                            <Size x="220" y="22"/>
+                    </Layer>
+                    <Layer level="ARTWORK">
+                        <FontString name="$parentTitle" inherits="GameFontNormalHuge" text="宣  传  神  器">
                             <Anchors>
-                                <Anchor point="TOP" x="0" y="-4"/>
+                                <Anchor point="TOP" x="0" y="-2"/>
                             </Anchors>
-                            <Color r="1.0" g="0.82" b="0.0"/>
-                        </FontString>
-
-                        <FontString name="$parentSubtitle" inherits="GameFontDisableSmall" text="Promotion Reward">
-                            <Anchors>
-                                <Anchor point="TOP" relativeTo="$parentTitle" relativePoint="BOTTOM" x="0" y="-2"/>
-                            </Anchors>
-                            <Color r="0.55" g="0.45" b="0.22"/>
+                            <Color r="1.0" g="0.88" b="0.22"/>
                         </FontString>
                     </Layer>
                 </Layers>
@@ -201,7 +240,7 @@
                 <Frames>
                     <Button name="$parentCloseButton" inherits="UIPanelCloseButton">
                         <Anchors>
-                            <Anchor point="TOPRIGHT" x="4" y="4"/>
+                            <Anchor point="TOPRIGHT" x="6" y="6"/>
                         </Anchors>
                         <Scripts>
                             <OnClick>
@@ -212,29 +251,13 @@
                 </Frames>
             </Frame>
 
-            <!-- ─────── 标题分隔线 ─────── -->
-            <Frame name="$parentDividerTop">
-                <Size x="400" y="8"/>
-                <Anchors>
-                    <Anchor point="TOP" x="0" y="-54"/>
-                </Anchors>
-                <Layers>
-                    <Layer level="ARTWORK">
-                        <Texture file="Interface\Common\UI-TooltipDivider-Transparent">
-                            <Anchors>
-                                <Anchor point="TOPLEFT"/>
-                                <Anchor point="BOTTOMRIGHT"/>
-                            </Anchors>
-                        </Texture>
-                    </Layer>
-                </Layers>
-            </Frame>
-
-            <!-- ─────── 左：累计天数卡片 ─────── -->
+            <!-- ============================================================ -->
+            <!-- 英雄展示区：左卡片 - 累计宣传                                 -->
+            <!-- ============================================================ -->
             <Frame name="$parentDaysPanel">
-                <Size x="210" y="112"/>
+                <Size x="232" y="140"/>
                 <Anchors>
-                    <Anchor point="TOPLEFT" x="20" y="-68"/>
+                    <Anchor point="TOPLEFT" x="22" y="-74"/>
                 </Anchors>
 
                 <Backdrop bgFile="Interface\ChatFrame\ChatFrameBackground" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="false">
@@ -244,58 +267,85 @@
                     <EdgeSize>
                         <AbsValue val="14"/>
                     </EdgeSize>
-                    <Color r="0.07" g="0.05" b="0.03" a="0.92"/>
-                    <BorderColor r="0.58" g="0.44" b="0.18" a="1.0"/>
+                    <Color r="0.07" g="0.05" b="0.03" a="0.94"/>
+                    <BorderColor r="0.68" g="0.52" b="0.20" a="1.0"/>
                 </Backdrop>
 
                 <Layers>
+                    <!-- 顶部装饰金色横条 -->
                     <Layer level="BACKGROUND">
-                        <Texture name="$parentTitleBg">
-                            <Size x="202" y="22"/>
+                        <Texture name="$parentTopBand" file="Interface\ChatFrame\ChatFrameBackground">
+                            <Size x="222" y="24"/>
                             <Anchors>
-                                <Anchor point="TOP" x="0" y="-4"/>
+                                <Anchor point="TOP" x="0" y="-5"/>
                             </Anchors>
-                            <Color r="0.28" g="0.20" b="0.06" a="0.55"/>
+                            <Color r="0.38" g="0.28" b="0.08" a="0.65"/>
+                        </Texture>
+                        <Texture name="$parentTopLine" file="Interface\ChatFrame\ChatFrameBackground">
+                            <Size x="222" y="1"/>
+                            <Anchors>
+                                <Anchor point="TOP" x="0" y="-29"/>
+                            </Anchors>
+                            <Color r="0.95" g="0.72" b="0.22" a="0.55"/>
+                        </Texture>
+                        <!-- 光晕：中央大号数字背后的暖光 -->
+                        <Texture name="$parentValueGlow" file="Interface\ChatFrame\ChatFrameBackground" alphaMode="ADD">
+                            <Size x="180" y="60"/>
+                            <Anchors>
+                                <Anchor point="CENTER" x="0" y="4"/>
+                            </Anchors>
+                            <Color r="1.0" g="0.78" b="0.20" a="0.10"/>
                         </Texture>
                     </Layer>
+
                     <Layer level="ARTWORK">
                         <Texture name="$parentIcon" file="Interface\Icons\Achievement_PVP_A_14">
-                            <Size x="14" y="14"/>
+                            <Size x="16" y="16"/>
                             <Anchors>
-                                <Anchor point="TOPLEFT" x="12" y="-8"/>
+                                <Anchor point="TOPLEFT" x="14" y="-9"/>
                             </Anchors>
                             <TexCoord left="0.07" right="0.93" top="0.07" bottom="0.93"/>
                         </Texture>
 
                         <FontString name="$parentLabel" inherits="GameFontNormal" text="累 计 宣 传">
                             <Anchors>
-                                <Anchor point="LEFT" relativeTo="$parentIcon" relativePoint="RIGHT" x="6" y="0"/>
+                                <Anchor point="LEFT" relativeTo="$parentIcon" relativePoint="RIGHT" x="8" y="0"/>
                             </Anchors>
-                            <Color r="1.0" g="0.82" b="0.0"/>
+                            <Color r="1.0" g="0.84" b="0.12"/>
                         </FontString>
 
-                        <FontString name="$parentValue" inherits="GameFontNormalHuge" text="0 天">
+                        <FontString name="$parentBadge" inherits="GameFontNormalSmall" text="DAYS" justifyH="RIGHT">
                             <Anchors>
-                                <Anchor point="CENTER" x="0" y="-6"/>
+                                <Anchor point="TOPRIGHT" x="-14" y="-13"/>
                             </Anchors>
-                            <Color r="1.0" g="0.88" b="0.32"/>
+                            <Color r="0.62" g="0.48" b="0.20"/>
                         </FontString>
 
-                        <FontString name="$parentDesc" inherits="GameFontDisableSmall" text="已坚持宣传的天数">
+                        <!-- 大号数字值 -->
+                        <FontString name="$parentValue" inherits="GameFontNormalHuge" text="0 |cffaaaaaa天|r">
                             <Anchors>
-                                <Anchor point="BOTTOM" x="0" y="10"/>
+                                <Anchor point="CENTER" x="0" y="4"/>
                             </Anchors>
-                            <Color r="0.55" g="0.50" b="0.40"/>
+                            <Color r="1.0" g="0.92" b="0.42"/>
+                        </FontString>
+
+                        <FontString name="$parentDesc" inherits="GameFontDisableSmall" text="◆ 每日坚持 · 奖励不停 ◆">
+                            <Anchors>
+                                <Anchor point="BOTTOM" x="0" y="12"/>
+                            </Anchors>
+                            <Color r="0.66" g="0.56" b="0.32"/>
                         </FontString>
                     </Layer>
                 </Layers>
             </Frame>
 
-            <!-- ─────── 右：武器属性卡片 ─────── -->
+            <!-- ============================================================ -->
+            <!-- 英雄展示区：右卡片 - 武器加成                                 -->
+            <!-- ============================================================ -->
             <Frame name="$parentAttrPanel">
-                <Size x="210" y="112"/>
+                <Size x="232" y="140"/>
                 <Anchors>
-                    <Anchor point="TOPRIGHT" x="-20" y="-68"/>
+                    <Anchor point="TOPRIGHT" x="-22" y="-74"/>
                 </Anchors>
 
                 <Backdrop bgFile="Interface\ChatFrame\ChatFrameBackground" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="false">
@@ -305,53 +355,75 @@
                     <EdgeSize>
                         <AbsValue val="14"/>
                     </EdgeSize>
-                    <Color r="0.07" g="0.05" b="0.03" a="0.92"/>
-                    <BorderColor r="0.58" g="0.44" b="0.18" a="1.0"/>
+                    <Color r="0.08" g="0.04" b="0.09" a="0.94"/>
+                    <BorderColor r="0.78" g="0.50" b="0.92" a="1.0"/>
                 </Backdrop>
 
                 <Layers>
                     <Layer level="BACKGROUND">
-                        <Texture name="$parentTitleBg">
-                            <Size x="202" y="22"/>
+                        <Texture name="$parentTopBand" file="Interface\ChatFrame\ChatFrameBackground">
+                            <Size x="222" y="24"/>
                             <Anchors>
-                                <Anchor point="TOP" x="0" y="-4"/>
+                                <Anchor point="TOP" x="0" y="-5"/>
                             </Anchors>
-                            <Color r="0.28" g="0.14" b="0.28" a="0.55"/>
+                            <Color r="0.32" g="0.10" b="0.34" a="0.65"/>
+                        </Texture>
+                        <Texture name="$parentTopLine" file="Interface\ChatFrame\ChatFrameBackground">
+                            <Size x="222" y="1"/>
+                            <Anchors>
+                                <Anchor point="TOP" x="0" y="-29"/>
+                            </Anchors>
+                            <Color r="0.86" g="0.56" b="0.98" a="0.55"/>
+                        </Texture>
+                        <Texture name="$parentValueGlow" file="Interface\ChatFrame\ChatFrameBackground" alphaMode="ADD">
+                            <Size x="200" y="60"/>
+                            <Anchors>
+                                <Anchor point="CENTER" x="0" y="6"/>
+                            </Anchors>
+                            <Color r="0.86" g="0.55" b="1.0" a="0.12"/>
                         </Texture>
                     </Layer>
+
                     <Layer level="ARTWORK">
                         <Texture name="$parentIcon" file="Interface\Icons\INV_Sword_48">
-                            <Size x="14" y="14"/>
+                            <Size x="16" y="16"/>
                             <Anchors>
-                                <Anchor point="TOPLEFT" x="12" y="-8"/>
+                                <Anchor point="TOPLEFT" x="14" y="-9"/>
                             </Anchors>
                             <TexCoord left="0.07" right="0.93" top="0.07" bottom="0.93"/>
                         </Texture>
 
-                        <FontString name="$parentLabel" inherits="GameFontNormal" text="武 器 加 成">
+                        <FontString name="$parentLabel" inherits="GameFontNormal" text="神 器 加 成">
                             <Anchors>
-                                <Anchor point="LEFT" relativeTo="$parentIcon" relativePoint="RIGHT" x="6" y="0"/>
+                                <Anchor point="LEFT" relativeTo="$parentIcon" relativePoint="RIGHT" x="8" y="0"/>
                             </Anchors>
-                            <Color r="1.0" g="0.82" b="0.0"/>
+                            <Color r="1.0" g="0.84" b="0.12"/>
+                        </FontString>
+
+                        <FontString name="$parentBadge" inherits="GameFontNormalSmall" text="ALL STATS" justifyH="RIGHT">
+                            <Anchors>
+                                <Anchor point="TOPRIGHT" x="-14" y="-13"/>
+                            </Anchors>
+                            <Color r="0.68" g="0.42" b="0.80"/>
                         </FontString>
 
                         <FontString name="$parentValue" inherits="GameFontNormalHuge" text="+0">
                             <Anchors>
-                                <Anchor point="CENTER" x="0" y="-4"/>
+                                <Anchor point="CENTER" x="0" y="10"/>
                             </Anchors>
-                            <Color r="0.90" g="0.60" b="1.0"/>
+                            <Color r="0.95" g="0.62" b="1.0"/>
                         </FontString>
 
                         <FontString name="$parentUnit" inherits="GameFontNormal" text="全属性">
                             <Anchors>
                                 <Anchor point="TOP" relativeTo="$parentValue" relativePoint="BOTTOM" x="0" y="-2"/>
                             </Anchors>
-                            <Color r="0.70" g="0.50" b="0.85"/>
+                            <Color r="0.80" g="0.58" b="0.94"/>
                         </FontString>
 
-                        <FontString name="$parentHeld" inherits="GameFontNormalSmall" text="○ 武器不在身上">
+                        <FontString name="$parentHeld" inherits="GameFontNormalSmall" text="○ 未拥有神器 · 输入CDK兑换">
                             <Anchors>
-                                <Anchor point="BOTTOM" x="0" y="8"/>
+                                <Anchor point="BOTTOM" x="0" y="10"/>
                             </Anchors>
                             <Color r="1.0" g="0.32" b="0.32"/>
                         </FontString>
@@ -359,11 +431,94 @@
                 </Layers>
             </Frame>
 
-            <!-- ─────── 下一奖励 进度提示条 ─────── -->
-            <Frame name="$parentNextPanel">
-                <Size x="420" y="32"/>
+            <!-- ============================================================ -->
+            <!-- 升级进度条（真实进度条）                                      -->
+            <!-- ============================================================ -->
+            <Frame name="$parentProgressPanel">
+                <Size x="476" y="60"/>
                 <Anchors>
-                    <Anchor point="TOP" x="0" y="-190"/>
+                    <Anchor point="TOP" x="0" y="-218"/>
+                </Anchors>
+
+                <Layers>
+                    <Layer level="ARTWORK">
+                        <FontString name="$parentLabelLeft" inherits="GameFontNormalSmall" text="当前 Lv.0" justifyH="LEFT">
+                            <Anchors>
+                                <Anchor point="TOPLEFT" x="4" y="-2"/>
+                            </Anchors>
+                            <Color r="1.0" g="0.84" b="0.12"/>
+                        </FontString>
+
+                        <FontString name="$parentTitle" inherits="GameFontNormal" text="升 级 进 度" justifyH="CENTER">
+                            <Anchors>
+                                <Anchor point="TOP" x="0" y="-2"/>
+                            </Anchors>
+                            <Color r="1.0" g="0.88" b="0.26"/>
+                        </FontString>
+
+                        <FontString name="$parentLabelRight" inherits="GameFontNormalSmall" text="下一级 Lv.1" justifyH="RIGHT">
+                            <Anchors>
+                                <Anchor point="TOPRIGHT" x="-4" y="-2"/>
+                            </Anchors>
+                            <Color r="0.95" g="0.62" b="1.0"/>
+                        </FontString>
+
+                        <FontString name="$parentPercent" inherits="GameFontNormalSmall" text="" justifyH="CENTER">
+                            <Anchors>
+                                <Anchor point="BOTTOM" x="0" y="2"/>
+                            </Anchors>
+                            <Color r="0.86" g="0.74" b="0.40"/>
+                        </FontString>
+                    </Layer>
+                </Layers>
+
+                <Frames>
+                    <!-- 进度条外框 -->
+                    <Frame name="$parentBarFrame">
+                        <Size x="476" y="18"/>
+                        <Anchors>
+                            <Anchor point="CENTER" x="0" y="0"/>
+                        </Anchors>
+
+                        <Backdrop bgFile="Interface\ChatFrame\ChatFrameBackground" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="false">
+                            <BackgroundInsets>
+                                <AbsInset left="3" right="3" top="3" bottom="3"/>
+                            </BackgroundInsets>
+                            <EdgeSize>
+                                <AbsValue val="12"/>
+                            </EdgeSize>
+                            <Color r="0.04" g="0.03" b="0.02" a="1.0"/>
+                            <BorderColor r="0.72" g="0.54" b="0.22" a="1.0"/>
+                        </Backdrop>
+
+                        <Frames>
+                            <StatusBar name="$parentBar">
+                                <Size x="462" y="10"/>
+                                <Anchors>
+                                    <Anchor point="CENTER" x="0" y="0"/>
+                                </Anchors>
+                                <BarTexture file="Interface\AddOns\PromotionReward\Assets\progress_fill.tga"/>
+                                <BarColor r="1.0" g="1.0" b="1.0" a="1.0"/>
+                                <Scripts>
+                                    <OnLoad>
+                                        this:SetMinMaxValues(0, 1000)
+                                        this:SetValue(0)
+                                        this:SetStatusBarColor(1.0, 1.0, 1.0, 1.0)
+                                    </OnLoad>
+                                </Scripts>
+                            </StatusBar>
+                        </Frames>
+                    </Frame>
+                </Frames>
+            </Frame>
+
+            <!-- ============================================================ -->
+            <!-- 下一级奖励预览卡片                                            -->
+            <!-- ============================================================ -->
+            <Frame name="$parentNextPanel">
+                <Size x="476" y="44"/>
+                <Anchors>
+                    <Anchor point="TOP" x="0" y="-282"/>
                 </Anchors>
 
                 <Backdrop bgFile="Interface\ChatFrame\ChatFrameBackground" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="false">
@@ -373,63 +528,63 @@
                     <EdgeSize>
                         <AbsValue val="12"/>
                     </EdgeSize>
-                    <Color r="0.09" g="0.07" b="0.02" a="0.90"/>
-                    <BorderColor r="0.70" g="0.55" b="0.22" a="1.0"/>
+                    <Color r="0.09" g="0.07" b="0.03" a="0.92"/>
+                    <BorderColor r="0.78" g="0.58" b="0.24" a="1.0"/>
                 </Backdrop>
 
                 <Layers>
-                    <Layer level="ARTWORK">
-                        <Texture name="$parentArrow" file="Interface\Buttons\UI-SpellbookIcon-NextPage-Up">
-                            <Size x="20" y="20"/>
+                    <Layer level="BACKGROUND">
+                        <!-- 图标金色底框（四边各一条细线） -->
+                        <Texture name="$parentIconBgFill" file="Interface\ChatFrame\ChatFrameBackground">
+                            <Size x="32" y="32"/>
                             <Anchors>
-                                <Anchor point="LEFT" x="8" y="0"/>
+                                <Anchor point="LEFT" x="7" y="0"/>
                             </Anchors>
+                            <Color r="0.72" g="0.54" b="0.22" a="1.0"/>
+                        </Texture>
+                    </Layer>
+                    <Layer level="ARTWORK">
+                        <Texture name="$parentPreviewIcon" file="Interface\Icons\INV_Sword_48">
+                            <Size x="28" y="28"/>
+                            <Anchors>
+                                <Anchor point="LEFT" x="9" y="0"/>
+                            </Anchors>
+                            <TexCoord left="0.07" right="0.93" top="0.07" bottom="0.93"/>
                         </Texture>
 
-                        <FontString name="$parentLabel" inherits="GameFontNormal" text="再坚持 1 天可得：">
+                        <FontString name="$parentLabel" inherits="GameFontNormal" text="再坚持 1 天可得：" justifyH="LEFT">
                             <Anchors>
-                                <Anchor point="LEFT" relativeTo="$parentArrow" relativePoint="RIGHT" x="4" y="0"/>
+                                <Anchor point="TOPLEFT" x="48" y="-6"/>
                             </Anchors>
-                            <Color r="1.0" g="0.82" b="0.0"/>
+                            <Color r="1.0" g="0.84" b="0.16"/>
                         </FontString>
 
-                        <FontString name="$parentText" inherits="GameFontNormalLarge" text="+0 全属性">
+                        <FontString name="$parentText" inherits="GameFontNormalLarge" text="宣传神器 +0 全属性" justifyH="LEFT">
                             <Anchors>
-                                <Anchor point="RIGHT" x="-14" y="0"/>
+                                <Anchor point="BOTTOMLEFT" x="48" y="6"/>
                             </Anchors>
-                            <Color r="0.90" g="0.70" b="1.0"/>
+                            <Color r="0.96" g="0.72" b="1.0"/>
                         </FontString>
+
+                        <Texture name="$parentArrow" file="Interface\Buttons\UI-SpellbookIcon-NextPage-Up">
+                            <Size x="22" y="22"/>
+                            <Anchors>
+                                <Anchor point="RIGHT" x="-10" y="0"/>
+                            </Anchors>
+                        </Texture>
                     </Layer>
                 </Layers>
             </Frame>
 
-            <!-- ─────── 公式说明（小字） ─────── -->
-            <Frame name="$parentFormulaPanel">
-                <Size x="420" y="16"/>
-                <Anchors>
-                    <Anchor point="TOP" x="0" y="-226"/>
-                </Anchors>
-                <Layers>
-                    <Layer level="ARTWORK">
-                        <FontString name="$parentText" inherits="GameFontDisableSmall" text="公式: 初始 1999 + (天数-1) × 1000">
-                            <Anchors>
-                                <Anchor point="CENTER"/>
-                            </Anchors>
-                            <Color r="0.55" g="0.48" b="0.30"/>
-                        </FontString>
-                    </Layer>
-                </Layers>
-            </Frame>
-
-            <!-- ─────── 分隔线 2 ─────── -->
+            <!-- ─── AI 生成华丽金色分隔线 ─── -->
             <Frame name="$parentDividerMid">
-                <Size x="400" y="8"/>
+                <Size x="320" y="40"/>
                 <Anchors>
-                    <Anchor point="TOP" x="0" y="-246"/>
+                    <Anchor point="TOP" x="0" y="-330"/>
                 </Anchors>
                 <Layers>
                     <Layer level="ARTWORK">
-                        <Texture file="Interface\Common\UI-TooltipDivider-Transparent">
+                        <Texture name="$parentTex" file="Interface\AddOns\PromotionReward\Assets\divider_ornate.tga">
                             <Anchors>
                                 <Anchor point="TOPLEFT"/>
                                 <Anchor point="BOTTOMRIGHT"/>
@@ -439,112 +594,39 @@
                 </Layers>
             </Frame>
 
-            <!-- ─────── CDK 列表 ─────── -->
-            <Frame name="$parentListPanel">
-                <Size x="420" y="206"/>
-                <Anchors>
-                    <Anchor point="TOP" x="0" y="-258"/>
-                </Anchors>
-
-                <Backdrop bgFile="Interface\ChatFrame\ChatFrameBackground" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="false">
-                    <BackgroundInsets>
-                        <AbsInset left="4" right="4" top="4" bottom="4"/>
-                    </BackgroundInsets>
-                    <EdgeSize>
-                        <AbsValue val="14"/>
-                    </EdgeSize>
-                    <Color r="0.05" g="0.04" b="0.02" a="0.95"/>
-                    <BorderColor r="0.58" g="0.44" b="0.18" a="1.0"/>
-                </Backdrop>
-
-                <Layers>
-                    <Layer level="BACKGROUND">
-                        <Texture name="$parentHeaderBg">
-                            <Size x="412" y="22"/>
-                            <Anchors>
-                                <Anchor point="TOP" x="0" y="-4"/>
-                            </Anchors>
-                            <Color r="0.24" g="0.18" b="0.06" a="0.75"/>
-                        </Texture>
-                    </Layer>
-                    <Layer level="ARTWORK">
-                        <Texture name="$parentIcon" file="Interface\Icons\INV_Misc_Note_01">
-                            <Size x="14" y="14"/>
-                            <Anchors>
-                                <Anchor point="TOPLEFT" x="14" y="-8"/>
-                            </Anchors>
-                            <TexCoord left="0.07" right="0.93" top="0.07" bottom="0.93"/>
-                        </Texture>
-
-                        <FontString name="$parentLabel" inherits="GameFontNormal" text="我 的 兑 换 码">
-                            <Anchors>
-                                <Anchor point="LEFT" relativeTo="$parentIcon" relativePoint="RIGHT" x="6" y="0"/>
-                            </Anchors>
-                            <Color r="1.0" g="0.82" b="0.0"/>
-                        </FontString>
-
-                        <FontString name="$parentCount" inherits="GameFontNormalSmall" text="0 张">
-                            <Anchors>
-                                <Anchor point="TOPRIGHT" x="-14" y="-10"/>
-                            </Anchors>
-                            <Color r="0.90" g="0.72" b="0.30"/>
-                        </FontString>
-
-                        <FontString name="$parentEmpty" inherits="GameFontDisable" text="暂无可用兑换码">
-                            <Anchors>
-                                <Anchor point="CENTER" x="0" y="-8"/>
-                            </Anchors>
-                            <Color r="0.50" g="0.42" b="0.28"/>
-                        </FontString>
-                    </Layer>
-                </Layers>
-
-                <Frames>
-                    <ScrollFrame name="$parentScroll" inherits="UIPanelScrollFrameTemplate">
-                        <Anchors>
-                            <Anchor point="TOPLEFT" x="10" y="-30"/>
-                            <Anchor point="BOTTOMRIGHT" x="-28" y="10"/>
-                        </Anchors>
-                        <ScrollChild>
-                            <Frame name="$parentChild">
-                                <Size x="380" y="1"/>
-                            </Frame>
-                        </ScrollChild>
-                    </ScrollFrame>
-                </Frames>
-            </Frame>
-
-            <!-- ─────── 手动输入区 ─────── -->
+            <!-- ============================================================ -->
+            <!-- CDK 手动输入区                                                -->
+            <!-- ============================================================ -->
             <Frame name="$parentInputPanel">
-                <Size x="420" y="34"/>
+                <Size x="476" y="34"/>
                 <Anchors>
-                    <Anchor point="TOP" x="0" y="-472"/>
+                    <Anchor point="TOP" x="0" y="-374"/>
                 </Anchors>
 
                 <Layers>
                     <Layer level="ARTWORK">
                         <Texture name="$parentIcon" file="Interface\Icons\INV_Inscription_Tradeskill01">
-                            <Size x="16" y="16"/>
+                            <Size x="18" y="18"/>
                             <Anchors>
                                 <Anchor point="LEFT" x="8" y="0"/>
                             </Anchors>
                             <TexCoord left="0.07" right="0.93" top="0.07" bottom="0.93"/>
                         </Texture>
 
-                        <FontString name="$parentLabel" inherits="GameFontNormal" text="手动输入:">
+                        <FontString name="$parentLabel" inherits="GameFontNormal" text="CDK兑换">
                             <Anchors>
-                                <Anchor point="LEFT" relativeTo="$parentIcon" relativePoint="RIGHT" x="4" y="0"/>
+                                <Anchor point="LEFT" relativeTo="$parentIcon" relativePoint="RIGHT" x="6" y="0"/>
                             </Anchors>
-                            <Color r="0.85" g="0.78" b="0.55"/>
+                            <Color r="0.88" g="0.80" b="0.56"/>
                         </FontString>
                     </Layer>
                 </Layers>
 
                 <Frames>
                     <EditBox name="$parentCodeInput" autoFocus="false" letters="32">
-                        <Size x="210" y="26"/>
+                        <Size x="248" y="26"/>
                         <Anchors>
-                            <Anchor point="LEFT" relativeTo="$parentLabel" relativePoint="RIGHT" x="6" y="0"/>
+                            <Anchor point="LEFT" relativeTo="$parentLabel" relativePoint="RIGHT" x="8" y="0"/>
                         </Anchors>
 
                         <Backdrop bgFile="Interface\ChatFrame\ChatFrameBackground" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="false">
@@ -555,7 +637,7 @@
                                 <AbsValue val="12"/>
                             </EdgeSize>
                             <Color r="0.05" g="0.04" b="0.02" a="1.0"/>
-                            <BorderColor r="0.60" g="0.46" b="0.20" a="1.0"/>
+                            <BorderColor r="0.70" g="0.52" b="0.22" a="1.0"/>
                         </Backdrop>
 
                         <FontString inherits="ChatFontNormal"/>
@@ -568,22 +650,22 @@
                                 this:ClearFocus()
                             </OnEscapePressed>
                             <OnEditFocusGained>
-                                this:SetBackdropBorderColor(1.0, 0.82, 0.0, 1.0)
+                                this:SetBackdropBorderColor(1.0, 0.86, 0.14, 1.0)
                             </OnEditFocusGained>
                             <OnEditFocusLost>
-                                this:SetBackdropBorderColor(0.60, 0.46, 0.20, 1.0)
+                                this:SetBackdropBorderColor(0.70, 0.52, 0.22, 1.0)
                             </OnEditFocusLost>
                         </Scripts>
                     </EditBox>
 
-                    <Button name="$parentRedeemButton" inherits="PromoDarkGoldButtonTemplate">
-                        <Size x="84" y="26"/>
+                    <Button name="$parentRedeemButton" inherits="PromoAIButtonTemplate">
+                        <Size x="120" y="30"/>
                         <Anchors>
-                            <Anchor point="LEFT" relativeTo="$parentCodeInput" relativePoint="RIGHT" x="8" y="0"/>
+                            <Anchor point="LEFT" relativeTo="$parentCodeInput" relativePoint="RIGHT" x="10" y="0"/>
                         </Anchors>
                         <Scripts>
                             <OnLoad>
-                                getglobal(this:GetName() .. "Text"):SetText("兑 换")
+                                getglobal(this:GetName() .. "Text"):SetText("兑  换")
                             </OnLoad>
                             <OnClick>
                                 PromotionRewardUI:RedeemFromInput()
@@ -593,15 +675,15 @@
                 </Frames>
             </Frame>
 
-            <!-- ─────── 分隔线 3 ─────── -->
+            <!-- ─── AI 生成华丽金色分隔线 ─── -->
             <Frame name="$parentDividerBottom">
-                <Size x="400" y="8"/>
+                <Size x="320" y="40"/>
                 <Anchors>
-                    <Anchor point="TOP" x="0" y="-510"/>
+                    <Anchor point="TOP" x="0" y="-412"/>
                 </Anchors>
                 <Layers>
                     <Layer level="ARTWORK">
-                        <Texture file="Interface\Common\UI-TooltipDivider-Transparent">
+                        <Texture name="$parentTex" file="Interface\AddOns\PromotionReward\Assets\divider_ornate.tga">
                             <Anchors>
                                 <Anchor point="TOPLEFT"/>
                                 <Anchor point="BOTTOMRIGHT"/>
@@ -611,33 +693,35 @@
                 </Layers>
             </Frame>
 
-            <!-- ─────── 底部按钮区 ─────── -->
+            <!-- ============================================================ -->
+            <!-- 底部按钮区                                                    -->
+            <!-- ============================================================ -->
             <Frame name="$parentButtonPanel">
-                <Size x="420" y="40"/>
+                <Size x="480" y="36"/>
                 <Anchors>
-                    <Anchor point="BOTTOM" x="0" y="14"/>
+                    <Anchor point="BOTTOM" x="0" y="12"/>
                 </Anchors>
 
                 <Layers>
                     <Layer level="ARTWORK">
                         <FontString name="$parentStatus" inherits="GameFontDisable" text="" justifyH="LEFT">
                             <Anchors>
-                                <Anchor point="LEFT" x="12" y="0"/>
-                                <Anchor point="RIGHT" x="-200" y="0"/>
+                                <Anchor point="LEFT" x="14" y="0"/>
+                                <Anchor point="RIGHT" x="-210" y="0"/>
                             </Anchors>
                         </FontString>
                     </Layer>
                 </Layers>
 
                 <Frames>
-                    <Button name="$parentRefreshButton" inherits="PromoDarkGoldButtonTemplate">
-                        <Size x="80" y="26"/>
+                    <Button name="$parentRefreshButton" inherits="PromoAIButtonTemplate">
+                        <Size x="120" y="30"/>
                         <Anchors>
-                            <Anchor point="RIGHT" x="-100" y="0"/>
+                            <Anchor point="RIGHT" x="-130" y="0"/>
                         </Anchors>
                         <Scripts>
                             <OnLoad>
-                                getglobal(this:GetName() .. "Text"):SetText("刷 新")
+                                getglobal(this:GetName() .. "Text"):SetText("刷  新")
                             </OnLoad>
                             <OnClick>
                                 PromotionRewardUI:RequestRefresh()
@@ -645,14 +729,14 @@
                         </Scripts>
                     </Button>
 
-                    <Button name="$parentCloseButton" inherits="PromoDarkGoldButtonTemplate">
-                        <Size x="80" y="26"/>
+                    <Button name="$parentCloseButton" inherits="PromoAIButtonTemplate">
+                        <Size x="120" y="30"/>
                         <Anchors>
                             <Anchor point="RIGHT" x="-14" y="0"/>
                         </Anchors>
                         <Scripts>
                             <OnLoad>
-                                getglobal(this:GetName() .. "Text"):SetText("关 闭")
+                                getglobal(this:GetName() .. "Text"):SetText("关  闭")
                             </OnLoad>
                             <OnClick>
                                 PromotionRewardUI:Hide()
@@ -681,38 +765,26 @@
     </Frame>
 
     <!-- ============================================================ -->
-    <!-- 屏幕顶部图标按钮 (金色底盘)                                  -->
+    <!-- 屏幕顶部图标按钮 (金色底盘)                                   -->
     <!-- ============================================================ -->
     <Frame name="PromotionRewardIconFrame" parent="UIParent" movable="true" enableMouse="false">
-        <Size x="60" y="46"/>
+        <Size x="60" y="40"/>
         <Anchors>
             <Anchor point="TOP" x="-120" y="-10"/>
         </Anchors>
 
         <Frames>
             <Button name="$parentIconButton" enableMouse="true" movable="true">
-                <Size x="26" y="26"/>
+                <Size x="20" y="20"/>
                 <Anchors>
                     <Anchor point="TOP" x="0" y="-2"/>
                 </Anchors>
 
-                <Backdrop bgFile="Interface\ChatFrame\ChatFrameBackground" edgeFile="Interface\Tooltips\UI-Tooltip-Border" tile="false">
-                    <BackgroundInsets>
-                        <AbsInset left="3" right="3" top="3" bottom="3"/>
-                    </BackgroundInsets>
-                    <EdgeSize>
-                        <AbsValue val="12"/>
-                    </EdgeSize>
-                    <Color r="0.05" g="0.04" b="0.02" a="0.85"/>
-                    <BorderColor r="0.65" g="0.50" b="0.20" a="1.0"/>
-                </Backdrop>
-
-                <NormalTexture file="Interface\Icons\INV_Misc_Coin_17">
-                    <Size x="18" y="18"/>
+                <NormalTexture file="Interface\AddOns\PromotionReward\Assets\icon_button.tga">
                     <Anchors>
-                        <Anchor point="CENTER"/>
+                        <Anchor point="TOPLEFT"/>
+                        <Anchor point="BOTTOMRIGHT"/>
                     </Anchors>
-                    <TexCoord left="0.07" right="0.93" top="0.07" bottom="0.93"/>
                 </NormalTexture>
                 <HighlightTexture file="Interface\Buttons\ButtonHilight-Square" alphaMode="ADD"/>
 
@@ -721,20 +793,22 @@
                         PromotionRewardUI:Toggle()
                     </OnClick>
                     <OnEnter>
-                        this:SetBackdropBorderColor(1.0, 0.82, 0.0, 1.0)
+                        local tex = this:GetNormalTexture()
+                        if tex then tex:SetVertexColor(1.0, 1.0, 0.85) end
                         GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
-                        GameTooltip:SetText("宣传奖励", 1, 0.82, 0)
-                        GameTooltip:AddLine("点击打开宣传奖励界面", 0.8, 0.8, 0.8, true)
+                        GameTooltip:SetText("宣传神器", 1, 0.86, 0.12)
+                        GameTooltip:AddLine("点击打开宣传奖励界面", 0.84, 0.84, 0.84, true)
                         GameTooltip:AddLine("拖动可移动图标位置", 0.6, 0.6, 0.6, true)
                         if PromotionRewardUI and PromotionRewardUI.state and PromotionRewardUI.state.days > 0 then
                             GameTooltip:AddLine(" ")
-                            GameTooltip:AddLine("累计宣传: " .. PromotionRewardUI.state.days .. " 天", 1, 0.85, 0.30)
-                            GameTooltip:AddLine("武器加成: +" .. PromotionRewardUI.state.totalAttr, 0.85, 0.55, 1.0)
+                            GameTooltip:AddLine("累计宣传: " .. PromotionRewardUI.state.days .. " 天", 1, 0.88, 0.32)
+                            GameTooltip:AddLine("神器加成: +" .. PromotionRewardUI.state.totalAttr, 0.90, 0.60, 1.0)
                         end
                         GameTooltip:Show()
                     </OnEnter>
                     <OnLeave>
-                        this:SetBackdropBorderColor(0.65, 0.50, 0.20, 1.0)
+                        local tex = this:GetNormalTexture()
+                        if tex then tex:SetVertexColor(1.0, 1.0, 1.0) end
                         GameTooltip:Hide()
                     </OnLeave>
                     <OnDragStart>
@@ -750,11 +824,11 @@
 
         <Layers>
             <Layer level="OVERLAY">
-                <FontString name="$parentText" inherits="GameFontNormalSmall" text="宣传奖励">
+                <FontString name="$parentText" inherits="GameFontNormalSmall" text="宣传神器">
                     <Anchors>
-                        <Anchor point="TOP" x="0" y="-28"/>
+                        <Anchor point="TOP" x="0" y="-24"/>
                     </Anchors>
-                    <Color r="1.0" g="0.82" b="0.0"/>
+                    <Color r="1.0" g="0.86" b="0.14"/>
                 </FontString>
             </Layer>
         </Layers>

@@ -33,6 +33,7 @@
 #include "Channel.h"
 #include "ChannelMgr.h"
 #include "CharacterDatabaseCleaner.h"
+#include "ClassAttributeCache.h"
 #include "Chat.h"
 #include "ChatPackets.h"
 #include "Common.h"
@@ -1649,6 +1650,9 @@ void World::SetInitialWorldSettings()
 
     LOG_INFO("server.loading", "Loading linked Spells...");
     sSpellMgr->LoadSpellLinked();
+
+    LOG_INFO("server.loading", "Loading Class Attribute Cache...");
+    sClassAttributeCache->Load();
 
     LOG_INFO("server.loading", "Loading Player Create Data...");
     sObjectMgr->LoadPlayerInfo();

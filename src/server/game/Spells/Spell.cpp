@@ -139,6 +139,25 @@ namespace
 
         return std::max<int32>(1, static_cast<int32>(hastedDuration));
     }
+
+    int32 ApplyCastSpeedToTime(int32 timeMs, Unit const* caster)
+    {
+        if (timeMs <= 0 || !caster)
+            return 0;
+
+        long double castSpeed = static_cast<long double>(caster->GetFloatValue(UNIT_MOD_CAST_SPEED));
+        if (!std::isfinite(castSpeed) || castSpeed <= 0.0L)
+            return 0;
+
+        long double hastedTime = static_cast<long double>(timeMs) * castSpeed;
+        if (!std::isfinite(hastedTime) || hastedTime <= 0.0L)
+            return 0;
+
+        if (hastedTime >= static_cast<long double>(std::numeric_limits<int32>::max()))
+            return std::numeric_limits<int32>::max();
+
+        return static_cast<int32>(hastedTime);
+    }
 }
 
 SpellDestination::SpellDestination()
@@ -9024,7 +9043,7 @@ void Spell::TriggerGlobalCooldown()
         if (m_spellInfo->StartRecoveryCategory == 133 && m_spellInfo->StartRecoveryTime == 1500 && m_spellInfo->DmgClass != SPELL_DAMAGE_CLASS_MELEE &&
             m_spellInfo->DmgClass != SPELL_DAMAGE_CLASS_RANGED && !m_spellInfo->HasAttribute(SPELL_ATTR0_USES_RANGED_SLOT) && !m_spellInfo->HasAttribute(SPELL_ATTR0_IS_ABILITY))
         {
-            gcd = int32(float(gcd) * m_caster->GetFloatValue(UNIT_MOD_CAST_SPEED));
+            gcd = ApplyCastSpeedToTime(gcd, m_caster);
         }
 
         if (gcd < MIN_GCD)

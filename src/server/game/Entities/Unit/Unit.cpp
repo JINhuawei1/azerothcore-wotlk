@@ -48,6 +48,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "OutdoorPvP.h"
+#include <chrono>
 #include <limits>
 #include "PassiveAI.h"
 #include "Pet.h"
@@ -98,6 +99,27 @@ float playerBaseMoveSpeed[MAX_MOVE_TYPE] =
     4.5f,                  // MOVE_FLIGHT_BACK
     3.14f                  // MOVE_PITCH_RATE
 };
+
+namespace
+{
+int64 ApplySpeedModToTime(int64 timeMs, long double speedMod)
+{
+    if (timeMs <= 0)
+        return 0;
+
+    if (!std::isfinite(speedMod) || speedMod <= 0.0L)
+        return 0;
+
+    long double result = static_cast<long double>(timeMs) * speedMod;
+    if (!std::isfinite(result) || result <= 0.0L)
+        return 0;
+
+    if (result >= static_cast<long double>(std::numeric_limits<int64>::max()))
+        return std::numeric_limits<int64>::max();
+
+    return static_cast<int64>(result);
+}
+}
 
 // Used for prepare can/can`t triggr aura
 static bool InitTriggerAuraData();
@@ -164,6 +186,49 @@ namespace
     int32 ToInt32Damage(uint64 damage)
     {
         return damage > static_cast<uint64>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(damage);
+    }
+
+    int32 ToInt32Saturated(long double value)
+    {
+        if (std::isnan(static_cast<double>(value)))
+            return 0;
+
+        if (!std::isfinite(value))
+            return value > 0.0L ? std::numeric_limits<int32>::max() : std::numeric_limits<int32>::min();
+
+        if (value >= static_cast<long double>(std::numeric_limits<int32>::max()))
+            return std::numeric_limits<int32>::max();
+
+        if (value <= static_cast<long double>(std::numeric_limits<int32>::min()))
+            return std::numeric_limits<int32>::min();
+
+        return static_cast<int32>(value);
+    }
+
+    uint32 ToUInt32Saturated(long double value)
+    {
+        if (std::isnan(static_cast<double>(value)))
+            return 0;
+
+        if (!std::isfinite(value))
+            return value > 0.0L ? std::numeric_limits<uint32>::max() : 0;
+
+        if (value <= 0.0L)
+            return 0;
+
+        if (value >= static_cast<long double>(std::numeric_limits<uint32>::max()))
+            return std::numeric_limits<uint32>::max();
+
+        return static_cast<uint32>(value);
+    }
+
+    void AddRatingBonusToSkill(uint32& value, float ratingBonus)
+    {
+        uint32 bonus = ToUInt32Saturated(static_cast<long double>(ratingBonus));
+        if (bonus > std::numeric_limits<uint32>::max() - value)
+            value = std::numeric_limits<uint32>::max();
+        else
+            value += bonus;
     }
 
     uint32 ToClientDamage(uint64 damage)
@@ -3404,7 +3469,8 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
 
     // Miss chance based on melee
     //float miss_chance = MeleeMissChanceCalc(victim, attType);
-    float miss_chance = MeleeSpellMissChance(victim, attType, int32(GetWeaponSkillValue(attType, victim)) - int32(victim->GetMaxSkillValueForLevel(this)), 0);
+    int32 skillDiff = ToInt32Saturated(static_cast<long double>(GetWeaponSkillValue(attType, victim)) - static_cast<long double>(victim->GetMaxSkillValueForLevel(this)));
+    float miss_chance = MeleeSpellMissChance(victim, attType, skillDiff, 0);
 
     // Critical hit chance
     float crit_chance = GetUnitCriticalChance(attType, victim);
@@ -3418,7 +3484,14 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
     // Useful if want to specify crit & miss chances for melee, else it could be removed
     //LOG_DEBUG("entities.unit", "MELEE OUTCOME: miss {} crit {} dodge {} parry {} block {}", miss_chance, crit_chance, dodge_chance, parry_chance, block_chance);
 
-    return RollMeleeOutcomeAgainst(victim, attType, int32(crit_chance * 100), int32(miss_chance * 100), int32(dodge_chance * 100), int32(parry_chance * 100), int32(block_chance * 100));
+    return RollMeleeOutcomeAgainst(
+        victim,
+        attType,
+        ToInt32Saturated(static_cast<long double>(crit_chance) * 100.0L),
+        ToInt32Saturated(static_cast<long double>(miss_chance) * 100.0L),
+        ToInt32Saturated(static_cast<long double>(dodge_chance) * 100.0L),
+        ToInt32Saturated(static_cast<long double>(parry_chance) * 100.0L),
+        ToInt32Saturated(static_cast<long double>(block_chance) * 100.0L));
 }
 
 MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackType attType, int32 crit_chance, int32 miss_chance, int32 dodge_chance, int32 parry_chance, int32 block_chance) const
@@ -3431,13 +3504,13 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
     int32 attackerMaxSkillValueForLevel = GetMaxSkillValueForLevel(victim);
     int32 victimMaxSkillValueForLevel = victim->GetMaxSkillValueForLevel(this);
 
-    int32 attackerWeaponSkill = GetWeaponSkillValue(attType, victim);
+    int32 attackerWeaponSkill = ToInt32Saturated(GetWeaponSkillValue(attType, victim));
     int32 victimDefenseSkill = victim->IsPlayer() ? static_cast<int32>(std::min<uint64>(victim->ToPlayer()->GetExtendedDefenseSkillValue(this), static_cast<uint64>(std::numeric_limits<int32>::max()))) : static_cast<int32>(victim->GetDefenseSkillValue(this));
 
     sScriptMgr->OnBeforeRollMeleeOutcomeAgainst(this, victim, attType, attackerMaxSkillValueForLevel, victimMaxSkillValueForLevel, attackerWeaponSkill, victimDefenseSkill, crit_chance, miss_chance, dodge_chance, parry_chance, block_chance);
 
     // bonus from skills is 0.04%
-    int32    skillBonus  = 4 * (attackerWeaponSkill - victimMaxSkillValueForLevel);
+    int32    skillBonus  = ToInt32Saturated((static_cast<long double>(attackerWeaponSkill) - static_cast<long double>(victimMaxSkillValueForLevel)) * 4.0L);
     int32    sum = 0, tmp = 0;
     int32    roll = urand (0, 10000);
 
@@ -3465,7 +3538,10 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
     {
         // Reduce dodge chance by attacker expertise rating
         if (IsPlayer())
-            dodge_chance -= int32(ToPlayer()->GetExpertiseDodgeOrParryReduction(attType) * 100);
+        {
+            int32 expertiseReduction = ToInt32Saturated(static_cast<long double>(ToPlayer()->GetExpertiseDodgeOrParryReduction(attType)) * 100.0L);
+            dodge_chance = ToInt32Saturated(static_cast<long double>(dodge_chance) - static_cast<long double>(expertiseReduction));
+        }
         else
             dodge_chance -= GetTotalAuraModifier(SPELL_AURA_MOD_EXPERTISE) * 25;
 
@@ -3499,7 +3575,10 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
     {
         // Reduce parry chance by attacker expertise rating
         if (IsPlayer())
-            parry_chance -= int32(ToPlayer()->GetExpertiseDodgeOrParryReduction(attType) * 100);
+        {
+            int32 expertiseReduction = ToInt32Saturated(static_cast<long double>(ToPlayer()->GetExpertiseDodgeOrParryReduction(attType)) * 100.0L);
+            parry_chance = ToInt32Saturated(static_cast<long double>(parry_chance) - static_cast<long double>(expertiseReduction));
+        }
         else
             parry_chance -= GetTotalAuraModifier(SPELL_AURA_MOD_EXPERTISE) * 25;
 
@@ -3549,7 +3628,7 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
         int32 maxskill = attackerMaxSkillValueForLevel;
         skill = (skill > maxskill) ? maxskill : skill;
 
-        tmp = (10 + (victimDefenseSkill - skill)) * 100;
+        tmp = ToInt32Saturated((10.0L + (static_cast<long double>(victimDefenseSkill) - static_cast<long double>(skill))) * 100.0L);
         tmp = tmp > 4000 ? 4000 : tmp;
         if (roll < (sum += tmp))
         {
@@ -3756,7 +3835,7 @@ bool Unit::isSpellBlocked(Unit* victim, SpellInfo const* spellProto, WeaponAttac
             return false;
 
         float blockChance = victim->GetUnitBlockChance();
-        blockChance += (int32(GetWeaponSkillValue(attackType)) - int32(victim->GetMaxSkillValueForLevel())) * 0.04f;
+        blockChance += static_cast<float>(ToInt32Saturated(static_cast<long double>(GetWeaponSkillValue(attackType)) - static_cast<long double>(victim->GetMaxSkillValueForLevel())) * 0.04L);
 
         // xinef: cant block while casting or while stunned
         if (blockChance < 0.0f || victim->IsNonMeleeSpellCast(false, false, true) || victim->HasUnitState(UNIT_STATE_CONTROLLED))
@@ -3816,13 +3895,13 @@ SpellMissInfo Unit::MeleeSpellHitResult(Unit* victim, SpellInfo const* spellInfo
         attackerWeaponSkill = GetLevel() * 5;
     // bonus from skills is 0.04% per skill Diff
     else
-        attackerWeaponSkill = int32(GetWeaponSkillValue(attType, victim));
+        attackerWeaponSkill = ToInt32Saturated(GetWeaponSkillValue(attType, victim));
 
-    int32 skillDiff = attackerWeaponSkill - int32(victim->GetMaxSkillValueForLevel(this));
+    int32 skillDiff = ToInt32Saturated(static_cast<long double>(attackerWeaponSkill) - static_cast<long double>(victim->GetMaxSkillValueForLevel(this)));
 
     uint32 roll = urand (0, 10000);
 
-    uint32 missChance = uint32(MeleeSpellMissChance(victim, attType, skillDiff, spellInfo->Id) * 100.0f);
+    uint32 missChance = ToUInt32Saturated(static_cast<long double>(MeleeSpellMissChance(victim, attType, skillDiff, spellInfo->Id)) * 100.0L);
     // Roll miss
     uint32 tmp = missChance;
     if (roll < tmp)
@@ -3918,13 +3997,16 @@ SpellMissInfo Unit::MeleeSpellHitResult(Unit* victim, SpellInfo const* spellInfo
     if (canDodge)
     {
         // Roll dodge
-        int32 dodgeChance = int32(victim->GetUnitDodgeChance() * 100.0f) - skillDiff * 4;
+        int32 dodgeChance = ToInt32Saturated(static_cast<long double>(victim->GetUnitDodgeChance()) * 100.0L - static_cast<long double>(skillDiff) * 4.0L);
         // Reduce enemy dodge chance by SPELL_AURA_MOD_COMBAT_RESULT_CHANCE
         dodgeChance += GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_COMBAT_RESULT_CHANCE, VICTIMSTATE_DODGE) * 100;
-        dodgeChance = int32(float(dodgeChance) * GetTotalAuraMultiplier(SPELL_AURA_MOD_ENEMY_DODGE));
+        dodgeChance = ToInt32Saturated(static_cast<long double>(dodgeChance) * static_cast<long double>(GetTotalAuraMultiplier(SPELL_AURA_MOD_ENEMY_DODGE)));
         // Reduce dodge chance by attacker expertise rating
         if (IsPlayer())
-            dodgeChance -= int32(ToPlayer()->GetExpertiseDodgeOrParryReduction(attType) * 100.0f);
+        {
+            int32 expertiseReduction = ToInt32Saturated(static_cast<long double>(ToPlayer()->GetExpertiseDodgeOrParryReduction(attType)) * 100.0L);
+            dodgeChance = ToInt32Saturated(static_cast<long double>(dodgeChance) - static_cast<long double>(expertiseReduction));
+        }
         else
             dodgeChance -= GetTotalAuraModifier(SPELL_AURA_MOD_EXPERTISE) * 25;
 
@@ -3940,10 +4022,13 @@ SpellMissInfo Unit::MeleeSpellHitResult(Unit* victim, SpellInfo const* spellInfo
     if (canParry)
     {
         // Roll parry
-        int32 parryChance = int32(victim->GetUnitParryChance() * 100.0f)  - skillDiff * 4;
+        int32 parryChance = ToInt32Saturated(static_cast<long double>(victim->GetUnitParryChance()) * 100.0L - static_cast<long double>(skillDiff) * 4.0L);
         // Reduce parry chance by attacker expertise rating
         if (IsPlayer())
-            parryChance -= int32(ToPlayer()->GetExpertiseDodgeOrParryReduction(attType) * 100.0f);
+        {
+            int32 expertiseReduction = ToInt32Saturated(static_cast<long double>(ToPlayer()->GetExpertiseDodgeOrParryReduction(attType)) * 100.0L);
+            parryChance = ToInt32Saturated(static_cast<long double>(parryChance) - static_cast<long double>(expertiseReduction));
+        }
         else
             parryChance -= GetTotalAuraModifier(SPELL_AURA_MOD_EXPERTISE) * 25;
 
@@ -3958,7 +4043,7 @@ SpellMissInfo Unit::MeleeSpellHitResult(Unit* victim, SpellInfo const* spellInfo
 
     if (canBlock)
     {
-        int32 blockChance = int32(victim->GetUnitBlockChance() * 100.0f) - skillDiff * 4;
+        int32 blockChance = ToInt32Saturated(static_cast<long double>(victim->GetUnitBlockChance()) * 100.0L - static_cast<long double>(skillDiff) * 4.0L);
 
         // xinef: cant block while casting or while stunned
         if (blockChance < 0 || victim->IsNonMeleeSpellCast(false, false, true) || victim->HasUnitState(UNIT_STATE_CONTROLLED))
@@ -4036,10 +4121,10 @@ SpellMissInfo Unit::MagicSpellHitResult(Unit* victim, SpellInfo const* spellInfo
 
         // Decrease hit chance from victim rating bonus
         if (victim->IsPlayer())
-            modHitChance -= int32(victim->ToPlayer()->GetRatingBonusValue(CR_HIT_TAKEN_SPELL));
+            modHitChance -= ToInt32Saturated(victim->ToPlayer()->GetRatingBonusValue(CR_HIT_TAKEN_SPELL));
     }
 
-    int32 HitChance = modHitChance * 100;
+    int64 HitChance = static_cast<int64>(modHitChance) * 100;
     // Increase hit chance from attacker SPELL_AURA_MOD_SPELL_HIT_CHANCE and attacker ratings
     // Xinef: Totems should inherit casters ratings?
     // 添加溢出保护：限制 m_modSpellHitChance 的最大值，防止 int32 溢出
@@ -4049,7 +4134,7 @@ SpellMissInfo Unit::MagicSpellHitResult(Unit* victim, SpellInfo const* spellInfo
     if (spellHitChance > 20000000.0f)
         spellHitChance = 20000000.0f;
 
-    int32 hitChanceAdd = int32(spellHitChance * 100.0f);
+    int32 hitChanceAdd = ToInt32Saturated(static_cast<long double>(spellHitChance) * 100.0L);
     HitChance += hitChanceAdd;
 
     if (HitChance < 100)
@@ -4057,7 +4142,7 @@ SpellMissInfo Unit::MagicSpellHitResult(Unit* victim, SpellInfo const* spellInfo
     else if (HitChance > 10000)
         HitChance = 10000;
 
-    int32 tmp = 10000 - HitChance;
+    int32 tmp = 10000 - static_cast<int32>(HitChance);
 
     int32 rand = irand(1, 10000); // Needs to be  1 to 10000 to avoid the 1/10000 chance to miss on 100% hit rating
 
@@ -4465,17 +4550,17 @@ uint32 Unit::GetWeaponSkillValue (WeaponAttackType attType, Unit const* target) 
                 ? player->GetMaxSkillValue(skill)
                 : player->GetSkillValue(skill);
         // Modify value from ratings
-        value += uint32(player->GetRatingBonusValue(CR_WEAPON_SKILL));
+        AddRatingBonusToSkill(value, player->GetRatingBonusValue(CR_WEAPON_SKILL));
         switch (attType)
         {
             case BASE_ATTACK:
-                value += uint32(player->GetRatingBonusValue(CR_WEAPON_SKILL_MAINHAND));
+                AddRatingBonusToSkill(value, player->GetRatingBonusValue(CR_WEAPON_SKILL_MAINHAND));
                 break;
             case OFF_ATTACK:
-                value += uint32(player->GetRatingBonusValue(CR_WEAPON_SKILL_OFFHAND));
+                AddRatingBonusToSkill(value, player->GetRatingBonusValue(CR_WEAPON_SKILL_OFFHAND));
                 break;
             case RANGED_ATTACK:
-                value += uint32(player->GetRatingBonusValue(CR_WEAPON_SKILL_RANGED));
+                AddRatingBonusToSkill(value, player->GetRatingBonusValue(CR_WEAPON_SKILL_RANGED));
                 break;
             default:
                 break;
@@ -5991,17 +6076,42 @@ void Unit::RemoveAreaAurasDueToLeaveWorld()
 
 void Unit::RemoveAllAuras()
 {
+    // 登出路径下这里可能处理上千条 aura，每一条都会触发 effect handler / 脚本回调。
+    // 加计数和分批计时，便于定位慢 aura。
+    Player const* pLog = ToPlayer();
+    using Clk = std::chrono::high_resolution_clock;
+    auto loopStart = Clk::now();
+    uint32 unapplyCount = 0;
+    uint32 ownedRemoveCount = 0;
+
     // this may be a dead loop if some events on aura remove will continiously apply aura on remove
     // we want to have all auras removed, so use your brain when linking events
     while (!m_appliedAuras.empty() || !m_ownedAuras.empty())
     {
         AuraApplicationMap::iterator aurAppIter;
         for (aurAppIter = m_appliedAuras.begin(); aurAppIter != m_appliedAuras.end();)
+        {
+            if (pLog)
+                ++unapplyCount;
             _UnapplyAura(aurAppIter, AURA_REMOVE_BY_DEFAULT);
+        }
 
         AuraMap::iterator aurIter;
         for (aurIter = m_ownedAuras.begin(); aurIter != m_ownedAuras.end();)
+        {
+            if (pLog)
+                ++ownedRemoveCount;
             RemoveOwnedAura(aurIter);
+        }
+    }
+
+    if (pLog)
+    {
+        int64 ms = std::chrono::duration_cast<std::chrono::milliseconds>(Clk::now() - loopStart).count();
+        if (ms >= 30)
+            LOG_WARN("server.loading",
+                "[性能监控-清理Aura] 角色={} applied={} owned={} 耗时={}ms",
+                pLog->GetName(), unapplyCount, ownedRemoveCount, ms);
     }
 }
 
@@ -15954,7 +16064,7 @@ int32 Unit::ModSpellDuration(SpellInfo const* spellProto, Unit const* target, in
     return std::max(duration, 0);
 }
 
-void Unit::ModSpellCastTime(SpellInfo const* spellInfo, int32& castTime, Spell* spell)
+void Unit::ModSpellCastTime(SpellInfo const* spellInfo, int64& castTime, Spell* spell)
 {
     if (!spellInfo || castTime < 0)
         return;
@@ -15971,17 +16081,17 @@ void Unit::ModSpellCastTime(SpellInfo const* spellInfo, int32& castTime, Spell* 
     {
         case SPELL_DAMAGE_CLASS_NONE:
             if (spellInfo->AttributesEx5 & SPELL_ATTR5_SPELL_HASTE_AFFECTS_PERIODIC) // required double check
-                castTime = int32(float(castTime) * GetFloatValue(UNIT_MOD_CAST_SPEED));
+                castTime = ApplySpeedModToTime(castTime, GetFloatValue(UNIT_MOD_CAST_SPEED));
             else if (spellInfo->SpellVisual[0] == 3881 && HasAura(67556)) // cooking with Chef Hat.
                 castTime = 500;
             break;
         case SPELL_DAMAGE_CLASS_MELEE:
             break; // no known cases
         case SPELL_DAMAGE_CLASS_MAGIC:
-            castTime = CanInstantCast() ? 0 : int32(float(castTime) * GetFloatValue(UNIT_MOD_CAST_SPEED));
+            castTime = CanInstantCast() ? 0 : ApplySpeedModToTime(castTime, GetFloatValue(UNIT_MOD_CAST_SPEED));
             break;
         case SPELL_DAMAGE_CLASS_RANGED:
-            castTime = int32(float(castTime) * m_modAttackSpeedPct[RANGED_ATTACK]);
+            castTime = ApplySpeedModToTime(castTime, m_modAttackSpeedPct[RANGED_ATTACK]);
             break;
         default:
             break;
@@ -16196,12 +16306,18 @@ bool Unit::HandleStatModifier(UnitMods unitMod, UnitModifierType modifierType, f
     {
         case BASE_VALUE:
         case TOTAL_VALUE:
-            m_auraModifiersGroup[unitMod][modifierType] += apply ? amount : -amount;
+            m_auraModifiersGroup[unitMod][modifierType] += apply ? double(amount) : -double(amount);
             break;
         case BASE_PCT:
         case TOTAL_PCT:
-            ApplyPercentModFloatVar(m_auraModifiersGroup[unitMod][modifierType], amount, apply);
+        {
+            // 百分比修正走 float 精度即可(pct 不会出现 1e12 级累加)；
+            // 但底层存储是 double,需要临时拷贝进出。
+            float tmp = float(m_auraModifiersGroup[unitMod][modifierType]);
+            ApplyPercentModFloatVar(tmp, amount, apply);
+            m_auraModifiersGroup[unitMod][modifierType] = double(tmp);
             break;
+        }
         default:
             break;
     }
@@ -16269,16 +16385,16 @@ bool Unit::HandleStatModifier(UnitMods unitMod, UnitModifierType modifierType, f
     return true;
 }
 
-float Unit::GetModifierValue(UnitMods unitMod, UnitModifierType modifierType) const
+double Unit::GetModifierValue(UnitMods unitMod, UnitModifierType modifierType) const
 {
     if (unitMod >= UNIT_MOD_END || modifierType >= MODIFIER_TYPE_END)
     {
         LOG_ERROR("entities.unit", "attempt to access non-existing modifier value from UnitMods!");
-        return 0.0f;
+        return 0.0;
     }
 
-    if (modifierType == TOTAL_PCT && m_auraModifiersGroup[unitMod][modifierType] <= 0.0f)
-        return 0.0f;
+    if (modifierType == TOTAL_PCT && m_auraModifiersGroup[unitMod][modifierType] <= 0.0)
+        return 0.0;
 
     return m_auraModifiersGroup[unitMod][modifierType];
 }
@@ -16287,16 +16403,17 @@ float Unit::GetTotalStatValue(Stats stat, float additionalValue) const
 {
     UnitMods unitMod = UnitMods(static_cast<uint16>(UNIT_MOD_STAT_START) + stat);
 
-    if (m_auraModifiersGroup[unitMod][TOTAL_PCT] <= 0.0f)
+    if (m_auraModifiersGroup[unitMod][TOTAL_PCT] <= 0.0)
         return 0.0f;
 
     // value = ((base_value * base_pct) + total_value) * total_pct
-    float value  = m_auraModifiersGroup[unitMod][BASE_VALUE] + GetCreateStat(stat);
+    // double 精度,避免 1e12 + 6999 被吞(float32 ULP ≈ 65536)
+    double value  = m_auraModifiersGroup[unitMod][BASE_VALUE] + double(GetCreateStat(stat));
     value *= m_auraModifiersGroup[unitMod][BASE_PCT];
-    value += m_auraModifiersGroup[unitMod][TOTAL_VALUE] + additionalValue;
+    value += m_auraModifiersGroup[unitMod][TOTAL_VALUE] + double(additionalValue);
     value *= m_auraModifiersGroup[unitMod][TOTAL_PCT];
 
-    return value;
+    return float(value);
 }
 
 float Unit::GetTotalAuraModValue(UnitMods unitMod) const
@@ -16307,15 +16424,16 @@ float Unit::GetTotalAuraModValue(UnitMods unitMod) const
         return 0.0f;
     }
 
-    if (m_auraModifiersGroup[unitMod][TOTAL_PCT] <= 0.0f)
+    if (m_auraModifiersGroup[unitMod][TOTAL_PCT] <= 0.0)
         return 0.0f;
 
-    float value = m_auraModifiersGroup[unitMod][BASE_VALUE];
+    // double 精度，避免 1e12 级 BASE_VALUE 与小量 TOTAL_VALUE 相加时精度丢失
+    double value = m_auraModifiersGroup[unitMod][BASE_VALUE];
     value *= m_auraModifiersGroup[unitMod][BASE_PCT];
     value += m_auraModifiersGroup[unitMod][TOTAL_VALUE];
     value *= m_auraModifiersGroup[unitMod][TOTAL_PCT];
 
-    return value;
+    return float(value);
 }
 
 void Unit::ApplyStatPercentBuffMod(Stats stat, float val, bool apply)
@@ -16922,28 +17040,53 @@ void Unit::CleanupBeforeRemoveFromMap(bool finalCleanup)
     if (IsDuringRemoveFromWorld())
         return;
 
+    // 分段性能采样：定位 CleanupsBeforeDelete 里哪一步拖住主线程。
+    // 只对玩家打日志（NPC 卸载高频，不需要监控）。
+    using Clk = std::chrono::high_resolution_clock;
+    Player const* pLog = ToPlayer();
+    auto t0 = Clk::now();
+    auto step = [&](char const* name)
+    {
+        if (!pLog)
+            return;
+        auto now = Clk::now();
+        int64 ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - t0).count();
+        t0 = now;
+        if (ms >= 30)
+            LOG_WARN("server.loading",
+                "[性能监控-清理] 阶段={} 角色={} 耗时={}ms", name, pLog->GetName(), ms);
+    };
+
     // This needs to be before RemoveFromWorld to make GetCaster() return a valid pointer on aura removal
     InterruptNonMeleeSpells(true);
+    step("InterruptNonMeleeSpells");
 
     if (IsInWorld()) // not in world and not being removed atm
         RemoveFromWorld();
+    step("RemoveFromWorld");
 
     ASSERT(GetGUID());
 
     // A unit may be in removelist and not in world, but it is still in grid
     // and may have some references during delete
     RemoveAllAuras();
+    step("RemoveAllAuras");
     RemoveAllGameObjects();
+    step("RemoveAllGameObjects");
 
     if (finalCleanup)
         m_cleanupDone = true;
 
     CombatStop();
+    step("CombatStop");
     ClearComboPoints();
     ClearComboPointHolders();
+    step("ClearCombo");
     GetThreatMgr().ClearAllThreat();
     getHostileRefMgr().deleteReferences();
+    step("ClearThreatAndHostileRefs");
     GetMotionMaster()->Clear(false);                    // remove different non-standard movement generators.
+    step("MotionMasterClear");
 }
 
 void Unit::CleanupsBeforeDelete(bool finalCleanup)

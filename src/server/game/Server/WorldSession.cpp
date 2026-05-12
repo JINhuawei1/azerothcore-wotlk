@@ -53,6 +53,7 @@
 #include "WorldPacket.h"
 #include "WorldSocket.h"
 #include "WorldState.h"
+#include <chrono>
 #include <zlib.h>
 
 namespace
@@ -584,9 +585,33 @@ void WorldSession::HandleTeleportTimeout(bool updateInSessions)
 /// %Log the player out
 void WorldSession::LogoutPlayer(bool save)
 {
+    // 分段性能采样：统计每一步耗时，主线程卡顿定位用。
+    // 阈值内的分段不打印，超过阈值打印 WARN，便于快速定位瓶颈。
+    using LogoutClock = std::chrono::high_resolution_clock;
+    auto const logoutStart = LogoutClock::now();
+    auto phaseStart = logoutStart;
+    constexpr int64 LOGOUT_PHASE_WARN_MS = 50;   // 单段 >50ms 标黄
+    constexpr int64 LOGOUT_TOTAL_WARN_MS = 200;  // 总耗时 >200ms 标黄
+
+    auto measurePhase = [&](char const* phase)
+    {
+        auto now = LogoutClock::now();
+        int64 ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - phaseStart).count();
+        phaseStart = now;
+        if (ms >= LOGOUT_PHASE_WARN_MS)
+        {
+            LOG_WARN("server.loading",
+                "[性能监控-登出分段] 账号={} 角色={} 阶段={} 耗时={}ms",
+                GetAccountId(),
+                _player ? _player->GetName() : "<none>",
+                phase, ms);
+        }
+    };
+
     // finish pending transfers before starting the logout
     while (_player && _player->IsBeingTeleportedFar())
         HandleMoveWorldportAck();
+    measurePhase("WaitTeleport");
 
     m_playerLogout = true;
     m_playerSave = save;
@@ -595,6 +620,7 @@ void WorldSession::LogoutPlayer(bool save)
     {
         //! Call script hook before other logout events
         sScriptMgr->OnPlayerBeforeLogout(_player);
+        measurePhase("Script:OnBeforeLogout");
 
         if (ObjectGuid lguid = _player->GetLootGUID())
             DoLootRelease(lguid);
@@ -620,6 +646,7 @@ void WorldSession::LogoutPlayer(bool save)
             _player->RepopAtGraveyard();
             _player->SetPendingBind(0, 0);
         }
+        measurePhase("DeathRepop");
 
         // pussywizard: leave whole bg on logout (character stays ingame when necessary)
         // pussywizard: GetBattleground() checked inside
@@ -631,6 +658,7 @@ void WorldSession::LogoutPlayer(bool save)
 
         sOutdoorPvPMgr->HandlePlayerLeaveZone(_player, _player->GetZoneId());
         sWorldState->HandlePlayerLeaveZone(_player, static_cast<WorldStateZoneId>(_player->GetZoneId()));
+        measurePhase("LeaveBGAndZone");
 
         // pussywizard: remove from battleground queues on logout
         for (int i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
@@ -656,17 +684,21 @@ void WorldSession::LogoutPlayer(bool save)
                 _player->RemoveBattlegroundQueueId(bgQueueTypeId);
                 sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId).RemovePlayer(_player->GetGUID(), true);
             }
+        measurePhase("BGQueueCleanup");
 
         ///- If the player is in a guild, update the guild roster and broadcast a logout message to other guild members
         if (Guild* guild = sGuildMgr->GetGuildById(_player->GetGuildId()))
             guild->HandleMemberLogout(this);
+        measurePhase("GuildLogout");
 
         ///- Remove pet
         _player->RemovePet(nullptr, PET_SAVE_AS_CURRENT);
+        measurePhase("RemovePet");
 
         // pussywizard: on logout remove auras that are removed at map change (before saving to db)
         // there are some positive auras from boss encounters that can be kept by logging out and logging in after boss is dead, and may be used on next bosses
         _player->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_CHANGE_MAP);
+        measurePhase("RemoveMapAuras");
 
         if (Group *group = _player->GetGroupInvite())
             sWorld->getBoolConfig(CONFIG_LEAVE_GROUP_ON_LOGOUT)
@@ -686,6 +718,7 @@ void WorldSession::LogoutPlayer(bool save)
         // Teleport player immediately for correct player save
         while (_player && _player->IsBeingTeleportedFar())
             HandleMoveWorldportAck();
+        measurePhase("GroupCleanup");
 
         ///- empty buyback items and save the player in the database
         // some save parts only correctly work in case player present in map/player_lists (pets, etc)
@@ -701,9 +734,11 @@ void WorldSession::LogoutPlayer(bool save)
             }
             _player->SaveToDB(false, true);
         }
+        measurePhase("SaveToDB");
 
         ///- Leave all channels before player delete...
         _player->CleanupChannels();
+        measurePhase("CleanupChannels");
 
         //! Send update to group and reset stored max enchanting level
         if (_player->GetGroup())
@@ -722,9 +757,11 @@ void WorldSession::LogoutPlayer(bool save)
         //! Broadcast a logout message to the player's friends
         sSocialMgr->SendFriendStatus(_player, FRIEND_OFFLINE, _player->GetGUID(), true);
         sSocialMgr->RemovePlayerSocial(_player->GetGUID());
+        measurePhase("GroupUpdateAndSocial");
 
         //! Call script hook before deletion
         sScriptMgr->OnPlayerLogout(_player);
+        measurePhase("Script:OnLogout");
 
         METRIC_EVENT("player_events", "Logout", _player->GetName());
 
@@ -736,13 +773,16 @@ void WorldSession::LogoutPlayer(bool save)
         // e.g if he got disconnected during a transfer to another map
         // calls to GetMap in this case may cause crashes
         _player->CleanupsBeforeDelete();
+        measurePhase("CleanupsBeforeDelete");
         if (Map* _map = _player->FindMap())
         {
             _map->RemovePlayerFromMap(_player, true);
             _map->AfterPlayerUnlinkFromMap();
         }
+        measurePhase("RemoveFromMap");
 
         SetPlayer(nullptr); // pointer already deleted
+        measurePhase("DeletePlayer");
 
         //! Send the 'logout complete' packet to the client
         //! Client will respond by sending 3x CMSG_CANCEL_TRADE, which we currently dont handle
@@ -753,12 +793,23 @@ void WorldSession::LogoutPlayer(bool save)
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_ACCOUNT_ONLINE);
         stmt->SetData(0, GetAccountId());
         CharacterDatabase.Execute(stmt);
+        measurePhase("FinalDB");
     }
 
     m_playerLogout = false;
     m_playerSave = false;
     m_playerRecentlyLogout = true;
     SetLogoutStartTime(0);
+
+    auto totalMs = std::chrono::duration_cast<std::chrono::milliseconds>(LogoutClock::now() - logoutStart).count();
+    if (totalMs >= LOGOUT_TOTAL_WARN_MS)
+        LOG_WARN("server.loading",
+            "[性能监控-登出总耗时] 账号={} 总耗时={}ms (阈值{}ms)",
+            GetAccountId(), totalMs, LOGOUT_TOTAL_WARN_MS);
+    else
+        LOG_INFO("server.loading",
+            "[性能监控-登出总耗时] 账号={} 总耗时={}ms",
+            GetAccountId(), totalMs);
 }
 
 /// Kick a player out of the World

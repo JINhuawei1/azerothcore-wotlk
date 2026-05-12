@@ -26,7 +26,9 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <set>
@@ -46,6 +48,17 @@ namespace
     constexpr size_t MAX_ADDON_PAYLOAD = 200;
     constexpr uint8 TUJIAN_ATTR_MODE_FIXED = 0;
     constexpr uint8 TUJIAN_ATTR_MODE_EQUIP = 1;
+
+    int32 ToInt32ForLegacyStatPath(int64 value)
+    {
+        if (value > std::numeric_limits<int32>::max())
+            return std::numeric_limits<int32>::max();
+
+        if (value < std::numeric_limits<int32>::min())
+            return std::numeric_limits<int32>::min();
+
+        return static_cast<int32>(value);
+    }
 
     struct TuJianEntry
     {
@@ -284,7 +297,8 @@ namespace
         if (!player || value == 0)
             return;
 
-        int32 val = static_cast<int32>(value);
+        int64 val = value;
+        int32 legacyVal = ToInt32ForLegacyStatPath(value);
         switch (statType)
         {
             case ITEM_MOD_MANA:
@@ -407,7 +421,7 @@ namespace
                 player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, float(val), apply);
                 break;
             case ITEM_MOD_MANA_REGENERATION:
-                player->ApplyManaRegenBonus(val, apply);
+                player->ApplyManaRegenBonus(legacyVal, apply);
                 break;
             case ITEM_MOD_ARMOR_PENETRATION_RATING:
                 player->ApplyRatingMod(CR_ARMOR_PENETRATION, val, apply);
@@ -416,10 +430,10 @@ namespace
                 player->ApplySpellPowerBonus(val, apply);
                 break;
             case ITEM_MOD_HEALTH_REGEN:
-                player->ApplyHealthRegenBonus(val, apply);
+                player->ApplyHealthRegenBonus(legacyVal, apply);
                 break;
             case ITEM_MOD_SPELL_PENETRATION:
-                player->ApplySpellPenetrationBonus(val, apply);
+                player->ApplySpellPenetrationBonus(legacyVal, apply);
                 break;
             case ITEM_MOD_BLOCK_VALUE:
                 player->HandleBaseModValue(SHIELD_BLOCK_VALUE, FLAT_MOD, float(val), apply);
@@ -2212,8 +2226,58 @@ public:
         if (!player)
             return;
 
-        RemovePlayerVirtualItems(player, true);
-        ClearPlayerCache(player->GetGUID().GetCounter());
+        using Clk = std::chrono::high_resolution_clock;
+        auto t0 = Clk::now();
+        auto step = [&](char const* name)
+        {
+            auto now = Clk::now();
+            int64 ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - t0).count();
+            t0 = now;
+            if (ms >= 30)
+                LOG_WARN("server.loading",
+                    "[性能监控-图鉴登出] 阶段={} 角色={} 耗时={}ms", name, player->GetName(), ms);
+        };
+
+        // 【性能优化】登出时走快速清理路径，不做属性/aura 回滚：
+        //   1) 玩家即将 CleanupsBeforeDelete + delete，aura 与属性都会被析构；
+        //   2) _ApplyItemMods / ApplyItemEquipSpell / RemoveItemsSetItem / RefreshPlayerStats
+        //      是主线程同步重路径，之前实测占用 400ms，是小退卡顿的主因之一；
+        //   3) 所有 unique_ptr<Item> 在 map.erase 时会自动析构，GUID 键的外部缓存也仍会清理。
+        uint32 playerGuid = player->GetGUID().GetCounter();
+
+        // 需要按 item GUID 清理的外部缓存，保留
+        auto itr = playerVirtualItems.find(playerGuid);
+        if (itr != playerVirtualItems.end())
+        {
+            for (auto const& applied : itr->second)
+            {
+                if (!applied.item)
+                    continue;
+
+                uint32 itemGuidCounter = applied.item->GetGUID().GetCounter();
+
+#ifdef MODULE_ITEM_SKILLS
+                if (applied.hasExternalSkills)
+                    sItemSkillsManager->RemoveExternalItemSkills(playerGuid, itemGuidCounter);
+#endif
+
+                if (!applied.allowEquipSpell)
+                    blockedVirtualEquipSpellItemGuids.erase(itemGuidCounter);
+            }
+
+            playerVirtualItems.erase(itr); // 触发 unique_ptr<Item> 析构
+        }
+
+        // 其余都是玩家 GUID 索引的缓存，直接 erase 即可
+        playerItemSetContributions.erase(playerGuid);
+        playerAggregatedItemBonuses.erase(playerGuid);
+        playerFallbackAppliedItems.erase(playerGuid);
+        playerWeaponDamageBonuses.erase(playerGuid);
+        playerFixedAllStatsBonus.erase(playerGuid);
+        step("FastCleanupVirtualItems");
+
+        ClearPlayerCache(playerGuid);
+        step("ClearPlayerCache");
     }
 
     void OnPlayerDeleteFromDB(CharacterDatabaseTransaction trans, uint32 guid) override

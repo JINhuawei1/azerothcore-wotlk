@@ -3255,19 +3255,37 @@ void AscensionPlayerScript::OnPlayerLogout(Player* player)
     if (!sAscensionConfig->IsEnabled() || !player)
         return;
 
-    // 移除所有效果
-    sAscensionManager->RemoveAllEffects(player);
+    // 登出路径分段计时，定位 2s 级卡顿
+    using Clk = std::chrono::high_resolution_clock;
+    auto t0 = Clk::now();
+    auto step = [&](char const* name)
+    {
+        auto now = Clk::now();
+        int64 ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - t0).count();
+        t0 = now;
+        if (ms >= 30)
+            LOG_WARN("server.loading",
+                "[性能监控-飞升登出] 阶段={} 角色={} 耗时={}ms", name, player->GetName(), ms);
+    };
+
+    // 【性能优化】登出时不回滚属性/aura/套装。
+    //   原因：玩家对象即将 CleanupsBeforeDelete + delete，aura 列表和属性都会被析构，
+    //   无须再走 RemoveAurasDueToSpell / RemoveStatEffect / UpdatePlayerStats 这条同步重路径。
+    //   RemoveAllEffects 之前实测耗时 2000ms+，是主线程卡顿的主因。
+    //   注意：如果未来在登出路径后还有任何"玩家仍在世界"的逻辑依赖此属性状态，需要重新评估。
 
     // 保存飞升物品到数据库
     sAscensionManager->SaveAscensionItems(player);
+    step("SaveAscensionItems");
 
     // 保存数据
     sAscensionManager->SavePlayerData(player);
+    step("SavePlayerData");
 
     // 【修复】清理玩家内存状态，防止内存泄漏
-    // 注意：由于 CanItemRemove 钩子现在依赖数据库检查而不是内存状态，
-    // 所以可以安全地在这里清理内存
+    // ClearPlayerData 内部 delete 了 slots 中的 Item*，必须保留。
     sAscensionManager->ClearPlayerData(player->GetGUID().GetCounter());
+    step("ClearPlayerData");
 
     if (sAscensionConfig->IsDebugMode())
     {

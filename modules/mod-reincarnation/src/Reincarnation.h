@@ -4,7 +4,7 @@
  * 此文件定义了转身系统的核心类和数据结构
  * 主要功能：玩家满足需求模板条件后可进行转身，并获得对应的累计奖励
  * 每次转身获得全属性百分比加成和额外天赋点
- * 支持无限转身，通过需求模板系统控制转身条件
+ * 通过数据库中已配置的最高转身等级控制上限
  */
 
 #ifndef _REINCARNATION_H_
@@ -98,6 +98,7 @@ public:
     uint32 GetPlayerBonusTalentPoints(uint32 playerGuid) const;
 
     uint32 GetConfigCount() const { return static_cast<uint32>(_configs.size()); }
+    uint32 GetMaxReincarnationLevel() const { return _maxConfiguredLevel; }
 
 private:
     ReincarnationMgr();
@@ -108,6 +109,7 @@ private:
 
     // 转身配置，键为转身等级
     std::map<uint32, ReincarnationConfig> _configs;
+    uint32 _maxConfiguredLevel;
 
     // 玩家数据，键为玩家GUID
     std::unordered_map<uint32, PlayerReincarnationData> _playerData;

@@ -4129,7 +4129,7 @@ RenderTooltip = function(tooltip, itemID, guid, bag, slot)
 
     if bag ~= nil and slot ~= nil then
         local pendingIdentifyInfo = GetPendingIdentifyInfo(bag, slot, itemID)
-        isPendingIdentifyTooltip = pendingIdentifyInfo and pendingIdentifyInfo.isPending
+        isPendingIdentifyTooltip = (pendingIdentifyInfo and pendingIdentifyInfo.isPending) == true
     end
 
     if cached and cached.systems then

@@ -24,3 +24,19 @@
 
 - 对当前仓库而言，如果 `az/acore-cli validate report`、`self-check` 或 `doctor` 显示 `soap=false`，但数据库三库连接正常、`worldserver/authserver` 路径存在，则默认先判断为“服务器或 SOAP 服务尚未启动”，而不是 harness 配置错误。
 - 遇到上述模式时，后续回复应直接按“需要先启动服务器，再验证 SOAP”来表述；除非用户明确要求排查 SOAP 配置，否则不要把它反复当成独立异常点强调。
+
+
+# 生图 MCP（game-image-gen）
+
+- 已在 `.kiro/settings/mcp.json` 安装 MCP server `game-image-gen`，绑定到 `kiro_default` agent，开箱即用。后端 `gpt-image-2`（OpenAI 兼容），endpoint `https://moai.top/v1`。
+- 当用户说"调用生图模型/生成素材/生图"之类，应使用 MCP 工具：
+    - `@game-image-gen/generate_game_asset(prompt, filename, size, subdir, overwrite)` — 异步下单，立刻返回
+    - `@game-image-gen/check_asset_status(filename, subdir)` — 轮询完成状态
+    - `@game-image-gen/list_generated_assets(subdir)` — 列已生成素材
+    - `@game-image-gen/server_status()` — 查 MCP 自检
+- 单张 PNG 生成通常 60–180s。下单后用 `check_asset_status` 轮询到 `[OK]` 再继续后续步骤，不要假设立刻完成。
+- 素材默认落到 `E:\azerothcore-wotlk\agent-harness\art\ai_generated\<subdir>\<filename>.png`。
+- gpt-image-2 的 size 限制：宽高都必须是 16 的倍数，总像素 655360–8294400，长短边比 ≤ 3:1。常用 `1024x1024`（正方形）或 `1536x512`（超宽条）。
+- Prompt 写英文效果更稳，务必加 `no text, no letters, no characters` 避免 AI 画乱码文字。
+- WoW 3.3.5 UI 素材流程：生成 PNG → auto-trim（黑色转透明 + bbox 裁剪让装饰贴满画布） → resize 到 2 的幂 → 保存为 32bit 未压缩 TGA → 放到 `<AddOn>\Assets\`，XML 里用 `Interface\AddOns\<Name>\Assets\<file>.tga`。已有脚本：`agent-harness\tools\png_to_tga.py`、`agent-harness\tools\build_promo_tga_v2.py`（auto-trim 参考实现）。
+- 让素材"不拉伸"的关键：**XML Size 的宽高比 = TGA 装饰实际 bbox 的宽高比**，不要强行用和 TGA 不同比例的 Size 拉伸贴图。

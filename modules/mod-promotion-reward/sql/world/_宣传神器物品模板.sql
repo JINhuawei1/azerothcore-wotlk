@@ -3,6 +3,7 @@
 -- 号段: 997001-998000,对应 宣传神器1-宣传神器1000
 -- 属性: 每级全属性 = 1999 + (等级 - 1) * 1000
 -- 奖励: 同步对接 `_模板_奖励` 100-1099,每级奖励对应同级宣传神器
+-- 背包/银行生效: 同步对接 `_物品_放背包加属性`,生效位置=2(背包+银行)
 -- ============================================================
 
 DROP TEMPORARY TABLE IF EXISTS `_tmp_promotion_weapon_levels`;
@@ -96,6 +97,18 @@ SELECT
   CONCAT(997000 + l.`lvl`, ' 1'),
   0,
   CONCAT('宣传神器', l.`lvl`, ' x1')
+FROM `_tmp_promotion_weapon_levels` l
+ORDER BY l.`lvl`;
+
+DELETE FROM `_物品_放背包加属性`
+WHERE `entry` BETWEEN 997001 AND 998000;
+
+INSERT INTO `_物品_放背包加属性`
+  (`注释`, `entry`, `生效背包位置`)
+SELECT
+  CONCAT('宣传神器', l.`lvl`, '背包银行属性生效'),
+  997000 + l.`lvl`,
+  2
 FROM `_tmp_promotion_weapon_levels` l
 ORDER BY l.`lvl`;
 

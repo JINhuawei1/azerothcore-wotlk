@@ -19,6 +19,8 @@
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "ScriptMgrMacros.h"
+#include "Log.h"
+#include <chrono>
 
 void ScriptMgr::OnPlayerBeforeDurabilityRepair(Player* player, ObjectGuid npcGUID, ObjectGuid itemGUID, float& discountMod, uint8 guildBank)
 {
@@ -262,7 +264,28 @@ void ScriptMgr::OnPlayerBeforeLogout(Player* player)
 
 void ScriptMgr::OnPlayerLogout(Player* player)
 {
-    CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_LOGOUT, script->OnPlayerLogout(player));
+    // 登出时 hook 较多且容易被第三方模块拖慢，单独按脚本计时定位瓶颈。
+    auto const& scripts = ScriptRegistry<PlayerScript>::EnabledHooks[PLAYERHOOK_ON_LOGOUT];
+    if (scripts.empty())
+        return;
+
+    using HookClock = std::chrono::high_resolution_clock;
+    constexpr int64 LOGOUT_HOOK_WARN_MS = 30; // 单个脚本 >=30ms 才打印，避免噪音
+
+    for (PlayerScript* script : scripts)
+    {
+        auto start = HookClock::now();
+        script->OnPlayerLogout(player);
+        int64 ms = std::chrono::duration_cast<std::chrono::milliseconds>(HookClock::now() - start).count();
+        if (ms >= LOGOUT_HOOK_WARN_MS)
+        {
+            LOG_WARN("server.loading",
+                "[性能监控-登出脚本] 脚本={} 角色={} 耗时={}ms",
+                script->GetName(),
+                player ? player->GetName() : "<none>",
+                ms);
+        }
+    }
 }
 
 void ScriptMgr::OnPlayerCreate(Player* player)

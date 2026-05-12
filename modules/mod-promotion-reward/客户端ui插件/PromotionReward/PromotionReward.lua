@@ -4,10 +4,8 @@
   配合 mod-promotion-reward 服务端模块使用
 
   通信协议 (Addon Message, prefix=PROMOREWARD):
-    Client -> Server:  REQ_INFO | REQ_CODES | REDEEM:<CDK>
+    Client -> Server:  REQ_INFO | REDEEM:<CDK>
     Server -> Client:  INFO:days|attr|weapon|base|perDay|claimed|nextWeapon|level|nextLevel|nextAttr|minDmg|maxDmg|nextMinDmg|nextMaxDmg
-                       CODES:CDK1,CDK2,...
-                       CODES_END
                        OPEN
                        REDEEM_OK:CDK | REDEEM_FAIL:CDK:reason
 ]]--
@@ -42,7 +40,6 @@ PromotionRewardUI.state = {
     baseAttr    = 1999,
     perDay      = 1000,
     weaponHeld  = false,
-    codes       = {},
     pendingCode = nil,
 }
 
@@ -232,7 +229,6 @@ end
 
 function PromotionRewardUI:RequestRefresh()
     SendAddon("REQ_INFO")
-    SendAddon("REQ_CODES")
 end
 
 function PromotionRewardUI:RedeemFromInput()
@@ -258,8 +254,6 @@ end
 -- 协议解析
 -- ============================================================
 
-local CodesAccum = nil
-
 function PromotionRewardUI:HandleAddonMessage(msg)
     local tab = msg:find("\t")
     if not tab then return end
@@ -270,22 +264,12 @@ function PromotionRewardUI:HandleAddonMessage(msg)
 
     if payload:sub(1, 5) == "INFO:" then
         self:ParseInfo(payload:sub(6))
-    elseif payload:sub(1, 6) == "CODES:" then
-        self:ParseCodes(payload:sub(7))
-    elseif payload == "CODES_END" then
-        self:FlushCodes()
     elseif payload == "OPEN" then
         self:Show()
     elseif payload:sub(1, 10) == "REDEEM_OK:" then
         local code = payload:sub(11)
         self.state.pendingCode = nil
         self:ShowStatus("|cff00ff00兑换成功: " .. code .. "|r")
-        for i = #self.state.codes, 1, -1 do
-            if self.state.codes[i] == code then
-                table.remove(self.state.codes, i)
-            end
-        end
-        self:RenderCodes()
         self:RequestRefresh()
     elseif payload:sub(1, 12) == "REDEEM_FAIL:" then
         local rest = payload:sub(13)
@@ -294,7 +278,6 @@ function PromotionRewardUI:HandleAddonMessage(msg)
         local reason = sep and rest:sub(sep + 1) or "未知错误"
         self.state.pendingCode = nil
         self:ShowStatus("|cffff5555兑换失败 [" .. code .. "]: " .. reason .. "|r")
-        self:RenderCodes()
     end
 end
 
@@ -336,21 +319,6 @@ function PromotionRewardUI:ParseInfo(payload)
     self:RenderInfo()
 end
 
-function PromotionRewardUI:ParseCodes(payload)
-    if not CodesAccum then CodesAccum = {} end
-    if payload and payload ~= "" then
-        for code in string.gmatch(payload, "([^,]+)") do
-            table.insert(CodesAccum, code)
-        end
-    end
-end
-
-function PromotionRewardUI:FlushCodes()
-    self.state.codes = CodesAccum or {}
-    CodesAccum = nil
-    self:RenderCodes()
-end
-
 -- ============================================================
 -- 渲染
 -- ============================================================
@@ -368,7 +336,7 @@ function PromotionRewardUI:RenderInfo()
     if PromotionRewardFrameAttrPanelValue then
         PromotionRewardFrameAttrPanelValue:SetText("+" .. FormatNum(s.totalAttr))
         if s.weaponHeld then
-            PromotionRewardFrameAttrPanelValue:SetTextColor(0.90, 0.60, 1.0)
+            PromotionRewardFrameAttrPanelValue:SetTextColor(0.95, 0.62, 1.0)
         else
             PromotionRewardFrameAttrPanelValue:SetTextColor(0.55, 0.50, 0.55)
         end
@@ -379,10 +347,10 @@ function PromotionRewardUI:RenderInfo()
         if s.weaponLevel and s.weaponLevel > 0 then
             PromotionRewardFrameAttrPanelUnit:SetText(WeaponName(s.weaponEntry, s.weaponLevel))
         else
-            PromotionRewardFrameAttrPanelUnit:SetText("未获得武器")
+            PromotionRewardFrameAttrPanelUnit:SetText("未获得神器")
         end
         if s.weaponHeld then
-            PromotionRewardFrameAttrPanelUnit:SetTextColor(0.72, 0.52, 0.88)
+            PromotionRewardFrameAttrPanelUnit:SetTextColor(0.80, 0.58, 0.94)
         else
             PromotionRewardFrameAttrPanelUnit:SetTextColor(0.50, 0.45, 0.50)
         end
@@ -391,15 +359,51 @@ function PromotionRewardUI:RenderInfo()
     -- 武器是否在身
     if PromotionRewardFrameAttrPanelHeld then
         if s.weaponHeld then
-            PromotionRewardFrameAttrPanelHeld:SetText("● 武器在身 · 属性已生效")
+            PromotionRewardFrameAttrPanelHeld:SetText("● 已拥有神器 · 背包/银行生效")
             PromotionRewardFrameAttrPanelHeld:SetTextColor(0.30, 1.0, 0.40)
         else
-            PromotionRewardFrameAttrPanelHeld:SetText("○ 武器不在身 · 属性未生效")
+            PromotionRewardFrameAttrPanelHeld:SetText("○ 未拥有神器 · 输入CDK兑换")
             PromotionRewardFrameAttrPanelHeld:SetTextColor(1.0, 0.32, 0.32)
         end
     end
 
-    -- 下次奖励进度条
+    -- 进度条：总体成长进度 (days / MAX_LEVEL)
+    -- 使用 AI 生成的 progress_fill.tga 原色（金→紫渐变），不做染色
+    local bar = PromotionRewardFrameProgressPanelBarFrameBar
+    if bar then
+        bar:SetMinMaxValues(0, PROMO_WEAPON_MAX_LEVEL)
+        local curDays = math.max(0, math.min(s.days or 0, PROMO_WEAPON_MAX_LEVEL))
+        bar:SetValue(curDays)
+        bar:SetStatusBarColor(1.0, 1.0, 1.0, 1.0)
+    end
+
+    if PromotionRewardFrameProgressPanelLabelLeft then
+        local curLv = s.weaponLevel or 0
+        PromotionRewardFrameProgressPanelLabelLeft:SetText("当前 Lv." .. curLv)
+    end
+    if PromotionRewardFrameProgressPanelLabelRight then
+        if s.days >= PROMO_WEAPON_MAX_LEVEL then
+            PromotionRewardFrameProgressPanelLabelRight:SetText("满级 Lv." .. PROMO_WEAPON_MAX_LEVEL)
+        else
+            PromotionRewardFrameProgressPanelLabelRight:SetText("下一级 Lv." .. (s.nextWeaponLevel or 1))
+        end
+    end
+    if PromotionRewardFrameProgressPanelPercent then
+        local pct = (s.days or 0) / PROMO_WEAPON_MAX_LEVEL * 100
+        PromotionRewardFrameProgressPanelPercent:SetText(
+            string.format("%d / %d  (%.1f%%)", s.days or 0, PROMO_WEAPON_MAX_LEVEL, pct))
+    end
+    if PromotionRewardFrameProgressPanelTitle then
+        if s.days >= PROMO_WEAPON_MAX_LEVEL then
+            PromotionRewardFrameProgressPanelTitle:SetText("神 器 满 级")
+            PromotionRewardFrameProgressPanelTitle:SetTextColor(1.0, 0.95, 0.45)
+        else
+            PromotionRewardFrameProgressPanelTitle:SetText("神 器 成 长 进 度")
+            PromotionRewardFrameProgressPanelTitle:SetTextColor(1.0, 0.88, 0.26)
+        end
+    end
+
+    -- 下一级奖励卡片
     local nextAttr = s.nextAttr or ((s.days == 0) and s.baseAttr or (s.totalAttr + s.perDay))
     if PromotionRewardFrameNextPanelLabel then
         if s.days == 0 then
@@ -411,13 +415,28 @@ function PromotionRewardUI:RenderInfo()
         end
     end
     if PromotionRewardFrameNextPanelText then
-        PromotionRewardFrameNextPanelText:SetText(WeaponName(s.nextWeaponEntry, s.nextWeaponLevel) .. "  +" .. FormatNum(nextAttr) .. " 全属性")
+        PromotionRewardFrameNextPanelText:SetText(
+            WeaponName(s.nextWeaponEntry, s.nextWeaponLevel) .. "  |cffe5b5ff+" .. FormatNum(nextAttr) .. " 全属性|r")
+    end
+
+    -- 预览图标：尝试读取下一级武器的物品图标
+    if PromotionRewardFrameNextPanelPreviewIcon then
+        local tex
+        if GetItemIcon and s.nextWeaponEntry and s.nextWeaponEntry > 0 then
+            local ok, result = pcall(GetItemIcon, s.nextWeaponEntry)
+            if ok then tex = result end
+        end
+        if not tex and GetItemInfo and s.nextWeaponEntry and s.nextWeaponEntry > 0 then
+            local _, _, _, _, _, _, _, _, _, texture = GetItemInfo(s.nextWeaponEntry)
+            tex = texture
+        end
+        PromotionRewardFrameNextPanelPreviewIcon:SetTexture(tex or "Interface\\Icons\\INV_Sword_48")
     end
 
     -- 公式
     if PromotionRewardFrameFormulaPanelText then
         PromotionRewardFrameFormulaPanelText:SetText(
-            "公式: 初始 " .. s.baseAttr .. " + (天数-1) × " .. s.perDay)
+            "公式: 基础 " .. s.baseAttr .. " + (天数-1) × " .. s.perDay)
     end
 end
 
@@ -509,94 +528,6 @@ function PromotionRewardUI:BindWeaponTooltips()
             PromotionRewardUI:HideWeaponTooltip()
         end)
         nextPanel._promoWeaponTooltipBound = true
-    end
-end
-
-local CodeRows = {}
-local ROW_H = 30
-
-local function GetOrCreateRow(idx)
-    local row = CodeRows[idx]
-    if row then return row end
-
-    local parent = PromotionRewardFrameListPanelScrollScrollChild
-    if not parent then return nil end
-
-    row = CreateFrame("Frame", "PromoCodeRow" .. idx, parent, "PromoCodeRowTemplate")
-    row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -((idx - 1) * ROW_H))
-    row.isOdd = (idx % 2 == 1)
-    if row.isOdd then
-        row:SetBackdropColor(0.12, 0.08, 0.04, 0.55)
-    else
-        row:SetBackdropColor(0.08, 0.05, 0.02, 0.55)
-    end
-
-    CodeRows[idx] = row
-    return row
-end
-
-function PromotionRewardUI:RenderCodes()
-    local codes = self.state.codes or {}
-    local n = #codes
-
-    for i = 1, math.max(n, #CodeRows) do
-        local row = CodeRows[i]
-        if i <= n then
-            row = GetOrCreateRow(i)
-            if row then
-                local code = codes[i]
-                local codeText = getglobal(row:GetName() .. "Code")
-                if codeText then codeText:SetText(code) end
-
-                local btn = getglobal(row:GetName() .. "Btn")
-                if btn then
-                    local btnText = getglobal(btn:GetName() .. "Text")
-                    if self.state.pendingCode == code then
-                        btn:Disable()
-                        if btnText then btnText:SetText("...") end
-                    else
-                        btn:Enable()
-                        if btnText then btnText:SetText("兑 换") end
-                    end
-                    btn:SetScript("OnClick", function()
-                        PromotionRewardUI:RequestRedeem(code)
-                    end)
-                end
-                row:Show()
-            end
-        elseif row then
-            row:Hide()
-        end
-    end
-
-    local child = PromotionRewardFrameListPanelScrollScrollChild
-    if child then
-        child:SetHeight(math.max(1, n * ROW_H))
-    end
-
-    -- 列表头部计数徽章
-    if PromotionRewardFrameListPanelCount then
-        PromotionRewardFrameListPanelCount:SetText(n .. " 张")
-        if n == 0 then
-            PromotionRewardFrameListPanelCount:SetTextColor(0.55, 0.48, 0.30)
-        else
-            PromotionRewardFrameListPanelCount:SetTextColor(0.95, 0.78, 0.35)
-        end
-    end
-
-    -- 空状态提示
-    if PromotionRewardFrameListPanelEmpty then
-        if n == 0 then
-            PromotionRewardFrameListPanelEmpty:Show()
-        else
-            PromotionRewardFrameListPanelEmpty:Hide()
-        end
-    end
-
-    if n == 0 then
-        self:ShowStatus("|cff888888暂无可用兑换码|r")
-    else
-        self:ShowStatus("|cff888888共 " .. n .. " 张可兑换|r")
     end
 end
 
