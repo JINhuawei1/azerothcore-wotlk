@@ -77,8 +77,6 @@ void ReincarnationMgr::LoadReincarnationConfig()
         ++count;
 
     } while (result->NextRow());
-
-    LOG_INFO("server.loading", ">> 转身系统: 加载 {} 条配置数据，最高转身等级 {}，耗时 {} ms", count, _maxConfiguredLevel, GetMSTimeDiffToNow(oldMSTime));
 }
 
 ReincarnationConfig const* ReincarnationMgr::GetConfigForLevel(uint32 level) const

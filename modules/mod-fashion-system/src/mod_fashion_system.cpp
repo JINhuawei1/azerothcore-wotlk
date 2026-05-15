@@ -530,8 +530,6 @@ public:
                 }
             }
             while (result->NextRow());
-
-            LOG_INFO("server.loading", "  → 时装系统：加载了 {} 条槽位配置", count);
         }
     }
 

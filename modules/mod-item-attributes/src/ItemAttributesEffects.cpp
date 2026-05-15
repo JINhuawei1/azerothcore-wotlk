@@ -30,8 +30,6 @@ void ItemAttributesEffects::Initialize()
         return;
     }
 
-    LOG_INFO("module.itemattributes", "开始初始化物品属性效果系统...");
-
     // 注册基础属性效果处理器
 
     // 力量属性 (类型 4)
@@ -553,9 +551,6 @@ void ItemAttributesEffects::Initialize()
 
     // 【根本性修复】标记为已初始化
     _isInitialized = true;
-
-    LOG_INFO("module.itemattributes", "物品属性效果系统初始化完成，已注册 {} 个属性处理器",
-             _attributeEffectHandlers.size());
 }
 
 void ItemAttributesEffects::RegisterAttributeEffectHandler(uint32 attributeType, AttributeEffectHandler handler, AttributeEffectRemover remover, AttributeDescriptionGenerator descGenerator)

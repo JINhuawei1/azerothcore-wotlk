@@ -94,14 +94,10 @@ void PluginManager::Initialize()
 {
     if (!_enabled)
     {
-        LOG_INFO("module", ">> 插件管理器模块已禁用");
         return;
     }
 
-    LOG_INFO("module", ">> 正在初始化插件管理器模块...");
     LoadAllPlugins();
-    LOG_INFO("module", "   已加载 {} 个插件", static_cast<uint32>(_plugins.size()));
-    LOG_INFO("module", ">> 插件管理器模块初始化完成!");
 }
 
 void PluginManager::LoadAllPlugins()
@@ -144,8 +140,6 @@ void PluginManager::LoadPluginsFromDatabase()
         _nextPluginId = std::max(_nextPluginId, entry.pluginId + 1);
 
     } while (result->NextRow());
-
-    LOG_INFO("module", "插件管理器: 成功加载 {} 个插件", static_cast<uint32>(_plugins.size()));
 }
 
 void PluginManager::LoadPlayerLayouts(uint32 playerGuid)
@@ -602,12 +596,14 @@ void PluginManager::SendPluginConfigToPlayer(Player* player, const std::string& 
             height = layout->height;
     }
 
+    bool visible = plugin->enabled && plugin->position != POSITION_HIDDEN;
+
     std::string configCmd = ".plugincfg " + plugin->pluginName + " " +
         std::to_string(posX) + " " +
         std::to_string(posY) + " " +
         std::to_string(width) + " " +
         std::to_string(height) + " " +
-        std::to_string(plugin->enabled ? 1 : 0);
+        std::to_string(visible ? 1 : 0);
 
     SendAddonPayload(player, configCmd);
 
@@ -763,9 +759,9 @@ void PluginManagerLoader::OnStartup()
     if (!sConfigMgr->GetOption<bool>("PluginManager.Enabled", true))
         return;
 
-    LOG_INFO("module", ">> 正在加载 插件管理器 模块...");
     sPluginManager->Initialize();
     _loaded = true;
+    LOG_INFO("server.loading", "→插件管理器系统√");
 }
 
 void PluginManagerLoader::OnUpdate(uint32 diff)
@@ -804,6 +800,7 @@ void PluginManagerPlayerScript::OnPlayerLogin(Player* player)
         return;
 
     sPluginManager->LoadPlayerLayouts(player->GetGUID().GetCounter());
+    sPluginManager->SendAllPluginConfigsToPlayer(player);
 }
 
 void PluginManagerPlayerScript::OnPlayerLogout(Player* player)

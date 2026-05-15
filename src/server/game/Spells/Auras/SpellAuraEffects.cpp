@@ -6783,9 +6783,9 @@ void AuraEffect::HandlePeriodicDamageAurasTick(Unit* target, Unit* caster) const
     }
 
     // Script Hook For HandlePeriodicDamageAurasTick -- Allow scripts to change the Damage pre class mitigation calculations
-    uint32 scriptDamage = damage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(damage);
+    uint64 scriptDamage = damage;
     sScriptMgr->ModifyPeriodicDamageAurasTick(target, caster, scriptDamage, GetSpellInfo());
-    if (scriptDamage != (damage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(damage)))
+    if (scriptDamage != damage)
         damage = scriptDamage;
 
     if (target->GetAI())
@@ -6925,9 +6925,9 @@ void AuraEffect::HandlePeriodicHealthLeechAuraTick(Unit* target, Unit* caster) c
     uint64 damage = GetAmountForCombat();
 
     // Script Hook For HandlePeriodicHealthLeechAurasTick -- Allow scripts to change the Damage pre class mitigation calculations
-    uint32 scriptDamage = damage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(damage);
+    uint64 scriptDamage = damage;
     sScriptMgr->ModifyPeriodicDamageAurasTick(target, caster, scriptDamage, GetSpellInfo());
-    if (scriptDamage != (damage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(damage)))
+    if (scriptDamage != damage)
         damage = scriptDamage;
 
     if (target->GetAI())
@@ -7024,7 +7024,7 @@ void AuraEffect::HandlePeriodicHealthLeechAuraTick(Unit* target, Unit* caster) c
     heal = caster->SpellHealingBonusTaken(caster, GetSpellInfo(), heal, DOT, GetBase()->GetStackAmount());
 
     HealInfo healInfo(caster, caster, heal, GetSpellInfo(), GetSpellInfo()->GetSchoolMask());
-    int64 gain = caster->HealBySpell(healInfo);
+    uint64 gain = caster->HealBySpell(healInfo);
     caster->getHostileRefMgr().threatAssist(caster, gain * 0.5f, GetSpellInfo());
 }
 
@@ -7156,21 +7156,25 @@ void AuraEffect::HandlePeriodicHealAurasTick(Unit* target, Unit* caster) const
                     GetCasterGUID().ToString(), target->GetGUID().ToString(), healAmount, GetId());
 
     uint64 heal = healAmount;
-    uint32 scriptHeal = heal > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(heal);
+    uint64 scriptPeriodicHeal = heal;
 
     // Script Hook For HandlePeriodicDamageAurasTick -- Allow scripts to change the Damage pre class mitigation calculations
-    sScriptMgr->ModifyPeriodicDamageAurasTick(target, caster, scriptHeal, GetSpellInfo());
+    sScriptMgr->ModifyPeriodicDamageAurasTick(target, caster, scriptPeriodicHeal, GetSpellInfo());
+    heal = scriptPeriodicHeal;
+
+    uint64 scriptHeal = heal;
     sScriptMgr->ModifyHealReceived(target, caster, scriptHeal, GetSpellInfo());
-    heal = heal > std::numeric_limits<uint32>::max() && scriptHeal == std::numeric_limits<uint32>::max() ? heal : scriptHeal;
+    heal = scriptHeal;
 
     if (target->GetAI())
     {
-        target->GetAI()->OnCalculatePeriodicTickReceived(scriptHeal, caster);
+        uint32 aiHeal = ToUInt32Saturated(heal);
+        target->GetAI()->OnCalculatePeriodicTickReceived(aiHeal, caster);
     }
 
     HealInfo healInfo(caster, target, heal, GetSpellInfo(), GetSpellInfo()->GetSchoolMask());
     Unit::CalcHealAbsorb(healInfo);
-    int64 gain = Unit::DealHeal(caster, target, healInfo.GetHeal());
+    uint64 gain = Unit::DealHeal(caster, target, healInfo.GetHeal());
     healInfo.SetEffectiveHeal(gain);
 
     SpellPeriodicAuraLogInfo pInfo(this, healInfo.GetHeal(), healInfo.GetHeal() - healInfo.GetEffectiveHeal(), healInfo.GetAbsorb(), 0, 0.0f, crit);
@@ -7390,7 +7394,7 @@ void AuraEffect::HandlePeriodicPowerBurnAuraTick(Unit* target, Unit* caster) con
     // maybe has to be sent different to client, but not by SMSG_PERIODICAURALOG
     SpellNonMeleeDamage damageInfo(caster, target, spellProto, spellProto->SchoolMask);
     // no SpellDamageBonus for burn mana
-    caster->CalculateSpellDamageTaken(&damageInfo, ToPositiveInt64(ScaleUInt64(gain, static_cast<long double>(dmgMultiplier))), spellProto);
+    caster->CalculateSpellDamageTaken(&damageInfo, ScaleUInt64(gain, static_cast<long double>(dmgMultiplier)), spellProto);
 
     Unit::DealDamageMods(damageInfo.target, damageInfo.damage, &damageInfo.absorb);
 
@@ -7460,7 +7464,7 @@ void AuraEffect::HandleProcTriggerDamageAuraProc(AuraApplication* aurApp, ProcEv
     SpellNonMeleeDamage damageInfo(target, triggerTarget, GetSpellInfo(), GetSpellInfo()->SchoolMask);
     uint64 damage = target->SpellDamageBonusDone(triggerTarget, GetSpellInfo(), static_cast<uint64>(std::max(GetAmount(), 0)), SPELL_DIRECT_DAMAGE, GetEffIndex());
     damage = triggerTarget->SpellDamageBonusTaken(target, GetSpellInfo(), damage, SPELL_DIRECT_DAMAGE);
-    target->CalculateSpellDamageTaken(&damageInfo, ToPositiveInt64(damage), GetSpellInfo());
+    target->CalculateSpellDamageTaken(&damageInfo, damage, GetSpellInfo());
     Unit::DealDamageMods(damageInfo.target, damageInfo.damage, &damageInfo.absorb);
     target->SendSpellNonMeleeDamageLog(&damageInfo);
     LOG_DEBUG("spells.aura", "AuraEffect::HandleProcTriggerDamageAuraProc: Triggering {} spell damage from aura {} proc", damage, GetId());

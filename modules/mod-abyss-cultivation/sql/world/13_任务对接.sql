@@ -233,6 +233,29 @@ SET
 WHERE q.`任务类型` IN (2, 3, 4, 5)
   AND q.`任务ID` BETWEEN 700001 AND 740074;
 
+-- 变身/换阶段首领章节：任务目标清零，接取后可直接提交
+UPDATE `quest_template` qt
+JOIN `_深渊任务模板对接` q ON q.`任务ID` = qt.`ID`
+JOIN `_深渊章节配置` c ON c.`章节ID` = q.`章节ID`
+SET
+  qt.`RequiredNpcOrGo1` = 0,
+  qt.`RequiredNpcOrGo2` = 0,
+  qt.`RequiredNpcOrGo3` = 0,
+  qt.`RequiredNpcOrGo4` = 0,
+  qt.`RequiredNpcOrGoCount1` = 0,
+  qt.`RequiredNpcOrGoCount2` = 0,
+  qt.`RequiredNpcOrGoCount3` = 0,
+  qt.`RequiredNpcOrGoCount4` = 0,
+  qt.`ObjectiveText1` = '',
+  qt.`ObjectiveText2` = '',
+  qt.`ObjectiveText3` = '',
+  qt.`ObjectiveText4` = '',
+  qt.`QuestDescription` = CONCAT('【', c.`章节名称`, '】任务已调整为接取后可直接提交。'),
+  qt.`QuestCompletionLog` = CONCAT('返回提交【', c.`章节名称`, '】任务。')
+WHERE c.`章节ID` IN (42, 52, 64, 66, 69)
+  AND q.`任务类型` IN (1, 2, 3, 4, 5)
+  AND q.`任务ID` BETWEEN 700001 AND 740074;
+
 -- 腐化任务：完成后发放章节遗物与底材奖励
 UPDATE `quest_template` qt
 JOIN `_深渊任务模板对接` q ON q.`任务ID` = qt.`ID`

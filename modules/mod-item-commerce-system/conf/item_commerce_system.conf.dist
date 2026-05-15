@@ -1,0 +1,40 @@
+[worldserver]
+
+#
+# 物品租赁系统配置
+#
+ItemLease.Enable = 1
+ItemLease.CheckInterval = 60
+ItemLease.NotifyBeforeExpire = 300
+
+#
+# 物品购买条件系统配置
+#
+ItemPurchaseCondition.Enable = 1
+
+#
+# 物品购买限制系统配置
+#
+ItemPurchaseLimit.Enable = 1
+ItemPurchaseLimit.Debug = 0
+ItemPurchaseLimit.NotifyPlayer = 1
+
+#
+# 物品售卖获得系统配置
+#
+ItemSellReward.Enable = 1
+ItemSellReward.DebugMode = 0
+ItemSellReward.AllowGMCommands = 1
+
+#
+# 物品使用条件系统配置
+#
+ItemUseCondition.Enable = 1
+
+#
+# 物品使用奖励系统配置
+#
+ItemUseReward.Enable = 1
+ItemUseReward.DebugMode = 0
+ItemUseReward.AllowGMCommands = 1
+ItemUseReward.ConsumeItemByDefault = 1

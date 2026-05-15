@@ -61,7 +61,7 @@ public:
                 // 设置独立GCD类别，使每个配置了GCD减少的技能有独立的GCD计时器
                 sTalentSoulMgr->SetupIndependentGCDCategories();
 
-                LOG_INFO("server.loading", "→天赋之魂系统加载成功√");
+                LOG_INFO("server.loading", "→天赋之魂系统√");
                 _loaded = true;
                 _updateTimer = 0;
             }
@@ -151,7 +151,7 @@ public:
     TalentSoulUnitScript() : UnitScript("TalentSoulUnitScript") { }
 
     // 修改法术伤害
-    void ModifySpellDamageTaken(Unit* target, Unit* attacker, int64& damage, SpellInfo const* spellInfo) override
+    void ModifySpellDamageTaken(Unit* target, Unit* attacker, uint64& damage, SpellInfo const* spellInfo) override
     {
         if (!attacker || !spellInfo || damage <= 0)
             return;
@@ -164,7 +164,7 @@ public:
             return;
 
         uint32 spellId = spellInfo->Id;
-        int64 originalDamage = damage;
+        uint64 originalDamage = damage;
 
         // 应用伤害加成
         sTalentSoulMgr->ApplyDamageBonus(attacker, spellId, damage);
@@ -178,7 +178,7 @@ public:
     }
 
     // 修改近战伤害
-    void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage) override
+    void ModifyMeleeDamage(Unit* target, Unit* attacker, uint64& damage) override
     {
         // 近战伤害不在此系统处理范围内
     }

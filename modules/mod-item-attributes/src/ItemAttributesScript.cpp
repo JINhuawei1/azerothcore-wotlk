@@ -68,7 +68,7 @@ public:
             // 初始化物品属性生成系统
             sItemAttributesGenerator->Initialize();
 
-            LOG_INFO("server.loading", "→物品属性系统加载√ [模板数: {}]", templateCount);
+            LOG_INFO("server.loading", "→物品属性系统√");
 
             _initialized = true;
         }

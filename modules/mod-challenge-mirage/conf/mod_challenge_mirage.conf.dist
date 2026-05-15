@@ -1,0 +1,21 @@
+############################################
+#          挑战幻境系统模块配置文件          #
+############################################
+
+[worldserver]
+
+# 是否启用挑战幻境系统
+# 默认: 1
+ChallengeMirage.Enable = 1
+
+# 是否输出调试日志
+# 默认: 0
+ChallengeMirage.Debug = 0
+
+# 玩家默认所在生物层。0 = 原世界
+# 默认: 0
+ChallengeMirage.DefaultLayer = 0
+
+# 幻境等级允许的最大值
+# 默认: 9999999
+ChallengeMirage.MaxLevel = 9999999

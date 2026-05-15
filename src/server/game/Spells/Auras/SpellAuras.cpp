@@ -81,11 +81,6 @@ namespace
         return static_cast<uint64>(value);
     }
 
-    int64 ToPositiveInt64(uint64 value)
-    {
-        return value > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(value);
-    }
-
     void DealTriggeredDirectSpellDamage(Unit* caster, Unit* target, uint32 spellId, uint64 rawDamage, AuraEffect const* triggeredByAura)
     {
         if (!caster || !target || !target->IsAlive() || !rawDamage)
@@ -107,7 +102,7 @@ namespace
         rawDamage = target->SpellDamageBonusTaken(caster, spellInfo, rawDamage, SPELL_DIRECT_DAMAGE);
 
         SpellNonMeleeDamage damageInfo(caster, target, spellInfo, spellInfo->GetSchoolMask());
-        caster->CalculateSpellDamageTaken(&damageInfo, ToPositiveInt64(rawDamage), spellInfo);
+        caster->CalculateSpellDamageTaken(&damageInfo, rawDamage, spellInfo);
         caster->SendSpellNonMeleeDamageLog(&damageInfo);
         caster->DealSpellDamage(&damageInfo, true);
 

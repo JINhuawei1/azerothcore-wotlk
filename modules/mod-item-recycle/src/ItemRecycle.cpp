@@ -387,8 +387,6 @@ void ItemRecycleScript::LoadItemRecycleFromDB()
         m_ItemRecycleStore.push_back(info);
         count++;
     } while (result->NextRow());
-
-    LOG_INFO("server.loading", ">> 已加载 {} 个物品回收记录", count);
 }
 
 bool ItemRecycleScript::IsProtectedQuestItem(uint32 itemId)
@@ -1287,7 +1285,7 @@ void ItemRecycle_Worldscript::OnUpdate(uint32 diff)
             ItemRecycleScript::LoadItemRecycleFromDB();
             ItemRecycleScript::LoadPlayerRecycleSettings();
 
-            LOG_INFO("server.loading", "→物品回收模块加载√");
+            LOG_INFO("server.loading", "→物品回收系统√");
 
             // 设置模块初始化标志
             ItemRecycleGlobals::bItemRecycleInitialized = true;

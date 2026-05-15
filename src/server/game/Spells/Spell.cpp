@@ -79,6 +79,27 @@ namespace
         return min + static_cast<int64>(roll % (range + 1));
     }
 
+    uint64 AddUInt64Saturated(uint64 left, uint64 right)
+    {
+        return left > std::numeric_limits<uint64>::max() - right ? std::numeric_limits<uint64>::max() : left + right;
+    }
+
+    uint64 ToUInt64Saturated(long double value)
+    {
+        if (std::isnan(static_cast<double>(value)) || value <= 0.0L)
+            return 0;
+
+        if (!std::isfinite(value) || value >= static_cast<long double>(std::numeric_limits<uint64>::max()))
+            return std::numeric_limits<uint64>::max();
+
+        return static_cast<uint64>(value);
+    }
+
+    int64 ToInt64Saturated(uint64 value)
+    {
+        return value > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(value);
+    }
+
     uint32 ToClientSpellPowerMax(uint32 value)
     {
         return value > MaxClientSpellPowerValue ? MaxClientSpellPowerValue : value;
@@ -2536,6 +2557,7 @@ void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*=
     targetInfo.processed  = false;                              // Effects not apply on target
     targetInfo.alive      = target->IsAlive();
     targetInfo.damage     = 0;
+    targetInfo.healing    = 0;
     targetInfo.crit       = false;
     targetInfo.scaleAura  = false;
     if (m_auraScaleMask && targetInfo.effectMask == m_auraScaleMask && m_caster != target)
@@ -2777,7 +2799,7 @@ void Spell::DoAllEffectOnTarget(TargetInfo* target)
 
     // Reset damage/healing counter
     m_damage = target->damage;
-    m_healing = -target->damage;
+    m_healing = target->healing;
 
     m_spellAura = nullptr; // Set aura to null for every target-make sure that pointer is not used for unit without aura applied
 
@@ -2905,7 +2927,7 @@ void Spell::DoAllEffectOnTarget(TargetInfo* target)
             procEx |= PROC_EX_CRITICAL_HIT;
         }
 
-        int64 gain = caster->HealBySpell(healInfo, crit);
+        uint64 gain = caster->HealBySpell(healInfo, crit);
         unitTarget->getHostileRefMgr().threatAssist(caster, float(gain) * 0.5f, m_spellInfo);
         m_healing = gain;
 
@@ -8494,17 +8516,13 @@ void Spell::DoAllEffectOnLaunchTarget(TargetInfo& targetInfo, float* multiplier)
             if (m_applyMultiplierMask & (1 << i))
             {
                 long double scaledDamage = static_cast<long double>(m_damage) * static_cast<long double>(m_damageMultipliers[i]);
-                if (std::isnan(static_cast<double>(scaledDamage)))
-                    m_damage = 0;
-                else if (scaledDamage > static_cast<long double>(std::numeric_limits<int64>::max()))
-                    m_damage = std::numeric_limits<int64>::max();
-                else if (scaledDamage < static_cast<long double>(std::numeric_limits<int64>::min()))
-                    m_damage = std::numeric_limits<int64>::min();
-                else
-                    m_damage = static_cast<int64>(scaledDamage);
+                m_damage = ToUInt64Saturated(scaledDamage);
+                long double scaledHealing = static_cast<long double>(m_healing) * static_cast<long double>(m_damageMultipliers[i]);
+                m_healing = ToUInt64Saturated(scaledHealing);
                 m_damageMultipliers[i] *= multiplier[i];
             }
-            targetInfo.damage += m_damage;
+            targetInfo.damage = AddUInt64Saturated(targetInfo.damage, m_damage);
+            targetInfo.healing = AddUInt64Saturated(targetInfo.healing, m_healing);
         }
     }
 

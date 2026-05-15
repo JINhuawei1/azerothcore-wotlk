@@ -19,7 +19,7 @@
 #include "ScriptMgr.h"
 #include "ScriptMgrMacros.h"
 
-void ScriptMgr::OnHeal(Unit* healer, Unit* reciever, uint32& gain)
+void ScriptMgr::OnHeal(Unit* healer, Unit* reciever, int64& gain)
 {
     CALL_ENABLED_HOOKS(UnitScript, UNITHOOK_ON_HEAL, script->OnHeal(healer, reciever, gain));
 }
@@ -29,27 +29,27 @@ void ScriptMgr::OnDamage(Unit* attacker, Unit* victim, uint64& damage)
     CALL_ENABLED_HOOKS(UnitScript, UNITHOOK_ON_DAMAGE, script->OnDamage(attacker, victim, damage));
 }
 
-void ScriptMgr::ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* spellInfo)
+void ScriptMgr::ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint64& damage, SpellInfo const* spellInfo)
 {
     CALL_ENABLED_HOOKS(UnitScript, UNITHOOK_MODIFY_PERIODIC_DAMAGE_AURAS_TICK, script->ModifyPeriodicDamageAurasTick(target, attacker, damage, spellInfo));
 }
 
-void ScriptMgr::ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage)
+void ScriptMgr::ModifyMeleeDamage(Unit* target, Unit* attacker, uint64& damage)
 {
     CALL_ENABLED_HOOKS(UnitScript, UNITHOOK_MODIFY_MELEE_DAMAGE, script->ModifyMeleeDamage(target, attacker, damage));
 }
 
-void ScriptMgr::ModifySpellDamageTaken(Unit* target, Unit* attacker, int64& damage, SpellInfo const* spellInfo)
+void ScriptMgr::ModifySpellDamageTaken(Unit* target, Unit* attacker, uint64& damage, SpellInfo const* spellInfo)
 {
     CALL_ENABLED_HOOKS(UnitScript, UNITHOOK_MODIFY_SPELL_DAMAGE_TAKEN, script->ModifySpellDamageTaken(target, attacker, damage, spellInfo));
 }
 
-void ScriptMgr::ModifyHealReceived(Unit* target, Unit* healer, uint32& heal, SpellInfo const* spellInfo)
+void ScriptMgr::ModifyHealReceived(Unit* target, Unit* healer, uint64& heal, SpellInfo const* spellInfo)
 {
     CALL_ENABLED_HOOKS(UnitScript, UNITHOOK_MODIFY_HEAL_RECEIVED, script->ModifyHealReceived(target, healer, heal, spellInfo));
 }
 
-uint32 ScriptMgr::DealDamage(Unit* AttackerUnit, Unit* pVictim, uint32 damage, DamageEffectType damagetype)
+uint64 ScriptMgr::DealDamage(Unit* AttackerUnit, Unit* pVictim, uint64 damage, DamageEffectType damagetype)
 {
     if (ScriptRegistry<UnitScript>::ScriptPointerList.empty())
     {
@@ -61,7 +61,7 @@ uint32 ScriptMgr::DealDamage(Unit* AttackerUnit, Unit* pVictim, uint32 damage, D
         auto const& dmg = script->DealDamage(AttackerUnit, pVictim, damage, damagetype);
         if (dmg != damage)
         {
-            return damage;
+            return dmg;
         }
     }
 

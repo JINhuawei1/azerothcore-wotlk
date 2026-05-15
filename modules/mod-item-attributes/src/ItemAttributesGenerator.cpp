@@ -15,7 +15,6 @@ void ItemAttributesGenerator::Initialize()
 {
     // 【根本性修复】标记初始化完成
     _isInitialized = true;
-    LOG_INFO("module.item-attributes", "物品属性生成系统初始化完成");
 }
 
 bool ItemAttributesGenerator::GenerateRandomAttributes(Item* item, ItemAttributeGenerateOptions const& options)

@@ -218,6 +218,7 @@ enum PlayerHook
     PLAYERHOOK_CAN_RESURRECT,
     PLAYERHOOK_ON_CAN_GIVE_LEVEL,
     PLAYERHOOK_ON_SEND_LIST_INVENTORY,
+    PLAYERHOOK_ON_CAN_SEE_CREATURE,
     PLAYERHOOK_END
 };
 
@@ -823,6 +824,11 @@ public:
      * @param vendorEntry Entry of the vendor player is interacting with
      */
     virtual void OnPlayerSendListInventory(Player* /*player*/, ObjectGuid /*vendorGuid*/, uint32& /*vendorEntry*/) {}
+
+    /**
+     * @brief This hook is called when checking whether a player can see a creature
+     */
+    [[nodiscard]] virtual bool OnPlayerCanSeeCreature(Player const* /*player*/, Creature const* /*creature*/) { return true; }
 };
 
 #endif

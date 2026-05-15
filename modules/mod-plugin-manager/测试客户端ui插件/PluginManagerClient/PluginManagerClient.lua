@@ -3,7 +3,7 @@
 -- ========================================
 -- 说明:
 --   1. 使用真正的 AddOn 通道与服务端通信
---   2. 只在玩家登录时请求一次配置，避免切图重复同步
+--   2. 玩家登录、重载UI、重新进世界时主动请求配置，并在无响应时短暂重试
 --   3. 提供统一的坐标保存接口，供各插件在拖拽结束后回传服务器
 
 if not C_Timer then
@@ -37,6 +37,11 @@ PMClient.initialized = PMClient.initialized or false
 PMClient.hasRequestedInitialSync = PMClient.hasRequestedInitialSync or false
 PMClient.hasCompletedInitialSync = PMClient.hasCompletedInitialSync or false
 PMClient.isReceivingSync = PMClient.isReceivingSync or false
+PMClient.syncGeneration = PMClient.syncGeneration or 0
+PMClient.completedSyncGeneration = PMClient.completedSyncGeneration or 0
+PMClient.lastRequestTime = PMClient.lastRequestTime or 0
+
+local SYNC_RETRY_DELAYS = { 0.5, 2.0, 5.0 }
 
 local function DebugPrint(message)
     if PMClient.debug then
@@ -55,6 +60,14 @@ local function NormalizeNumber(value)
     end
 
     return math.ceil(value - 0.5)
+end
+
+local function GetClientTime()
+    if GetTime then
+        return GetTime()
+    end
+
+    return 0
 end
 
 local function BuildConfigMessage(pluginName, config)
@@ -95,6 +108,10 @@ function PMClient:RegisterPlugin(pluginName, handler)
         end
     end
 
+    if not self.hasRequestedInitialSync and not self.hasCompletedInitialSync then
+        self:ScheduleConfigRequest("REGISTER_PLUGIN", false)
+    end
+
     return true
 end
 
@@ -116,6 +133,7 @@ function PMClient:DispatchMessage(message)
 
     if message == ".plugincfg_start" then
         self.isReceivingSync = true
+        self.configs = {}
         for _, handler in pairs(self.handlers) do
             pcall(handler, message, { ".plugincfg_start" })
         end
@@ -124,7 +142,9 @@ function PMClient:DispatchMessage(message)
 
     if message == ".plugincfg_end" then
         self.isReceivingSync = false
+        self.hasRequestedInitialSync = true
         self.hasCompletedInitialSync = true
+        self.completedSyncGeneration = self.syncGeneration
         for _, handler in pairs(self.handlers) do
             pcall(handler, message, { ".plugincfg_end" })
         end
@@ -202,18 +222,50 @@ function PMClient:SendAddonPayload(payload)
 end
 
 function PMClient:RequestPluginConfig(force)
-    if self.hasRequestedInitialSync and not force then
+    local now = GetClientTime()
+
+    if self.hasRequestedInitialSync and self.hasCompletedInitialSync and not force then
         DebugPrint("本次会话已请求过配置，跳过重复同步")
+        return false
+    end
+
+    if not force and self.lastRequestTime > 0 and now - self.lastRequestTime < 1 then
         return false
     end
 
     if self:SendAddonPayload("REQ_ALL") then
         self.hasRequestedInitialSync = true
+        self.lastRequestTime = now
         DebugPrint("已发送插件配置请求")
         return true
     end
 
     return false
+end
+
+function PMClient:ScheduleConfigRequest(reason, force)
+    self.syncGeneration = (self.syncGeneration or 0) + 1
+    local generation = self.syncGeneration
+
+    DebugPrint("安排插件配置同步: " .. tostring(reason))
+
+    for _, delay in ipairs(SYNC_RETRY_DELAYS) do
+        C_Timer.After(delay, function()
+            if PMClient.syncGeneration ~= generation then
+                return
+            end
+
+            if PMClient.completedSyncGeneration == generation then
+                return
+            end
+
+            if not force and PMClient.hasCompletedInitialSync and not PMClient.isReceivingSync then
+                return
+            end
+
+            PMClient:RequestPluginConfig(true)
+        end)
+    end
 end
 
 function PMClient:SavePluginPosition(pluginName, x, y, width, height)
@@ -294,6 +346,7 @@ function PMClient:Initialize()
     eventFrame:RegisterEvent("CHAT_MSG_ADDON")
     eventFrame:RegisterEvent("CHAT_MSG_SYSTEM")
     eventFrame:RegisterEvent("PLAYER_LOGIN")
+    eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
     eventFrame:SetScript("OnEvent", function(_, event, ...)
         if event == "CHAT_MSG_ADDON" then
             local prefix, message = ...
@@ -304,9 +357,9 @@ function PMClient:Initialize()
             local message = ...
             PMClient:DispatchMessage(message)
         elseif event == "PLAYER_LOGIN" then
-            C_Timer.After(0.5, function()
-                PMClient:RequestPluginConfig()
-            end)
+            PMClient:ScheduleConfigRequest("PLAYER_LOGIN", true)
+        elseif event == "PLAYER_ENTERING_WORLD" then
+            PMClient:ScheduleConfigRequest("PLAYER_ENTERING_WORLD", true)
         end
     end)
 

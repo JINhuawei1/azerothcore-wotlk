@@ -498,7 +498,7 @@ class spell_pet_gen_valkyr_guardian_smite : public SpellScript
             std::list<TargetInfo>* targetsInfo = GetSpell()->GetUniqueTargetInfo();
             for (std::list<TargetInfo>::iterator ihit = targetsInfo->begin(); ihit != targetsInfo->end(); ++ihit)
                 if (ihit->targetGUID == GetCaster()->GetGUID())
-                    ihit->damage = -int32(GetHitDamage() * 0.25f);
+                    ihit->healing = static_cast<uint64>(static_cast<long double>(GetHitDamage()) * 0.25L);
         }
     }
 

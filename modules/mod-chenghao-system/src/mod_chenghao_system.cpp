@@ -125,8 +125,6 @@ public:
 
             return left.id < right.id;
         });
-
-        LOG_INFO("server.loading", ">> 自定义UI称号系统已加载 {} 条称号配置。", _entries.size());
     }
 
     void LoadPlayerData(Player* player)

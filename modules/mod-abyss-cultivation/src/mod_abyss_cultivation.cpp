@@ -840,7 +840,21 @@ char const* const kLoadTaskDockingsSql =
     "SELECT `\xE4\xBB\xBB\xE5\x8A\xA1ID`, `\xE7\xAB\xA0\xE8\x8A\x82ID`, `\xE4\xBB\xBB\xE5\x8A\xA1\xE7\xB1\xBB\xE5\x9E\x8B`, `\xE4\xBB\xBB\xE5\x8A\xA1\xE6\xA0\x87\xE9\xA2\x98`, `\xE4\xB8\x8A\xE4\xB8\x80\xE4\xBB\xBB\xE5\x8A\xA1ID`, `\xE4\xB8\x8B\xE4\xB8\x80\xE4\xBB\xBB\xE5\x8A\xA1ID`, `\xE5\xBB\xBA\xE8\xAE\xAE\xE4\xBB\xBB\xE5\x8A\xA1\xE7\xAD\x89\xE7\xBA\xA7`, `\xE5\xBB\xBA\xE8\xAE\xAE\xE6\x9C\x80\xE5\xB0\x8F\xE7\xAD\x89\xE7\xBA\xA7`, `\xE5\xBB\xBA\xE8\xAE\xAE\xE4\xBB\xBB\xE5\x8A\xA1\xE5\x88\x86\xE7\xB1\xBB`, `\xE4\xBB\xBB\xE5\x8A\xA1\xE8\xAF\xB4\xE6\x98\x8E`, `\xE5\xAF\xB9\xE6\x8E\xA5\xE7\x8A\xB6\xE6\x80\x81` FROM `_\xE6\xB7\xB1\xE6\xB8\x8A\xE4\xBB\xBB\xE5\x8A\xA1\xE6\xA8\xA1\xE6\x9D\xBF\xE5\xAF\xB9\xE6\x8E\xA5` ORDER BY `\xE7\xAB\xA0\xE8\x8A\x82ID`, `\xE4\xBB\xBB\xE5\x8A\xA1\xE7\xB1\xBB\xE5\x9E\x8B`, `\xE4\xBB\xBB\xE5\x8A\xA1ID`";
 
 char const* const kLoadBossDockingsSql =
-    "SELECT `\xE9\xA6\x96\xE9\xA2\x86\xE5\x85\xA5\xE5\x8F\xA3`, `\xE9\xA6\x96\xE9\xA2\x86\xE5\x90\x8D\xE7\xA7\xB0`, `\xE9\xA6\x96\xE9\xA2\x86\xE7\xB1\xBB\xE5\x9E\x8B`, `\xE5\xB9\x95ID`, `\xE7\xAB\xA0\xE8\x8A\x82ID`, `\xE5\xBB\xBA\xE8\xAE\xAE\xE7\xAD\x89\xE7\xBA\xA7`, `\xE5\xBB\xBA\xE8\xAE\xAE\xE9\x98\xB5\xE8\x90\xA5`, `\xE5\xBB\xBA\xE8\xAE\xAE\xE6\xA8\xA1\xE5\x9E\x8B\xE7\xBB\x84`, `\xE5\xBB\xBA\xE8\xAE\xAE\xE8\x84\x9A\xE6\x9C\xAC\xE5\x90\x8D`, `\xE6\x98\xAF\xE5\x90\xA6\xE5\x86\x99\xE5\x85\xA5\xE7\x94\x9F\xE7\x89\xA9\xE6\xA8\xA1\xE6\x9D\xBF`, `\xE6\x98\xAF\xE5\x90\xA6\xE5\x86\x99\xE5\x85\xA5\xE6\x8E\x89\xE8\x90\xBD\xE6\xA8\xA1\xE6\x9D\xBF`, `\xE5\xAF\xB9\xE6\x8E\xA5\xE7\x8A\xB6\xE6\x80\x81`, `\xE8\xAF\xB4\xE6\x98\x8E` FROM `_\xE6\xB7\xB1\xE6\xB8\x8A\xE8\x87\xAA\xE5\xAE\x9A\xE4\xB9\x89\xE9\xA6\x96\xE9\xA2\x86\xE5\xAF\xB9\xE6\x8E\xA5` ORDER BY `\xE7\xAB\xA0\xE8\x8A\x82ID`, `\xE9\xA6\x96\xE9\xA2\x86\xE7\xB1\xBB\xE5\x9E\x8B`, `\xE9\xA6\x96\xE9\xA2\x86\xE5\x85\xA5\xE5\x8F\xA3`";
+    "SELECT `首领入口`, `首领名称`, `首领类型`, `幕ID`, "
+    "CASE "
+    "WHEN `章节ID` <> 0 THEN `章节ID` "
+    "WHEN `首领类型` = 3 AND `幕ID` = 1 THEN 1 "
+    "WHEN `首领类型` = 3 AND `幕ID` = 2 THEN 21 "
+    "WHEN `首领类型` = 3 AND `幕ID` = 4 THEN 53 "
+    "WHEN `首领类型` = 3 AND `幕ID` = 5 THEN 58 "
+    "WHEN `首领类型` = 3 AND `幕ID` = 6 THEN 67 "
+    "ELSE `章节ID` END AS `章节ID`, "
+    "CASE WHEN `幕ID` <= 1 THEN 35 WHEN `幕ID` = 2 THEN 70 WHEN `幕ID` = 3 THEN 80 WHEN `幕ID` = 4 THEN 83 WHEN `幕ID` = 5 THEN 83 ELSE 83 END AS `建议等级`, "
+    "14 AS `建议阵营`, 0 AS `建议模型组`, '' AS `建议脚本名`, "
+    "1 AS `是否写入生物模板`, 1 AS `是否写入掉落模板`, 1 AS `对接状态`, '' AS `说明` "
+    "FROM `_深渊首领配置` "
+    "WHERE `是否启用` = 1 AND `首领类型` IN (2, 3) "
+    "ORDER BY `章节ID`, `首领类型`, `首领入口`";
 
 char const* const kLoadItemDockingsSql =
     "SELECT `\xE7\x89\xA9\xE5\x93\x81ID`, `\xE7\x89\xA9\xE5\x93\x81\xE5\x90\x8D\xE7\xA7\xB0`, `\xE5\xAF\xB9\xE6\x8E\xA5\xE7\xB1\xBB\xE5\x9E\x8B`, `\xE5\xB9\x95ID`, `\xE7\xAB\xA0\xE8\x8A\x82ID`, `\xE5\xBB\xBA\xE8\xAE\xAE\xE7\x89\xA9\xE5\x93\x81\xE5\x93\x81\xE8\xB4\xA8`, `\xE5\xBB\xBA\xE8\xAE\xAE\xE7\x89\xA9\xE5\x93\x81\xE5\x88\x86\xE7\xB1\xBB`, `\xE5\xBB\xBA\xE8\xAE\xAE\xE7\x89\xA9\xE5\x93\x81\xE5\xAD\x90\xE7\xB1\xBB`, `\xE5\xBB\xBA\xE8\xAE\xAE\xE8\xA3\x85\xE5\xA4\x87\xE6\xA7\xBD\xE4\xBD\x8D`, `\xE6\x98\xAF\xE5\x90\xA6\xE5\x94\xAF\xE4\xB8\x80`, `\xE6\x98\xAF\xE5\x90\xA6\xE8\x83\x8C\xE5\x8C\x85\xE6\xBF\x80\xE6\xB4\xBB`, `\xE9\xA2\x84\xE7\x95\x99\xE6\x98\xBE\xE7\xA4\xBAID`, `\xE5\xAF\xB9\xE6\x8E\xA5\xE7\x8A\xB6\xE6\x80\x81`, `\xE8\xAF\xB4\xE6\x98\x8E` FROM `_\xE6\xB7\xB1\xE6\xB8\x8A\xE7\x89\xA9\xE5\x93\x81\xE6\xA8\xA1\xE6\x9D\xBF\xE5\xAF\xB9\xE6\x8E\xA5` ORDER BY `\xE7\xAB\xA0\xE8\x8A\x82ID`, `\xE5\xAF\xB9\xE6\x8E\xA5\xE7\xB1\xBB\xE5\x9E\x8B`, `\xE7\x89\xA9\xE5\x93\x81ID`";
@@ -1507,9 +1521,6 @@ public:
             }
         }
 
-        LOG_INFO("server.loading", ">> mod-abyss-cultivation: loaded {} chapters in {} ms",
-            count, GetMSTimeDiffToNow(oldMSTime));
-
         if (warningCount > 0)
         {
             LOG_WARN("module", "mod-abyss-cultivation: chapter cache validation finished with {} warning(s)",
@@ -1558,9 +1569,6 @@ public:
             _taskDockings[docking.questId] = docking;
             ++count;
         } while (result->NextRow());
-
-        LOG_INFO("server.loading", ">> mod-abyss-cultivation: loaded {} task dockings in {} ms",
-            count, GetMSTimeDiffToNow(oldMSTime));
 
         if (warningCount > 0)
         {
@@ -1613,9 +1621,6 @@ public:
             ++count;
         } while (result->NextRow());
 
-        LOG_INFO("server.loading", ">> mod-abyss-cultivation: loaded {} custom boss dockings in {} ms",
-            count, GetMSTimeDiffToNow(oldMSTime));
-
         if (warningCount > 0)
         {
             LOG_WARN("module", "mod-abyss-cultivation: boss docking validation finished with {} warning(s)",
@@ -1667,9 +1672,6 @@ public:
             _itemDockings[docking.itemId] = docking;
             ++count;
         } while (result->NextRow());
-
-        LOG_INFO("server.loading", ">> mod-abyss-cultivation: loaded {} item dockings in {} ms",
-            count, GetMSTimeDiffToNow(oldMSTime));
 
         if (warningCount > 0)
         {
@@ -1735,9 +1737,6 @@ public:
             _relicConfigs[config.itemId] = config;
             ++count;
         } while (result->NextRow());
-
-        LOG_INFO("server.loading", ">> mod-abyss-cultivation: loaded {} relic configs in {} ms",
-            count, GetMSTimeDiffToNow(oldMSTime));
     }
 
     void LoadBossConfigs()
@@ -1783,9 +1782,6 @@ public:
             _bossConfigs[config.bossEntry] = config;
             ++count;
         } while (result->NextRow());
-
-        LOG_INFO("server.loading", ">> mod-abyss-cultivation: loaded {} boss configs in {} ms",
-            count, GetMSTimeDiffToNow(oldMSTime));
     }
 
     void LoadEquipmentTemplates()
@@ -1835,8 +1831,6 @@ public:
             ++count;
         } while (result->NextRow());
 
-        LOG_INFO("server.loading", ">> mod-abyss-cultivation: loaded {} equipment templates in {} ms",
-            count, GetMSTimeDiffToNow(oldMSTime));
     }
 
     void LoadSetBonusConfigs()
@@ -1891,8 +1885,6 @@ public:
             ++count;
         } while (result->NextRow());
 
-        LOG_INFO("server.loading", ">> mod-abyss-cultivation: loaded {} set bonus configs in {} ms",
-            count, GetMSTimeDiffToNow(oldMSTime));
     }
 
     void LoadAffixTemplates()
@@ -1929,8 +1921,6 @@ public:
             ++count;
         } while (result->NextRow());
 
-        LOG_INFO("server.loading", ">> mod-abyss-cultivation: loaded {} affix templates in {} ms",
-            count, GetMSTimeDiffToNow(oldMSTime));
     }
 
     void LoadSpecialEffectTemplates()
@@ -1968,8 +1958,6 @@ public:
             ++count;
         } while (result->NextRow());
 
-        LOG_INFO("server.loading", ">> mod-abyss-cultivation: loaded {} special effect templates in {} ms",
-            count, GetMSTimeDiffToNow(oldMSTime));
     }
 
     void LoadPlayerData(Player* player, bool createIfMissing)
@@ -9045,7 +9033,7 @@ public:
         sAbyssCultivationMgr->LoadTaskDockings();
         sAbyssCultivationMgr->LoadBossDockings();
         sAbyssCultivationMgr->LoadItemDockings();
-        LOG_INFO("server.loading", ">> mod-abyss-cultivation: bootstrap ready");
+        LOG_INFO("server.loading", "→深渊修炼系统√");
     }
 
 private:

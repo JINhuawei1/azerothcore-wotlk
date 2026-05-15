@@ -1,96 +1,100 @@
 /*
  * 修仙系统 - 连续召唤Boss战斗脚本
  * 100个Boss (390101-390200) 循环使用10套AI脚本
- * 每套6个技能，技能ID 371101-371160
- * 击杀后5秒在同位置召唤下一个Boss
+ * 每套6个技能，全部使用客户端 Spell.dbc 已存在法术
+ * 击杀后5秒在第一层Boss出生点召唤下一个Boss
  */
 
 #include "ScriptMgr.h"
 #include "ScriptedCreature.h"
 #include "Player.h"
 #include "Chat.h"
+#include "Log.h"
+#include "SpellMgr.h"
+
+void RegisterCultivationTribulationBoss(uint32 bossGuid, uint32 playerGuid);
 
 enum ChainBossSpells
 {
-    // 脚本1: 火焰系 (371101-371106)
-    SPELL_FIRE_BOLT         = 371101, // 火球术：单体伤害
-    SPELL_FIRE_NOVA         = 371102, // 烈焰新星：AOE
-    SPELL_FIRE_SHIELD       = 371103, // 火焰护盾：自身buff
-    SPELL_METEOR            = 371104, // 陨石坠落：延迟AOE
-    SPELL_IGNITE            = 371105, // 点燃：DOT
-    SPELL_INFERNO           = 371106, // 地狱火：持续AOE
+    // 脚本1: 火焰系
+    SPELL_FIRE_BOLT         = 42833, // 火球术
+    SPELL_FIRE_NOVA         = 42945, // 冲击波
+    SPELL_FIRE_SHIELD       = 43010, // 火焰防护结界
+    SPELL_METEOR            = 42891, // 炎爆术
+    SPELL_IGNITE            = 55360, // 活体炸弹
+    SPELL_INFERNO           = 42926, // 烈焰风暴
 
-    // 脚本2: 冰霜系 (371107-371112)
-    SPELL_FROST_BOLT        = 371107, // 寒冰箭：单体+减速
-    SPELL_BLIZZARD          = 371108, // 暴风雪：区域AOE
-    SPELL_FROST_ARMOR       = 371109, // 冰甲术：自身buff
-    SPELL_ICE_LANCE         = 371110, // 冰枪术：单体爆发
-    SPELL_FROZEN_ORB        = 371111, // 冰冻之球：移动AOE
-    SPELL_DEEP_FREEZE       = 371112, // 深度冻结：控制
+    // 脚本2: 冰霜系
+    SPELL_FROST_BOLT        = 42842, // 寒冰箭
+    SPELL_BLIZZARD          = 42940, // 暴风雪
+    SPELL_FROST_ARMOR       = 43039, // 冰霜护甲
+    SPELL_ICE_LANCE         = 42914, // 冰枪术
+    SPELL_FROZEN_ORB        = 42917, // 冰霜新星
+    SPELL_DEEP_FREEZE       = 44572, // 深度冻结
 
-    // 脚本3: 暗影系 (371113-371118)
-    SPELL_SHADOW_BOLT       = 371113, // 暗影箭：单体
-    SPELL_SHADOW_NOVA       = 371114, // 暗影新星：AOE+恐惧
-    SPELL_DRAIN_LIFE        = 371115, // 生命吸取：吸血
-    SPELL_CURSE_AGONY       = 371116, // 痛苦诅咒：DOT
-    SPELL_SHADOW_FURY       = 371117, // 暗影之怒：AOE眩晕
-    SPELL_DARK_PACT         = 371118, // 黑暗契约：自身强化
+    // 脚本3: 暗影系
+    SPELL_SHADOW_BOLT       = 47809, // 暗影箭
+    SPELL_SHADOW_NOVA       = 10890, // 心灵尖啸
+    SPELL_DRAIN_LIFE        = 47857, // 吸取生命
+    SPELL_CURSE_AGONY       = 47864, // 痛苦诅咒
+    SPELL_SHADOW_FURY       = 47847, // 暗影之怒
+    SPELL_DARK_PACT         = 47891, // 暗影防护结界
 
-    // 脚本4: 自然系 (371119-371124)
-    SPELL_WRATH             = 371119, // 愤怒：单体
-    SPELL_HURRICANE         = 371120, // 飓风：区域AOE
-    SPELL_THORNS            = 371121, // 荆棘术：反伤buff
-    SPELL_ENTANGLE          = 371122, // 纠缠根须：定身
-    SPELL_STARFALL          = 371123, // 星辰坠落：大范围AOE
-    SPELL_REJUVENATE_BOSS   = 371124, // 回春术：自身HOT
+    // 脚本4: 自然系
+    SPELL_WRATH             = 48461, // 愤怒
+    SPELL_STARFIRE          = 48465, // 星火术
+    SPELL_THORNS            = 53307, // 荆棘术
+    SPELL_ENTANGLE          = 53308, // 纠缠根须
+    SPELL_STARFALL          = 53201, // 星辰坠落
+    SPELL_REJUVENATE_BOSS   = 48441, // 回春术
 
-    // 脚本5: 神圣系 (371125-371130)
-    SPELL_SMITE             = 371125, // 惩击：单体
-    SPELL_HOLY_NOVA_BOSS    = 371126, // 神圣新星：AOE
-    SPELL_DIVINE_SHIELD     = 371127, // 神圣护盾：免伤buff
-    SPELL_HAMMER_JUSTICE    = 371128, // 制裁之锤：眩晕
-    SPELL_CONSECRATION      = 371129, // 奉献：脚下AOE
-    SPELL_HOLY_WRATH        = 371130, // 神圣愤怒：大AOE
+    // 脚本5: 神圣系
+    SPELL_SMITE             = 48123, // 惩击
+    SPELL_HOLY_NOVA_BOSS    = 48078, // 神圣新星
+    SPELL_DIVINE_SHIELD     = 642,   // 圣盾术
+    SPELL_HAMMER_JUSTICE    = 10308, // 制裁之锤
+    SPELL_CONSECRATION      = 48819, // 奉献
+    SPELL_HOLY_WRATH        = 48817, // 神圣愤怒
 
-    // 脚本6: 奥术系 (371131-371136)
-    SPELL_ARCANE_BLAST      = 371131, // 奥术冲击：单体
-    SPELL_ARCANE_EXPLOSION  = 371132, // 奥术爆炸：AOE
-    SPELL_MANA_SHIELD       = 371133, // 法力护盾：吸收buff
-    SPELL_ARCANE_MISSILES   = 371134, // 奥术飞弹：连击
-    SPELL_COUNTERSPELL_BOSS = 371135, // 法术反制：沉默
-    SPELL_ARCANE_BARRAGE    = 371136, // 奥术弹幕：多目标
+    // 脚本6: 奥术系
+    SPELL_ARCANE_BLAST      = 42897, // 奥术冲击
+    SPELL_ARCANE_EXPLOSION  = 42921, // 魔爆术
+    SPELL_MANA_SHIELD       = 43020, // 法力护盾
+    SPELL_ARCANE_MISSILES   = 42846, // 奥术飞弹
+    SPELL_COUNTERSPELL_BOSS = 2139,  // 法术反制
+    SPELL_ARCANE_BARRAGE    = 44781, // 奥术弹幕
 
-    // 脚本7: 物理系 (371137-371142)
-    SPELL_MORTAL_STRIKE     = 371137, // 致死打击：单体+治疗减半
-    SPELL_WHIRLWIND_BOSS    = 371138, // 旋风斩：AOE
-    SPELL_BATTLE_SHOUT      = 371139, // 战斗怒吼：自身强化
-    SPELL_CHARGE_BOSS       = 371140, // 冲锋：突进+眩晕
-    SPELL_THUNDER_CLAP      = 371141, // 雷霆一击：AOE减速
-    SPELL_EXECUTE_BOSS      = 371142, // 斩杀：低血量爆发
+    // 脚本7: 物理系
+    SPELL_MORTAL_STRIKE     = 47486, // 致死打击
+    SPELL_WHIRLWIND_BOSS    = 1680,  // 旋风斩
+    SPELL_BATTLE_SHOUT      = 47436, // 战斗怒吼
+    SPELL_CHARGE_BOSS       = 11578, // 冲锋
+    SPELL_THUNDER_CLAP      = 47502, // 雷霆一击
+    SPELL_EXECUTE_BOSS      = 47471, // 斩杀
 
-    // 脚本8: 毒系 (371143-371148)
-    SPELL_POISON_BOLT       = 371143, // 毒箭：单体DOT
-    SPELL_POISON_CLOUD      = 371144, // 毒云：区域AOE
-    SPELL_ENVENOM           = 371145, // 毒化：自身强化
-    SPELL_CRIPPLING_POISON  = 371146, // 致残毒药：减速
-    SPELL_VENOM_SPIT        = 371147, // 毒液喷射：锥形AOE
-    SPELL_DEADLY_POISON     = 371148, // 致命毒药：叠加DOT
+    // 脚本8: 毒系
+    SPELL_POISON_BOLT       = 21067, // 毒箭
+    SPELL_POISON_CLOUD      = 57061, // 毒云
+    SPELL_ENVENOM           = 57993, // 毒伤
+    SPELL_CRIPPLING_POISON  = 3409,  // 致残毒药
+    SPELL_VENOM_SPIT        = 45525, // 毒液喷吐
+    SPELL_DEADLY_POISON     = 57970, // 致命药膏
 
-    // 脚本9: 雷电系 (371149-371154)
-    SPELL_LIGHTNING_BOLT    = 371149, // 闪电箭：单体
-    SPELL_CHAIN_LIGHTNING   = 371150, // 闪电链：弹射
-    SPELL_LIGHTNING_SHIELD  = 371151, // 闪电之盾：反击buff
-    SPELL_THUNDERSTORM      = 371152, // 雷暴：AOE+击退
-    SPELL_STORMSTRIKE       = 371153, // 风暴打击：近战爆发
-    SPELL_EARTH_SHOCK       = 371154, // 地震术：打断+伤害
+    // 脚本9: 雷电系
+    SPELL_LIGHTNING_BOLT    = 49238, // 闪电箭
+    SPELL_CHAIN_LIGHTNING   = 49271, // 闪电链
+    SPELL_LIGHTNING_SHIELD  = 49281, // 闪电之盾
+    SPELL_THUNDERSTORM      = 59159, // 雷霆风暴
+    SPELL_STORMSTRIKE       = 17364, // 风暴打击
+    SPELL_EARTH_SHOCK       = 49231, // 地震术
 
-    // 脚本10: 混沌系 (371155-371160)
-    SPELL_CHAOS_BOLT        = 371155, // 混沌箭：单体高伤
-    SPELL_VOID_ZONE         = 371156, // 虚空区域：站桩AOE
-    SPELL_BERSERK_BOSS      = 371157, // 狂暴：自身强化
-    SPELL_SOUL_FIRE         = 371158, // 灵魂之火：延迟高伤
-    SPELL_RAIN_OF_CHAOS     = 371159, // 混沌之雨：大范围AOE
-    SPELL_NETHER_PORTAL     = 371160, // 虚空传送门：召唤小怪
+    // 脚本10: 混沌系
+    SPELL_CHAOS_BOLT        = 47825, // 混乱之箭
+    SPELL_VOID_ZONE         = 47836, // 腐蚀之种
+    SPELL_BERSERK_BOSS      = 47893, // 恶魔护甲
+    SPELL_SOUL_FIRE         = 47811, // 灵魂之火
+    SPELL_RAIN_OF_CHAOS     = 47820, // 火焰之雨
+    SPELL_NETHER_PORTAL     = 47867, // 末日灾祸
 };
 
 // ============================================================
@@ -99,6 +103,45 @@ enum ChainBossSpells
 struct npc_cultivation_chain_boss_base : public ScriptedAI
 {
     npc_cultivation_chain_boss_base(Creature* creature) : ScriptedAI(creature) {}
+
+    void Reset() override
+    {
+        events.Reset();
+        me->SetFullHealth();
+    }
+
+    void CastVictimSpell(uint32 spellId)
+    {
+        if (!sSpellMgr->GetSpellInfo(spellId))
+        {
+            LOG_INFO("server.loading", "修仙连续Boss: Spell.dbc 缺少法术 {}, Boss {} 无法施放。", spellId, me->GetEntry());
+            return;
+        }
+
+        DoCastVictim(spellId, true);
+    }
+
+    void CastAoeSpell(uint32 spellId)
+    {
+        if (!sSpellMgr->GetSpellInfo(spellId))
+        {
+            LOG_INFO("server.loading", "修仙连续Boss: Spell.dbc 缺少法术 {}, Boss {} 无法施放。", spellId, me->GetEntry());
+            return;
+        }
+
+        DoCastAOE(spellId, true);
+    }
+
+    void CastSelfSpell(uint32 spellId)
+    {
+        if (!sSpellMgr->GetSpellInfo(spellId))
+        {
+            LOG_INFO("server.loading", "修仙连续Boss: Spell.dbc 缺少法术 {}, Boss {} 无法施放。", spellId, me->GetEntry());
+            return;
+        }
+
+        DoCast(me, spellId, true);
+    }
 
     uint32 GetBossIndex() const
     {
@@ -126,10 +169,8 @@ struct npc_cultivation_chain_boss_base : public ScriptedAI
 
         // 5秒后召唤下一个Boss
         uint32 nextEntry = 390100 + bossIndex + 1;
-        float x = me->GetPositionX();
-        float y = me->GetPositionY();
-        float z = me->GetPositionZ();
-        float o = me->GetOrientation();
+        float x, y, z, o;
+        me->GetHomePosition(x, y, z, o);
 
         me->m_Events.AddEventAtOffset([nextEntry, x, y, z, o, killer]()
         {
@@ -143,10 +184,13 @@ struct npc_cultivation_chain_boss_base : public ScriptedAI
                 return;
 
             if (Creature* next = p->SummonCreature(nextEntry, x, y, z, o,
-                TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, 300000))
+                TEMPSUMMON_TIMED_DESPAWN_OOC_ALIVE, 30000))
             {
+                next->SetCorpseDelay(30);
                 next->SetInCombatWith(p);
                 next->AddThreat(p, 1000.0f);
+                next->AI()->AttackStart(p);
+                RegisterCultivationTribulationBoss(next->GetGUID().GetCounter(), p->GetGUID().GetCounter());
             }
         }, 5s);
     }
@@ -180,12 +224,12 @@ struct npc_cultivation_chain_boss_1 : public npc_cultivation_chain_boss_base
         {
             switch (eventId)
             {
-                case 1: DoCastVictim(SPELL_FIRE_BOLT);    events.Repeat(3s); break;
-                case 2: DoCastAOE(SPELL_FIRE_NOVA);       events.Repeat(12s); break;
-                case 3: DoCast(me, SPELL_FIRE_SHIELD);    events.Repeat(30s); break;
-                case 4: DoCastVictim(SPELL_METEOR);       events.Repeat(18s); break;
-                case 5: DoCastVictim(SPELL_IGNITE);       events.Repeat(14s); break;
-                case 6: DoCastAOE(SPELL_INFERNO);         events.Repeat(25s); break;
+                case 1: CastVictimSpell(SPELL_FIRE_BOLT);    events.Repeat(3s); break;
+                case 2: CastAoeSpell(SPELL_FIRE_NOVA);       events.Repeat(12s); break;
+                case 3: CastSelfSpell(SPELL_FIRE_SHIELD);    events.Repeat(30s); break;
+                case 4: CastVictimSpell(SPELL_METEOR);       events.Repeat(18s); break;
+                case 5: CastVictimSpell(SPELL_IGNITE);       events.Repeat(14s); break;
+                case 6: CastAoeSpell(SPELL_INFERNO);         events.Repeat(25s); break;
             }
         }
         DoMeleeAttackIfReady();
@@ -219,12 +263,12 @@ struct npc_cultivation_chain_boss_2 : public npc_cultivation_chain_boss_base
         {
             switch (eventId)
             {
-                case 1: DoCastVictim(SPELL_FROST_BOLT);   events.Repeat(3s); break;
-                case 2: DoCastAOE(SPELL_BLIZZARD);        events.Repeat(15s); break;
-                case 3: DoCast(me, SPELL_FROST_ARMOR);    events.Repeat(35s); break;
-                case 4: DoCastVictim(SPELL_ICE_LANCE);    events.Repeat(8s); break;
-                case 5: DoCastVictim(SPELL_FROZEN_ORB);   events.Repeat(18s); break;
-                case 6: DoCastVictim(SPELL_DEEP_FREEZE);  events.Repeat(22s); break;
+                case 1: CastVictimSpell(SPELL_FROST_BOLT);   events.Repeat(3s); break;
+                case 2: CastAoeSpell(SPELL_BLIZZARD);        events.Repeat(15s); break;
+                case 3: CastSelfSpell(SPELL_FROST_ARMOR);    events.Repeat(35s); break;
+                case 4: CastVictimSpell(SPELL_ICE_LANCE);    events.Repeat(8s); break;
+                case 5: CastVictimSpell(SPELL_FROZEN_ORB);   events.Repeat(18s); break;
+                case 6: CastVictimSpell(SPELL_DEEP_FREEZE);  events.Repeat(22s); break;
             }
         }
         DoMeleeAttackIfReady();
@@ -258,12 +302,12 @@ struct npc_cultivation_chain_boss_3 : public npc_cultivation_chain_boss_base
         {
             switch (eventId)
             {
-                case 1: DoCastVictim(SPELL_SHADOW_BOLT);  events.Repeat(3s); break;
-                case 2: DoCastAOE(SPELL_SHADOW_NOVA);     events.Repeat(14s); break;
-                case 3: DoCastVictim(SPELL_DRAIN_LIFE);   events.Repeat(10s); break;
-                case 4: DoCastVictim(SPELL_CURSE_AGONY);  events.Repeat(12s); break;
-                case 5: DoCastAOE(SPELL_SHADOW_FURY);     events.Repeat(18s); break;
-                case 6: DoCast(me, SPELL_DARK_PACT);      events.Repeat(25s); break;
+                case 1: CastVictimSpell(SPELL_SHADOW_BOLT);  events.Repeat(3s); break;
+                case 2: CastAoeSpell(SPELL_SHADOW_NOVA);     events.Repeat(14s); break;
+                case 3: CastVictimSpell(SPELL_DRAIN_LIFE);   events.Repeat(10s); break;
+                case 4: CastVictimSpell(SPELL_CURSE_AGONY);  events.Repeat(12s); break;
+                case 5: CastAoeSpell(SPELL_SHADOW_FURY);     events.Repeat(18s); break;
+                case 6: CastSelfSpell(SPELL_DARK_PACT);      events.Repeat(25s); break;
             }
         }
         DoMeleeAttackIfReady();
@@ -297,12 +341,12 @@ struct npc_cultivation_chain_boss_4 : public npc_cultivation_chain_boss_base
         {
             switch (eventId)
             {
-                case 1: DoCastVictim(SPELL_WRATH);            events.Repeat(3s); break;
-                case 2: DoCastAOE(SPELL_HURRICANE);           events.Repeat(16s); break;
-                case 3: DoCast(me, SPELL_THORNS);             events.Repeat(30s); break;
-                case 4: DoCastVictim(SPELL_ENTANGLE);         events.Repeat(12s); break;
-                case 5: DoCastAOE(SPELL_STARFALL);            events.Repeat(22s); break;
-                case 6: DoCast(me, SPELL_REJUVENATE_BOSS);    events.Repeat(20s); break;
+                case 1: CastVictimSpell(SPELL_WRATH);            events.Repeat(3s); break;
+                case 2: CastVictimSpell(SPELL_STARFIRE);         events.Repeat(16s); break;
+                case 3: CastSelfSpell(SPELL_THORNS);             events.Repeat(30s); break;
+                case 4: CastVictimSpell(SPELL_ENTANGLE);         events.Repeat(12s); break;
+                case 5: CastAoeSpell(SPELL_STARFALL);            events.Repeat(22s); break;
+                case 6: CastSelfSpell(SPELL_REJUVENATE_BOSS);    events.Repeat(20s); break;
             }
         }
         DoMeleeAttackIfReady();
@@ -336,12 +380,12 @@ struct npc_cultivation_chain_boss_5 : public npc_cultivation_chain_boss_base
         {
             switch (eventId)
             {
-                case 1: DoCastVictim(SPELL_SMITE);            events.Repeat(3s); break;
-                case 2: DoCastAOE(SPELL_HOLY_NOVA_BOSS);      events.Repeat(11s); break;
-                case 3: DoCast(me, SPELL_DIVINE_SHIELD);      events.Repeat(40s); break;
-                case 4: DoCastVictim(SPELL_HAMMER_JUSTICE);    events.Repeat(10s); break;
-                case 5: DoCastAOE(SPELL_CONSECRATION);        events.Repeat(15s); break;
-                case 6: DoCastAOE(SPELL_HOLY_WRATH);          events.Repeat(20s); break;
+                case 1: CastVictimSpell(SPELL_SMITE);            events.Repeat(3s); break;
+                case 2: CastAoeSpell(SPELL_HOLY_NOVA_BOSS);      events.Repeat(11s); break;
+                case 3: CastSelfSpell(SPELL_DIVINE_SHIELD);      events.Repeat(40s); break;
+                case 4: CastVictimSpell(SPELL_HAMMER_JUSTICE);    events.Repeat(10s); break;
+                case 5: CastAoeSpell(SPELL_CONSECRATION);        events.Repeat(15s); break;
+                case 6: CastAoeSpell(SPELL_HOLY_WRATH);          events.Repeat(20s); break;
             }
         }
         DoMeleeAttackIfReady();
@@ -375,12 +419,12 @@ struct npc_cultivation_chain_boss_6 : public npc_cultivation_chain_boss_base
         {
             switch (eventId)
             {
-                case 1: DoCastVictim(SPELL_ARCANE_BLAST);     events.Repeat(3s); break;
-                case 2: DoCastAOE(SPELL_ARCANE_EXPLOSION);    events.Repeat(10s); break;
-                case 3: DoCast(me, SPELL_MANA_SHIELD);        events.Repeat(30s); break;
-                case 4: DoCastVictim(SPELL_ARCANE_MISSILES);  events.Repeat(8s); break;
-                case 5: DoCastVictim(SPELL_COUNTERSPELL_BOSS);events.Repeat(16s); break;
-                case 6: DoCastAOE(SPELL_ARCANE_BARRAGE);      events.Repeat(12s); break;
+                case 1: CastVictimSpell(SPELL_ARCANE_BLAST);     events.Repeat(3s); break;
+                case 2: CastAoeSpell(SPELL_ARCANE_EXPLOSION);    events.Repeat(10s); break;
+                case 3: CastSelfSpell(SPELL_MANA_SHIELD);        events.Repeat(30s); break;
+                case 4: CastVictimSpell(SPELL_ARCANE_MISSILES);  events.Repeat(8s); break;
+                case 5: CastVictimSpell(SPELL_COUNTERSPELL_BOSS);events.Repeat(16s); break;
+                case 6: CastAoeSpell(SPELL_ARCANE_BARRAGE);      events.Repeat(12s); break;
             }
         }
         DoMeleeAttackIfReady();
@@ -414,12 +458,12 @@ struct npc_cultivation_chain_boss_7 : public npc_cultivation_chain_boss_base
         {
             switch (eventId)
             {
-                case 1: DoCastVictim(SPELL_MORTAL_STRIKE);    events.Repeat(6s); break;
-                case 2: DoCastAOE(SPELL_WHIRLWIND_BOSS);      events.Repeat(10s); break;
-                case 3: DoCast(me, SPELL_BATTLE_SHOUT);       events.Repeat(30s); break;
-                case 4: DoCastVictim(SPELL_CHARGE_BOSS);      events.Repeat(15s); break;
-                case 5: DoCastAOE(SPELL_THUNDER_CLAP);        events.Repeat(14s); break;
-                case 6: DoCastVictim(SPELL_EXECUTE_BOSS);     events.Repeat(12s); break;
+                case 1: CastVictimSpell(SPELL_MORTAL_STRIKE);    events.Repeat(6s); break;
+                case 2: CastAoeSpell(SPELL_WHIRLWIND_BOSS);      events.Repeat(10s); break;
+                case 3: CastSelfSpell(SPELL_BATTLE_SHOUT);       events.Repeat(30s); break;
+                case 4: CastVictimSpell(SPELL_CHARGE_BOSS);      events.Repeat(15s); break;
+                case 5: CastAoeSpell(SPELL_THUNDER_CLAP);        events.Repeat(14s); break;
+                case 6: CastVictimSpell(SPELL_EXECUTE_BOSS);     events.Repeat(12s); break;
             }
         }
         DoMeleeAttackIfReady();
@@ -453,12 +497,12 @@ struct npc_cultivation_chain_boss_8 : public npc_cultivation_chain_boss_base
         {
             switch (eventId)
             {
-                case 1: DoCastVictim(SPELL_POISON_BOLT);      events.Repeat(4s); break;
-                case 2: DoCastAOE(SPELL_POISON_CLOUD);        events.Repeat(16s); break;
-                case 3: DoCast(me, SPELL_ENVENOM);            events.Repeat(25s); break;
-                case 4: DoCastVictim(SPELL_CRIPPLING_POISON); events.Repeat(10s); break;
-                case 5: DoCastAOE(SPELL_VENOM_SPIT);          events.Repeat(12s); break;
-                case 6: DoCastVictim(SPELL_DEADLY_POISON);    events.Repeat(8s); break;
+                case 1: CastVictimSpell(SPELL_POISON_BOLT);      events.Repeat(4s); break;
+                case 2: CastAoeSpell(SPELL_POISON_CLOUD);        events.Repeat(16s); break;
+                case 3: CastSelfSpell(SPELL_ENVENOM);            events.Repeat(25s); break;
+                case 4: CastVictimSpell(SPELL_CRIPPLING_POISON); events.Repeat(10s); break;
+                case 5: CastAoeSpell(SPELL_VENOM_SPIT);          events.Repeat(12s); break;
+                case 6: CastVictimSpell(SPELL_DEADLY_POISON);    events.Repeat(8s); break;
             }
         }
         DoMeleeAttackIfReady();
@@ -492,12 +536,12 @@ struct npc_cultivation_chain_boss_9 : public npc_cultivation_chain_boss_base
         {
             switch (eventId)
             {
-                case 1: DoCastVictim(SPELL_LIGHTNING_BOLT);   events.Repeat(3s); break;
-                case 2: DoCastVictim(SPELL_CHAIN_LIGHTNING);  events.Repeat(9s); break;
-                case 3: DoCast(me, SPELL_LIGHTNING_SHIELD);   events.Repeat(28s); break;
-                case 4: DoCastAOE(SPELL_THUNDERSTORM);        events.Repeat(18s); break;
-                case 5: DoCastVictim(SPELL_STORMSTRIKE);      events.Repeat(7s); break;
-                case 6: DoCastVictim(SPELL_EARTH_SHOCK);      events.Repeat(12s); break;
+                case 1: CastVictimSpell(SPELL_LIGHTNING_BOLT);   events.Repeat(3s); break;
+                case 2: CastVictimSpell(SPELL_CHAIN_LIGHTNING);  events.Repeat(9s); break;
+                case 3: CastSelfSpell(SPELL_LIGHTNING_SHIELD);   events.Repeat(28s); break;
+                case 4: CastAoeSpell(SPELL_THUNDERSTORM);        events.Repeat(18s); break;
+                case 5: CastVictimSpell(SPELL_STORMSTRIKE);      events.Repeat(7s); break;
+                case 6: CastVictimSpell(SPELL_EARTH_SHOCK);      events.Repeat(12s); break;
             }
         }
         DoMeleeAttackIfReady();
@@ -531,12 +575,12 @@ struct npc_cultivation_chain_boss_10 : public npc_cultivation_chain_boss_base
         {
             switch (eventId)
             {
-                case 1: DoCastVictim(SPELL_CHAOS_BOLT);       events.Repeat(4s); break;
-                case 2: DoCastAOE(SPELL_VOID_ZONE);           events.Repeat(14s); break;
-                case 3: DoCast(me, SPELL_BERSERK_BOSS);       events.Repeat(45s); break;
-                case 4: DoCastVictim(SPELL_SOUL_FIRE);        events.Repeat(8s); break;
-                case 5: DoCastAOE(SPELL_RAIN_OF_CHAOS);       events.Repeat(20s); break;
-                case 6: DoCastAOE(SPELL_NETHER_PORTAL);       events.Repeat(30s); break;
+                case 1: CastVictimSpell(SPELL_CHAOS_BOLT);       events.Repeat(4s); break;
+                case 2: CastAoeSpell(SPELL_VOID_ZONE);           events.Repeat(14s); break;
+                case 3: CastSelfSpell(SPELL_BERSERK_BOSS);       events.Repeat(45s); break;
+                case 4: CastVictimSpell(SPELL_SOUL_FIRE);        events.Repeat(8s); break;
+                case 5: CastAoeSpell(SPELL_RAIN_OF_CHAOS);       events.Repeat(20s); break;
+                case 6: CastAoeSpell(SPELL_NETHER_PORTAL);       events.Repeat(30s); break;
             }
         }
         DoMeleeAttackIfReady();

@@ -1206,7 +1206,7 @@ public:
     uint64 CalculateDamage(WeaponAttackType attType, bool normalized, bool addTotalPct, uint8 itemDamagesMask = 0);
     virtual void CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bool addTotalPct, float& minDamage, float& maxDamage, uint8 damageIndex = 0) = 0;
     void CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, WeaponAttackType attackType = BASE_ATTACK, const bool sittingVictim = false);
-    void CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int64 damage, SpellInfo const* spellInfo, WeaponAttackType attackType = BASE_ATTACK, bool crit = false);
+    void CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, uint64 damage, SpellInfo const* spellInfo, WeaponAttackType attackType = BASE_ATTACK, bool crit = false);
     int32 CalculateSpellDamage(Unit const* target, SpellInfo const* spellProto, uint8 effect_index, int32 const* basePoints = nullptr) const;
     float CalculateDefaultCoefficient(SpellInfo const* spellInfo, DamageEffectType damagetype) const;
 
@@ -1222,7 +1222,7 @@ public:
     uint64 SpellDamageBonusTaken(Unit* caster, SpellInfo const* spellProto, uint64 pdamage, DamageEffectType damagetype, uint32 stack = 1);
 
     // AOE damages
-    int64 CalculateAOEDamageReduction(int64 damage, uint32 schoolMask, bool npcCaster) const;
+    uint64 CalculateAOEDamageReduction(uint64 damage, uint32 schoolMask, bool npcCaster) const;
 
     // Armor reduction
     static bool IsDamageReducedByArmor(SpellSchoolMask damageSchoolMask, SpellInfo const* spellInfo = nullptr, uint8 effIndex = MAX_SPELL_EFFECTS);
@@ -1577,9 +1577,9 @@ public:
     [[nodiscard]] SpellMissInfo SpellHitResult(Unit* victim, Spell const* spell, bool canReflect = false);
 
     // Healling spells
-    static int64 DealHeal(Unit* healer, Unit* victim, uint64 addhealth);
+    static uint64 DealHeal(Unit* healer, Unit* victim, uint64 addhealth);
     void SendHealSpellLog(HealInfo const& healInfo, bool critical = false);
-    int64 HealBySpell(HealInfo& healInfo, bool critical = false);
+    uint64 HealBySpell(HealInfo& healInfo, bool critical = false);
 
     int32 SpellBaseHealingBonusDone(SpellSchoolMask schoolMask);
     int32 SpellBaseHealingBonusTaken(SpellSchoolMask schoolMask);

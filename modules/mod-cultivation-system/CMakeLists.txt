@@ -6,12 +6,12 @@
 include_directories(
   ${CMAKE_SOURCE_DIR}/modules
   ${CMAKE_SOURCE_DIR}/modules/mod-requirement-template/src
-  ${CMAKE_SOURCE_DIR}/modules/mod-elemental-system/src
   ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 # Add scripts
 AC_ADD_SCRIPT("${CMAKE_CURRENT_SOURCE_DIR}/src/mod_cultivation_system.cpp")
+AC_ADD_SCRIPT("${CMAKE_CURRENT_SOURCE_DIR}/src/cultivation_chain_boss.cpp")
 AC_ADD_SCRIPT("${CMAKE_CURRENT_SOURCE_DIR}/src/mod_cultivation_system_loader.cpp")
 
 # Add config file

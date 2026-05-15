@@ -105,6 +105,7 @@ struct PlayerCultivationData
 {
     uint32 level = 0;
     uint32 tribCooldown = 0;
+    uint32 tribPassedLevel = 0;
 };
 
 // ============================================
@@ -188,8 +189,6 @@ public:
             _realmConfigs[config.level] = config;
             ++count;
         } while (result->NextRow());
-
-        LOG_INFO("server.loading", ">> 修仙系统: 加载 {} 条境界配置，耗时 {} ms", count, GetMSTimeDiffToNow(oldMSTime));
     }
 
     // 加载技能配置
@@ -222,8 +221,6 @@ public:
             _skillConfigs.push_back(skill);
             ++count;
         } while (result->NextRow());
-
-        LOG_INFO("server.loading", ">> 修仙系统: 加载 {} 条技能配置，耗时 {} ms", count, GetMSTimeDiffToNow(oldMSTime));
     }
 
     // 加载玩家数据
@@ -236,7 +233,7 @@ public:
         _playerData[guid] = PlayerCultivationData();
 
         QueryResult result = CharacterDatabase.Query(
-            "SELECT `修仙等级`, `渡劫冷却时间` FROM `_玩家修仙数据` WHERE `角色id` = {}", guid);
+            "SELECT `修仙等级`, `渡劫冷却时间`, `渡劫通过等级` FROM `_玩家修仙数据` WHERE `角色id` = {}", guid);
 
         if (!result)
             return;
@@ -244,6 +241,7 @@ public:
         Field* fields = result->Fetch();
         _playerData[guid].level = fields[0].Get<uint32>();
         _playerData[guid].tribCooldown = fields[1].Get<uint32>();
+        _playerData[guid].tribPassedLevel = fields[2].Get<uint32>();
 
         LOG_DEBUG("module", "修仙系统: 加载玩家 {} 数据，修仙等级: {}",
             player->GetName(), _playerData[guid].level);
@@ -261,8 +259,8 @@ public:
             return;
 
         CharacterDatabase.Execute(
-            "REPLACE INTO `_玩家修仙数据` (`角色id`, `修仙等级`, `渡劫冷却时间`) VALUES ({}, {}, {})",
-            guid, itr->second.level, itr->second.tribCooldown);
+            "REPLACE INTO `_玩家修仙数据` (`角色id`, `修仙等级`, `渡劫冷却时间`, `渡劫通过等级`) VALUES ({}, {}, {}, {})",
+            guid, itr->second.level, itr->second.tribCooldown, itr->second.tribPassedLevel);
     }
 
     // 获取玩家属性加成百分比（累计）
@@ -363,12 +361,19 @@ public:
             return false;
         }
 
-        // 检查当前等级是否需要渡劫才能继续
+        bool breakthroughUpgrade = false;
+
+        // 检查当前等级是否需要先完成渡劫挑战
         auto cfgItr = _realmConfigs.find(currentLevel);
         if (cfgItr != _realmConfigs.end() && cfgItr->second.needTribulation)
         {
-            ChatHandler(player->GetSession()).PSendSysMessage("|cffff0000当前境界已圆满，需要渡劫才能突破！|r");
-            return false;
+            if (itr->second.tribPassedLevel != currentLevel)
+            {
+                ChatHandler(player->GetSession()).PSendSysMessage("|cffff0000当前境界已圆满，需要先通关天劫试炼，再发送提升请求突破！|r");
+                return false;
+            }
+
+            breakthroughUpgrade = true;
         }
 
         // 获取下一等级的升级需求
@@ -380,8 +385,10 @@ public:
             return false;
         }
 
+        uint32 requireId = breakthroughUpgrade ? cfgItr->second.tribRequireId : nextCfgItr->second.upgradeRequireId;
+
         // 检查和消耗需求
-        if (nextCfgItr->second.upgradeRequireId > 0)
+        if (requireId > 0)
         {
             RequirementInterface* reqModule = GetRequirementModule();
             if (!reqModule)
@@ -390,18 +397,20 @@ public:
                 return false;
             }
 
-            if (!reqModule->CheckRequirements(player, nextCfgItr->second.upgradeRequireId, true))
+            if (!reqModule->CheckRequirements(player, requireId, true))
                 return false;
 
-            if (!reqModule->ConsumeRequirements(player, nextCfgItr->second.upgradeRequireId))
+            if (!reqModule->ConsumeRequirements(player, requireId))
             {
-                ChatHandler(player->GetSession()).PSendSysMessage("|cffff0000消耗升级材料失败！|r");
+                ChatHandler(player->GetSession()).PSendSysMessage("|cffff0000消耗突破材料失败！|r");
                 return false;
             }
         }
 
         // 升级成功
         itr->second.level = nextLevel;
+        if (breakthroughUpgrade)
+            itr->second.tribPassedLevel = 0;
         SavePlayerData(player);
         player->UpdateAllStats();
         player->UpdateAllRatings();
@@ -449,24 +458,10 @@ public:
             return false;
         }
 
-        // 检查和消耗渡劫需求
-        if (cfgItr->second.tribRequireId > 0)
+        if (itr->second.tribPassedLevel == currentLevel)
         {
-            RequirementInterface* reqModule = GetRequirementModule();
-            if (!reqModule)
-            {
-                ChatHandler(player->GetSession()).PSendSysMessage("|cffff0000需求系统未加载！|r");
-                return false;
-            }
-
-            if (!reqModule->CheckRequirements(player, cfgItr->second.tribRequireId, true))
-                return false;
-
-            if (!reqModule->ConsumeRequirements(player, cfgItr->second.tribRequireId))
-            {
-                ChatHandler(player->GetSession()).PSendSysMessage("|cffff0000消耗渡劫材料失败！|r");
-                return false;
-            }
+            ChatHandler(player->GetSession()).PSendSysMessage("|cffff0000当前境界的天劫已通过，请通过插件发送提升请求并消耗突破材料。|r");
+            return false;
         }
 
         // 召唤渡劫Boss
@@ -480,10 +475,12 @@ public:
             y += 5.0f * sin(o);
 
             if (Creature* boss = player->SummonCreature(cfgItr->second.tribBossEntry, x, y, z, o + M_PI,
-                TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, 300000)) // 5分钟后消失
+                TEMPSUMMON_TIMED_DESPAWN_OOC_ALIVE, 30000))
             {
+                boss->SetCorpseDelay(30);
                 boss->SetInCombatWith(player);
                 boss->AddThreat(player, 1000.0f);
+                boss->AI()->AttackStart(player);
                 _tribBosses[boss->GetGUID().GetCounter()] = guid;
 
                 ChatHandler(player->GetSession()).PSendSysMessage(
@@ -510,7 +507,7 @@ public:
         return true;
     }
 
-    // 渡劫成功（击杀Boss后调用）
+    // 渡劫成功（击杀100层Boss后调用）：只记录通过状态，不直接提升境界
     bool CompleteTribulation(Player* player)
     {
         if (!player)
@@ -522,28 +519,15 @@ public:
             return false;
 
         uint32 currentLevel = itr->second.level;
-        uint32 nextLevel = currentLevel + 1;
-
-        if (nextLevel > 100)
+        auto cfgItr = _realmConfigs.find(currentLevel);
+        if (cfgItr == _realmConfigs.end() || !cfgItr->second.needTribulation)
             return false;
 
-        auto nextCfgItr = _realmConfigs.find(nextLevel);
-        if (nextCfgItr == _realmConfigs.end())
-            return false;
-
-        // 提升等级
-        itr->second.level = nextLevel;
+        itr->second.tribPassedLevel = currentLevel;
         SavePlayerData(player);
-        player->UpdateAllStats();
-        player->UpdateAllRatings();
 
-        float totalBonus = GetPlayerStatBonus(guid);
         ChatHandler(player->GetSession()).PSendSysMessage(
-            "|cff00ff00[修仙系统]|r 渡劫成功！突破至: |cffffd700{}|r，全属性加成: |cff00ffff{:.1f}%|r",
-            nextCfgItr->second.name, totalBonus);
-
-        // 学习新技能
-        LearnAvailableSkills(player);
+            "|cff00ff00[修仙系统]|r 天劫试炼已通关！请通过插件发送提升请求，消耗突破材料后再提升境界。");
 
         return true;
     }
@@ -565,7 +549,18 @@ public:
         if (player->GetGUID().GetCounter() != playerGuid)
             return;
 
+        if (creature->GetEntry() != 390200)
+            return;
+
         CompleteTribulation(player);
+    }
+
+    void RegisterTribulationBoss(uint32 bossGuid, uint32 playerGuid)
+    {
+        if (!bossGuid || !playerGuid)
+            return;
+
+        _tribBosses[bossGuid] = playerGuid;
     }
 
     // 渡劫失败判定
@@ -662,6 +657,11 @@ private:
 };
 
 #define sCultivationMgr CultivationMgr::instance()
+
+void RegisterCultivationTribulationBoss(uint32 bossGuid, uint32 playerGuid)
+{
+    sCultivationMgr->RegisterTribulationBoss(bossGuid, playerGuid);
+}
 
 // ============================================
 // Addon消息发送函数
@@ -873,7 +873,7 @@ public:
             sCultivationMgr->LoadRealmConfigs();
             sCultivationMgr->LoadSkillConfigs();
 
-            LOG_INFO("server.loading", "→修仙系统加载成功√");
+            LOG_INFO("server.loading", "→修仙系统√");
             _loaded = true;
         }
     }
@@ -1218,201 +1218,6 @@ public:
         float bonus = sCultivationMgr->GetPlayerStatBonus(player->GetGUID().GetCounter());
         if (bonus > 0 && amount > 0)
             amount = ScaleRatingForCultivation(amount, bonus);
-    }
-};
-
-// ============================================
-// CreatureScript - NPC 修仙导师
-// ============================================
-
-enum CultivationGossipActions
-{
-    CULT_ACTION_INFO         = 1000,
-    CULT_ACTION_UPGRADE      = 1001,
-    CULT_ACTION_TRIBULATION  = 1002,
-    CULT_ACTION_SKILLS       = 1003,
-    CULT_ACTION_START        = 1004,
-    CULT_ACTION_BACK         = 1005,
-};
-
-class CultivationNPCScript : public CreatureScript
-{
-public:
-    CultivationNPCScript() : CreatureScript("npc_cultivation_master") { }
-
-    bool OnGossipHello(Player* player, Creature* creature) override
-    {
-        if (!sConfigMgr->GetOption("Cultivation.Enable", true))
-            return false;
-
-        ShowMainMenu(player, creature);
-        return true;
-    }
-
-    bool OnGossipSelect(Player* player, Creature* creature, uint32 sender, uint32 action) override
-    {
-        if (!sConfigMgr->GetOption("Cultivation.Enable", true))
-            return false;
-
-        player->PlayerTalkClass->ClearMenus();
-
-        switch (action)
-        {
-            case CULT_ACTION_INFO:
-                ShowInfo(player, creature);
-                break;
-            case CULT_ACTION_UPGRADE:
-                sCultivationMgr->TryUpgrade(player);
-                ShowMainMenu(player, creature);
-                break;
-            case CULT_ACTION_TRIBULATION:
-                sCultivationMgr->StartTribulation(player);
-                CloseGossipMenuFor(player);
-                break;
-            case CULT_ACTION_SKILLS:
-                ShowSkills(player, creature);
-                break;
-            case CULT_ACTION_START:
-                if (sCultivationMgr->StartCultivation(player))
-                {
-                    ChatHandler(player->GetSession()).PSendSysMessage(
-                        "|cff00ff00[修仙系统]|r 恭喜踏入修仙之路！当前境界: |cffffd700炼气一层|r");
-                }
-                ShowMainMenu(player, creature);
-                break;
-            case CULT_ACTION_BACK:
-                ShowMainMenu(player, creature);
-                break;
-            default:
-                ShowMainMenu(player, creature);
-                break;
-        }
-        return true;
-    }
-
-private:
-    void ShowMainMenu(Player* player, Creature* creature)
-    {
-        player->PlayerTalkClass->ClearMenus();
-
-        uint32 guid = player->GetGUID().GetCounter();
-        uint32 level = sCultivationMgr->GetPlayerLevel(guid);
-
-        // 查看境界信息
-        AddGossipItemFor(player, GOSSIP_ICON_CHAT,
-            "|TInterface\\Icons\\INV_Misc_Book_09:30:30|t 查看修仙境界",
-            GOSSIP_SENDER_MAIN, CULT_ACTION_INFO);
-
-        if (level == 0)
-        {
-            // 未入门，显示入门选项
-            AddGossipItemFor(player, GOSSIP_ICON_INTERACT_1,
-                "|TInterface\\Icons\\Spell_Holy_SurgeOfLight:30:30|t 踏入修仙之路",
-                GOSSIP_SENDER_MAIN, CULT_ACTION_START);
-        }
-        else
-        {
-            // 已入门
-            AddGossipItemFor(player, GOSSIP_ICON_TRAINER,
-                "|TInterface\\Icons\\Spell_Holy_MagicalSentry:30:30|t 修炼升级",
-                GOSSIP_SENDER_MAIN, CULT_ACTION_UPGRADE);
-
-            // 检查是否需要渡劫
-            auto const* config = sCultivationMgr->GetRealmConfig(level);
-            if (config && config->needTribulation)
-            {
-                AddGossipItemFor(player, GOSSIP_ICON_BATTLE,
-                    "|TInterface\\Icons\\Spell_Shadow_SummonInfernal:30:30|t 突破渡劫",
-                    GOSSIP_SENDER_MAIN, CULT_ACTION_TRIBULATION);
-            }
-
-            // 仙术一览
-            AddGossipItemFor(player, GOSSIP_ICON_INTERACT_2,
-                "|TInterface\\Icons\\Spell_Arcane_TeleportStormwind:30:30|t 仙术一览",
-                GOSSIP_SENDER_MAIN, CULT_ACTION_SKILLS);
-        }
-
-        SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, creature->GetGUID());
-    }
-
-    void ShowInfo(Player* player, Creature* creature)
-    {
-        player->PlayerTalkClass->ClearMenus();
-
-        uint32 guid = player->GetGUID().GetCounter();
-        uint32 level = sCultivationMgr->GetPlayerLevel(guid);
-
-        if (level == 0)
-        {
-            ChatHandler(player->GetSession()).PSendSysMessage(
-                "|cff00ff00[修仙系统]|r 你尚未踏入修仙之路，当前为 |cff888888凡人|r");
-        }
-        else
-        {
-            auto const* config = sCultivationMgr->GetRealmConfig(level);
-            float bonus = sCultivationMgr->GetPlayerStatBonus(guid);
-            std::string realmName = config ? config->name : "未知";
-            std::string majorName = config ? GetMajorRealmName(config->majorRealm) : "未知";
-
-            ChatHandler(player->GetSession()).PSendSysMessage(
-                "|cff00ff00[修仙系统]|r 修仙信息:");
-            ChatHandler(player->GetSession()).PSendSysMessage(
-                "  境界: |cffffd700{}|r ({})", realmName, majorName);
-            ChatHandler(player->GetSession()).PSendSysMessage(
-                "  等级: |cffffd700{}/100|r", level);
-            ChatHandler(player->GetSession()).PSendSysMessage(
-                "  属性加成: |cff00ffff{:.1f}%|r", bonus);
-
-            if (config && config->needTribulation)
-            {
-                ChatHandler(player->GetSession()).PSendSysMessage(
-                    "  状态: |cffff8800境界圆满，需渡劫突破|r");
-            }
-        }
-
-        AddGossipItemFor(player, GOSSIP_ICON_CHAT,
-            "|TInterface\\Icons\\Misc_ArrowLeft:30:30|t 返回",
-            GOSSIP_SENDER_MAIN, CULT_ACTION_BACK);
-
-        SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, creature->GetGUID());
-    }
-
-    void ShowSkills(Player* player, Creature* creature)
-    {
-        player->PlayerTalkClass->ClearMenus();
-
-        uint32 guid = player->GetGUID().GetCounter();
-        uint32 playerLevel = sCultivationMgr->GetPlayerLevel(guid);
-
-        ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff00[修仙系统]|r 仙术一览:");
-
-        auto const& skills = sCultivationMgr->GetSkillConfigs();
-        for (auto const& skill : skills)
-        {
-            const char* typeStr = "";
-            switch (skill.skillType)
-            {
-                case 1: typeStr = "主动"; break;
-                case 2: typeStr = "被动"; break;
-                case 3: typeStr = "辅助"; break;
-            }
-
-            std::string statusStr;
-            if (playerLevel >= skill.unlockLevel)
-                statusStr = "|cff00ff00已领悟|r";
-            else
-                statusStr = Acore::StringFormat("|cff888888{}级解锁|r", skill.unlockLevel);
-
-            ChatHandler(player->GetSession()).PSendSysMessage(
-                "  |cffffd700{}|r [{}] - {} ({})",
-                skill.name, typeStr, skill.description, statusStr);
-        }
-
-        AddGossipItemFor(player, GOSSIP_ICON_CHAT,
-            "|TInterface\\Icons\\Misc_ArrowLeft:30:30|t 返回",
-            GOSSIP_SENDER_MAIN, CULT_ACTION_BACK);
-
-        SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, creature->GetGUID());
     }
 };
 
@@ -2247,7 +2052,6 @@ void AddSC_mod_cultivation_system()
 {
     new CultivationWorldScript();
     new CultivationPlayerScript();
-    new CultivationNPCScript();
     new CultivationCommandScript();
 
     // 仙术技能脚本

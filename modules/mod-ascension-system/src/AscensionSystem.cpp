@@ -3197,7 +3197,7 @@ void AscensionWorldScript::OnUpdate(uint32 diff)
         if (sAscensionConfig->IsEnabled())
         {
             sAscensionManager->Initialize();
-            LOG_INFO("server.loading", "→飞升系统加载√");
+            LOG_INFO("server.loading", "→飞升系统√");
         }
         _initialized = true;
     }

@@ -208,8 +208,6 @@ public:
 
             return left.id < right.id;
         });
-
-        LOG_INFO("server.loading", ">> 回血神符系统已加载 {} 条配置。", static_cast<uint32>(_entries.size()));
     }
 
     std::vector<HealRuneEntry> const& GetEntries() const

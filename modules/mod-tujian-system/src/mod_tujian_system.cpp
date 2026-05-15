@@ -1355,11 +1355,6 @@ namespace
         bool hasFixedAllStatsValueColumn = WorldDatabase.Query(
             "SHOW COLUMNS FROM `_图鉴系统` LIKE '固定全属性值'") != nullptr;
 
-        if (!hasAttributeEffectModeColumn)
-            LOG_INFO("server.loading", "→_图鉴系统：未检测到属性生效模式字段，当前默认按装备属性模式加载");
-        if (!hasFixedAllStatsValueColumn)
-            LOG_INFO("server.loading", "→_图鉴系统：未检测到固定全属性值字段，固定属性模式将不会生效");
-
         std::string query =
             "SELECT tj.`注释`, COALESCE(it.`name`, ''), tj.`id`, tj.`一级菜单名称`, tj.`一级菜单图标`, tj.`二级菜单名称1`, tj.`二级菜单名称2`, tj.`二级菜单图标`, "
             "tj.`第几页`, tj.`等级`, tj.`最大等级`, tj.`物品entry`, tj.`套装ID`, tj.`激活需求`, tj.`激活后执行GM命令`";
@@ -1451,19 +1446,9 @@ namespace
 
     void LoadAllTuJianData()
     {
-        uint32 tuJianCount = LoadTuJianData();
-        uint32 tuJianSetCount = LoadTuJianSetData();
+        LoadTuJianData();
+        LoadTuJianSetData();
         RebuildTuJianIndexes();
-
-        if (tuJianCount > 0)
-            LOG_INFO("server.loading", "→_图鉴系统：已加载{}条数据", tuJianCount);
-        else
-            LOG_INFO("server.loading", "→_图鉴系统：已加载，无数据");
-
-        if (tuJianSetCount > 0)
-            LOG_INFO("server.loading", "→_图鉴系统_套装：已加载{}条数据", tuJianSetCount);
-        else
-            LOG_INFO("server.loading", "→_图鉴系统_套装：已加载，无数据");
     }
 
     void ClearPlayerCache(uint32 playerGuid)

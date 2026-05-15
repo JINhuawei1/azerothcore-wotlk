@@ -622,8 +622,6 @@ void ItemIdentificationSystem::LoadIdentificationTemplates()
         }
 
     } while (result->NextRow());
-
-    LOG_INFO("server.loading", "物品鉴定系统: 已加载 {} 个鉴定模板 (共 {} 个组)", count, groups.size());
 }
 
 // 检查物品是否可以鉴定
@@ -3116,7 +3114,6 @@ void ItemIdentificationSystem::InitializeCache()
 
     if (!result)
     {
-        LOG_INFO("module.itemidentification", "已鉴定物品缓存初始化完成：0 个物品");
         _cacheInitialized = true;
         return;
     }
@@ -3131,7 +3128,6 @@ void ItemIdentificationSystem::InitializeCache()
     } while (result->NextRow());
 
     _cacheInitialized = true;
-    LOG_INFO("module.itemidentification", "已鉴定物品缓存初始化完成：{} 个物品", count);
 }
 
 // ✅ 新增：清除指定物品的鉴定缓存

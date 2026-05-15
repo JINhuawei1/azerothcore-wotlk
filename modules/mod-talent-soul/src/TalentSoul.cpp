@@ -67,8 +67,6 @@ void TalentSoulMgr::LoadTalentSoulData()
         ++count;
 
     } while (result->NextRow());
-
-    LOG_INFO("server.loading", ">> 天赋之魂: 加载 {} 条配置数据，耗时 {} ms", count, GetMSTimeDiffToNow(oldMSTime));
 }
 
 void TalentSoulMgr::SetupIndependentGCDCategories()
@@ -104,10 +102,7 @@ void TalentSoulMgr::SetupIndependentGCDCategories()
         }
     }
 
-    if (setupCount > 0)
-    {
-        LOG_INFO("server.loading", ">> 天赋之魂: 已为 {} 个技能设置独立GCD类别", setupCount);
-    }
+    (void)setupCount;
 }
 
 TalentSoulData const* TalentSoulMgr::GetTalentSoulData(uint32 spellId) const
@@ -694,9 +689,9 @@ void TalentSoulMgr::ApplyCostReduction(Player* player, uint32 spellId, int64& co
     }
 }
 
-void TalentSoulMgr::ApplyDamageBonus(Unit* attacker, uint32 spellId, int64& damage) const
+void TalentSoulMgr::ApplyDamageBonus(Unit* attacker, uint32 spellId, uint64& damage) const
 {
-    if (!attacker || damage <= 0)
+    if (!attacker || damage == 0)
         return;
 
     Player* player = attacker->ToPlayer();
@@ -707,9 +702,9 @@ void TalentSoulMgr::ApplyDamageBonus(Unit* attacker, uint32 spellId, int64& dama
     if (bonusPercent > 0)
     {
         long double bonusAmount = static_cast<long double>(damage) * static_cast<long double>(bonusPercent) / 100.0L;
-        if (bonusAmount > static_cast<long double>(std::numeric_limits<int64>::max() - damage))
-            damage = std::numeric_limits<int64>::max();
+        if (bonusAmount > static_cast<long double>(std::numeric_limits<uint64>::max() - damage))
+            damage = std::numeric_limits<uint64>::max();
         else
-            damage += static_cast<int64>(bonusAmount);
+            damage += static_cast<uint64>(bonusAmount);
     }
 }

@@ -109,10 +109,6 @@ void ItemAttributesLoader::LoadItemAttributeTemplates()
 
     // 【根本性修复】标记初始化成功
     _isInitialized = true;
-
-    LOG_INFO("module.item-attributes", ">> 已加载 {} 个物品属性模板，系统初始化完成", count);
-
-
 }
 
 ItemAttributeTemplate const* ItemAttributesLoader::GetItemAttributeTemplate(uint32 id) const

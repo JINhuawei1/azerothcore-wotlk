@@ -81,7 +81,7 @@ public:
 
             sReincarnationMgr->LoadReincarnationConfig();
 
-            LOG_INFO("server.loading", "→转身系统加载成功√");
+            LOG_INFO("server.loading", "→转身系统√");
             _loaded = true;
         }
     }

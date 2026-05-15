@@ -1836,6 +1836,16 @@ bool WorldObject::CanSeeOrDetect(WorldObject const* obj, bool ignoreStealth, boo
     if (obj->IsNeverVisible() || CanNeverSee(obj))
         return false;
 
+    if (Player const* player = ToPlayer())
+        if (Creature const* creature = obj->ToCreature())
+            if (!sScriptMgr->OnPlayerCanSeeCreature(player, creature))
+                return false;
+
+    if (Creature const* creature = ToCreature())
+        if (Player const* player = obj->ToPlayer())
+            if (!sScriptMgr->OnPlayerCanSeeCreature(player, creature))
+                return false;
+
     if (obj->IsAlwaysVisibleFor(this) || CanAlwaysSee(obj))
         return true;
 

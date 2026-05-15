@@ -1,5 +1,5 @@
 ﻿-- ============================================
--- 首版 creature_template 对接：由 _深渊自定义首领对接 批量生成
+-- 首版 creature_template 对接：由 _深渊首领配置 批量生成
 -- 说明：尽量复用章节官方首领模板作为骨架和模型来源，后续再补掉落和技能
 -- ============================================
 
@@ -81,7 +81,26 @@ SELECT
   s.`flags_extra`,
   '',
   NULL
-FROM `_深渊自定义首领对接` d
+FROM (
+  SELECT
+    `首领入口`,
+    `首领名称`,
+    `首领类型`,
+    `幕ID`,
+    CASE
+      WHEN `章节ID` <> 0 THEN `章节ID`
+      WHEN `首领类型` = 3 AND `幕ID` = 1 THEN 1
+      WHEN `首领类型` = 3 AND `幕ID` = 2 THEN 21
+      WHEN `首领类型` = 3 AND `幕ID` = 4 THEN 53
+      WHEN `首领类型` = 3 AND `幕ID` = 5 THEN 58
+      WHEN `首领类型` = 3 AND `幕ID` = 6 THEN 67
+      ELSE `章节ID`
+    END AS `章节ID`,
+    CASE WHEN `幕ID` <= 1 THEN 35 WHEN `幕ID` = 2 THEN 70 WHEN `幕ID` = 3 THEN 80 WHEN `幕ID` = 4 THEN 83 WHEN `幕ID` = 5 THEN 83 ELSE 83 END AS `建议等级`,
+    14 AS `建议阵营`
+  FROM `_深渊首领配置`
+  WHERE `首领类型` IN (2, 3)
+) d
 JOIN `_深渊章节配置` c ON c.`章节ID` = d.`章节ID`
 JOIN `creature_template` s
   ON s.`entry` = CASE
@@ -160,7 +179,26 @@ SELECT
   s.`flags_extra`,
   '',
   NULL
-FROM `_深渊自定义首领对接` d
+FROM (
+  SELECT
+    `首领入口`,
+    `首领名称`,
+    `首领类型`,
+    `幕ID`,
+    CASE
+      WHEN `章节ID` <> 0 THEN `章节ID`
+      WHEN `首领类型` = 3 AND `幕ID` = 1 THEN 1
+      WHEN `首领类型` = 3 AND `幕ID` = 2 THEN 21
+      WHEN `首领类型` = 3 AND `幕ID` = 4 THEN 53
+      WHEN `首领类型` = 3 AND `幕ID` = 5 THEN 58
+      WHEN `首领类型` = 3 AND `幕ID` = 6 THEN 67
+      ELSE `章节ID`
+    END AS `章节ID`,
+    CASE WHEN `幕ID` <= 1 THEN 35 WHEN `幕ID` = 2 THEN 70 WHEN `幕ID` = 3 THEN 80 WHEN `幕ID` = 4 THEN 83 WHEN `幕ID` = 5 THEN 83 ELSE 83 END AS `建议等级`,
+    14 AS `建议阵营`
+  FROM `_深渊首领配置`
+  WHERE `首领类型` IN (2, 3)
+) d
 JOIN `creature_template` s
   ON s.`entry` = CASE
     WHEN d.`首领入口` = 910046 THEN 26533
@@ -183,7 +221,24 @@ SELECT
   m.`DisplayScale`,
   m.`Probability`,
   NULL
-FROM `_深渊自定义首领对接` d
+FROM (
+  SELECT
+    `首领入口`,
+    `首领名称`,
+    `首领类型`,
+    `幕ID`,
+    CASE
+      WHEN `章节ID` <> 0 THEN `章节ID`
+      WHEN `首领类型` = 3 AND `幕ID` = 1 THEN 1
+      WHEN `首领类型` = 3 AND `幕ID` = 2 THEN 21
+      WHEN `首领类型` = 3 AND `幕ID` = 4 THEN 53
+      WHEN `首领类型` = 3 AND `幕ID` = 5 THEN 58
+      WHEN `首领类型` = 3 AND `幕ID` = 6 THEN 67
+      ELSE `章节ID`
+    END AS `章节ID`
+  FROM `_深渊首领配置`
+  WHERE `首领类型` IN (2, 3)
+) d
 JOIN `_深渊章节配置` c ON c.`章节ID` = d.`章节ID`
 JOIN `creature_template_model` m
   ON m.`CreatureID` = CASE
@@ -202,7 +257,14 @@ SELECT
   m.`DisplayScale`,
   m.`Probability`,
   NULL
-FROM `_深渊自定义首领对接` d
+FROM (
+  SELECT
+    `首领入口`,
+    `首领类型`,
+    `幕ID`
+  FROM `_深渊首领配置`
+  WHERE `首领类型` IN (2, 3)
+) d
 JOIN `creature_template_model` m
   ON m.`CreatureID` = CASE
     WHEN d.`首领入口` = 910046 THEN 26533
@@ -227,11 +289,12 @@ SELECT
   0,
   0,
   NULL
-FROM `_深渊自定义首领对接` d
+FROM (
+  SELECT
+    `首领入口`
+  FROM `_深渊首领配置`
+  WHERE `首领类型` IN (2, 3)
+) d
 JOIN `creature_template` ct ON ct.`entry` = d.`首领入口`
 WHERE d.`首领入口` BETWEEN 910001 AND 910074 OR d.`首领入口` BETWEEN 919001 AND 919074;
-
-UPDATE `_深渊自定义首领对接`
-SET `对接状态` = 1
-WHERE `首领入口` BETWEEN 910001 AND 910074 OR `首领入口` BETWEEN 919001 AND 919074;
 

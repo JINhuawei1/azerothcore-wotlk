@@ -14,7 +14,6 @@ void ItemAttributesDisplay::Initialize()
 {
     // 【根本性修复】标记初始化完成
     _isInitialized = true;
-    LOG_INFO("module.item-attributes", "物品属性显示系统初始化完成");
 }
 
 void ItemAttributesDisplay::AddItemAttributesToTooltip(Player* player, Item* item, std::vector<std::string>& lines)

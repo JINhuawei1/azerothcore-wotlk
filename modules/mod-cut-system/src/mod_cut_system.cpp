@@ -173,8 +173,6 @@ public:
 
             return left.id < right.id;
         });
-
-        LOG_INFO("server.loading", ">> 切割系统已加载 {} 条配置。", static_cast<uint32>(_entries.size()));
     }
 
     void LoadPlayerData(Player* player)
@@ -501,7 +499,7 @@ public:
         return true;
     }
 
-    bool TryApplyCutDamage(Unit* attacker, Unit* victim, uint32& damage, uint64& appliedDamage) const
+    bool TryApplyCutDamage(Unit* attacker, Unit* victim, uint64& damage, uint64& appliedDamage) const
     {
         appliedDamage = 0;
 
@@ -512,11 +510,13 @@ public:
         if (!TryPrepareCutDamage(attacker, victim, cutDamage))
             return false;
 
-        appliedDamage = std::min<uint64>(cutDamage, static_cast<uint64>(std::numeric_limits<uint32>::max() - damage));
+        appliedDamage = damage > std::numeric_limits<uint64>::max() - cutDamage
+            ? std::numeric_limits<uint64>::max() - damage
+            : cutDamage;
         if (appliedDamage == 0)
             return false;
 
-        damage += static_cast<uint32>(appliedDamage);
+        damage += appliedDamage;
         return true;
     }
 
@@ -894,7 +894,7 @@ public:
         UNITHOOK_MODIFY_SPELL_DAMAGE_TAKEN
     }) { }
 
-    void ModifyPeriodicDamageAurasTick(Unit* victim, Unit* attacker, uint32& damage, SpellInfo const* spellInfo) override
+    void ModifyPeriodicDamageAurasTick(Unit* victim, Unit* attacker, uint64& damage, SpellInfo const* spellInfo) override
     {
         if (!spellInfo || spellInfo->IsPositive())
             return;
@@ -906,7 +906,7 @@ public:
         QueueCutHitNotification(attacker, appliedDamage);
     }
 
-    void ModifyMeleeDamage(Unit* victim, Unit* attacker, uint32& damage) override
+    void ModifyMeleeDamage(Unit* victim, Unit* attacker, uint64& damage) override
     {
         uint64 appliedDamage = 0;
         if (!CutSystemMgr::Instance()->TryApplyCutDamage(attacker, victim, damage, appliedDamage))
@@ -915,7 +915,7 @@ public:
         QueueCutHitNotification(attacker, appliedDamage);
     }
 
-    void ModifySpellDamageTaken(Unit* victim, Unit* attacker, int64& damage, SpellInfo const* /*spellInfo*/) override
+    void ModifySpellDamageTaken(Unit* victim, Unit* attacker, uint64& damage, SpellInfo const* /*spellInfo*/) override
     {
         uint64 appliedDamage = 0;
         if (!CutSystemMgr::Instance()->TryApplyCutDamage(attacker, victim, damage, appliedDamage))

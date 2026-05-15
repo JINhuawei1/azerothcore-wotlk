@@ -364,7 +364,7 @@ void SkillMasterWorldScript::OnStartup()
 {
     if (skillMasterEnableModule)
     {
-        LOG_INFO("server.loading", ">> 技能综合大师模块已加载 (支持任何绑定 npc_skill_master 脚本的NPC)");
+        LOG_INFO("server.loading", "→技能综合大师系统√");
     }
 }
 

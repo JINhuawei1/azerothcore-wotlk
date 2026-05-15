@@ -472,6 +472,7 @@ public: /* PlayerScript */
     bool OnPlayerCanResurrect(Player* player);
     bool OnPlayerCanGiveLevel(Player* player, uint8 newLevel);
     void OnPlayerSendListInventory(Player* player, ObjectGuid vendorGuid, uint32& vendorEntry);
+    bool OnPlayerCanSeeCreature(Player const* player, Creature const* creature);
 
     // Anti cheat
     void AnticheatSetCanFlybyServer(Player* player, bool apply);
@@ -546,13 +547,13 @@ public: /* Scheduled scripts */
     bool IsScriptScheduled() const { return _scheduledScripts > 0; }
 
 public: /* UnitScript */
-    void OnHeal(Unit* healer, Unit* reciever, uint32& gain);
+    void OnHeal(Unit* healer, Unit* reciever, int64& gain);
     void OnDamage(Unit* attacker, Unit* victim, uint64& damage);
-    void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage, SpellInfo const* spellInfo);
-    void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage);
-    void ModifySpellDamageTaken(Unit* target, Unit* attacker, int64& damage, SpellInfo const* spellInfo);
-    void ModifyHealReceived(Unit* target, Unit* healer, uint32& addHealth, SpellInfo const* spellInfo);
-    uint32 DealDamage(Unit* AttackerUnit, Unit* pVictim, uint32 damage, DamageEffectType damagetype);
+    void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint64& damage, SpellInfo const* spellInfo);
+    void ModifyMeleeDamage(Unit* target, Unit* attacker, uint64& damage);
+    void ModifySpellDamageTaken(Unit* target, Unit* attacker, uint64& damage, SpellInfo const* spellInfo);
+    void ModifyHealReceived(Unit* target, Unit* healer, uint64& addHealth, SpellInfo const* spellInfo);
+    uint64 DealDamage(Unit* AttackerUnit, Unit* pVictim, uint64 damage, DamageEffectType damagetype);
     void OnBeforeRollMeleeOutcomeAgainst(Unit const* attacker, Unit const* victim, WeaponAttackType attType, int32& attackerMaxSkillValueForLevel, int32& victimMaxSkillValueForLevel, int32& attackerWeaponSkill, int32& victimDefenseSkill, int32& crit_chance, int32& miss_chance, int32& dodge_chance, int32& parry_chance, int32& block_chance);
     void OnAuraApply(Unit* /*unit*/, Aura* /*aura*/);
     void OnAuraRemove(Unit* unit, AuraApplication* aurApp, AuraRemoveMode mode);

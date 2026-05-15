@@ -222,6 +222,17 @@ namespace
         return static_cast<uint32>(value);
     }
 
+    uint64 ToUInt64Saturated(long double value)
+    {
+        if (std::isnan(static_cast<double>(value)) || value <= 0.0L)
+            return 0;
+
+        if (!std::isfinite(value) || value >= static_cast<long double>(std::numeric_limits<uint64>::max()))
+            return std::numeric_limits<uint64>::max();
+
+        return static_cast<uint64>(value);
+    }
+
     void AddRatingBonusToSkill(uint32& value, float ratingBonus)
     {
         uint32 bonus = ToUInt32Saturated(static_cast<long double>(ratingBonus));
@@ -1926,9 +1937,9 @@ SpellCastResult Unit::CastSpell(GameObject* go, uint32 spellId, bool triggered, 
     return CastSpell(targets, spellInfo, nullptr, triggered ? TRIGGERED_FULL_MASK : TRIGGERED_NONE, castItem, triggeredByAura, originalCaster);
 }
 
-void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int64 damage, SpellInfo const* spellInfo, WeaponAttackType attackType, bool crit)
+void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, uint64 damage, SpellInfo const* spellInfo, WeaponAttackType attackType, bool crit)
 {
-    if (damage <= 0)
+    if (damage == 0)
         return;
 
     Unit* victim = damageInfo->target;
@@ -1939,24 +1950,26 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int64 dama
     uint32 crTypeMask = victim->GetCreatureTypeMask();
 
     sScriptMgr->ModifySpellDamageTaken(damageInfo->target, damageInfo->attacker, damage, spellInfo);
-    if (damage <= 0)
+    if (damage == 0)
         return;
 
     if (victim->GetAI())
     {
-        int64 aiDamage = damage;
+        int64 aiDamage = damage > static_cast<uint64>(std::numeric_limits<int64>::max())
+            ? std::numeric_limits<int64>::max()
+            : static_cast<int64>(damage);
         int64 originalAiDamage = aiDamage;
         victim->GetAI()->OnCalculateSpellDamageReceived(aiDamage, this);
         if (aiDamage != originalAiDamage)
-            damage = std::max<int64>(0, aiDamage);
+            damage = aiDamage > 0 ? static_cast<uint64>(aiDamage) : 0;
     }
 
-    int64 cleanDamage = 0;
+    uint64 cleanDamage = 0;
     if (Unit::IsDamageReducedByArmor(damageSchoolMask, spellInfo))
     {
-        int64 oldDamage = damage;
-        damage = static_cast<int64>(std::min<uint64>(Unit::CalcArmorReducedDamage(this, victim, static_cast<uint64>(damage), spellInfo, 0, attackType), static_cast<uint64>(std::numeric_limits<int64>::max())));
-        cleanDamage = oldDamage - damage;
+        uint64 oldDamage = damage;
+        damage = Unit::CalcArmorReducedDamage(this, victim, damage, spellInfo, 0, attackType);
+        cleanDamage = oldDamage > damage ? oldDamage - damage : 0;
     }
 
     bool blocked = false;
@@ -1983,7 +1996,7 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int64 dama
                     // Apply crit_damage bonus for melee spells
                     if (Player* modOwner = GetSpellModOwner())
                         modOwner->ApplySpellMod(spellInfo->Id, SPELLMOD_CRIT_DAMAGE_BONUS, crit_bonus);
-                    damage = static_cast<int64>(std::min<long double>(static_cast<long double>(std::numeric_limits<int64>::max()), static_cast<long double>(damage) + crit_bonus));
+                    damage = AddUInt64Damage(damage, ToUInt64Saturated(crit_bonus));
 
                     // Apply SPELL_AURA_MOD_ATTACKER_RANGED_CRIT_DAMAGE or SPELL_AURA_MOD_ATTACKER_MELEE_CRIT_DAMAGE
                     float critPctDamageMod = 0.0f;
@@ -1999,7 +2012,10 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int64 dama
                     critPctDamageMod += GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_CRIT_PERCENT_VERSUS, crTypeMask);
 
                     if (critPctDamageMod != 0)
-                        AddPct(damage, critPctDamageMod);
+                    {
+                        long double pctDamage = static_cast<long double>(damage) * (1.0L + static_cast<long double>(critPctDamageMod) / 100.0L);
+                        damage = ToUInt64Saturated(pctDamage);
+                    }
                 }
 
                 // Spell weapon based damage CAN BE crit & blocked at same time
@@ -2009,14 +2025,14 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int64 dama
                     // double blocked amount if block is critical
                     if (victim->isBlockCritical())
                         damageInfo->blocked *= 2;
-                    if (damage < int64(damageInfo->blocked))
+                    if (damage < damageInfo->blocked)
                         damageInfo->blocked = static_cast<uint64>(damage);
 
                     damage -= damageInfo->blocked;
-                    cleanDamage += damageInfo->blocked;
+                    cleanDamage = AddUInt64Damage(cleanDamage, damageInfo->blocked);
                 }
 
-                int32 resilienceDamage = int32(std::min<int64>(damage, std::numeric_limits<int32>::max()));
+                int32 resilienceDamage = ToInt32Damage(damage);
                 int32 originalResilienceDamage = resilienceDamage;
                 if (CanApplyResilience())
                 {
@@ -2033,9 +2049,11 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int64 dama
                 if (originalResilienceDamage > 0)
                 {
                     long double reductionRatio = static_cast<long double>(originalResilienceDamage - resilienceDamage) / static_cast<long double>(originalResilienceDamage);
-                    int64 resilienceReduction = std::max<int64>(0, static_cast<int64>(static_cast<long double>(damage) * reductionRatio));
+                    uint64 resilienceReduction = ToUInt64Saturated(static_cast<long double>(damage) * reductionRatio);
+                    if (resilienceReduction > damage)
+                        resilienceReduction = damage;
                     damage -= resilienceReduction;
-                    cleanDamage += resilienceReduction;
+                    cleanDamage = AddUInt64Damage(cleanDamage, resilienceReduction);
                 }
                 break;
             }
@@ -2047,10 +2065,10 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int64 dama
                 if (crit)
                 {
                     damageInfo->HitInfo |= SPELL_HIT_TYPE_CRIT;
-                    damage = static_cast<int64>(std::min<uint64>(Unit::SpellCriticalDamageBonus(this, spellInfo, static_cast<uint64>(damage), victim), static_cast<uint64>(std::numeric_limits<int64>::max())));
+                    damage = Unit::SpellCriticalDamageBonus(this, spellInfo, damage, victim);
                 }
 
-                int32 resilienceDamage = int32(std::min<int64>(damage, std::numeric_limits<int32>::max()));
+                int32 resilienceDamage = ToInt32Damage(damage);
                 int32 originalResilienceDamage = resilienceDamage;
                 if (CanApplyResilience())
                 {
@@ -2060,9 +2078,11 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int64 dama
                 if (originalResilienceDamage > 0)
                 {
                     long double reductionRatio = static_cast<long double>(originalResilienceDamage - resilienceDamage) / static_cast<long double>(originalResilienceDamage);
-                    int64 resilienceReduction = std::max<int64>(0, static_cast<int64>(static_cast<long double>(damage) * reductionRatio));
+                    uint64 resilienceReduction = ToUInt64Saturated(static_cast<long double>(damage) * reductionRatio);
+                    if (resilienceReduction > damage)
+                        resilienceReduction = damage;
                     damage -= resilienceReduction;
-                    cleanDamage += resilienceReduction;
+                    cleanDamage = AddUInt64Damage(cleanDamage, resilienceReduction);
                 }
                 break;
             }
@@ -2070,8 +2090,8 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int64 dama
             break;
     }
 
-    damageInfo->cleanDamage = static_cast<uint64>(std::max<int64>(0, cleanDamage));
-    damageInfo->damage = static_cast<uint64>(std::max<int64>(0, damage));
+    damageInfo->cleanDamage = cleanDamage;
+    damageInfo->damage = damage;
 
     // Calculate absorb resist
     if (damageInfo->damage > 0)
@@ -2212,9 +2232,9 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
         damage = damageInfo->target->MeleeDamageBonusTaken(this, damage, damageInfo->attackType, nullptr, schoolMask);
 
         // Script Hook For CalculateMeleeDamage -- Allow scripts to change the Damage pre class mitigation calculations
-        uint32 scriptDamage = ToUInt32Damage(damage);
+        uint64 scriptDamage = damage;
         sScriptMgr->ModifyMeleeDamage(damageInfo->target, damageInfo->attacker, scriptDamage);
-        if (scriptDamage != ToUInt32Damage(damage))
+        if (scriptDamage != damage)
             damage = scriptDamage;
 
         if (victim->GetAI())
@@ -11126,6 +11146,16 @@ bool Unit::Attack(Unit* victim, bool meleeAttack)
     if (!IsInMap(victim) || !InSamePhase(victim))
         return false;
 
+    if (Player const* player = ToPlayer())
+        if (Creature const* creatureVictim = victim->ToCreature())
+            if (!sScriptMgr->OnPlayerCanSeeCreature(player, creatureVictim))
+                return false;
+
+    if (Creature const* creatureAttacker = ToCreature())
+        if (Player const* playerVictim = victim->ToPlayer())
+            if (!sScriptMgr->OnPlayerCanSeeCreature(playerVictim, creatureAttacker))
+                return false;
+
     // player cannot attack in mount state
     if (IsPlayer() && IsMounted())
         return false;
@@ -11796,9 +11826,9 @@ void Unit::SetCharm(Unit* charm, bool apply)
     }
 }
 
-int64 Unit::DealHeal(Unit* healer, Unit* victim, uint64 addhealth)
+uint64 Unit::DealHeal(Unit* healer, Unit* victim, uint64 addhealth)
 {
-    int64 gain = 0;
+    uint64 gain = 0;
 
     if (healer)
     {
@@ -11812,10 +11842,19 @@ int64 Unit::DealHeal(Unit* healer, Unit* victim, uint64 addhealth)
     }
 
     if (addhealth)
-        gain = victim->ModifyHealth(addhealth > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(addhealth));
+    {
+        uint64 currentHealth = victim->GetHealthForCombat();
+        uint64 maxHealth = victim->GetMaxHealthForCombat();
+        uint64 headroom = currentHealth < maxHealth ? maxHealth - currentHealth : 0;
+        gain = addhealth > headroom ? headroom : addhealth;
+        if (gain)
+            victim->SetHealthForCombat(currentHealth + gain);
+    }
 
     // Hook for OnHeal Event
-    uint32 scriptGain = gain > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(std::max<int64>(gain, 0));
+    int64 scriptGain = gain > static_cast<uint64>(std::numeric_limits<int64>::max())
+        ? std::numeric_limits<int64>::max()
+        : static_cast<int64>(gain);
     sScriptMgr->OnHeal(healer, victim, scriptGain);
 
     Unit* unit = healer;
@@ -12094,17 +12133,16 @@ void Unit::SendHealSpellLog(HealInfo const& healInfo, bool critical)
     SendMessageToSet(&data, true);
 }
 
-int64 Unit::HealBySpell(HealInfo& healInfo, bool critical)
+uint64 Unit::HealBySpell(HealInfo& healInfo, bool critical)
 {
-    uint64 heal = healInfo.GetHeal();
-    uint32 scriptHeal = ToUInt32Damage(heal);
-    sScriptMgr->ModifyHealReceived(this, healInfo.GetTarget(), scriptHeal, healInfo.GetSpellInfo());
-    healInfo.SetHeal(heal > std::numeric_limits<uint32>::max() && scriptHeal == std::numeric_limits<uint32>::max() ? heal : scriptHeal);
+    uint64 scriptHeal = healInfo.GetHeal();
+    sScriptMgr->ModifyHealReceived(healInfo.GetTarget(), this, scriptHeal, healInfo.GetSpellInfo());
+    healInfo.SetHeal(scriptHeal);
 
     // calculate heal absorb and reduce healing
     CalcHealAbsorb(healInfo);
 
-    int64 gain = Unit::DealHeal(healInfo.GetHealer(), healInfo.GetTarget(), healInfo.GetHeal());
+    uint64 gain = Unit::DealHeal(healInfo.GetHealer(), healInfo.GetTarget(), healInfo.GetHeal());
     healInfo.SetEffectiveHeal(gain);
 
     SendHealSpellLog(healInfo, critical);
@@ -14850,6 +14888,16 @@ bool Unit::_IsValidAttackTarget(Unit const* target, SpellInfo const* bySpell, Wo
     if (m_vehicle)
         if (IsOnVehicle(target) || m_vehicle->GetBase()->IsOnVehicle(target))
             if (!IsHostileTo(target)) // pussywizard: actually can attack own vehicle or passenger if it's hostile to us - needed for snobold in Gormok encounter
+                return false;
+
+    if (Player const* playerAttacker = GetAffectingPlayer())
+        if (Creature const* creatureTarget = target->ToCreature())
+            if (!sScriptMgr->OnPlayerCanSeeCreature(playerAttacker, creatureTarget))
+                return false;
+
+    if (Creature const* creatureAttacker = ToCreature())
+        if (Player const* playerTarget = target->GetAffectingPlayer())
+            if (!sScriptMgr->OnPlayerCanSeeCreature(playerTarget, creatureAttacker))
                 return false;
 
     // can't attack invisible (ignore stealth for aoe spells) also if the area being looked at is from a spell use the dynamic object created instead of the casting unit.
@@ -21733,7 +21781,7 @@ void Unit::PetSpellFail(SpellInfo const* spellInfo, Unit* target, uint32 result)
     }
 }
 
-int64 Unit::CalculateAOEDamageReduction(int64 damage, uint32 schoolMask, bool npcCaster) const
+uint64 Unit::CalculateAOEDamageReduction(uint64 damage, uint32 schoolMask, bool npcCaster) const
 {
     long double reducedDamage = static_cast<long double>(damage) * static_cast<long double>(GetTotalAuraMultiplierByMiscMask(SPELL_AURA_MOD_AOE_DAMAGE_AVOIDANCE, schoolMask));
     if (npcCaster)
@@ -21742,10 +21790,10 @@ int64 Unit::CalculateAOEDamageReduction(int64 damage, uint32 schoolMask, bool np
     if (reducedDamage <= 0.0L || std::isnan(static_cast<double>(reducedDamage)))
         return 0;
 
-    if (reducedDamage > static_cast<long double>(std::numeric_limits<int64>::max()))
-        return std::numeric_limits<int64>::max();
+    if (reducedDamage > static_cast<long double>(std::numeric_limits<uint64>::max()))
+        return std::numeric_limits<uint64>::max();
 
-    return static_cast<int64>(reducedDamage);
+    return static_cast<uint64>(reducedDamage);
 }
 
 void Unit::ExecuteDelayedUnitRelocationEvent()

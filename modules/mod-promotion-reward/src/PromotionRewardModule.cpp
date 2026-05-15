@@ -68,11 +68,6 @@ void PromotionRewardMgr::LoadConfig()
     _cfg.announceType    = f[6].Get<uint32>();
 
     _cfg.enabled = true;
-
-    LOG_INFO("server.loading",
-        "[宣传奖励] 武器entry={} 初始={} 每日+={} 对接[组={},需求={},奖励={}]",
-        _cfg.weaponEntry, _cfg.baseAttrValue, _cfg.perDayAttrValue,
-        _cfg.groupId, _cfg.requireId, _cfg.rewardId);
 }
 
 void PromotionRewardMgr::LoadAllPlayers()
@@ -89,8 +84,6 @@ void PromotionRewardMgr::LoadAllPlayers()
             _players[guid].days = f[1].Get<uint32>();
         } while (r->NextRow());
     }
-
-    LOG_INFO("server.loading", "[宣传奖励] 已加载 {} 个玩家的宣传记录", _players.size());
 }
 
 PromotionPlayerData* PromotionRewardMgr::GetPlayerData(uint32 guid, bool createIfMissing)
@@ -400,7 +393,7 @@ void PromotionReward_WorldScript::OnStartup()
 {
     sPromotionRewardMgr->LoadConfig();
     sPromotionRewardMgr->LoadAllPlayers();
-    LOG_INFO("server.loading", "→ 宣传奖励系统加载成功");
+    LOG_INFO("server.loading", "→宣传奖励系统√");
 }
 
 // ============================================================

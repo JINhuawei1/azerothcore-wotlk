@@ -88,6 +88,11 @@ uint64 ScaleUInt64(uint64 value, long double scale)
     return static_cast<uint64>(scaled);
 }
 
+uint64 AddUInt64Saturated(uint64 left, uint64 right)
+{
+    return left > std::numeric_limits<uint64>::max() - right ? std::numeric_limits<uint64>::max() : left + right;
+}
+
 uint64 AbsInt64ToUInt64(int64 value)
 {
     if (value == std::numeric_limits<int64>::min())
@@ -747,11 +752,14 @@ void Spell::EffectSchoolDMG(SpellEffIndex effIndex)
             if (damage < 0)
                 damage = 0;
 
-            damage = static_cast<int64>(std::min<uint64>(m_originalCaster->SpellDamageBonusDone(unitTarget, m_spellInfo, static_cast<uint64>(damage), SPELL_DIRECT_DAMAGE, effIndex), static_cast<uint64>(std::numeric_limits<int64>::max())));
-            damage = static_cast<int64>(std::min<uint64>(unitTarget->SpellDamageBonusTaken(m_originalCaster, m_spellInfo, static_cast<uint64>(damage), SPELL_DIRECT_DAMAGE), static_cast<uint64>(std::numeric_limits<int64>::max())));
+            uint64 bonusDamage = m_originalCaster->SpellDamageBonusDone(unitTarget, m_spellInfo, static_cast<uint64>(damage), SPELL_DIRECT_DAMAGE, effIndex);
+            bonusDamage = unitTarget->SpellDamageBonusTaken(m_originalCaster, m_spellInfo, bonusDamage, SPELL_DIRECT_DAMAGE);
+            m_damage = AddUInt64Saturated(m_damage, bonusDamage);
         }
-
-        m_damage += damage;
+        else if (damage > 0)
+        {
+            m_damage = AddUInt64Saturated(m_damage, static_cast<uint64>(damage));
+        }
     }
 }
 
@@ -1574,12 +1582,8 @@ void Spell::EffectPowerBurn(SpellEffIndex effIndex)
     // add log data before multiplication (need power amount, not damage)
     ExecuteLogEffectTakeTargetPower(effIndex, unitTarget, PowerType, newDamage, 0.0f);
 
-    int64 scaledDamage = ToPositiveInt64(ScaleUInt64(newDamage, static_cast<long double>(dmgMultiplier)));
-
-    if (m_damage > std::numeric_limits<int64>::max() - scaledDamage)
-        m_damage = std::numeric_limits<int64>::max();
-    else
-        m_damage += scaledDamage;
+    uint64 scaledDamage = ScaleUInt64(newDamage, static_cast<long double>(dmgMultiplier));
+    m_damage = AddUInt64Saturated(m_damage, scaledDamage);
 }
 
 void Spell::EffectHeal(SpellEffIndex effIndex)
@@ -1596,7 +1600,7 @@ void Spell::EffectHeal(SpellEffIndex effIndex)
         if (!caster)
             return;
 
-        int64 addhealth = damage;
+        uint64 addhealth = static_cast<uint64>(damage);
 
         // Vessel of the Naaru (Vial of the Sunwell trinket)
         if (m_spellInfo->Id == 45064)
@@ -1609,7 +1613,7 @@ void Spell::EffectHeal(SpellEffIndex effIndex)
                 m_caster->RemoveAurasDueToSpell(45062);
             }
 
-            addhealth += damageAmount;
+            addhealth = AddUInt64Saturated(addhealth, damageAmount > 0 ? static_cast<uint64>(damageAmount) : 0);
         }
         // Swiftmend - consumes Regrowth or Rejuvenation
         else if (m_spellInfo->TargetAuraState == AURA_STATE_SWIFTMEND && unitTarget->HasAuraState(AURA_STATE_SWIFTMEND, m_spellInfo, m_caster))
@@ -1642,7 +1646,7 @@ void Spell::EffectHeal(SpellEffIndex effIndex)
                 return;
             }
 
-            int64 tickheal = targetAura->GetAmount();
+            uint64 tickheal = targetAura->GetAmount() > 0 ? static_cast<uint64>(targetAura->GetAmount()) : 0;
             if (Unit* auraCaster = targetAura->GetCaster())
                 tickheal = unitTarget->SpellHealingBonusTaken(auraCaster, targetAura->GetSpellInfo(), tickheal, DOT);
 
@@ -1657,7 +1661,7 @@ void Spell::EffectHeal(SpellEffIndex effIndex)
             else // if (targetAura->GetSpellInfo()->SpellFamilyFlags[0] & 0x40)
                 tickcount = 6;
 
-            addhealth += tickheal * tickcount;
+            addhealth = AddUInt64Saturated(addhealth, ScaleUInt64(tickheal, static_cast<long double>(tickcount)));
 
             // Glyph of Swiftmend
             if (!caster->HasAura(54824))
@@ -1684,12 +1688,13 @@ void Spell::EffectHeal(SpellEffIndex effIndex)
             if (!m_spellInfo->HasAura(SPELL_AURA_PERIODIC_HEAL) && (m_spellInfo->GetSchoolMask() & SPELL_SCHOOL_MASK_HOLY))
             {
                 m_damage = 0;
+                m_healing = 0;
                 caster->CastSpell(unitTarget, 23402, false); // Nefarian Corrupted Healing Periodic Damage effect.
                 return;
             }
         }
 
-        m_damage -= addhealth;
+        m_healing = AddUInt64Saturated(m_healing, addhealth);
     }
 }
 
@@ -1708,7 +1713,7 @@ void Spell::EffectHealPct(SpellEffIndex effIndex)
     uint64 heal = m_originalCaster->SpellHealingBonusDone(unitTarget, m_spellInfo, unitTarget->CountPctFromMaxHealth(damage), HEAL, effIndex);
     heal = unitTarget->SpellHealingBonusTaken(m_originalCaster, m_spellInfo, heal, HEAL);
 
-    m_damage -= heal > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(heal);
+    m_healing = AddUInt64Saturated(m_healing, heal);
 }
 
 void Spell::EffectHealMechanical(SpellEffIndex effIndex)
@@ -1726,7 +1731,7 @@ void Spell::EffectHealMechanical(SpellEffIndex effIndex)
     uint64 heal = m_originalCaster->SpellHealingBonusDone(unitTarget, m_spellInfo, static_cast<uint64>(damage), HEAL, effIndex);
 
     uint64 takenHeal = unitTarget->SpellHealingBonusTaken(m_originalCaster, m_spellInfo, heal, HEAL);
-    m_damage -= takenHeal > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(takenHeal);
+    m_healing = AddUInt64Saturated(m_healing, takenHeal);
 }
 
 void Spell::EffectHealthLeech(SpellEffIndex  effIndex)
@@ -1737,15 +1742,15 @@ void Spell::EffectHealthLeech(SpellEffIndex  effIndex)
     if (!unitTarget || !unitTarget->IsAlive() || damage < 0)
         return;
 
-    damage = static_cast<int64>(std::min<uint64>(m_caster->SpellDamageBonusDone(unitTarget, m_spellInfo, static_cast<uint64>(damage), SPELL_DIRECT_DAMAGE, effIndex), static_cast<uint64>(std::numeric_limits<int64>::max())));
-    damage = static_cast<int64>(std::min<uint64>(unitTarget->SpellDamageBonusTaken(m_caster, m_spellInfo, static_cast<uint64>(damage), SPELL_DIRECT_DAMAGE), static_cast<uint64>(std::numeric_limits<int64>::max())));
+    uint64 leechDamage = m_caster->SpellDamageBonusDone(unitTarget, m_spellInfo, static_cast<uint64>(damage), SPELL_DIRECT_DAMAGE, effIndex);
+    leechDamage = unitTarget->SpellDamageBonusTaken(m_caster, m_spellInfo, leechDamage, SPELL_DIRECT_DAMAGE);
 
-    LOG_DEBUG("spells.aura", "HealthLeech :{}", damage);
+    LOG_DEBUG("spells.aura", "HealthLeech :{}", leechDamage);
 
     // xinef: handled in spell.cpp
     //float healMultiplier = m_spellInfo->Effects[effIndex].CalcValueMultiplier(m_originalCaster, this);
 
-    m_damage += damage;
+    m_damage = AddUInt64Saturated(m_damage, leechDamage);
     // get max possible damage, don't count overkill for heal
     //uint32 healthGain = uint32(-unitTarget->GetHealthGain(-damage) * healMultiplier);
 
@@ -3785,11 +3790,7 @@ void Spell::EffectWeaponDmg(SpellEffIndex effIndex)
         eff_damage /= count;                    // divide to all targets
     }
 
-    int64 addDamage = ToPositiveInt64(eff_damage);
-    if (addDamage > 0 && m_damage > std::numeric_limits<int64>::max() - addDamage)
-        m_damage = std::numeric_limits<int64>::max();
-    else
-        m_damage += addDamage;
+    m_damage = AddUInt64Saturated(m_damage, eff_damage);
 }
 
 void Spell::EffectThreat(SpellEffIndex /*effIndex*/)
@@ -3821,15 +3822,15 @@ void Spell::EffectHealMaxHealth(SpellEffIndex /*effIndex*/)
         return;
     }
 
-    int64 addhealth = 0;
+    uint64 addhealth = 0;
 
     // damage == 0 - heal for caster max health
     if (damage == 0)
-        addhealth = m_caster->GetMaxHealthForCombat() > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(m_caster->GetMaxHealthForCombat());
+        addhealth = m_caster->GetMaxHealthForCombat();
     else
-        addhealth = unitTarget->GetMaxHealthForCombat() > unitTarget->GetHealthForCombat() ? static_cast<int64>(std::min<uint64>(unitTarget->GetMaxHealthForCombat() - unitTarget->GetHealthForCombat(), static_cast<uint64>(std::numeric_limits<int64>::max()))) : 0;
+        addhealth = unitTarget->GetMaxHealthForCombat() > unitTarget->GetHealthForCombat() ? unitTarget->GetMaxHealthForCombat() - unitTarget->GetHealthForCombat() : 0;
 
-    m_healing += addhealth;
+    m_healing = AddUInt64Saturated(m_healing, addhealth);
 }
 
 void Spell::EffectInterruptCast(SpellEffIndex effIndex)

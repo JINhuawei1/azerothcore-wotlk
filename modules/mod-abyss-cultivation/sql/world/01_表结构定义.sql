@@ -4,6 +4,8 @@
 -- 设计原则：首版优先减少表数量，尽量按“章节 / 首领 / 装备 / 遗物 / 局内效果”五大块收敛
 -- ============================================
 
+DROP TABLE IF EXISTS `_深渊首领别名`;
+
 DROP TABLE IF EXISTS `_深渊章节配置`;
 CREATE TABLE `_深渊章节配置` (
   `章节ID` smallint unsigned NOT NULL COMMENT '章节ID 1-74',

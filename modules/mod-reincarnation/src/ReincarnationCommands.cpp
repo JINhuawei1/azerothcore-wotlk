@@ -18,6 +18,7 @@
 #include "Language.h"
 #include "WorldPacket.h"
 #include "Opcodes.h"
+#include "StringFormat.h"
 
 using namespace Acore::ChatCommands;
 
@@ -231,8 +232,156 @@ public:
     }
 };
 
+class ReincarnationAddonScript : public PlayerScript
+{
+public:
+    ReincarnationAddonScript() : PlayerScript("ReincarnationAddonScript") { }
+
+    void OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg, Player* /*receiver*/) override
+    {
+        if (!player || type != CHAT_MSG_WHISPER || lang != LANG_ADDON)
+        {
+            return;
+        }
+
+        size_t tabPos = msg.find('\t');
+        if (tabPos == std::string::npos)
+        {
+            return;
+        }
+
+        std::string prefix = msg.substr(0, tabPos);
+        if (prefix != REINCARNATION_ADDON_PREFIX)
+        {
+            return;
+        }
+
+        std::string command = msg.substr(tabPos + 1);
+        if (command == "INFO")
+        {
+            SendInfo(player);
+        }
+        else if (command == "REINCARNATE")
+        {
+            HandleReincarnate(player);
+        }
+    }
+
+private:
+    void SendAddonMessage(Player* player, std::string const& payload)
+    {
+        if (!player || payload.empty())
+        {
+            return;
+        }
+
+        std::string fullMessage = std::string(REINCARNATION_ADDON_PREFIX) + '\t' + payload;
+
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
+        player->SendDirectMessage(&data);
+    }
+
+    void SendInfo(Player* player)
+    {
+        if (!player)
+        {
+            return;
+        }
+
+        if (!sConfigMgr->GetOption("Reincarnation.Enable", true))
+        {
+            SendAddonMessage(player, "|cffff0000转身系统已禁用|r");
+            return;
+        }
+
+        uint32 playerGuid = player->GetGUID().GetCounter();
+        uint32 reincarnationLevel = sReincarnationMgr->GetPlayerReincarnationLevel(playerGuid);
+        float bonusStats = sReincarnationMgr->GetPlayerBonusStats(playerGuid);
+        uint32 bonusTalent = sReincarnationMgr->GetPlayerBonusTalentPoints(playerGuid);
+
+        SendAddonMessage(player, "|cff00ff00========== 转身信息 ==========|r");
+        SendAddonMessage(player, Acore::StringFormat("|cffffd700当前转身等级:|r {} 转", reincarnationLevel));
+        SendAddonMessage(player, Acore::StringFormat("|cffffd700全属性加成:|r +{:.1f}%", bonusStats));
+        SendAddonMessage(player, Acore::StringFormat("|cffffd700额外天赋点:|r +{}", bonusTalent));
+        SendAddonMessage(player, Acore::StringFormat("|cffffd700当前角色等级:|r {}级", player->GetLevel()));
+        SendAddonMessage(player, Acore::StringFormat("|cffffd700转身等级上限:|r {} 转", sReincarnationMgr->GetMaxReincarnationLevel()));
+
+        uint32 nextLevel = reincarnationLevel + 1;
+        uint32 maxLevel = sReincarnationMgr->GetMaxReincarnationLevel();
+        if (reincarnationLevel >= maxLevel)
+        {
+            SendAddonMessage(player, "|cff00ffff已达到转身等级上限|r");
+        }
+        else
+        {
+            ReincarnationConfig const* nextConfig = sReincarnationMgr->GetConfigForLevel(nextLevel);
+            if (nextConfig)
+            {
+                SendAddonMessage(player, Acore::StringFormat("|cff00ffff--- 下一转({}转)奖励 ---|r", nextLevel));
+                SendAddonMessage(player, Acore::StringFormat("|cff00ffff全属性加成:|r +{:.1f}%", nextConfig->bonusStats));
+                SendAddonMessage(player, Acore::StringFormat("|cff00ffff天赋点奖励:|r +{}", nextConfig->bonusTalentPoints));
+                if (nextConfig->requirementTemplateId > 0)
+                {
+                    SendAddonMessage(player, Acore::StringFormat("|cff00ffff需求模板ID:|r {}", nextConfig->requirementTemplateId));
+                }
+            }
+        }
+
+        SendAddonMessage(player, "|cff00ff00================================|r");
+    }
+
+    void HandleReincarnate(Player* player)
+    {
+        if (!player)
+        {
+            return;
+        }
+
+        if (!sConfigMgr->GetOption("Reincarnation.Enable", true))
+        {
+            SendAddonMessage(player, "|cffff0000转身系统已禁用|r");
+            return;
+        }
+
+        std::string errorMsg;
+        if (!sReincarnationMgr->CanReincarnate(player, errorMsg))
+        {
+            SendAddonMessage(player, "|cffff0000转身失败: " + errorMsg + "|r");
+            return;
+        }
+
+        if (!sReincarnationMgr->DoReincarnate(player))
+        {
+            SendAddonMessage(player, "|cffff0000转身失败|r");
+            return;
+        }
+
+        uint32 playerGuid = player->GetGUID().GetCounter();
+        uint32 reincarnationLevel = sReincarnationMgr->GetPlayerReincarnationLevel(playerGuid);
+        float bonusStats = sReincarnationMgr->GetPlayerBonusStats(playerGuid);
+        uint32 bonusTalent = sReincarnationMgr->GetPlayerBonusTalentPoints(playerGuid);
+        ReincarnationConfig const* config = sReincarnationMgr->GetConfigForLevel(reincarnationLevel);
+
+        SendAddonMessage(player, Acore::StringFormat("|cff00ff00恭喜你完成第{}次转身！|r", reincarnationLevel));
+        if (config)
+        {
+            SendAddonMessage(player, Acore::StringFormat("|cff00ffff全属性加成: +{}% (累计: {}%)|r",
+                static_cast<uint32>(config->bonusStats), static_cast<uint32>(bonusStats)));
+            SendAddonMessage(player, Acore::StringFormat("|cffff00ff天赋点奖励: +{}点 (累计: {}点)|r",
+                config->bonusTalentPoints, bonusTalent));
+        }
+        else
+        {
+            SendAddonMessage(player, Acore::StringFormat("|cff00ffff全属性加成: +0% (累计: {}%)|r", static_cast<uint32>(bonusStats)));
+            SendAddonMessage(player, Acore::StringFormat("|cffff00ff天赋点奖励: +0点 (累计: {}点)|r", bonusTalent));
+        }
+    }
+};
+
 // 添加脚本
 void AddSC_ReincarnationCommands()
 {
     new ReincarnationCommandScript();
+    new ReincarnationAddonScript();
 }
