@@ -2806,6 +2806,61 @@ public:
         return nullptr;
     }
 
+    bool IsDirectCombatCustomBoss(uint32 bossEntry) const
+    {
+        if (AbyssBossDocking const* docking = GetBossDocking(bossEntry))
+            return docking->bossType != 1;
+
+        return IsAbyssCustomBossEntry(bossEntry);
+    }
+
+    void PrepareDirectCombatBoss(Creature* creature, Player* target = nullptr) const
+    {
+        if (!creature || !IsDirectCombatCustomBoss(creature->GetEntry()))
+            return;
+
+        if (creature->GetVehicleKit())
+            creature->RemoveVehicleKit();
+
+        creature->RemoveAurasByType(SPELL_AURA_MOD_UNATTACKABLE);
+        creature->SetImmuneToPC(false);
+        creature->SetImmuneToNPC(false);
+        uint32 const templateImmunityPlaceholderSpellId = std::numeric_limits<uint32>::max();
+        for (uint8 school = SPELL_SCHOOL_NORMAL; school <= SPELL_SCHOOL_ARCANE; ++school)
+        {
+            creature->ApplySpellImmune(templateImmunityPlaceholderSpellId, IMMUNITY_SCHOOL, school, false);
+            creature->ApplySpellImmune(templateImmunityPlaceholderSpellId, IMMUNITY_SCHOOL, 1 << school, false);
+        }
+        creature->RemoveUnitFlag(UNIT_FLAG_SERVER_CONTROLLED | UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_DISABLE_MOVE |
+            UNIT_FLAG_PLAYER_CONTROLLED | UNIT_FLAG_NOT_ATTACKABLE_1 | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC |
+            UNIT_FLAG_NON_ATTACKABLE_2 | UNIT_FLAG_PACIFIED | UNIT_FLAG_STUNNED | UNIT_FLAG_TAXI_FLIGHT |
+            UNIT_FLAG_DISARMED | UNIT_FLAG_CONFUSED | UNIT_FLAG_FLEEING | UNIT_FLAG_POSSESSED |
+            UNIT_FLAG_NOT_SELECTABLE | UNIT_FLAG_MOUNT | UNIT_FLAG_IMMUNE);
+        creature->RemoveUnitFlag2(UNIT_FLAG2_FEIGN_DEATH | UNIT_FLAG2_HIDE_BODY | UNIT_FLAG2_RESTRICT_PARTY_INTERACTION |
+            UNIT_FLAG2_PREVENT_SPELL_CLICK | UNIT_FLAG2_CANNOT_TURN);
+        creature->ClearUnitState(UNIT_STATE_STUNNED | UNIT_STATE_ROOT | UNIT_STATE_FLEEING | UNIT_STATE_CONFUSED |
+            UNIT_STATE_DISTRACTED | UNIT_STATE_IN_FLIGHT | UNIT_STATE_POSSESSED | UNIT_STATE_CASTING |
+            UNIT_STATE_EVADE | UNIT_STATE_IGNORE_PATHFINDING);
+        creature->SetReactState(REACT_AGGRESSIVE);
+
+        if (AbyssBossDocking const* docking = GetBossDocking(creature->GetEntry()))
+            if (docking->suggestedFaction != 0 && creature->GetFaction() != docking->suggestedFaction)
+                creature->SetFaction(docking->suggestedFaction);
+
+        if (!creature->GetVictim())
+            creature->GetMotionMaster()->Initialize();
+
+        if (!target || !target->IsAlive() || !target->IsInWorld())
+            return;
+
+        creature->SetInCombatWith(target);
+        target->SetInCombatWith(creature);
+        creature->AddThreat(target, 1000.0f);
+
+        if (creature->IsAIEnabled)
+            creature->AI()->AttackStart(target);
+    }
+
     std::string GetBossBaseName(uint32 bossEntry) const
     {
         if (bossEntry == 0)
@@ -7111,8 +7166,12 @@ public:
         if (!summon)
             return false;
 
-        summon->SetInCombatWith(player);
-        summon->AddThreat(player, 1000.0f);
+        PrepareDirectCombatBoss(summon, player);
+        if (!IsDirectCombatCustomBoss(bossEntry))
+        {
+            summon->SetInCombatWith(player);
+            summon->AddThreat(player, 1000.0f);
+        }
 
         return true;
     }
@@ -7936,8 +7995,12 @@ public:
         if (storyLootMode != 0)
             summon->SetLootMode(storyLootMode);
 
-        summon->SetInCombatWith(player);
-        summon->AddThreat(player, 1000.0f);
+        PrepareDirectCombatBoss(summon, player);
+        if (!IsDirectCombatCustomBoss(chapterConfig->abyssBossEntry))
+        {
+            summon->SetInCombatWith(player);
+            summon->AddThreat(player, 1000.0f);
+        }
         state.pendingAbyssModeType = 0;
         state.pendingCacheSummon = false;
         state.abyssBossSummoned = true;
@@ -8836,7 +8899,10 @@ public:
             return nullptr;
 
         AbyssBossDocking const* docking = sAbyssCultivationMgr->GetBossDocking(creature->GetEntry());
-        if (!docking || docking->bossType == 1)
+        if (docking && docking->bossType == 1)
+            return nullptr;
+
+        if (!sAbyssCultivationMgr->IsDirectCombatCustomBoss(creature->GetEntry()))
             return nullptr;
 
         return new AbyssCultivationBossAI(creature);
@@ -8847,6 +8913,7 @@ public:
         if (!IsModuleEnabled() || !creature)
             return;
 
+        sAbyssCultivationMgr->PrepareDirectCombatBoss(creature);
         sAbyssCultivationMgr->SyncTrackedBossLootMode(creature);
 
         if (sAbyssCultivationMgr->ApplyBossRuntimeTuning(creature))
@@ -9788,6 +9855,33 @@ public:
 
 private:
     std::unordered_map<uint32, uint32> _runCheckTimers;
+};
+
+class AbyssCultivationUnitScript : public UnitScript
+{
+public:
+    AbyssCultivationUnitScript() : UnitScript("AbyssCultivationUnitScript", true, { UNITHOOK_ON_UNIT_DEATH }) { }
+
+    void OnUnitDeath(Unit* unit, Unit* killer) override
+    {
+        if (!unit || !killer || killer->IsPlayer() || !IsModuleEnabled())
+            return;
+
+        Creature* creature = unit->ToCreature();
+        if (!creature)
+            return;
+
+        Player* owner = killer->GetCharmerOrOwnerPlayerOrPlayerItself();
+        if (!owner || !owner->IsInMap(creature))
+            return;
+
+        if (!creature->hasLootRecipient() || !creature->isTappedBy(owner))
+            return;
+
+        sAbyssCultivationMgr->TryRestoreDefaultLootForNonAbyssKill(owner, creature);
+        if (sAbyssCultivationMgr->HandleCreatureKill(owner, creature))
+            SendAbyssStateToAddon(owner);
+    }
 };
 
 class AbyssCultivationCommandScript : public CommandScript
@@ -13242,6 +13336,7 @@ void AddSC_mod_abyss_cultivation()
 {
     new AbyssCultivationWorldScript();
     new AbyssCultivationPlayerScript();
+    new AbyssCultivationUnitScript();
     new AbyssCultivationCreatureScript();
     new AbyssCultivationCommandScript();
 

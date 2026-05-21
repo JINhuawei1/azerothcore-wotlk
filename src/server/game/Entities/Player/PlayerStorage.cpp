@@ -5972,17 +5972,17 @@ void Player::_LoadInventory(PreparedQueryResult result, uint32 timeDiff)
                 }
                 else
                 {
-                    // 【飞升系统兼容】检查是否是飞升系统的虚拟背包（bag=200）
-                    // 如果是，跳过这个物品，让飞升系统自己加载和管理
-                    if (bagGuid == 200)
+                    // 【模块虚拟背包兼容】检查是否是模块托管的虚拟背包（bag=200/201）
+                    // 如果是，跳过这个物品，让对应模块自己加载和管理
+                    if (bagGuid == 200 || bagGuid == 201)
                     {
-                        // 飞升系统物品，设置为 ITEM_UNCHANGED 状态，不添加到更新队列
+                        // 模块托管物品，设置为 ITEM_UNCHANGED 状态，不添加到更新队列
                         item->SetSlot(slot);
                         item->FSetState(ITEM_UNCHANGED);
-                        // 不删除物品，飞升系统会在 OnPlayerLogin 时加载它
-                        LOG_DEBUG("entities.player", "Player::_LoadInventory: 跳过飞升系统物品 ({}, entry: {}) bag=200 slot={}",
-                                  item->GetGUID().ToString(), item->GetEntry(), slot);
-                        delete item;  // 释放临时创建的物品对象，飞升系统会重新加载
+                        // 不删除物品，对应模块会在 OnPlayerLogin 时加载它
+                        LOG_DEBUG("entities.player", "Player::_LoadInventory: 跳过模块虚拟背包物品 ({}, entry: {}) bag={} slot={}",
+                                  item->GetGUID().ToString(), item->GetEntry(), bagGuid, slot);
+                        delete item;  // 释放临时创建的物品对象，模块会重新加载
                         continue;
                     }
 

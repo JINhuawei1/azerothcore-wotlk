@@ -15,10 +15,10 @@
 
 # 本地工具链
 
-- 涉及 `agent-harness`、`az`、`acore-cli`、服务器管理、账号、角色、物品、NPC、公会、GM、数据库、日志、进程、监控、配置、校验等任务时，优先使用 `D:\azerothcore-wotlk03\agent-harness`。短命令别名使用 `az`。首选入口是 `acore-cli` 或 `az`；若 PATH 中没有这些命令，则在 `D:\azerothcore-wotlk03\agent-harness` 下使用 `python -m cli_anything.azerothcore`。需要结构化结果时优先加 `--json`。
-- 涉及 `tools`、`CLI-Anything`、harness 生成/补全/测试/验证、`codex-skill`、方法论或模板复用等任务时，优先使用 `D:\azerothcore-wotlk03\tools\CLI-Anything` 作为本地工具链根目录。优先参考 `D:\azerothcore-wotlk03\tools\CLI-Anything\codex-skill\SKILL.md` 与 `D:\azerothcore-wotlk03\tools\CLI-Anything\cli-anything-plugin\HARNESS.md`，除非任务确实需要，不必重新检索外部文档或再次向用户确认这些路径。
+- 涉及 `agent-harness`、`az`、`acore-cli`、服务器管理、账号、角色、物品、NPC、公会、GM、数据库、日志、进程、监控、配置、校验等任务时，优先使用 `E:\azerothcore-wotlk\agent-harness`。短命令别名使用 `az`。首选入口是 `acore-cli` 或 `az`；若 PATH 中没有这些命令，则在 `E:\azerothcore-wotlk\agent-harness` 下使用 `python -m cli_anything.azerothcore`。需要结构化结果时优先加 `--json`。
+- 涉及 `tools`、`CLI-Anything`、harness 生成/补全/测试/验证、`codex-skill`、方法论或模板复用等任务时，优先使用 `E:\azerothcore-wotlk\tools\CLI-Anything` 作为本地工具链根目录。优先参考 `E:\azerothcore-wotlk\tools\CLI-Anything\codex-skill\SKILL.md` 与 `E:\azerothcore-wotlk\tools\CLI-Anything\cli-anything-plugin\HARNESS.md`，除非任务确实需要，不必重新检索外部文档或再次向用户确认这些路径。
 - 已安装仓库专属 skill `azerothcore-local-toolchains`。匹配上述任务时，应优先使用该 skill，而不是重新摸索工具链结构。
-- 涉及 `DBC`、`MPQ`、`万剑补丁`、`SpellVisual`、客户端补丁打包等任务时，优先使用 `D:\azerothcore-wotlk03\agent-harness\patch_toolchain\wanjian` 作为本地补丁工具链根目录。首选通过 `az patch paths`、`az patch status`、`az patch run ...` 发现和执行脚本，而不是再次要求用户提供 `D:\azerothcore-wotlk03\tools` 路径。
+- 涉及 `DBC`、`MPQ`、`万剑补丁`、`SpellVisual`、客户端补丁打包等任务时，优先使用 `E:\azerothcore-wotlk\agent-harness\patch_toolchain\wanjian` 作为本地补丁工具链根目录。首选通过 `az patch paths`、`az patch status`、`az patch run ...` 发现和执行脚本，而不是再次要求用户提供 `E:\azerothcore-wotlk\tools` 路径。
 
 # 环境约定
 

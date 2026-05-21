@@ -554,6 +554,12 @@ namespace
         return AddUInt64Damage(attacker->GetCustomTrueDamageBonus(), attacker->GetCustomCuttingDamageBonus());
     }
 
+    bool IsWuhunAvatar(Unit const* unit)
+    {
+        Creature const* creature = unit ? unit->ToCreature() : nullptr;
+        return creature && (creature->GetEntry() == 930001 || creature->GetScriptName() == "npc_wuhun_avatar");
+    }
+
     int32 ToClientStatValue(long double value)
     {
         if (std::isnan(static_cast<double>(value)))
@@ -1384,18 +1390,27 @@ void Unit::DealDamageMods(Unit const* victim, uint32& damage, uint32* absorb)
 
 uint64 Unit::GetCustomTrueDamageBonus() const
 {
+    if (IsWuhunAvatar(this))
+        return 0;
+
     Player* player = GetSpellModOwner();
     return player ? player->GetTrueDamageBonus() : 0;
 }
 
 uint64 Unit::GetCustomCuttingDamageBonus() const
 {
+    if (IsWuhunAvatar(this))
+        return 0;
+
     Player* player = GetSpellModOwner();
     return player ? player->GetCuttingDamageBonus() : 0;
 }
 
 uint64 Unit::GetCustomSkillDamageBonus() const
 {
+    if (IsWuhunAvatar(this))
+        return 0;
+
     Player* player = GetSpellModOwner();
     return player ? player->GetSkillDamageBonus() : 0;
 }

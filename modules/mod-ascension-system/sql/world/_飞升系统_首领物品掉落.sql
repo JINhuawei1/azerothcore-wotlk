@@ -215,7 +215,7 @@ SELECT
   'AggressorAI',
   0,
   1,
-  ROUND(s.`boss_health` / 13945, 6),
+  ROUND(s.`boss_health` / 13945 / 5.0, 6),
   1,
   8,
   1,

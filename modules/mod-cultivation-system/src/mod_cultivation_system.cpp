@@ -464,45 +464,16 @@ public:
             return false;
         }
 
-        // 召唤渡劫Boss
-        if (cfgItr->second.tribBossEntry > 0)
-        {
-            float x, y, z, o;
-            player->GetPosition(x, y, z, o);
-
-            // 在玩家前方5码处召唤Boss
-            x += 5.0f * cos(o);
-            y += 5.0f * sin(o);
-
-            if (Creature* boss = player->SummonCreature(cfgItr->second.tribBossEntry, x, y, z, o + M_PI,
-                TEMPSUMMON_TIMED_DESPAWN_OOC_ALIVE, 30000))
-            {
-                boss->SetCorpseDelay(30);
-                boss->SetInCombatWith(player);
-                boss->AddThreat(player, 1000.0f);
-                boss->AI()->AttackStart(player);
-                _tribBosses[boss->GetGUID().GetCounter()] = guid;
-
-                ChatHandler(player->GetSession()).PSendSysMessage(
-                    "|cffff8800[修仙系统]|r 天劫降临！击败劫兽方可突破！");
-            }
-            else
-            {
-                ChatHandler(player->GetSession()).PSendSysMessage(
-                    "|cffff0000召唤渡劫Boss失败！|r");
-                return false;
-            }
-        }
-        else
+        if (cfgItr->second.tribBossEntry == 0)
         {
             // 没有配置Boss，直接突破
             return CompleteTribulation(player);
         }
 
-        // 设置冷却
-        uint32 cooldown = sConfigMgr->GetOption("Cultivation.TribulationCooldown", 600u);
-        itr->second.tribCooldown = now + cooldown;
-        SavePlayerData(player);
+        // 渡劫Boss由地图预先刷新，插件/命令只做条件检查和入口提示，不再召唤生物。
+        ChatHandler(player->GetSession()).PSendSysMessage(
+            "|cffff8800[修仙系统]|r 当前境界需要通关天劫试炼。请前往试炼地图击杀入口Boss {}，通关后再发送提升请求突破。",
+            cfgItr->second.tribBossEntry);
 
         return true;
     }
@@ -1056,7 +1027,7 @@ public:
             bool success = sCultivationMgr->StartTribulation(player);
             if (success)
             {
-                SendCultivationResult(player, "TRIB", true, "天劫降临！击败劫兽方可突破！");
+                SendCultivationResult(player, "TRIB", true, "请前往天劫试炼区域击败入口劫兽，通关后再提升突破！");
             }
             else
             {

@@ -48,7 +48,7 @@ namespace
     constexpr uint32 ASCENSION_CHAIN_BOSS_CORPSE_DELAY_SEC = 5;
     constexpr uint64 ASCENSION_BOSS_HEALTH_BASE = 1000000000;
     constexpr uint64 ASCENSION_BOSS_HEALTH_STEP = 100000000;
-    constexpr uint64 ASCENSION_CLIENT_VISIBLE_HEALTH_LIMIT = 2147483520ULL;
+    constexpr uint64 ASCENSION_CLIENT_VISIBLE_HEALTH_LIMIT = 2000000000ULL;
     constexpr uint32 ASCENSION_TRUE_STRIKE_MIN_MS = 1800;
     constexpr uint32 ASCENSION_TRUE_STRIKE_MAX_MS = 2400;
 
@@ -1387,9 +1387,6 @@ bool AscensionManager::EquipItem(Player* player, uint8 slot, uint32 itemId, uint
     }
 
     CharacterDatabase.CommitTransaction(trans);
-
-    LOG_INFO("module", "飞升系统: 装备物品 槽位={} 物品ID={} GUID={} OwnerGUID={}",
-        slot, itemId, itemGuid, player->GetGUID().GetCounter());
 
     // 应用属性与套装贡献
     ApplyItemEffect(player, itemId, slot, true);
@@ -3746,16 +3743,10 @@ public:
             {
                 uint32 clientHealth = ToAscensionClientHealth(maxHealth);
                 me->SetCreateHealth(clientHealth);
+                me->SetModifierValue(UNIT_MOD_HEALTH, BASE_VALUE, static_cast<double>(maxHealth));
                 me->SetMaxHealth(clientHealth);
-
-                if (maxHealth > clientHealth)
-                {
-                    me->SetExtendedMaxHealth(maxHealth);
-                    me->SetExtendedHealth(maxHealth);
-                    me->SyncClientHealthFromExtended();
-                }
-                else
-                    me->SetHealth(clientHealth);
+                me->SetExtendedMaxHealth(maxHealth);
+                me->SetHealthForCombat(maxHealth);
             }
 
             // 扩展血量首领会把核心半血伤害需求抬得过高，这里只解除奖励判定门槛，掉落仍由 creature_template.lootid 正常生成。

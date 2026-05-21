@@ -1,0 +1,8 @@
+# 武魂系统
+
+WuhunSystem.Enable = 1
+WuhunSystem.Debug = 0
+WuhunSystem.AnnounceOnLogin = 1
+WuhunSystem.AutoAttackSelectedTarget = 1
+WuhunSystem.AutoAttackNearbyTarget = 1
+WuhunSystem.AvatarSkillAI = 1

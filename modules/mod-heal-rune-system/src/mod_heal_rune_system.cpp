@@ -230,11 +230,22 @@ public:
         if (!player || !runeId)
             return false;
 
+        HealRuneEntry const* entry = GetEntryById(runeId);
+        if (!entry)
+            return false;
+
         auto playerItr = _playerRunes.find(player->GetGUID().GetCounter());
         if (playerItr == _playerRunes.end())
             return false;
 
-        return playerItr->second.find(runeId) != playerItr->second.end();
+        for (auto const& [storedRuneId, state] : playerItr->second)
+        {
+            (void)storedRuneId;
+            if (state.healLevel >= entry->healLevel)
+                return true;
+        }
+
+        return false;
     }
 
     bool HasUnlockedHealLevel(Player* player, uint32 healLevel) const
@@ -249,7 +260,7 @@ public:
         for (auto const& [runeId, state] : playerItr->second)
         {
             (void)runeId;
-            if (state.healLevel == healLevel)
+            if (state.healLevel >= healLevel)
                 return true;
         }
 
@@ -304,12 +315,14 @@ public:
         _playerTickTimers[playerGuid] = 0;
 
         QueryResult result = CharacterDatabase.Query(
-            "SELECT `神符ID`, `回血等级` FROM `_玩家回血神符` WHERE `玩家GUID` = {}",
+            "SELECT `神符ID`, `回血等级` FROM `_玩家回血神符` WHERE `玩家GUID` = {} "
+            "ORDER BY `回血等级` DESC, `神符ID` DESC LIMIT 1",
             playerGuid);
 
         if (!result)
             return;
 
+        uint32 currentRuneId = 0;
         do
         {
             Field* fields = result->Fetch();
@@ -321,8 +334,17 @@ public:
                 continue;
 
             _playerRunes[playerGuid][runeId] = state;
+            currentRuneId = runeId;
         }
         while (result->NextRow());
+
+        if (currentRuneId)
+        {
+            CharacterDatabase.Execute(
+                "DELETE FROM `_玩家回血神符` WHERE `玩家GUID` = {} AND `神符ID` <> {}",
+                playerGuid,
+                currentRuneId);
+        }
     }
 
     void UnloadPlayerData(uint32 playerGuid)
@@ -446,10 +468,29 @@ public:
             return false;
 
         uint32 playerGuid = player->GetGUID().GetCounter();
-        _playerRunes[playerGuid][runeId] = { entry->healLevel };
+        uint32 previousRuneId = GetHighestUnlockedRuneId(player);
+        auto& playerRunes = _playerRunes[playerGuid];
+        playerRunes.clear();
+        playerRunes[runeId] = { entry->healLevel };
+
+        if (previousRuneId)
+        {
+            CharacterDatabase.Execute(
+                "DELETE FROM `_玩家回血神符` WHERE `玩家GUID` = {} AND `神符ID` <> {}",
+                playerGuid,
+                previousRuneId);
+
+            CharacterDatabase.Execute(
+                "UPDATE `_玩家回血神符` SET `神符ID` = {}, `回血等级` = {} WHERE `玩家GUID` = {} AND `神符ID` = {}",
+                runeId,
+                entry->healLevel,
+                playerGuid,
+                previousRuneId);
+        }
 
         CharacterDatabase.Execute(
-            "REPLACE INTO `_玩家回血神符` (`玩家GUID`, `神符ID`, `回血等级`) VALUES ({}, {}, {})",
+            "INSERT INTO `_玩家回血神符` (`玩家GUID`, `神符ID`, `回血等级`) VALUES ({}, {}, {}) "
+            "ON DUPLICATE KEY UPDATE `神符ID` = VALUES(`神符ID`), `回血等级` = VALUES(`回血等级`)",
             playerGuid,
             runeId,
             entry->healLevel);
