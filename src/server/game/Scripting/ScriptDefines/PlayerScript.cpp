@@ -16,6 +16,7 @@
  */
 
 #include "PlayerScript.h"
+#include "Item.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "ScriptMgrMacros.h"
@@ -425,6 +426,9 @@ void ScriptMgr::OnPlayerBeforeFillQuestLootItem(Player* player, LootItem& item)
 
 void ScriptMgr::OnPlayerStoreNewItem(Player* player, Item* item, uint32 count)
 {
+    if (!item || !item->AreValuesInitialized())
+        return;
+
     CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_STORE_NEW_ITEM, script->OnPlayerStoreNewItem(player, item, count));
 }
 

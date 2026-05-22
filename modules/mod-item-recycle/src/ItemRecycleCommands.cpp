@@ -198,6 +198,9 @@ bool HandleRecycleGroupCommand(ChatHandler* handler, Acore::ChatCommands::Tail a
         if (ItemRecycleScript::IsProtectedQuestItem(recycleItem.itemId))
             continue;
 
+        if (ItemRecycleScript::IsReservedByMaterialWarehouse(player, recycleItem.itemId))
+            continue;
+
         uint32 count = player->GetItemCount(recycleItem.itemId, false);
         if (count >= 1) // 简化：只要有物品就可以回收
         {

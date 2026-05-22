@@ -55,6 +55,10 @@ constexpr uint8 WUHUN_SKILL_MODE_SYNC = 1;
 constexpr uint8 WUHUN_SKILL_MODE_AUTO = 2;
 constexpr uint64 WUHUN_CLIENT_VISIBLE_HEALTH_LIMIT = 2147483520ULL;
 constexpr uint32 WUHUN_RANGED_MIRROR_MELEE_DELAY_MS = 2000;
+constexpr uint32 WUHUN_SKILL_SCAN_INTERVAL_MS = 100;
+constexpr uint32 WUHUN_MIN_SKILL_COOLDOWN_MS = 100;
+constexpr long double WUHUN_DIRECT_SKILL_POWER_COEFFICIENT = 1.0L;
+constexpr long double WUHUN_PERIODIC_SKILL_POWER_COEFFICIENT = 0.35L;
 constexpr TriggerCastFlags WUHUN_SPELL_CAST_FLAGS = TriggerCastFlags(
     TRIGGERED_FULL_MASK |
     TRIGGERED_IGNORE_SPELL_AND_CATEGORY_CD |
@@ -147,6 +151,9 @@ struct PlayerWuhunData
     uint32 syncTimer = 0;
     uint32 statRefreshTimer = 0;
     uint32 uiStateTimer = 0;
+    double avatarAttackPower = 0.0;
+    double avatarRangedAttackPower = 0.0;
+    double avatarSpellPower = 0.0;
 };
 
 struct WuhunSkillRuntime
@@ -171,6 +178,14 @@ struct WuhunEquipmentBonus
     int64 rangedHasteRating = 0;
     int64 spellHasteRating = 0;
     uint32 itemCount = 0;
+    uint32 enhancedItemCount = 0;
+};
+
+struct WuhunItemAttributeMultiplier
+{
+    float value = 1.0f;
+    char mode = 'x';
+    bool active = false;
 };
 
 uint32 ToWuhunClientHealth(uint64 value)
@@ -209,6 +224,90 @@ int64 ScaleInt64(int64 value, float percent)
 uint32 ClampUInt32FromUInt64(uint64 value)
 {
     return value > static_cast<uint64>(std::numeric_limits<uint32>::max()) ? std::numeric_limits<uint32>::max() : static_cast<uint32>(value);
+}
+
+uint64 AddDamageSaturated(uint64 damage, long double bonus)
+{
+    if (bonus <= 0.0L || !std::isfinite(static_cast<double>(bonus)))
+        return damage;
+
+    long double maxValue = static_cast<long double>(std::numeric_limits<uint64>::max());
+    if (bonus >= maxValue - static_cast<long double>(damage))
+        return std::numeric_limits<uint64>::max();
+
+    uint64 flatBonus = static_cast<uint64>(bonus);
+    if (!flatBonus && bonus > 0.0L)
+        flatBonus = 1;
+
+    return damage + flatBonus;
+}
+
+char NormalizeWuhunItemAttributeMode(char mode)
+{
+    if (mode == '+' || mode == 1)
+        return '+';
+    if (mode == '-' || mode == 'n')
+        return '-';
+    return 'x';
+}
+
+char DbValueToWuhunItemAttributeMode(int32 value)
+{
+    if (value == 1)
+        return '+';
+    if (value == -1)
+        return '-';
+    return 'x';
+}
+
+bool HasWuhunItemAttributeMultiplierEffect(float value, char mode)
+{
+    mode = NormalizeWuhunItemAttributeMode(mode);
+    if (mode == '-')
+        return false;
+
+    return mode == '+' ? value > 0.0f : value > 1.0f;
+}
+
+int64 CalculateWuhunEnhancedAttributeValue(int64 originalValue, WuhunItemAttributeMultiplier const& multiplier)
+{
+    if (!multiplier.active)
+        return originalValue;
+
+    char mode = NormalizeWuhunItemAttributeMode(multiplier.mode);
+    if (mode == '-')
+        return originalValue;
+
+    if (mode == '+')
+    {
+        long double enhanced = static_cast<long double>(originalValue) + static_cast<long double>(multiplier.value);
+        if (enhanced >= static_cast<long double>(std::numeric_limits<int64>::max()))
+            return std::numeric_limits<int64>::max();
+        if (enhanced <= static_cast<long double>(std::numeric_limits<int64>::min()))
+            return std::numeric_limits<int64>::min();
+        return static_cast<int64>(enhanced);
+    }
+
+    long double enhanced = static_cast<long double>(originalValue) * static_cast<long double>(multiplier.value);
+    if (enhanced >= static_cast<long double>(std::numeric_limits<int64>::max()))
+        return std::numeric_limits<int64>::max();
+    if (enhanced <= static_cast<long double>(std::numeric_limits<int64>::min()))
+        return std::numeric_limits<int64>::min();
+    return static_cast<int64>(enhanced);
+}
+
+float CalculateWuhunEnhancedAttributeValue(float originalValue, WuhunItemAttributeMultiplier const& multiplier)
+{
+    if (!multiplier.active)
+        return originalValue;
+
+    char mode = NormalizeWuhunItemAttributeMode(multiplier.mode);
+    if (mode == '-')
+        return originalValue;
+    if (mode == '+')
+        return originalValue + multiplier.value;
+
+    return originalValue * multiplier.value;
 }
 
 bool TryParseUInt(std::string const& text, uint32& value)
@@ -1069,8 +1168,15 @@ public:
 
         double inheritedAP = player->GetExtendedTotalAttackPowerValue(BASE_ATTACK) * static_cast<double>(inheritPercent) / 100.0;
         double inheritedRangedAP = player->GetExtendedTotalAttackPowerValue(RANGED_ATTACK) * static_cast<double>(inheritPercent) / 100.0;
+        long double inheritedSpellPower = static_cast<long double>(player->GetExtendedSpellPowerBonus()) * static_cast<long double>(inheritPercent) / 100.0L;
         double ap = inheritedAP + equipmentBonus.attackPower + equipmentBonus.spellPower * 0.5;
         double rangedAP = inheritedRangedAP + equipmentBonus.rangedAttackPower;
+        double spellPower = static_cast<double>(std::min<long double>(
+            std::numeric_limits<double>::max(),
+            std::max<long double>(0.0L, inheritedSpellPower + static_cast<long double>(equipmentBonus.spellPower))));
+        data->avatarAttackPower = ap;
+        data->avatarRangedAttackPower = rangedAP;
+        data->avatarSpellPower = spellPower;
         avatar->SetModifierValue(UNIT_MOD_ATTACK_POWER, BASE_VALUE, ap);
         avatar->SetModifierValue(UNIT_MOD_ATTACK_POWER, BASE_PCT, 1.0f);
         avatar->SetModifierValue(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, 0.0f);
@@ -1125,9 +1231,14 @@ public:
         if (IsDebug())
         {
             LOG_INFO("server.loading",
-                "武魂系统: 玩家 {} 武魂攻速同步，继承={:.2f}%，主人近战急速={:.2f}%，武魂装备近战急速等级={}，近战攻速={}ms，远程攻速={}ms",
+                "武魂系统: 玩家 {} 武魂属性同步，继承={:.2f}%，装备数={}，增强装备数={}，AP={:.2f}，远程AP={:.2f}，法强={:.2f}，主人近战急速={:.2f}%，武魂装备近战急速等级={}，近战攻速={}ms，远程攻速={}ms",
                 player->GetName(),
                 inheritPercent,
+                equipmentBonus.itemCount,
+                equipmentBonus.enhancedItemCount,
+                data->avatarAttackPower,
+                data->avatarRangedAttackPower,
+                data->avatarSpellPower,
                 player->GetRatingBonusValue(CR_HASTE_MELEE),
                 equipmentBonus.meleeHasteRating,
                 meleeAttackTime,
@@ -1230,6 +1341,23 @@ public:
         if (spellInfo->IsPassive() || spellInfo->Id == 6603)
             return;
 
+        uint32 targetMask = spell->m_targets.GetTargetMask();
+        if ((targetMask & (TARGET_FLAG_GAMEOBJECT_MASK | TARGET_FLAG_ITEM_MASK | TARGET_FLAG_CORPSE_MASK)) ||
+            spell->m_targets.GetGOTarget() ||
+            spell->m_targets.GetItemTarget() ||
+            (spell->m_targets.GetObjectTarget() && !spell->m_targets.GetObjectTarget()->ToUnit()))
+        {
+            if (IsDebug())
+            {
+                LOG_INFO("server.loading",
+                    "武魂系统: 跳过非单位目标同步施法，主人={}，SpellID={}，目标掩码={}",
+                    player->GetName(),
+                    spellInfo->Id,
+                    targetMask);
+            }
+            return;
+        }
+
         bool rangedMirror = IsRangedMirrorSpell(spellInfo);
         TriggerCastFlags mirrorFlags = WUHUN_SPELL_CAST_FLAGS;
         Unit* originalTarget = spell->m_targets.GetUnitTarget();
@@ -1238,7 +1366,6 @@ public:
             SetOwnerTarget(player, originalTarget, rangedMirror ? WUHUN_RANGED_MIRROR_MELEE_DELAY_MS : 3000, !rangedMirror);
 
         SpellCastResult result = SPELL_FAILED_BAD_TARGETS;
-        uint32 targetMask = spell->m_targets.GetTargetMask();
 
         if (originalTarget)
         {
@@ -1998,6 +2125,32 @@ public:
         return skills;
     }
 
+    long double CalculateAvatarSkillPowerBonus(PlayerWuhunData const& data, SpellInfo const* spellInfo, bool periodic) const
+    {
+        if (!spellInfo)
+            return 0.0L;
+
+        long double meleePower = std::max<long double>(0.0L, static_cast<long double>(data.avatarAttackPower));
+        long double rangedPower = std::max<long double>(0.0L, static_cast<long double>(data.avatarRangedAttackPower));
+        long double spellPower = std::max<long double>(0.0L, static_cast<long double>(data.avatarSpellPower));
+        long double weaponPower = std::max(meleePower, rangedPower);
+        long double combatPower = spellPower;
+
+        if (spellInfo->DmgClass == SPELL_DAMAGE_CLASS_MELEE)
+            combatPower = std::max(meleePower, spellPower * 0.5L);
+        else if (spellInfo->DmgClass == SPELL_DAMAGE_CLASS_RANGED)
+            combatPower = std::max(rangedPower, spellPower * 0.5L);
+        else if (spellInfo->DmgClass == SPELL_DAMAGE_CLASS_MAGIC)
+            combatPower = std::max(spellPower, weaponPower * 0.35L);
+        else if (spellInfo->GetSchoolMask() == SPELL_SCHOOL_MASK_NORMAL)
+            combatPower = weaponPower;
+        else
+            combatPower = std::max(spellPower, weaponPower * 0.35L);
+
+        long double coefficient = periodic ? WUHUN_PERIODIC_SKILL_POWER_COEFFICIENT : WUHUN_DIRECT_SKILL_POWER_COEFFICIENT;
+        return combatPower * coefficient;
+    }
+
     void ApplySkillDamageBonus(Creature* avatar, SpellInfo const* spellInfo, uint64& damage, char const* source)
     {
         if (!avatar || !spellInfo || !damage)
@@ -2011,6 +2164,8 @@ public:
         if (!data || data->avatarGuid != avatar->GetGUID())
             return;
 
+        bool periodic = source && std::string(source) == "periodic";
+        long double powerBonus = CalculateAvatarSkillPowerBonus(*data, spellInfo, periodic);
         float bonusPct = 0.0f;
         for (uint32 skillId : data->skillSlots)
         {
@@ -2028,25 +2183,34 @@ public:
             bonusPct = std::max<float>(bonusPct, static_cast<float>(levelItr->second) * skill->damageBonusPerLevel);
         }
 
-        if (bonusPct <= 0.0f)
+        if (bonusPct <= 0.0f && powerBonus <= 0.0L)
             return;
 
         uint64 oldDamage = damage;
-        long double scaled = static_cast<long double>(damage) * (100.0L + static_cast<long double>(bonusPct)) / 100.0L;
-        damage = scaled >= static_cast<long double>(std::numeric_limits<uint64>::max())
-            ? std::numeric_limits<uint64>::max()
-            : static_cast<uint64>(scaled);
+        damage = AddDamageSaturated(damage, powerBonus);
 
-        if (damage == oldDamage && scaled > static_cast<long double>(oldDamage))
-            ++damage;
+        if (bonusPct > 0.0f)
+        {
+            long double scaled = static_cast<long double>(damage) * (100.0L + static_cast<long double>(bonusPct)) / 100.0L;
+            damage = scaled >= static_cast<long double>(std::numeric_limits<uint64>::max())
+                ? std::numeric_limits<uint64>::max()
+                : static_cast<uint64>(scaled);
+
+            if (damage == oldDamage && scaled > static_cast<long double>(oldDamage))
+                ++damage;
+        }
 
         if (IsDebug())
         {
             LOG_INFO("server.loading",
-                "武魂系统: 技能伤害加成，来源={}，主人GUID={}，SpellID={}，加成={:.2f}%，伤害 {} -> {}",
+                "武魂系统: 技能伤害加成，来源={}，主人GUID={}，SpellID={}，AP={:.2f}，远程AP={:.2f}，法强={:.2f}，属性伤害加成={:.2f}，技能等级加成={:.2f}%，伤害 {} -> {}",
                 source ? source : "unknown",
                 ownerGuid.GetCounter(),
                 spellInfo->Id,
+                data->avatarAttackPower,
+                data->avatarRangedAttackPower,
+                data->avatarSpellPower,
+                static_cast<double>(powerBonus),
                 bonusPct,
                 oldDamage,
                 damage);
@@ -3024,13 +3188,37 @@ private:
     }
 
 #ifdef WUHUN_HAS_ITEM_ATTRIBUTES
-    void ApplyWuhunItemAttributeRows(WuhunEquipmentBonus& bonus, std::vector<uint32> const& attributeIds, std::vector<int32> const& attributeValues) const
+    void ApplyWuhunItemAttributeRows(WuhunEquipmentBonus& bonus, std::vector<uint32> const& attributeIds, std::vector<int32> const& attributeValues, WuhunItemAttributeMultiplier const& multiplier) const
     {
         size_t count = std::min(attributeIds.size(), attributeValues.size());
         for (size_t i = 0; i < count; ++i)
-            ApplyWuhunItemStat(bonus, attributeIds[i], attributeValues[i]);
+            ApplyWuhunItemStat(bonus, attributeIds[i], CalculateWuhunEnhancedAttributeValue(static_cast<int64>(attributeValues[i]), multiplier));
     }
 #endif
+
+    WuhunItemAttributeMultiplier GetWuhunItemAttributeMultiplier(ObjectGuid::LowType itemGuid) const
+    {
+        WuhunItemAttributeMultiplier result;
+        if (!itemGuid)
+            return result;
+
+        QueryResult queryResult = CharacterDatabase.Query(
+            "SELECT `属性倍率`, `属性倍率模式` FROM `玩家装备属性增强` WHERE `装备GUID` = {} LIMIT 1",
+            static_cast<uint64>(itemGuid));
+        if (!queryResult)
+            return result;
+
+        Field* fields = queryResult->Fetch();
+        float value = static_cast<float>(fields[0].Get<int32>());
+        char mode = DbValueToWuhunItemAttributeMode(fields[1].Get<int32>());
+        if (!HasWuhunItemAttributeMultiplierEffect(value, mode))
+            return result;
+
+        result.value = value;
+        result.mode = mode;
+        result.active = true;
+        return result;
+    }
 
     WuhunEquipmentBonus CalculateEquipmentBonus(PlayerWuhunData const& data) const
     {
@@ -3043,14 +3231,18 @@ private:
                 continue;
 
             ++bonus.itemCount;
-            bonus.armor += proto->Armor;
+            WuhunItemAttributeMultiplier multiplier = GetWuhunItemAttributeMultiplier(pair.second.itemGuid);
+            if (multiplier.active)
+                ++bonus.enhancedItemCount;
+
+            bonus.armor += static_cast<uint64>(std::max<int64>(0, CalculateWuhunEnhancedAttributeValue(static_cast<int64>(proto->Armor), multiplier)));
             for (uint32 i = 0; i < proto->StatsCount && i < MAX_ITEM_PROTO_STATS; ++i)
-                ApplyWuhunItemStat(bonus, proto->ItemStat[i].ItemStatType, proto->ItemStat[i].ItemStatValue);
+                ApplyWuhunItemStat(bonus, proto->ItemStat[i].ItemStatType, CalculateWuhunEnhancedAttributeValue(static_cast<int64>(proto->ItemStat[i].ItemStatValue), multiplier));
 
             for (uint8 i = 0; i < MAX_ITEM_PROTO_DAMAGES; ++i)
             {
-                bonus.minDamage += proto->Damage[i].DamageMin;
-                bonus.maxDamage += proto->Damage[i].DamageMax;
+                bonus.minDamage += CalculateWuhunEnhancedAttributeValue(static_cast<float>(proto->Damage[i].DamageMin), multiplier);
+                bonus.maxDamage += CalculateWuhunEnhancedAttributeValue(static_cast<float>(proto->Damage[i].DamageMax), multiplier);
             }
 
 #ifdef WUHUN_HAS_ITEM_ATTRIBUTES
@@ -3058,8 +3250,8 @@ private:
             {
                 if (auto attributeData = ItemAttributesDBHelper::LoadItemAttributes(pair.second.itemGuid))
                 {
-                    ApplyWuhunItemAttributeRows(bonus, attributeData->baseAttributeIds, attributeData->baseAttributeValues);
-                    ApplyWuhunItemAttributeRows(bonus, attributeData->additionalAttributeIds, attributeData->additionalAttributeValues);
+                    ApplyWuhunItemAttributeRows(bonus, attributeData->baseAttributeIds, attributeData->baseAttributeValues, multiplier);
+                    ApplyWuhunItemAttributeRows(bonus, attributeData->additionalAttributeIds, attributeData->additionalAttributeValues, multiplier);
                 }
             }
 #endif
@@ -3533,7 +3725,7 @@ private:
             _skillTimer -= diff;
             return;
         }
-        _skillTimer = 250;
+        _skillTimer = WUHUN_SKILL_SCAN_INTERVAL_MS;
 
         std::vector<WuhunSkillRuntime> skills = sWuhunMgr->GetEquippedSkills(owner->GetGUID().GetCounter());
         bool logScan = CanLogSkillDebug();
@@ -3559,8 +3751,12 @@ private:
             return;
         }
 
-        for (WuhunSkillRuntime const& runtime : skills)
+        size_t startIndex = _nextSkillIndex % skills.size();
+        for (size_t offset = 0; offset < skills.size(); ++offset)
         {
+            size_t skillIndex = (startIndex + offset) % skills.size();
+            WuhunSkillRuntime const& runtime = skills[skillIndex];
+
             if (_cooldowns.find(runtime.skillId) != _cooldowns.end())
             {
                 if (logScan)
@@ -3667,13 +3863,14 @@ private:
                 continue;
             }
 
-            uint32 cooldown = skill->cooldownMs;
+            uint32 cooldown = std::max<uint32>(WUHUN_MIN_SKILL_COOLDOWN_MS, skill->cooldownMs);
             if (runtime.level > 1)
             {
                 uint64 reduction = static_cast<uint64>(runtime.level - 1) * 250ULL;
-                cooldown = reduction >= cooldown ? 1000 : std::max<uint32>(1000, cooldown - static_cast<uint32>(reduction));
+                cooldown = reduction >= cooldown ? WUHUN_MIN_SKILL_COOLDOWN_MS : std::max<uint32>(WUHUN_MIN_SKILL_COOLDOWN_MS, cooldown - static_cast<uint32>(reduction));
             }
             _cooldowns[runtime.skillId] = cooldown;
+            _nextSkillIndex = (skillIndex + 1) % skills.size();
             break;
         }
     }
@@ -3687,6 +3884,7 @@ private:
     float _flightFollowX = 0.0f;
     float _flightFollowY = 0.0f;
     float _flightFollowZ = 0.0f;
+    size_t _nextSkillIndex = 0;
     std::unordered_map<uint32, uint32> _cooldowns;
 };
 

@@ -101,6 +101,7 @@ public:
     // 回收相关函数
     static bool IsProtectedQuestItem(uint32 itemId);
     static bool IsActiveQuestItem(Player* player, uint32 itemId);
+    static bool IsReservedByMaterialWarehouse(Player* player, uint32 itemId);
     static bool CanRecycleItem(Player* player, Item* item, const PlayerRecycleSettings& settings);
     // 新增：查找匹配的回收规则
     static const ItemRecycleInfo* FindMatchingRecycleRule(Item* item, const PlayerRecycleSettings& settings);

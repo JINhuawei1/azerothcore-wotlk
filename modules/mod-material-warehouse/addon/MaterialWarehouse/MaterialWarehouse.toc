@@ -1,0 +1,7 @@
+## Interface: 30300
+## Title: 材料仓库
+## Notes: 材料仓库界面
+## Author: AzerothCore
+## Version: 1.0.0
+## SavedVariablesPerCharacter: MaterialWarehouseDB
+MaterialWarehouse.lua

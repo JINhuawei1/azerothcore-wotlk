@@ -506,6 +506,9 @@ bool ItemRecycleScript::CanRecycleItem(Player* player, Item* item, const PlayerR
     if (!itemTemplate)
         return false;
 
+    if (IsReservedByMaterialWarehouse(player, item->GetEntry()))
+        return false;
+
     // 任何任务作为来源/需求/奖励使用的物品不允许回收。
     // 例如 10733 相关紫罗兰徽记即使可通过放弃任务或补发逻辑重新获得，也不能进入回收链刷奖励。
     if (IsProtectedQuestItem(item->GetEntry()))
@@ -582,6 +585,21 @@ bool ItemRecycleScript::CanRecycleItem(Player* player, Item* item, const PlayerR
     // 注意：需求模板检查在实际回收时进行，这里只检查基本条件
 
     return true;
+}
+
+bool ItemRecycleScript::IsReservedByMaterialWarehouse(Player* player, uint32 itemId)
+{
+    if (!player || !itemId)
+        return false;
+
+    if (!sConfigMgr->GetOption<bool>("MaterialWarehouse.Enable", true))
+        return false;
+
+    QueryResult result = CharacterDatabase.Query(
+        "SELECT 1 FROM `_材料仓库玩家` WHERE `玩家GUID` = {} AND `物品ID` = {} AND `自动存储` = 1 LIMIT 1",
+        player->GetGUID().GetCounter(), itemId);
+
+    return !!result;
 }
 
 // 新增：查找匹配的回收规则

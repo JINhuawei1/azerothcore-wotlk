@@ -1,0 +1,10 @@
+[worldserver]
+
+# 是否启用材料仓库系统
+MaterialWarehouse.Enable = 1
+
+# 玩家把新物品加入仓库列表时，是否立刻把背包中已有的同类物品存入仓库
+MaterialWarehouse.DepositExistingOnAdd = 1
+
+# 单次从仓库取出的最大数量，防止误操作或异常请求
+MaterialWarehouse.MaxWithdrawPerRequest = 100000

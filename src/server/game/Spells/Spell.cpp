@@ -7279,7 +7279,11 @@ SpellCastResult Spell::CheckRange(bool strict)
 
     if (GameObject* goTarget = m_targets.GetGOTarget())
     {
-        if (!goTarget->IsAtInteractDistance(m_caster->ToPlayer(), m_spellInfo))
+        Player* playerCaster = m_caster->ToPlayer();
+        if (!playerCaster)
+            return SPELL_FAILED_BAD_TARGETS;
+
+        if (!goTarget->IsAtInteractDistance(playerCaster, m_spellInfo))
         {
             return SPELL_FAILED_OUT_OF_RANGE;
         }
