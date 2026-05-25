@@ -26,6 +26,8 @@
 #include "WorldPacket.h"
 #include "ModuleManager.h"
 #include "RequirementInterface.h"
+#include "StringConvert.h"
+#include "Util.h"
 
 #if __has_include("ItemAttributesDBHelper.h")
 #define WUHUN_HAS_ITEM_ATTRIBUTES 1
@@ -93,10 +95,10 @@ struct WuhunDefinition
     uint32 creatureEntry = 930001;
     std::string name = "本命武魂";
     float scale = 1.0f;
-    uint32 activationSoulCost = 1000;
-    uint32 evolveSoulCost = 0;
-    uint32 dungeonBossSoulPower = 1;
-    uint32 worldBossSoulPower = 1;
+    uint128 activationSoulCost = 1000;
+    uint128 evolveSoulCost = 0;
+    uint128 dungeonBossSoulPower = 1;
+    uint128 worldBossSoulPower = 1;
 };
 
 struct WuhunSkillTemplate
@@ -106,8 +108,8 @@ struct WuhunSkillTemplate
     std::string name;
     std::string description;
     uint32 cooldownMs = 5000;
-    uint32 learnCost = 100;
-    uint32 upgradeCost = 100;
+    uint128 learnCost = 100;
+    uint128 upgradeCost = 100;
     uint32 maxLevel = 10;
     uint8 targetType = 0;          // 0=敌方目标 1=武魂自身 2=主人
     uint8 minTargetHealthPct = 0;  // 0=不限制
@@ -126,7 +128,7 @@ struct WuhunEquipSlotConfig
 {
     uint8 slot = 0;
     std::string name;
-    uint64 soulCost = 0;
+    uint128 soulCost = 0;
     uint32 requirementId = 0;
 };
 
@@ -135,7 +137,7 @@ struct PlayerWuhunData
     uint32 wuhunId = 1;
     bool activated = false;
     bool summonRequested = false;
-    uint64 soulPower = 0;
+    uint128 soulPower = 0;
     std::array<uint32, WUHUN_RING_COUNT> ringLevels = { };
     std::array<uint32, WUHUN_SKILL_SLOT_COUNT> skillSlots = { };
     std::array<bool, EQUIPMENT_SLOT_END> unlockedEquipSlots = { };
@@ -165,10 +167,10 @@ struct WuhunSkillRuntime
 
 struct WuhunEquipmentBonus
 {
-    std::array<int64, MAX_STATS> stats = { };
-    uint64 health = 0;
-    uint64 mana = 0;
-    uint64 armor = 0;
+    std::array<int128, MAX_STATS> stats = { };
+    uint128 health = 0;
+    uint128 mana = 0;
+    uint128 armor = 0;
     double attackPower = 0.0;
     double rangedAttackPower = 0.0;
     double spellPower = 0.0;
@@ -188,58 +190,99 @@ struct WuhunItemAttributeMultiplier
     bool active = false;
 };
 
-uint32 ToWuhunClientHealth(uint64 value)
+uint32 ToWuhunClientHealth(uint128 const& value)
 {
-    return value > WUHUN_CLIENT_VISIBLE_HEALTH_LIMIT ? static_cast<uint32>(WUHUN_CLIENT_VISIBLE_HEALTH_LIMIT) : static_cast<uint32>(value);
+    return value > WUHUN_CLIENT_VISIBLE_HEALTH_LIMIT ? static_cast<uint32>(WUHUN_CLIENT_VISIBLE_HEALTH_LIMIT) : Acore::Number::ToUInt32Saturated(value);
 }
 
-uint64 ScaleUInt64(uint64 value, float percent)
+uint128 ScaleUInt128(uint128 const& value, float percent)
 {
-    long double scaled = static_cast<long double>(value) * static_cast<long double>(percent) / 100.0L;
-    if (scaled <= 0.0L)
+    if (value == 0 || percent <= 0.0f)
         return 0;
-    if (scaled >= static_cast<long double>(std::numeric_limits<uint64>::max()))
-        return std::numeric_limits<uint64>::max();
-    return static_cast<uint64>(scaled);
+
+    return Acore::Number::ToUInt128Saturated(Acore::Number::ToLongDouble(value) * static_cast<long double>(percent) / 100.0L);
 }
 
-uint64 SaturatingAddUInt64(uint64 left, uint64 right)
+int64 SaturatingAddInt64(int64 left, int64 right)
 {
-    if (std::numeric_limits<uint64>::max() - left < right)
-        return std::numeric_limits<uint64>::max();
+    if (right > 0 && left > std::numeric_limits<int64>::max() - right)
+        return std::numeric_limits<int64>::max();
+    if (right < 0 && left < std::numeric_limits<int64>::min() - right)
+        return std::numeric_limits<int64>::min();
 
     return left + right;
 }
 
-int64 ScaleInt64(int64 value, float percent)
+int128 SaturatingAddInt128(int128 const& left, int128 const& right)
 {
-    long double scaled = static_cast<long double>(value) * static_cast<long double>(percent) / 100.0L;
-    if (scaled <= 0.0L)
+    if (right > 0 && left > std::numeric_limits<int128>::max() - right)
+        return std::numeric_limits<int128>::max();
+    if (right < 0 && left < std::numeric_limits<int128>::min() - right)
+        return std::numeric_limits<int128>::min();
+
+    return left + right;
+}
+
+uint128 SaturatingAddUInt128(uint128 const& left, uint128 const& right)
+{
+    if (right > std::numeric_limits<uint128>::max() - left)
+        return std::numeric_limits<uint128>::max();
+
+    return left + right;
+}
+
+uint128 SaturatingMultiplyUInt128(uint128 const& value, uint32 multiplier)
+{
+    if (value == 0 || multiplier == 0)
         return 0;
-    if (scaled >= static_cast<long double>(std::numeric_limits<int64>::max()))
-        return std::numeric_limits<int64>::max();
-    return static_cast<int64>(scaled);
+    if (value > std::numeric_limits<uint128>::max() / multiplier)
+        return std::numeric_limits<uint128>::max();
+
+    return value * multiplier;
 }
 
-uint32 ClampUInt32FromUInt64(uint64 value)
+uint128 AbsInt128ToUInt128(int128 const& value)
 {
-    return value > static_cast<uint64>(std::numeric_limits<uint32>::max()) ? std::numeric_limits<uint32>::max() : static_cast<uint32>(value);
+    if (value >= 0)
+        return static_cast<uint128>(value);
+
+    if (value == std::numeric_limits<int128>::min())
+        return static_cast<uint128>(std::numeric_limits<int128>::max()) + 1;
+
+    return static_cast<uint128>(-value);
 }
 
-uint64 AddDamageSaturated(uint64 damage, long double bonus)
+uint128 DefaultRingSoulCost(uint32 level)
+{
+    return static_cast<uint128>(level) * 100;
+}
+
+uint32 ToUInt32FromPositiveInt128(int128 const& value)
+{
+    if (value <= 0)
+        return 0;
+
+    return Acore::Number::ToUInt32Saturated(static_cast<uint128>(value));
+}
+
+int128 ScaleInt128(int128 const& value, float percent)
+{
+    if (value <= 0 || percent <= 0.0f)
+        return 0;
+
+    return Acore::Number::ToInt128Saturated(Acore::Number::ToLongDouble(value) * static_cast<long double>(percent) / 100.0L);
+}
+
+uint128 AddDamageSaturated(uint128 const& damage, long double bonus)
 {
     if (bonus <= 0.0L || !std::isfinite(static_cast<double>(bonus)))
         return damage;
 
-    long double maxValue = static_cast<long double>(std::numeric_limits<uint64>::max());
-    if (bonus >= maxValue - static_cast<long double>(damage))
-        return std::numeric_limits<uint64>::max();
-
-    uint64 flatBonus = static_cast<uint64>(bonus);
+    uint128 flatBonus = Acore::Number::ToUInt128Saturated(bonus);
     if (!flatBonus && bonus > 0.0L)
         flatBonus = 1;
 
-    return damage + flatBonus;
+    return SaturatingAddUInt128(damage, flatBonus);
 }
 
 char NormalizeWuhunItemAttributeMode(char mode)
@@ -269,7 +312,7 @@ bool HasWuhunItemAttributeMultiplierEffect(float value, char mode)
     return mode == '+' ? value > 0.0f : value > 1.0f;
 }
 
-int64 CalculateWuhunEnhancedAttributeValue(int64 originalValue, WuhunItemAttributeMultiplier const& multiplier)
+int128 CalculateWuhunEnhancedAttributeValue(int128 const& originalValue, WuhunItemAttributeMultiplier const& multiplier)
 {
     if (!multiplier.active)
         return originalValue;
@@ -278,22 +321,31 @@ int64 CalculateWuhunEnhancedAttributeValue(int64 originalValue, WuhunItemAttribu
     if (mode == '-')
         return originalValue;
 
+    long double enhanced = Acore::Number::ToLongDouble(originalValue);
     if (mode == '+')
-    {
-        long double enhanced = static_cast<long double>(originalValue) + static_cast<long double>(multiplier.value);
-        if (enhanced >= static_cast<long double>(std::numeric_limits<int64>::max()))
-            return std::numeric_limits<int64>::max();
-        if (enhanced <= static_cast<long double>(std::numeric_limits<int64>::min()))
-            return std::numeric_limits<int64>::min();
-        return static_cast<int64>(enhanced);
-    }
+        enhanced += static_cast<long double>(multiplier.value);
+    else
+        enhanced *= static_cast<long double>(multiplier.value);
 
-    long double enhanced = static_cast<long double>(originalValue) * static_cast<long double>(multiplier.value);
-    if (enhanced >= static_cast<long double>(std::numeric_limits<int64>::max()))
-        return std::numeric_limits<int64>::max();
-    if (enhanced <= static_cast<long double>(std::numeric_limits<int64>::min()))
-        return std::numeric_limits<int64>::min();
-    return static_cast<int64>(enhanced);
+    return Acore::Number::ToInt128Saturated(enhanced);
+}
+
+uint128 CalculateWuhunEnhancedAttributeValue(uint128 const& originalValue, WuhunItemAttributeMultiplier const& multiplier)
+{
+    if (!multiplier.active)
+        return originalValue;
+
+    char mode = NormalizeWuhunItemAttributeMode(multiplier.mode);
+    if (mode == '-')
+        return originalValue;
+
+    long double enhanced = Acore::Number::ToLongDouble(originalValue);
+    if (mode == '+')
+        enhanced += static_cast<long double>(multiplier.value);
+    else
+        enhanced *= static_cast<long double>(multiplier.value);
+
+    return Acore::Number::ToUInt128Saturated(enhanced);
 }
 
 float CalculateWuhunEnhancedAttributeValue(float originalValue, WuhunItemAttributeMultiplier const& multiplier)
@@ -330,25 +382,32 @@ bool TryParseUInt(std::string const& text, uint32& value)
     }
 }
 
-bool TryParseInt64(std::string const& text, int64& value)
+bool TryParseUInt128(std::string const& text, uint128& value)
 {
     if (text.empty())
         return false;
 
-    try
+    if (Optional<uint128> parsed = Acore::StringTo<uint128>(text))
     {
-        size_t read = 0;
-        long long parsed = std::stoll(text, &read, 10);
-        if (read != text.size())
-            return false;
-
-        value = static_cast<int64>(parsed);
+        value = *parsed;
         return true;
     }
-    catch (...)
-    {
+
+    return false;
+}
+
+bool TryParseInt128(std::string const& text, int128& value)
+{
+    if (text.empty())
         return false;
+
+    if (Optional<int128> parsed = Acore::StringTo<int128>(text))
+    {
+        value = *parsed;
+        return true;
     }
+
+    return false;
 }
 
 std::vector<std::string> Split(std::string const& text, char delimiter)
@@ -562,6 +621,7 @@ public:
         _ringInheritBonuses.clear();
         _equipSlotConfigs.clear();
         _intParams.clear();
+        _uint128Params.clear();
         _floatParams.clear();
 
         SeedBuiltInDefaults();
@@ -610,12 +670,12 @@ private:
             uint8 type = fields[0].Get<uint8>();
             std::string key = fields[1].Get<std::string>();
             std::string name = fields[3].Get<std::string>();
-            int64 value1 = fields[4].Get<int64>();
-            int64 value2 = fields[5].Get<int64>();
-            int64 value3 = fields[6].Get<int64>();
-            int64 value4 = fields[7].Get<int64>();
-            int64 value5 = fields[8].Get<int64>();
-            int64 value6 = fields[9].Get<int64>();
+            int128 value1 = fields[4].Get<int128>();
+            int128 value2 = fields[5].Get<int128>();
+            int128 value3 = fields[6].Get<int128>();
+            int128 value4 = fields[7].Get<int128>();
+            int128 value5 = fields[8].Get<int128>();
+            int128 value6 = fields[9].Get<int128>();
             float float1 = fields[10].Get<float>();
             float float2 = fields[11].Get<float>();
             std::string text1 = fields[12].Get<std::string>();
@@ -625,18 +685,19 @@ private:
             {
                 case WUHUN_TEMPLATE_SYSTEM:
                 case WUHUN_TEMPLATE_AI:
-                    _intParams[key] = value1;
+                    _intParams[key] = Acore::Number::ToInt64Saturated(value1);
+                    _uint128Params[key] = Acore::Number::ToUInt128Saturated(value1);
                     _floatParams[key] = float1;
                     break;
                 case WUHUN_TEMPLATE_DEFINITION:
                 {
                     uint32 id = 0;
                     if (!TryParseUInt(key, id) || !id)
-                        id = static_cast<uint32>(std::max<int64>(1, value1));
+                        id = value1 > 0 ? ToUInt32FromPositiveInt128(value1) : 1;
 
                     WuhunDefinition def;
                     def.id = id;
-                    def.creatureEntry = value1 > 0 ? static_cast<uint32>(value1) : GetUIntParam("AVATAR_ENTRY", 930001);
+                    def.creatureEntry = value1 > 0 ? ToUInt32FromPositiveInt128(value1) : GetUIntParam("AVATAR_ENTRY", 930001);
                     def.scale = float1 > 0.0f ? float1 : 1.0f;
                     def.name = !name.empty() ? name : (!text1.empty() ? text1 : "本命武魂");
                     _definitions[id] = def;
@@ -647,7 +708,7 @@ private:
                     uint32 level = 0;
                     if (TryParseUInt(key, level) && level > 0)
                     {
-                        _ringCosts[level] = value1 > 0 ? static_cast<uint64>(value1) : static_cast<uint64>(level * 100);
+                        _ringCosts[level] = value1 > 0 ? Acore::Number::ToUInt128Saturated(value1) : DefaultRingSoulCost(level);
                         _ringInheritBonuses[level] = float1 > 0.0f ? float1 : static_cast<float>(level);
                     }
                     break;
@@ -661,10 +722,10 @@ private:
                     WuhunSkillTemplate skill;
                     skill.skillId = skillId;
                     skill.name = !name.empty() ? name : ("武魂技能" + std::to_string(skillId));
-                    skill.spellId = value1 > 0 ? static_cast<uint32>(value1) : 0;
-                    skill.cooldownMs = value2 > 0 ? static_cast<uint32>(value2) : 5000;
-                    skill.learnCost = value3 > 0 ? static_cast<uint32>(value3) : 100;
-                    skill.upgradeCost = value4 > 0 ? static_cast<uint32>(value4) : 100;
+                    skill.spellId = value1 > 0 ? ToUInt32FromPositiveInt128(value1) : 0;
+                    skill.cooldownMs = value2 > 0 ? ToUInt32FromPositiveInt128(value2) : 5000;
+                    skill.learnCost = value3 > 0 ? Acore::Number::ToUInt128Saturated(value3) : 100;
+                    skill.upgradeCost = value4 > 0 ? Acore::Number::ToUInt128Saturated(value4) : 100;
                     skill.maxLevel = GetUIntParam("MAX_SKILL_LEVEL", 10);
                     skill.targetType = value5 >= 0 && value5 <= 2 ? static_cast<uint8>(value5) : 0;
                     skill.minTargetHealthPct = value6 > 0 && value6 <= 100 ? static_cast<uint8>(value6) : 0;
@@ -683,8 +744,8 @@ private:
                     WuhunEquipSlotConfig config;
                     config.slot = static_cast<uint8>(slotId);
                     config.name = !name.empty() ? name : GetWuhunEquipmentSlotName(config.slot);
-                    config.soulCost = value1 > 0 ? static_cast<uint64>(value1) : 0;
-                    config.requirementId = value2 > 0 ? static_cast<uint32>(value2) : 0;
+                    config.soulCost = value1 > 0 ? Acore::Number::ToUInt128Saturated(value1) : 0;
+                    config.requirementId = value2 > 0 ? ToUInt32FromPositiveInt128(value2) : 0;
                     _equipSlotConfigs[config.slot] = config;
                     break;
                 }
@@ -722,7 +783,7 @@ public:
             data.wuhunId = fields[0].Get<uint32>();
             data.activated = fields[1].Get<uint8>() != 0;
             data.summonRequested = fields[2].Get<uint8>() != 0;
-            data.soulPower = fields[3].Get<uint64>();
+            data.soulPower = fields[3].Get<uint128>();
 
             for (uint8 i = 0; i < WUHUN_RING_COUNT; ++i)
                 data.ringLevels[i] = fields[4 + i].Get<uint32>();
@@ -797,7 +858,7 @@ public:
             "`魂环1等级`, `魂环2等级`, `魂环3等级`, `魂环4等级`, `魂环5等级`, "
             "`魂环6等级`, `魂环7等级`, `魂环8等级`, `魂环9等级`) "
             "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-            playerGuid, data->wuhunId, data->activated ? 1 : 0, data->summonRequested ? 1 : 0, data->soulPower,
+            playerGuid, data->wuhunId, data->activated ? 1 : 0, data->summonRequested ? 1 : 0, Acore::ToString(data->soulPower),
             data->ringLevels[0], data->ringLevels[1], data->ringLevels[2],
             data->ringLevels[3], data->ringLevels[4], data->ringLevels[5],
             data->ringLevels[6], data->ringLevels[7], data->ringLevels[8]);
@@ -966,11 +1027,11 @@ public:
         }
 
         WuhunDefinition const* definition = GetDefinition(data->wuhunId);
-        uint32 activationCost = definition ? definition->activationSoulCost : GetUIntParam("ACTIVATION_SOUL_COST", 1000);
+        uint128 activationCost = definition ? definition->activationSoulCost : GetUInt128Param("ACTIVATION_SOUL_COST", 1000);
         if (data->soulPower < activationCost)
         {
             std::ostringstream message;
-            message << "魂力不足，激活武魂分身需要 " << activationCost << " 点魂力";
+            message << "魂力不足，激活武魂分身需要 " << Acore::ToString(activationCost) << " 点魂力";
             SendResult(player, "ACTIVATE", false, message.str());
             SendState(player);
             return false;
@@ -1008,7 +1069,7 @@ public:
         if (data->soulPower < next->evolveSoulCost)
         {
             std::ostringstream message;
-            message << "魂力不足，进化到 " << next->name << " 需要 " << next->evolveSoulCost << " 点魂力";
+            message << "魂力不足，进化到 " << next->name << " 需要 " << Acore::ToString(next->evolveSoulCost) << " 点魂力";
             SendResult(player, "EVOLVE_WUHUN", false, message.str());
             SendState(player);
             return false;
@@ -1019,7 +1080,6 @@ public:
         SavePlayerData(player);
         DismissAvatar(player, true);
 
-        LOG_INFO("server.loading", "武魂系统: 玩家 {} 进化武魂到 {}，消耗魂力={}", player->GetName(), next->name, next->evolveSoulCost);
         SendResult(player, "EVOLVE_WUHUN", true, "武魂进化成功，请重新召唤");
         SendAll(player);
         return true;
@@ -1106,15 +1166,15 @@ public:
         float inheritPercent = GetInheritancePercent(*data);
         WuhunEquipmentBonus equipmentBonus = CalculateEquipmentBonus(*data);
 
-        uint64 oldMaxHealth = avatar->GetMaxHealthForCombat();
-        uint64 oldHealth = avatar->GetHealthForCombat();
-        long double healthPct = oldMaxHealth ? static_cast<long double>(oldHealth) / static_cast<long double>(oldMaxHealth) : 1.0L;
+        uint128 oldMaxHealth = avatar->GetMaxHealthForCombat128();
+        uint128 oldHealth = avatar->GetHealthForCombat128();
+        long double healthPct = oldMaxHealth != 0 ? Acore::Number::ToLongDouble(oldHealth) / Acore::Number::ToLongDouble(oldMaxHealth) : 1.0L;
         if (healthPct <= 0.0L || healthPct > 1.0L)
             healthPct = 1.0L;
 
-        uint64 inheritedHealth = ScaleUInt64(player->GetMaxHealthForCombat(), inheritPercent);
-        uint64 newMaxHealth = std::max<uint64>(player->GetLevel() * 50, inheritedHealth + equipmentBonus.health);
-        uint64 newHealth = std::max<uint64>(1, static_cast<uint64>(static_cast<long double>(newMaxHealth) * healthPct));
+        uint128 inheritedHealth = ScaleUInt128(player->GetMaxHealthForCombat128(), inheritPercent);
+        uint128 newMaxHealth = std::max<uint128>(static_cast<uint128>(player->GetLevel() * 50), SaturatingAddUInt128(inheritedHealth, equipmentBonus.health));
+        uint128 newHealth = std::max<uint128>(uint128(1), Acore::Number::ToUInt128Saturated(Acore::Number::ToLongDouble(newMaxHealth) * healthPct));
         uint32 clientHealth = ToWuhunClientHealth(newMaxHealth);
         avatar->SetMaxHealth(clientHealth);
         if (newMaxHealth > clientHealth)
@@ -1127,12 +1187,12 @@ public:
         {
             avatar->SetExtendedMaxHealth(0);
             avatar->SetExtendedHealth(0);
-            avatar->SetHealth(ClampUInt32FromUInt64(newHealth));
+            avatar->SetHealth(Acore::Number::ToUInt32Saturated(newHealth));
         }
 
-        uint64 inheritedMana = ScaleUInt64(player->GetMaxPowerForCombat(POWER_MANA), inheritPercent);
-        uint64 newMana = inheritedMana + equipmentBonus.mana;
-        uint32 clientMana = ClampUInt32FromUInt64(newMana);
+        uint128 inheritedMana = ScaleUInt128(player->GetMaxPowerForCombat128(POWER_MANA), inheritPercent);
+        uint128 newMana = SaturatingAddUInt128(inheritedMana, equipmentBonus.mana);
+        uint32 clientMana = Acore::Number::ToUInt32Saturated(newMana);
         avatar->SetMaxPower(POWER_MANA, clientMana);
         if (newMana > clientMana)
         {
@@ -1148,27 +1208,30 @@ public:
 
         for (uint8 i = STAT_STRENGTH; i < MAX_STATS; ++i)
         {
-            int64 playerStat = player->GetExtendedStat(Stats(i));
+            int128 playerStat = player->GetExtendedStat128(Stats(i));
             if (playerStat <= 0)
-                playerStat = static_cast<int64>(player->GetTotalStatValue(Stats(i)));
+                playerStat = Acore::Number::ToInt128Saturated(static_cast<long double>(player->GetTotalStatValue(Stats(i))));
 
-            int64 inheritedStat = ScaleInt64(playerStat, inheritPercent);
-            int64 finalStat = inheritedStat + equipmentBonus.stats[i];
-            avatar->SetCreateStat(Stats(i), static_cast<float>(std::min<int64>(finalStat, 2000000000)));
-            avatar->SetStat(Stats(i), finalStat > 0 ? static_cast<uint32>(std::min<int64>(finalStat, 2000000000)) : 0);
+            int128 inheritedStat = ScaleInt128(playerStat, inheritPercent);
+            int128 finalStat = SaturatingAddInt128(inheritedStat, equipmentBonus.stats[i]);
+            uint32 displayStat = finalStat > 0 ? Acore::Number::ToUInt32Saturated(static_cast<uint128>(std::min<int128>(finalStat, int128(2000000000)))) : 0;
+            displayStat = std::min<uint32>(displayStat, 2000000000);
+            avatar->SetCreateStat(Stats(i), static_cast<float>(displayStat));
+            avatar->SetStat(Stats(i), displayStat);
         }
 
-        uint64 inheritedArmor = ScaleUInt64(static_cast<uint64>(std::max<int64>(0, player->GetExtendedArmor())), inheritPercent);
-        uint64 armor = inheritedArmor + equipmentBonus.armor;
-        avatar->SetArmor(static_cast<int32>(std::min<uint64>(armor, 2000000000ULL)));
-        avatar->SetModifierValue(UNIT_MOD_ARMOR, BASE_VALUE, static_cast<double>(std::min<uint64>(armor, 2000000000ULL)));
+        uint128 inheritedArmor = ScaleUInt128(player->GetExtendedArmor128() > 0 ? static_cast<uint128>(player->GetExtendedArmor128()) : 0, inheritPercent);
+        uint128 armor = SaturatingAddUInt128(inheritedArmor, equipmentBonus.armor);
+        uint32 displayArmor = Acore::Number::ToUInt32Saturated(std::min<uint128>(armor, uint128(2000000000)));
+        avatar->SetArmor(static_cast<int32>(displayArmor));
+        avatar->SetModifierValue(UNIT_MOD_ARMOR, BASE_VALUE, static_cast<double>(displayArmor));
         avatar->SetModifierValue(UNIT_MOD_ARMOR, BASE_PCT, 1.0f);
         avatar->SetModifierValue(UNIT_MOD_ARMOR, TOTAL_VALUE, 0.0f);
         avatar->SetModifierValue(UNIT_MOD_ARMOR, TOTAL_PCT, 1.0f);
 
         double inheritedAP = player->GetExtendedTotalAttackPowerValue(BASE_ATTACK) * static_cast<double>(inheritPercent) / 100.0;
         double inheritedRangedAP = player->GetExtendedTotalAttackPowerValue(RANGED_ATTACK) * static_cast<double>(inheritPercent) / 100.0;
-        long double inheritedSpellPower = static_cast<long double>(player->GetExtendedSpellPowerBonus()) * static_cast<long double>(inheritPercent) / 100.0L;
+        long double inheritedSpellPower = Acore::Number::ToLongDouble(player->GetExtendedSpellPowerBonus128()) * static_cast<long double>(inheritPercent) / 100.0L;
         double ap = inheritedAP + equipmentBonus.attackPower + equipmentBonus.spellPower * 0.5;
         double rangedAP = inheritedRangedAP + equipmentBonus.rangedAttackPower;
         double spellPower = static_cast<double>(std::min<long double>(
@@ -1560,14 +1623,14 @@ public:
 
         PlayerWuhunData* data = EnsurePlayerData(player);
         WuhunDefinition const* definition = data ? GetDefinition(data->wuhunId) : nullptr;
-        uint32 reward = creature->isWorldBoss()
-            ? (definition ? definition->worldBossSoulPower : GetUIntParam("WORLD_BOSS_SOUL_POWER", 1))
-            : (definition ? definition->dungeonBossSoulPower : GetUIntParam("DUNGEON_BOSS_SOUL_POWER", 1));
+        uint128 reward = creature->isWorldBoss()
+            ? (definition ? definition->worldBossSoulPower : GetUInt128Param("WORLD_BOSS_SOUL_POWER", 1))
+            : (definition ? definition->dungeonBossSoulPower : GetUInt128Param("DUNGEON_BOSS_SOUL_POWER", 1));
 
         AddSoulPower(player, reward, creature->GetName());
     }
 
-    void AddSoulPower(Player* player, uint32 amount, std::string const& source)
+    void AddSoulPower(Player* player, uint128 const& amount, std::string const& source)
     {
         if (!player || !amount)
             return;
@@ -1576,12 +1639,12 @@ public:
         if (!data)
             return;
 
-        data->soulPower = SaturatingAddUInt64(data->soulPower, amount);
+        data->soulPower = SaturatingAddUInt128(data->soulPower, amount);
         SavePlayerData(player);
 
         ChatHandler(player->GetSession()).PSendSysMessage(
             "|cff66ccff[武魂系统]|r 击杀 {} 获得 |cffffd700{}|r 点魂力。",
-            source.empty() ? "Boss" : source, amount);
+            source.empty() ? "Boss" : source, Acore::ToString(amount));
 
         SendState(player);
     }
@@ -1605,7 +1668,7 @@ public:
         return data && data->skillMode == WUHUN_SKILL_MODE_AUTO;
     }
 
-    bool GetSoulPowerInfo(Player* player, uint64& soulPower, uint32& wuhunId)
+    bool GetSoulPowerInfo(Player* player, uint128& soulPower, uint32& wuhunId)
     {
         if (!player)
             return false;
@@ -1619,7 +1682,7 @@ public:
         return true;
     }
 
-    bool SetSoulPower(Player* player, uint64 amount)
+    bool SetSoulPower(Player* player, uint128 const& amount)
     {
         if (!player)
             return false;
@@ -1635,7 +1698,7 @@ public:
         return true;
     }
 
-    bool AdjustSoulPowerByCommand(Player* player, int64 delta)
+    bool AdjustSoulPowerByCommand(Player* player, int128 const& delta)
     {
         if (!player)
             return false;
@@ -1646,12 +1709,12 @@ public:
 
         if (delta > 0)
         {
-            uint64 amount = static_cast<uint64>(delta);
-            data->soulPower = SaturatingAddUInt64(data->soulPower, amount);
+            uint128 amount = static_cast<uint128>(delta);
+            data->soulPower = SaturatingAddUInt128(data->soulPower, amount);
         }
         else if (delta < 0)
         {
-            uint64 amount = static_cast<uint64>(-(delta + 1)) + 1;
+            uint128 amount = AbsInt128ToUInt128(delta);
             data->soulPower = amount >= data->soulPower ? 0 : data->soulPower - amount;
         }
 
@@ -1673,7 +1736,7 @@ public:
         return true;
     }
 
-    bool InfuseRing(Player* player, uint32 rawSlot, uint32 amount)
+    bool InfuseRing(Player* player, uint32 rawSlot, uint128 const& amount)
     {
         PlayerWuhunData* data = EnsurePlayerData(player);
         if (!player || !data)
@@ -1687,18 +1750,18 @@ public:
         }
 
         uint32 maxRingLevel = GetUIntParam("MAX_RING_LEVEL", 100);
-        uint64 budget = amount ? std::min<uint64>(amount, data->soulPower) : data->soulPower;
-        uint64 spent = 0;
+        uint128 budget = amount ? std::min<uint128>(amount, data->soulPower) : data->soulPower;
+        uint128 spent = 0;
         uint32 upgraded = 0;
 
         while (data->ringLevels[slot] < maxRingLevel)
         {
             uint32 nextLevel = data->ringLevels[slot] + 1;
-            uint64 cost = GetRingCost(nextLevel);
+            uint128 cost = GetRingCost(nextLevel);
             if (!cost)
                 cost = 1;
 
-            if (spent + cost > budget || cost > data->soulPower - spent)
+            if (cost > budget - spent)
                 break;
 
             spent += cost;
@@ -1787,7 +1850,7 @@ public:
         }
 
         uint32 nextLevel = itr->second + 1;
-        uint64 cost = static_cast<uint64>(skill->upgradeCost) * nextLevel;
+        uint128 cost = SaturatingMultiplyUInt128(skill->upgradeCost, nextLevel);
         if (data->soulPower < cost)
         {
             SendResult(player, "UPGRADE_SKILL", false, "魂力不足，无法升级技能");
@@ -2151,7 +2214,7 @@ public:
         return combatPower * coefficient;
     }
 
-    void ApplySkillDamageBonus(Creature* avatar, SpellInfo const* spellInfo, uint64& damage, char const* source)
+    void ApplySkillDamageBonus(Creature* avatar, SpellInfo const* spellInfo, uint128& damage, char const* source)
     {
         if (!avatar || !spellInfo || !damage)
             return;
@@ -2186,19 +2249,22 @@ public:
         if (bonusPct <= 0.0f && powerBonus <= 0.0L)
             return;
 
-        uint64 oldDamage = damage;
-        damage = AddDamageSaturated(damage, powerBonus);
+        uint128 oldDamage = damage;
+        uint128 workingDamage = AddDamageSaturated(Acore::Number::ToUInt64Saturated(damage), powerBonus);
 
         if (bonusPct > 0.0f)
         {
-            long double scaled = static_cast<long double>(damage) * (100.0L + static_cast<long double>(bonusPct)) / 100.0L;
-            damage = scaled >= static_cast<long double>(std::numeric_limits<uint64>::max())
-                ? std::numeric_limits<uint64>::max()
-                : static_cast<uint64>(scaled);
+            uint128 beforePctDamage = workingDamage;
+            long double scaled = Acore::Number::ToLongDouble(workingDamage) * (100.0L + static_cast<long double>(bonusPct)) / 100.0L;
+            workingDamage = !std::isfinite(static_cast<double>(scaled))
+                ? std::numeric_limits<uint128>::max()
+                : Acore::Number::ToUInt128Saturated(scaled);
 
-            if (damage == oldDamage && scaled > static_cast<long double>(oldDamage))
-                ++damage;
+            if (workingDamage == beforePctDamage && workingDamage < std::numeric_limits<uint128>::max() && scaled > Acore::Number::ToLongDouble(beforePctDamage))
+                ++workingDamage;
         }
+
+        damage = workingDamage;
 
         if (IsDebug())
         {
@@ -2212,8 +2278,8 @@ public:
                 data->avatarSpellPower,
                 static_cast<double>(powerBonus),
                 bonusPct,
-                oldDamage,
-                damage);
+                oldDamage.convert_to<std::string>(),
+                damage.convert_to<std::string>());
         }
     }
 
@@ -2293,10 +2359,10 @@ public:
         percent << std::fixed << std::setprecision(2) << GetInheritancePercent(*data);
 
         Creature* avatar = GetAvatar(player);
-        uint64 avatarHealth = avatar ? avatar->GetHealthForCombat() : 0;
-        uint64 avatarMaxHealth = avatar ? avatar->GetMaxHealthForCombat() : 0;
-        uint64 avatarMana = avatar ? avatar->GetPowerForCombat(POWER_MANA) : 0;
-        uint64 avatarMaxMana = avatar ? avatar->GetMaxPowerForCombat(POWER_MANA) : 0;
+        std::string avatarHealth = avatar ? avatar->GetHealthForCombat128().convert_to<std::string>() : "0";
+        std::string avatarMaxHealth = avatar ? avatar->GetMaxHealthForCombat128().convert_to<std::string>() : "0";
+        std::string avatarMana = avatar ? avatar->GetPowerForCombat128(POWER_MANA).convert_to<std::string>() : "0";
+        std::string avatarMaxMana = avatar ? avatar->GetMaxPowerForCombat128(POWER_MANA).convert_to<std::string>() : "0";
         uint32 avatarLevel = avatar ? avatar->GetLevel() : player->GetLevel();
         std::string avatarName = avatar ? std::string(avatar->GetName()) : std::string("武魂分身");
         WuhunDefinition const* definition = GetDefinition(data->wuhunId);
@@ -2304,8 +2370,8 @@ public:
 
         std::ostringstream payload;
         payload << "STATE:" << data->wuhunId << '|'
-                << data->soulPower << '|'
-                << data->soulPower << '|'
+                << Acore::ToString(data->soulPower) << '|'
+                << Acore::ToString(data->soulPower) << '|'
                 << percent.str() << '|'
                 << (avatar ? 1 : 0) << '|'
                 << rings.str() << '|'
@@ -2318,9 +2384,9 @@ public:
                 << avatarName << '|'
                 << static_cast<uint32>(data->skillMode) << '|'
                 << (data->activated ? 1 : 0) << '|'
-                << (definition ? definition->activationSoulCost : GetUIntParam("ACTIVATION_SOUL_COST", 1000)) << '|'
+                << Acore::ToString(definition ? definition->activationSoulCost : GetUInt128Param("ACTIVATION_SOUL_COST", 1000)) << '|'
                 << (nextDefinition ? nextDefinition->id : 0) << '|'
-                << (nextDefinition ? nextDefinition->evolveSoulCost : 0);
+                << Acore::ToString(nextDefinition ? nextDefinition->evolveSoulCost : uint128(0));
 
         SendPayload(player, payload.str());
         SendAvatarState(player);
@@ -2332,10 +2398,10 @@ public:
             return;
 
         Creature* avatar = GetAvatar(player);
-        uint64 avatarHealth = avatar ? avatar->GetHealthForCombat() : 0;
-        uint64 avatarMaxHealth = avatar ? avatar->GetMaxHealthForCombat() : 0;
-        uint64 avatarMana = avatar ? avatar->GetPowerForCombat(POWER_MANA) : 0;
-        uint64 avatarMaxMana = avatar ? avatar->GetMaxPowerForCombat(POWER_MANA) : 0;
+        std::string avatarHealth = avatar ? avatar->GetHealthForCombat128().convert_to<std::string>() : "0";
+        std::string avatarMaxHealth = avatar ? avatar->GetMaxHealthForCombat128().convert_to<std::string>() : "0";
+        std::string avatarMana = avatar ? avatar->GetPowerForCombat128(POWER_MANA).convert_to<std::string>() : "0";
+        std::string avatarMaxMana = avatar ? avatar->GetMaxPowerForCombat128(POWER_MANA).convert_to<std::string>() : "0";
         uint32 avatarLevel = avatar ? avatar->GetLevel() : player->GetLevel();
         std::string avatarName = avatar ? std::string(avatar->GetName()) : std::string("武魂分身");
 
@@ -2354,7 +2420,7 @@ public:
         SendPanelAvatarState(player, avatarHealth, avatarMaxHealth, avatarMana, avatarMaxMana, avatar ? 1 : 0, avatarLevel);
     }
 
-    void SendPanelAvatarState(Player* player, uint64 avatarHealth, uint64 avatarMaxHealth, uint64 avatarMana, uint64 avatarMaxMana, uint32 summoned, uint32 avatarLevel)
+    void SendPanelAvatarState(Player* player, std::string const& avatarHealth, std::string const& avatarMaxHealth, std::string const& avatarMana, std::string const& avatarMaxMana, uint32 summoned, uint32 avatarLevel)
     {
         if (!player || !player->GetSession())
             return;
@@ -2401,8 +2467,8 @@ public:
                     << skill.spellId << ','
                     << skill.cooldownMs << ','
                     << skill.range << ','
-                    << skill.learnCost << ','
-                    << skill.upgradeCost << ','
+                    << Acore::ToString(skill.learnCost) << ','
+                    << Acore::ToString(skill.upgradeCost) << ','
                     << static_cast<uint32>(skill.targetType) << ','
                     << static_cast<uint32>(skill.minTargetHealthPct) << ','
                     << skill.description;
@@ -2468,7 +2534,7 @@ public:
 
             payload << static_cast<uint32>(slot) << ','
                     << (IsEquipSlotUnlocked(*data, slot) ? 1 : 0) << ','
-                    << config->soulCost << ','
+                    << Acore::ToString(config->soulCost) << ','
                     << config->requirementId << ','
                     << config->name;
         }
@@ -2571,10 +2637,10 @@ private:
                 def.name = "本命武魂";
             if (def.scale <= 0.0f)
                 def.scale = 1.0f;
-            def.activationSoulCost = fields[5].Get<uint32>();
-            def.evolveSoulCost = fields[6].Get<uint32>();
-            def.dungeonBossSoulPower = std::max<uint32>(1, fields[7].Get<uint32>());
-            def.worldBossSoulPower = std::max<uint32>(1, fields[8].Get<uint32>());
+            def.activationSoulCost = fields[5].Get<uint128>();
+            def.evolveSoulCost = fields[6].Get<uint128>();
+            def.dungeonBossSoulPower = std::max<uint128>(uint128(1), fields[7].Get<uint128>());
+            def.worldBossSoulPower = std::max<uint128>(uint128(1), fields[8].Get<uint128>());
 
             _definitions[id] = def;
 
@@ -2583,9 +2649,9 @@ private:
             {
                 _intParams["DEFAULT_WUHUN_ID"] = id;
                 _intParams["AVATAR_ENTRY"] = def.creatureEntry;
-                _intParams["ACTIVATION_SOUL_COST"] = fields[5].Get<int64>();
-                _intParams["DUNGEON_BOSS_SOUL_POWER"] = fields[7].Get<int64>();
-                _intParams["WORLD_BOSS_SOUL_POWER"] = fields[8].Get<int64>();
+                _uint128Params["ACTIVATION_SOUL_COST"] = def.activationSoulCost;
+                _uint128Params["DUNGEON_BOSS_SOUL_POWER"] = def.dungeonBossSoulPower;
+                _uint128Params["WORLD_BOSS_SOUL_POWER"] = def.worldBossSoulPower;
                 _intParams["MAX_RING_LEVEL"] = fields[9].Get<int64>();
                 _intParams["MAX_INHERIT_PERCENT"] = fields[10].Get<int64>();
                 _intParams["TARGET_SYNC_INTERVAL"] = fields[11].Get<int64>();
@@ -2618,10 +2684,10 @@ private:
         {
             Field* fields = result->Fetch();
             uint32 level = fields[0].Get<uint32>();
-            uint64 soulCost = fields[1].Get<uint64>();
+            uint128 soulCost = fields[1].Get<uint128>();
             if (level)
             {
-                _ringCosts[level] = soulCost > 0 ? soulCost : static_cast<uint64>(level) * 100;
+                _ringCosts[level] = soulCost > 0 ? soulCost : DefaultRingSoulCost(level);
                 _ringInheritBonuses[level] = hasInheritBonus ? std::max<float>(0.0f, fields[2].Get<float>()) : static_cast<float>(level);
             }
         } while (result->NextRow());
@@ -2664,8 +2730,8 @@ private:
             skill.name = fields[1].Get<std::string>();
             skill.spellId = fields[2].Get<uint32>();
             skill.cooldownMs = fields[3].Get<uint32>();
-            skill.learnCost = fields[4].Get<uint32>();
-            skill.upgradeCost = fields[5].Get<uint32>();
+            skill.learnCost = fields[4].Get<uint128>();
+            skill.upgradeCost = fields[5].Get<uint128>();
             skill.maxLevel = fields[6].Get<uint32>();
             skill.targetType = std::min<uint8>(fields[7].Get<uint8>(), 2);
             skill.minTargetHealthPct = std::min<uint8>(fields[8].Get<uint8>(), 100);
@@ -2716,7 +2782,7 @@ private:
             WuhunEquipSlotConfig config;
             config.slot = static_cast<uint8>(slotId);
             config.name = fields[1].Get<std::string>();
-            config.soulCost = fields[2].Get<uint64>();
+            config.soulCost = fields[2].Get<uint128>();
             config.requirementId = fields[3].Get<uint32>();
             if (config.name.empty())
                 config.name = GetWuhunEquipmentSlotName(config.slot);
@@ -2730,15 +2796,15 @@ private:
     {
         _intParams["DEFAULT_WUHUN_ID"] = 1;
         _intParams["AVATAR_ENTRY"] = 930001;
-        _intParams["DUNGEON_BOSS_SOUL_POWER"] = 1;
-        _intParams["WORLD_BOSS_SOUL_POWER"] = 1;
         _intParams["TARGET_SYNC_INTERVAL"] = 250;
         _intParams["STAT_REFRESH_INTERVAL"] = 3000;
-        _intParams["ACTIVATION_SOUL_COST"] = 1000;
         _intParams["MAX_RING_LEVEL"] = 100;
         _intParams["MAX_SKILL_LEVEL"] = 10;
         _intParams["MAX_INHERIT_PERCENT"] = 900;
         _intParams["AVATAR_SKILL_AI"] = 1;
+        _uint128Params["DUNGEON_BOSS_SOUL_POWER"] = 1;
+        _uint128Params["WORLD_BOSS_SOUL_POWER"] = 1;
+        _uint128Params["ACTIVATION_SOUL_COST"] = 1000;
         _floatParams["FOLLOW_DISTANCE"] = 2.5f;
         _floatParams["RECALL_DISTANCE"] = 55.0f;
         _floatParams["AUTO_ASSIST_RADIUS"] = 30.0f;
@@ -2748,7 +2814,7 @@ private:
 
         for (uint32 level = 1; level <= 100; ++level)
         {
-            _ringCosts[level] = static_cast<uint64>(level) * 100;
+            _ringCosts[level] = DefaultRingSoulCost(level);
             _ringInheritBonuses[level] = static_cast<float>(level);
         }
 
@@ -2802,7 +2868,7 @@ private:
         _skills[id] = skill;
     }
 
-    void AddDefaultEquipSlot(uint8 slot, uint64 soulCost)
+    void AddDefaultEquipSlot(uint8 slot, uint128 const& soulCost)
     {
         WuhunEquipSlotConfig config;
         config.slot = slot;
@@ -2865,6 +2931,14 @@ private:
         return static_cast<uint32>(itr->second);
     }
 
+    uint128 GetUInt128Param(std::string const& key, uint128 const& defaultValue) const
+    {
+        auto itr = _uint128Params.find(key);
+        if (itr == _uint128Params.end())
+            return defaultValue;
+        return itr->second;
+    }
+
     float GetFloatParam(std::string const& key, float defaultValue) const
     {
         auto itr = _floatParams.find(key);
@@ -2873,12 +2947,12 @@ private:
         return itr->second;
     }
 
-    uint64 GetRingCost(uint32 level) const
+    uint128 GetRingCost(uint32 level) const
     {
         auto itr = _ringCosts.find(level);
         if (itr != _ringCosts.end())
             return itr->second;
-        return static_cast<uint64>(level) * 100;
+        return DefaultRingSoulCost(level);
     }
 
     float GetRingInheritBonus(uint32 level) const
@@ -3063,67 +3137,68 @@ private:
         data.equipment.clear();
     }
 
-    void ApplyWuhunItemStat(WuhunEquipmentBonus& bonus, uint32 statType, int64 rawValue) const
+    void ApplyWuhunItemStat(WuhunEquipmentBonus& bonus, uint32 statType, int128 const& rawValue) const
     {
-        if (rawValue == 0)
+        if (rawValue <= 0)
             return;
 
-        int64 value = std::max<int64>(0, rawValue);
-        if (value == 0)
-            return;
+        int128 value = rawValue;
+        uint128 unsignedValue = Acore::Number::ToUInt128Saturated(value);
+        int64 legacyValue = Acore::Number::ToInt64Saturated(value);
+        double numericValue = Acore::Number::ToDouble(value);
 
         switch (statType)
         {
             case ITEM_MOD_STRENGTH:
-                bonus.stats[STAT_STRENGTH] += value;
-                bonus.attackPower += static_cast<double>(value) * 2.0;
+                bonus.stats[STAT_STRENGTH] = SaturatingAddInt128(bonus.stats[STAT_STRENGTH], value);
+                bonus.attackPower += numericValue * 2.0;
                 break;
             case ITEM_MOD_AGILITY:
-                bonus.stats[STAT_AGILITY] += value;
-                bonus.attackPower += static_cast<double>(value);
-                bonus.rangedAttackPower += static_cast<double>(value);
+                bonus.stats[STAT_AGILITY] = SaturatingAddInt128(bonus.stats[STAT_AGILITY], value);
+                bonus.attackPower += numericValue;
+                bonus.rangedAttackPower += numericValue;
                 break;
             case ITEM_MOD_STAMINA:
-                bonus.stats[STAT_STAMINA] += value;
-                bonus.health += static_cast<uint64>(value) * 10;
+                bonus.stats[STAT_STAMINA] = SaturatingAddInt128(bonus.stats[STAT_STAMINA], value);
+                bonus.health = SaturatingAddUInt128(bonus.health, SaturatingMultiplyUInt128(unsignedValue, 10));
                 break;
             case ITEM_MOD_INTELLECT:
-                bonus.stats[STAT_INTELLECT] += value;
-                bonus.mana += static_cast<uint64>(value) * 15;
-                bonus.spellPower += static_cast<double>(value) * 0.25;
+                bonus.stats[STAT_INTELLECT] = SaturatingAddInt128(bonus.stats[STAT_INTELLECT], value);
+                bonus.mana = SaturatingAddUInt128(bonus.mana, SaturatingMultiplyUInt128(unsignedValue, 15));
+                bonus.spellPower += numericValue * 0.25;
                 break;
             case ITEM_MOD_SPIRIT:
-                bonus.stats[STAT_SPIRIT] += value;
-                bonus.mana += static_cast<uint64>(value) * 5;
+                bonus.stats[STAT_SPIRIT] = SaturatingAddInt128(bonus.stats[STAT_SPIRIT], value);
+                bonus.mana = SaturatingAddUInt128(bonus.mana, SaturatingMultiplyUInt128(unsignedValue, 5));
                 break;
             case ITEM_MOD_HEALTH:
-                bonus.health += static_cast<uint64>(value);
+                bonus.health = SaturatingAddUInt128(bonus.health, unsignedValue);
                 break;
             case ITEM_MOD_MANA:
-                bonus.mana += static_cast<uint64>(value);
+                bonus.mana = SaturatingAddUInt128(bonus.mana, unsignedValue);
                 break;
             case ITEM_MOD_ATTACK_POWER:
-                bonus.attackPower += static_cast<double>(value);
+                bonus.attackPower += numericValue;
                 break;
             case ITEM_MOD_RANGED_ATTACK_POWER:
-                bonus.rangedAttackPower += static_cast<double>(value);
+                bonus.rangedAttackPower += numericValue;
                 break;
             case ITEM_MOD_SPELL_POWER:
             case ITEM_MOD_SPELL_DAMAGE_DONE:
             case ITEM_MOD_SPELL_HEALING_DONE:
-                bonus.spellPower += static_cast<double>(value);
+                bonus.spellPower += numericValue;
                 break;
             case ITEM_MOD_TRUE_DAMAGE:
             case ITEM_MOD_CUTTING_DAMAGE:
             case ITEM_MOD_SKILL_DAMAGE:
-                bonus.attackPower += static_cast<double>(value) * 2.0;
-                bonus.rangedAttackPower += static_cast<double>(value) * 2.0;
-                bonus.spellPower += static_cast<double>(value);
-                bonus.minDamage += static_cast<double>(value) * 0.35;
-                bonus.maxDamage += static_cast<double>(value) * 0.55;
+                bonus.attackPower += numericValue * 2.0;
+                bonus.rangedAttackPower += numericValue * 2.0;
+                bonus.spellPower += numericValue;
+                bonus.minDamage += numericValue * 0.35;
+                bonus.maxDamage += numericValue * 0.55;
                 break;
             case ITEM_MOD_COOLDOWN_REDUCTION:
-                bonus.spellPower += static_cast<double>(value);
+                bonus.spellPower += numericValue;
                 break;
             case ITEM_MOD_DEFENSE_SKILL_RATING:
             case ITEM_MOD_DODGE_RATING:
@@ -3138,8 +3213,8 @@ private:
             case ITEM_MOD_HIT_TAKEN_RATING:
             case ITEM_MOD_CRIT_TAKEN_RATING:
             case ITEM_MOD_RESILIENCE_RATING:
-                bonus.armor += static_cast<uint64>(value) * 4;
-                bonus.health += static_cast<uint64>(value) * 5;
+                bonus.armor = SaturatingAddUInt128(bonus.armor, SaturatingMultiplyUInt128(unsignedValue, 4));
+                bonus.health = SaturatingAddUInt128(bonus.health, SaturatingMultiplyUInt128(unsignedValue, 5));
                 break;
             case ITEM_MOD_HIT_MELEE_RATING:
             case ITEM_MOD_HIT_RANGED_RATING:
@@ -3151,36 +3226,36 @@ private:
             case ITEM_MOD_CRIT_RATING:
             case ITEM_MOD_EXPERTISE_RATING:
             case ITEM_MOD_ARMOR_PENETRATION_RATING:
-                bonus.attackPower += static_cast<double>(value);
-                bonus.rangedAttackPower += static_cast<double>(value);
-                bonus.spellPower += static_cast<double>(value) * 0.5;
+                bonus.attackPower += numericValue;
+                bonus.rangedAttackPower += numericValue;
+                bonus.spellPower += numericValue * 0.5;
                 break;
             case ITEM_MOD_HASTE_MELEE_RATING:
-                bonus.meleeHasteRating += value;
+                bonus.meleeHasteRating = SaturatingAddInt64(bonus.meleeHasteRating, legacyValue);
                 break;
             case ITEM_MOD_HASTE_RANGED_RATING:
-                bonus.rangedHasteRating += value;
+                bonus.rangedHasteRating = SaturatingAddInt64(bonus.rangedHasteRating, legacyValue);
                 break;
             case ITEM_MOD_HASTE_SPELL_RATING:
-                bonus.spellHasteRating += value;
+                bonus.spellHasteRating = SaturatingAddInt64(bonus.spellHasteRating, legacyValue);
                 break;
             case ITEM_MOD_HASTE_RATING:
-                bonus.meleeHasteRating += value;
-                bonus.rangedHasteRating += value;
-                bonus.spellHasteRating += value;
+                bonus.meleeHasteRating = SaturatingAddInt64(bonus.meleeHasteRating, legacyValue);
+                bonus.rangedHasteRating = SaturatingAddInt64(bonus.rangedHasteRating, legacyValue);
+                bonus.spellHasteRating = SaturatingAddInt64(bonus.spellHasteRating, legacyValue);
                 break;
             case ITEM_MOD_MANA_REGENERATION:
-                bonus.mana += static_cast<uint64>(value) * 5;
-                bonus.spellPower += static_cast<double>(value) * 0.5;
+                bonus.mana = SaturatingAddUInt128(bonus.mana, SaturatingMultiplyUInt128(unsignedValue, 5));
+                bonus.spellPower += numericValue * 0.5;
                 break;
             case ITEM_MOD_HEALTH_REGEN:
-                bonus.health += static_cast<uint64>(value) * 10;
+                bonus.health = SaturatingAddUInt128(bonus.health, SaturatingMultiplyUInt128(unsignedValue, 10));
                 break;
             case ITEM_MOD_SPELL_PENETRATION:
-                bonus.spellPower += static_cast<double>(value);
+                bonus.spellPower += numericValue;
                 break;
             case ITEM_MOD_BLOCK_VALUE:
-                bonus.armor += static_cast<uint64>(value);
+                bonus.armor = SaturatingAddUInt128(bonus.armor, unsignedValue);
                 break;
             default:
                 break;
@@ -3188,11 +3263,11 @@ private:
     }
 
 #ifdef WUHUN_HAS_ITEM_ATTRIBUTES
-    void ApplyWuhunItemAttributeRows(WuhunEquipmentBonus& bonus, std::vector<uint32> const& attributeIds, std::vector<int32> const& attributeValues, WuhunItemAttributeMultiplier const& multiplier) const
+    void ApplyWuhunItemAttributeRows(WuhunEquipmentBonus& bonus, std::vector<uint32> const& attributeIds, std::vector<int128> const& attributeValues, WuhunItemAttributeMultiplier const& multiplier) const
     {
         size_t count = std::min(attributeIds.size(), attributeValues.size());
         for (size_t i = 0; i < count; ++i)
-            ApplyWuhunItemStat(bonus, attributeIds[i], CalculateWuhunEnhancedAttributeValue(static_cast<int64>(attributeValues[i]), multiplier));
+            ApplyWuhunItemStat(bonus, attributeIds[i], CalculateWuhunEnhancedAttributeValue(attributeValues[i], multiplier));
     }
 #endif
 
@@ -3235,9 +3310,9 @@ private:
             if (multiplier.active)
                 ++bonus.enhancedItemCount;
 
-            bonus.armor += static_cast<uint64>(std::max<int64>(0, CalculateWuhunEnhancedAttributeValue(static_cast<int64>(proto->Armor), multiplier)));
+            bonus.armor = SaturatingAddUInt128(bonus.armor, CalculateWuhunEnhancedAttributeValue(proto->Armor128, multiplier));
             for (uint32 i = 0; i < proto->StatsCount && i < MAX_ITEM_PROTO_STATS; ++i)
-                ApplyWuhunItemStat(bonus, proto->ItemStat[i].ItemStatType, CalculateWuhunEnhancedAttributeValue(static_cast<int64>(proto->ItemStat[i].ItemStatValue), multiplier));
+                ApplyWuhunItemStat(bonus, proto->ItemStat[i].ItemStatType, CalculateWuhunEnhancedAttributeValue(proto->ItemStatValue128[i], multiplier));
 
             for (uint8 i = 0; i < MAX_ITEM_PROTO_DAMAGES; ++i)
             {
@@ -3326,10 +3401,11 @@ private:
 
     std::unordered_map<uint32, WuhunDefinition> _definitions;
     std::unordered_map<uint32, WuhunSkillTemplate> _skills;
-    std::unordered_map<uint32, uint64> _ringCosts;
+    std::unordered_map<uint32, uint128> _ringCosts;
     std::unordered_map<uint32, float> _ringInheritBonuses;
     std::unordered_map<uint8, WuhunEquipSlotConfig> _equipSlotConfigs;
     std::unordered_map<std::string, int64> _intParams;
+    std::unordered_map<std::string, uint128> _uint128Params;
     std::unordered_map<std::string, float> _floatParams;
     std::unordered_map<uint32, PlayerWuhunData> _players;
 };
@@ -3359,7 +3435,7 @@ public:
         if (!creature->hasLootRecipient())
             creature->SetLootRecipient(owner);
 
-        creature->LowerPlayerDamageReq(std::min<uint64>(victim->GetHealthForCombat(), damage), true);
+        creature->LowerPlayerDamageReq(Acore::Number::ToUInt64Saturated(std::min<uint128>(victim->GetHealthForCombat128(), uint128(damage))), true);
     }
 
     void KilledUnit(Unit* victim) override
@@ -3954,7 +4030,7 @@ public:
         UNITHOOK_MODIFY_PERIODIC_DAMAGE_AURAS_TICK
     }) { }
 
-    void ModifySpellDamageTaken(Unit* /*target*/, Unit* attacker, uint64& damage, SpellInfo const* spellInfo) override
+    void ModifySpellDamageTaken(Unit* /*target*/, Unit* attacker, uint128& damage, SpellInfo const* spellInfo) override
     {
         if (!sWuhunMgr->IsEnabled())
             return;
@@ -3963,7 +4039,7 @@ public:
         sWuhunMgr->ApplySkillDamageBonus(avatar, spellInfo, damage, "direct");
     }
 
-    void ModifyPeriodicDamageAurasTick(Unit* /*target*/, Unit* attacker, uint64& damage, SpellInfo const* spellInfo) override
+    void ModifyPeriodicDamageAurasTick(Unit* /*target*/, Unit* attacker, uint128& damage, SpellInfo const* spellInfo) override
     {
         if (!sWuhunMgr->IsEnabled() || (spellInfo && spellInfo->IsPositive()))
             return;
@@ -4133,10 +4209,11 @@ private:
         uint32 a = 0;
         uint32 b = 0;
         uint32 c = 0;
+        uint128 amount = 0;
 
-        if (parts[0] == "INFUSE_RING" && parts.size() >= 3 && TryParseUInt(parts[1], a) && TryParseUInt(parts[2], b))
+        if (parts[0] == "INFUSE_RING" && parts.size() >= 3 && TryParseUInt(parts[1], a) && TryParseUInt128(parts[2], amount))
         {
-            sWuhunMgr->InfuseRing(player, a, b);
+            sWuhunMgr->InfuseRing(player, a, amount);
             return;
         }
 
@@ -4266,7 +4343,7 @@ private:
         return target;
     }
 
-    static bool ReadOptionalInt64Argument(ChatHandler* handler, char const* args, char const* usage, bool& hasValue, int64& value)
+    static bool ReadOptionalInt128Argument(ChatHandler* handler, char const* args, char const* usage, bool& hasValue, int128& value)
     {
         hasValue = false;
         value = 0;
@@ -4277,7 +4354,7 @@ private:
             return true;
 
         std::string extra;
-        if (!TryParseInt64(token, value) || (stream >> extra))
+        if (!TryParseInt128(token, value) || (stream >> extra))
         {
             handler->PSendSysMessage("用法: {}", usage);
             handler->SetSentErrorMessage(true);
@@ -4290,19 +4367,19 @@ private:
 
     static bool SendSoulPowerInfo(ChatHandler* handler, Player* target)
     {
-        uint64 soulPower = 0;
+        uint128 soulPower = 0;
         uint32 wuhunId = 0;
         if (!sWuhunMgr->GetSoulPowerInfo(target, soulPower, wuhunId))
             return false;
 
         handler->PSendSysMessage("|cff66ccff[武魂系统]|r {} 武魂ID: {}，魂力: {}。",
-            handler->GetNameLink(target), wuhunId, soulPower);
+            handler->GetNameLink(target), wuhunId, Acore::ToString(soulPower));
         return true;
     }
 
     static void NotifySoulPowerChanged(ChatHandler* handler, Player* target)
     {
-        uint64 soulPower = 0;
+        uint128 soulPower = 0;
         uint32 wuhunId = 0;
         if (!target || !target->GetSession() || !sWuhunMgr->GetSoulPowerInfo(target, soulPower, wuhunId))
             return;
@@ -4311,7 +4388,7 @@ private:
         if (executor == target)
             return;
 
-        ChatHandler(target->GetSession()).PSendSysMessage("|cff66ccff[武魂系统]|r GM 已调整你的魂力，当前魂力 {}。", soulPower);
+        ChatHandler(target->GetSession()).PSendSysMessage("|cff66ccff[武魂系统]|r GM 已调整你的魂力，当前魂力 {}。", Acore::ToString(soulPower));
     }
 
     static bool HandleHelpCommand(ChatHandler* handler, char const* /*args*/)
@@ -4368,9 +4445,9 @@ private:
         if (!target)
             return false;
 
-        int64 value = 0;
+        int128 value = 0;
         bool hasValue = false;
-        if (!ReadOptionalInt64Argument(handler, args, ".武魂系统 魂力 [+#值|-#值]", hasValue, value))
+        if (!ReadOptionalInt128Argument(handler, args, ".武魂系统 魂力 [+#值|-#值]", hasValue, value))
             return false;
 
         if (!hasValue)
@@ -4382,9 +4459,9 @@ private:
         if (!sWuhunMgr->AdjustSoulPowerByCommand(target, value))
             return false;
 
-        uint64 amount = value > 0 ? static_cast<uint64>(value) : static_cast<uint64>(-(value + 1)) + 1;
+        uint128 amount = AbsInt128ToUInt128(value);
         handler->PSendSysMessage("|cff66ccff[武魂系统]|r 已为 {} {} {} 点魂力。",
-            handler->GetNameLink(target), value > 0 ? "增加" : "扣除", amount);
+            handler->GetNameLink(target), value > 0 ? "增加" : "扣除", Acore::ToString(amount));
         NotifySoulPowerChanged(handler, target);
         return true;
     }

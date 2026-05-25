@@ -12,7 +12,9 @@
 #include "SharedDefines.h"
 #include "Random.h"
 #include "RequirementSystem.h"
+#include "StringConvert.h"
 #include <algorithm>
+#include <limits>
 #include <sstream>
 #include <set>
 
@@ -44,6 +46,56 @@
 #include "ItemAttributesDBHelper.h"
 #include "ItemAttributesEffects.h"
 #endif
+
+namespace
+{
+uint128 RandomUInt128InRange(uint128 minValue, uint128 maxValue)
+{
+    if (maxValue <= minValue)
+        return minValue;
+
+    uint128 span = maxValue - minValue;
+    uint128 randomValue = 0;
+    for (uint8 i = 0; i < 4; ++i)
+    {
+        randomValue <<= 32;
+        randomValue += rand32();
+    }
+
+    if (span == std::numeric_limits<uint128>::max())
+        return randomValue;
+
+    return minValue + (randomValue % (span + 1));
+}
+
+int128 RandomInt128InRange(uint128 minValue, uint128 maxValue)
+{
+    return Acore::Number::ToInt128Saturated(RandomUInt128InRange(minValue, maxValue));
+}
+
+int128 SaturatingAddInt128(int128 const& left, int128 const& right)
+{
+    if (right > 0 && left > std::numeric_limits<int128>::max() - right)
+        return std::numeric_limits<int128>::max();
+
+    if (right < 0 && left < std::numeric_limits<int128>::min() - right)
+        return std::numeric_limits<int128>::min();
+
+    return left + right;
+}
+
+int128 AbsInt128Saturated(int128 const& value)
+{
+    if (value >= 0)
+        return value;
+
+    if (value == std::numeric_limits<int128>::min())
+        return std::numeric_limits<int128>::max();
+
+    return -value;
+}
+
+}
 
 ItemEnhancementMgr* ItemEnhancementMgr::instance()
 {
@@ -180,23 +232,23 @@ void ItemEnhancementMgr::LoadEnhancementTemplates()
         // 7. 平均随机分配 (int)
         temp.distributionType = fields[index++].Get<uint32>();
 
-        // 8. 属性值1 (int)
-        temp.statValue1 = fields[index++].Get<uint32>();
+        // 8. 属性值1 (decimal)
+        temp.statValue1 = fields[index++].Get<uint128>();
 
-        // 9. 属性值2 (int)
-        temp.statValue2 = fields[index++].Get<uint32>();
+        // 9. 属性值2 (decimal)
+        temp.statValue2 = fields[index++].Get<uint128>();
 
-        // 10. 属性百分比1 (int)
-        temp.statPercent1 = fields[index++].Get<uint32>();
+        // 10. 属性百分比1 (decimal)
+        temp.statPercent1 = fields[index++].Get<uint128>();
 
-        // 11. 属性百分比2 (int)
-        temp.statPercent2 = fields[index++].Get<uint32>();
+        // 11. 属性百分比2 (decimal)
+        temp.statPercent2 = fields[index++].Get<uint128>();
 
-        // 12. 达到该强化等级后的奖励属性 (int)
-        temp.bonusStat = fields[index++].Get<uint32>();
+        // 12. 达到该强化等级后的奖励属性 (decimal)
+        temp.bonusStat = fields[index++].Get<uint128>();
 
-        // 13. 达到该强化等级后的奖励属性百分比 (int)
-        temp.bonusStatPercent = fields[index++].Get<uint32>();
+        // 13. 达到该强化等级后的奖励属性百分比 (decimal)
+        temp.bonusStatPercent = fields[index++].Get<uint128>();
 
         // 14. 物品技能_模板_id_多个逗号隔开 (varchar)
         if (!fields[index].IsNull())
@@ -650,10 +702,10 @@ bool ItemEnhancementMgr::EnhanceItem(Player* player, Item* item, uint32 group)
         if (!incrementalStats.empty())
         {
             // 解析本次强化增加的属性
-            std::map<uint32, int32> incrementalStatsMap = ParseStatValues(incrementalStats);
+            std::map<uint32, int128> incrementalStatsMap = ParseStatValues(incrementalStats);
 
             // 解析现有的累计属性
-            std::map<uint32, int32> existingStats = ParseStatValues(record.statValues);
+            std::map<uint32, int128> existingStats = ParseStatValues(record.statValues);
 
             // ChatHandler(player->GetSession()).PSendSysMessage("本次强化增量属性: '{}'", incrementalStats);
             // ChatHandler(player->GetSession()).PSendSysMessage("强化前累计属性: '{}'", record.statValues);
@@ -661,7 +713,7 @@ bool ItemEnhancementMgr::EnhanceItem(Player* player, Item* item, uint32 group)
             // 累加属性（增量模式）
             for (const auto& incrementalStat : incrementalStatsMap)
             {
-                existingStats[incrementalStat.first] += incrementalStat.second;
+                existingStats[incrementalStat.first] = SaturatingAddInt128(existingStats[incrementalStat.first], incrementalStat.second);
                 // ChatHandler(player->GetSession()).PSendSysMessage("属性累加: {} (类型{}) 原值:{} + 增量:{} = 新值:{}",
                 //     GetStatTypeName(incrementalStat.first), incrementalStat.first,
                 //     existingStats[incrementalStat.first] - incrementalStat.second,
@@ -676,7 +728,7 @@ bool ItemEnhancementMgr::EnhanceItem(Player* player, Item* item, uint32 group)
                 if (stat.second > 0)
                 {
                     if (!first) updatedStatValues += ",";
-                    updatedStatValues += std::to_string(stat.first) + " " + std::to_string(stat.second);
+                    updatedStatValues += std::to_string(stat.first) + " " + Acore::ToString(stat.second);
                     first = false;
                 }
             }
@@ -878,7 +930,7 @@ bool ItemEnhancementMgr::EnhanceItem(Player* player, Item* item, uint32 group)
 
 // 为鉴定系统初始化强化（直接创建等级1，不依赖随机判定，并按鉴定模板约束条目数量与数值范围）
 bool ItemEnhancementMgr::InitializeEnhancementForIdentification(Player* player, Item* item, uint32 group,
-    uint32 minAttrCount, uint32 maxAttrCount, uint32 minAttrValue, uint32 maxAttrValue)
+    uint32 minAttrCount, uint32 maxAttrCount, uint128 minAttrValue, uint128 maxAttrValue)
 {
     if (!CanEnhanceItem(player, item))
         return false;
@@ -974,12 +1026,12 @@ bool ItemEnhancementMgr::InitializeEnhancementForIdentification(Player* player, 
         // 如果配置了约束，则对生成的属性做一次性裁剪
         if (maxAttrCount > 0 || minAttrCount > 0 || minAttrValue > 0 || maxAttrValue > 0)
         {
-            std::map<uint32, int32> statsMap = ParseStatValues(initialStats);
+            std::map<uint32, int128> statsMap = ParseStatValues(initialStats);
 
             if (!statsMap.empty())
             {
                 // 转成vector以便随机抽取
-                std::vector<std::pair<uint32, int32>> stats(statsMap.begin(), statsMap.end());
+                std::vector<std::pair<uint32, int128>> stats(statsMap.begin(), statsMap.end());
                 uint32 availableCount = static_cast<uint32>(stats.size());
                 uint32 targetCount = availableCount;
 
@@ -1020,13 +1072,15 @@ bool ItemEnhancementMgr::InitializeEnhancementForIdentification(Player* player, 
 
                     for (auto& kv : stats)
                     {
-                        int32 v = kv.second;
+                        int128 v = kv.second;
+                        int128 minValueLimit = Acore::Number::ToInt128Saturated(minAttrValue);
+                        int128 maxValueLimit = Acore::Number::ToInt128Saturated(maxAttrValue);
 
-                        if (minAttrValue > 0 && v < static_cast<int32>(minAttrValue))
-                            v = static_cast<int32>(minAttrValue);
+                        if (minAttrValue > 0 && v < minValueLimit)
+                            v = minValueLimit;
 
-                        if (maxAttrValue > 0 && v > static_cast<int32>(maxAttrValue))
-                            v = static_cast<int32>(maxAttrValue);
+                        if (maxAttrValue > 0 && v > maxValueLimit)
+                            v = maxValueLimit;
 
                         kv.second = v;
                     }
@@ -1038,7 +1092,7 @@ bool ItemEnhancementMgr::InitializeEnhancementForIdentification(Player* player, 
                 {
                     if (i > 0)
                         oss << ",";
-                    oss << stats[i].first << " " << stats[i].second;
+                    oss << stats[i].first << " " << Acore::ToString(stats[i].second);
                 }
 
                 initialStats = oss.str();
@@ -1046,7 +1100,7 @@ bool ItemEnhancementMgr::InitializeEnhancementForIdentification(Player* player, 
                 if (_debugMode)
                 {
                     LOG_DEBUG("module.itemenhancement", "[鉴定初始化] 约束后强化属性='{}' (minCount={}, maxCount={}, minValue={}, maxValue={})",
-                              initialStats, minAttrCount, maxAttrCount, minAttrValue, maxAttrValue);
+                              initialStats, minAttrCount, maxAttrCount, Acore::ToString(minAttrValue), Acore::ToString(maxAttrValue));
                 }
             }
         }
@@ -1064,23 +1118,23 @@ bool ItemEnhancementMgr::InitializeEnhancementForIdentification(Player* player, 
             uint32 defaultStatType = (proto->Class == ITEM_CLASS_WEAPON) ? ITEM_MOD_ATTACK_POWER : ITEM_MOD_STAMINA;
 
             // 根据模板的数值区间选一个值，如果区间为0则给一个固定值1
-            int32 minValue = enhTemplate->statValue1;
-            int32 maxValue = enhTemplate->statValue2;
+            uint128 minValue = enhTemplate->statValue1;
+            uint128 maxValue = enhTemplate->statValue2;
             if (maxValue < minValue)
                 maxValue = minValue;
 
-            int32 value = 0;
+            int128 value = 0;
             if (minValue == 0 && maxValue == 0)
                 value = 1;
             else if (minValue == maxValue)
-                value = minValue;
+                value = Acore::Number::ToInt128Saturated(minValue);
             else
-                value = irand(minValue, maxValue);
+                value = RandomInt128InRange(minValue, maxValue);
 
-            record.statValues = std::to_string(defaultStatType) + " " + std::to_string(value);
+            record.statValues = std::to_string(defaultStatType) + " " + Acore::ToString(value);
             LOG_WARN("module.itemenhancement",
                 "[鉴定初始化] itemId={} 无可用基础属性，使用默认属性生成1级强化: statType={}, value={}",
-                item->GetEntry(), defaultStatType, value);
+                item->GetEntry(), defaultStatType, Acore::ToString(value));
         }
         else
         {
@@ -1197,7 +1251,7 @@ void ItemEnhancementMgr::ApplyOfficialItemEnhancement(Player* player, Item* item
     }
 
     // 解析属性值
-    std::map<uint32, int32> stats = ParseStatValues(record->statValues);
+    std::map<uint32, int128> stats = ParseStatValues(record->statValues);
 
     // ChatHandler(player->GetSession()).PSendSysMessage("强化系统：应用强化属性: {}", record->statValues);
 
@@ -1205,7 +1259,7 @@ void ItemEnhancementMgr::ApplyOfficialItemEnhancement(Player* player, Item* item
     for (const auto& stat : stats)
     {
         uint32 statType = stat.first;
-        int32 statValue = stat.second;
+        int128 statValue = stat.second;
 
         if (statValue > 0)
         {
@@ -1323,21 +1377,21 @@ std::string ItemEnhancementMgr::GenerateEnhancementStats(Item* item, uint32 leve
     }
 
     // 根据分配类型决定强化值生成方式
-    int32 fixedEnhancementValue = 0; // 固定模式下所有属性使用的相同值
+    int128 fixedEnhancementValue = 0; // 固定模式下所有属性使用的相同值
     bool useFixedValue = (enhTemplate->distributionType == 0);
 
     if (useFixedValue)
     {
         // 固定值模式：先随机生成一个值，所有属性都使用这个值
-        int32 minValue = enhTemplate->statValue1;
-        int32 maxValue = enhTemplate->statValue2;
+        uint128 minValue = enhTemplate->statValue1;
+        uint128 maxValue = enhTemplate->statValue2;
         if (maxValue > minValue)
         {
-            fixedEnhancementValue = irand(minValue, maxValue);
+            fixedEnhancementValue = RandomInt128InRange(minValue, maxValue);
         }
         else
         {
-            fixedEnhancementValue = minValue;
+            fixedEnhancementValue = Acore::Number::ToInt128Saturated(minValue);
         }
 
     }
@@ -1350,7 +1404,7 @@ std::string ItemEnhancementMgr::GenerateEnhancementStats(Item* item, uint32 leve
     for (uint8 i = 0; i < proto->StatsCount && i < MAX_ITEM_PROTO_STATS; ++i)
     {
         uint32 statType = proto->ItemStat[i].ItemStatType;
-        int64 originalValue = proto->ItemStat[i].ItemStatValue;
+        int128 originalValue = proto->ItemStatValue128[i];
 
         // 强制显示调试信息
         // ChatHandler(item->GetOwner()->GetSession()).PSendSysMessage("调试：属性{}: 类型={}, 值={}",
@@ -1367,7 +1421,7 @@ std::string ItemEnhancementMgr::GenerateEnhancementStats(Item* item, uint32 leve
 
         // ChatHandler(item->GetOwner()->GetSession()).PSendSysMessage("调试：计算等级{} (类型{}) 的强化加成", level, statType);
 
-        int32 enhancementValue = 0;
+        int128 enhancementValue = 0;
 
         if (useFixedValue)
         {
@@ -1377,17 +1431,17 @@ std::string ItemEnhancementMgr::GenerateEnhancementStats(Item* item, uint32 leve
         else
         {
             // 随机值模式：每个属性独立随机
-            int32 minValue = enhTemplate->statValue1;
-            int32 maxValue = enhTemplate->statValue2;
+            uint128 minValue = enhTemplate->statValue1;
+            uint128 maxValue = enhTemplate->statValue2;
             if (maxValue > minValue)
             {
-                enhancementValue = irand(minValue, maxValue);
+                enhancementValue = RandomInt128InRange(minValue, maxValue);
                 // ChatHandler(item->GetOwner()->GetSession()).PSendSysMessage("调试：随机模式，属性{}独立随机[{}-{}]，生成值={}",
                 //     i, minValue, maxValue, enhancementValue);
             }
             else
             {
-                enhancementValue = minValue;
+                enhancementValue = Acore::Number::ToInt128Saturated(minValue);
             }
         }
 
@@ -1400,7 +1454,7 @@ std::string ItemEnhancementMgr::GenerateEnhancementStats(Item* item, uint32 leve
             if (!first)
                 statValues += ",";
 
-            statValues += std::to_string(statType) + " " + std::to_string(enhancementValue);
+            statValues += std::to_string(statType) + " " + Acore::ToString(enhancementValue);
             first = false;
 
 
@@ -1448,24 +1502,24 @@ std::string ItemEnhancementMgr::GenerateIncrementalEnhancementStats(Item* item, 
     }
 
     LOG_DEBUG("module.itemenhancement", "[增量属性] 使用模板: id={}, itemStatGroup={}, val1={}, val2={}, distType={}",
-        enhTemplate->id, enhTemplate->itemStatGroup, enhTemplate->statValue1, enhTemplate->statValue2, enhTemplate->distributionType);
+        enhTemplate->id, enhTemplate->itemStatGroup, Acore::ToString(enhTemplate->statValue1), Acore::ToString(enhTemplate->statValue2), enhTemplate->distributionType);
 
     // 根据分配类型决定强化值生成方式
-    int32 fixedEnhancementValue = 0; // 固定模式下所有属性使用的相同值
+    int128 fixedEnhancementValue = 0; // 固定模式下所有属性使用的相同值
     bool useFixedValue = (enhTemplate->distributionType == 0);
 
     if (useFixedValue)
     {
         // 固定值模式：先随机生成一个值，所有属性都使用这个值
-        int32 minValue = enhTemplate->statValue1;
-        int32 maxValue = enhTemplate->statValue2;
+        uint128 minValue = enhTemplate->statValue1;
+        uint128 maxValue = enhTemplate->statValue2;
         if (maxValue > minValue)
         {
-            fixedEnhancementValue = irand(minValue, maxValue);
+            fixedEnhancementValue = RandomInt128InRange(minValue, maxValue);
         }
         else
         {
-            fixedEnhancementValue = minValue;
+            fixedEnhancementValue = Acore::Number::ToInt128Saturated(minValue);
         }
     }
 
@@ -1488,30 +1542,30 @@ std::string ItemEnhancementMgr::GenerateIncrementalEnhancementStats(Item* item, 
 
                 uint32 statType = attr->attributeType; // 对应 ITEM_MOD_* 类型
 
-                int32 enhancementValue = 0;
+                int128 enhancementValue = 0;
                 if (useFixedValue)
                 {
                     enhancementValue = fixedEnhancementValue;
                 }
                 else
                 {
-                    int32 minValue = enhTemplate->statValue1;
-                    int32 maxValue = enhTemplate->statValue2;
+                    uint128 minValue = enhTemplate->statValue1;
+                    uint128 maxValue = enhTemplate->statValue2;
                     if (maxValue > minValue)
-                        enhancementValue = irand(minValue, maxValue);
+                        enhancementValue = RandomInt128InRange(minValue, maxValue);
                     else
-                        enhancementValue = minValue;
+                        enhancementValue = Acore::Number::ToInt128Saturated(minValue);
                 }
 
                 LOG_DEBUG("module.itemenhancement", "[增量属性] 组{}模板属性{}: statType={}, 增量值={}",
-                    enhTemplate->itemStatGroup, attr->id, statType, enhancementValue);
+                    enhTemplate->itemStatGroup, attr->id, statType, Acore::ToString(enhancementValue));
 
                 if (enhancementValue > 0)
                 {
                     if (!first)
                         statValues += ",";
 
-                    statValues += std::to_string(statType) + " " + std::to_string(enhancementValue);
+                    statValues += std::to_string(statType) + " " + Acore::ToString(enhancementValue);
                     first = false;
                 }
             }
@@ -1532,18 +1586,18 @@ std::string ItemEnhancementMgr::GenerateIncrementalEnhancementStats(Item* item, 
     for (uint8 i = 0; i < proto->StatsCount && i < MAX_ITEM_PROTO_STATS; ++i)
     {
         uint32 statType = proto->ItemStat[i].ItemStatType;
-        int64 originalValue = proto->ItemStat[i].ItemStatValue;
+        int128 originalValue = proto->ItemStatValue128[i];
 
         if (originalValue <= 0)
         {
-            LOG_DEBUG("module.itemenhancement", "[增量属性] 跳过属性槽{}: statType={}, 原始值={}<=0", i, statType, originalValue);
+            LOG_DEBUG("module.itemenhancement", "[增量属性] 跳过属性槽{}: statType={}, 原始值={}<=0", i, statType, originalValue.convert_to<std::string>());
             continue; // 跳过没有数值的属性
         }
 
         // 注意：这个函数生成的是本次强化的增量属性加成
         // 不是累计属性，而是本次强化新增加的属性值
 
-        int32 enhancementValue = 0;
+        int128 enhancementValue = 0;
 
         if (useFixedValue)
         {
@@ -1553,20 +1607,20 @@ std::string ItemEnhancementMgr::GenerateIncrementalEnhancementStats(Item* item, 
         else
         {
             // 随机值模式：每个属性独立随机
-            int32 minValue = enhTemplate->statValue1;
-            int32 maxValue = enhTemplate->statValue2;
+            uint128 minValue = enhTemplate->statValue1;
+            uint128 maxValue = enhTemplate->statValue2;
             if (maxValue > minValue)
             {
-                enhancementValue = irand(minValue, maxValue);
+                enhancementValue = RandomInt128InRange(minValue, maxValue);
             }
             else
             {
-                enhancementValue = minValue;
+                enhancementValue = Acore::Number::ToInt128Saturated(minValue);
             }
         }
 
         LOG_DEBUG("module.itemenhancement", "[增量属性] 槽{}: statType={}, 原始值={}, 增量值={}",
-            i, statType, originalValue, enhancementValue);
+            i, statType, originalValue.convert_to<std::string>(), Acore::ToString(enhancementValue));
 
         // 只有当有强化值时才添加到字符串
         if (enhancementValue > 0)
@@ -1574,7 +1628,7 @@ std::string ItemEnhancementMgr::GenerateIncrementalEnhancementStats(Item* item, 
             if (!first)
                 statValues += ",";
 
-            statValues += std::to_string(statType) + " " + std::to_string(enhancementValue);
+            statValues += std::to_string(statType) + " " + Acore::ToString(enhancementValue);
             first = false;
         }
     }
@@ -1590,9 +1644,9 @@ std::string ItemEnhancementMgr::GenerateIncrementalEnhancementStats(Item* item, 
 }
 
 // 解析属性值字符串
-std::map<uint32, int32> ItemEnhancementMgr::ParseStatValues(const std::string& statValues) const
+std::map<uint32, int128> ItemEnhancementMgr::ParseStatValues(const std::string& statValues) const
 {
-    std::map<uint32, int32> stats;
+    std::map<uint32, int128> stats;
 
     if (statValues.empty())
         return stats;
@@ -1607,21 +1661,18 @@ std::map<uint32, int32> ItemEnhancementMgr::ParseStatValues(const std::string& s
         std::istringstream tokenStream(token);
         std::string statTypeStr, statValueStr;
 
-        if (std::getline(tokenStream, statTypeStr, ' ') && std::getline(tokenStream, statValueStr))
+        if (tokenStream >> statTypeStr >> statValueStr)
         {
-            try
+            Optional<uint32> statType = Acore::StringTo<uint32>(statTypeStr);
+            Optional<int128> statValue = Acore::StringTo<int128>(statValueStr);
+            if (statType && statValue)
             {
-                uint32 statType = std::stoul(statTypeStr);
-                int32 statValue = std::stol(statValueStr);
                 // 【修复】对重复属性类型进行累加而非覆盖
-                stats[statType] += statValue;
+                stats[*statType] = SaturatingAddInt128(stats[*statType], *statValue);
             }
-            catch (const std::exception& e)
+            else if (_debugMode)
             {
-                if (_debugMode)
-                {
-                    LOG_ERROR("server.loading", "解析属性值时发生错误: {}", e.what());
-                }
+                LOG_ERROR("server.loading", "解析属性值时发生错误: token='{}'", token);
             }
         }
     }
@@ -1639,8 +1690,8 @@ void ItemEnhancementMgr::SyncEnhancementAttributesToItemAttributes(Player* playe
     uint64 itemGuid = item->GetGUID().GetCounter();
     uint32 itemId = item->GetEntry();
 
-    std::map<uint32, int32> newStats = ParseStatValues(newStatValues);
-    std::map<uint32, int32> oldStats = ParseStatValues(oldStatValues);
+    std::map<uint32, int128> newStats = ParseStatValues(newStatValues);
+    std::map<uint32, int128> oldStats = ParseStatValues(oldStatValues);
 
     if (newStats.empty() && oldStats.empty())
         return;
@@ -1670,17 +1721,17 @@ void ItemEnhancementMgr::SyncEnhancementAttributesToItemAttributes(Player* playe
 
     for (uint32 statType : keys)
     {
-        int32 oldValue = 0;
+        int128 oldValue = 0;
         auto itOld = oldStats.find(statType);
         if (itOld != oldStats.end())
             oldValue = itOld->second;
 
-        int32 newValue = 0;
+        int128 newValue = 0;
         auto itNew = newStats.find(statType);
         if (itNew != newStats.end())
             newValue = itNew->second;
 
-        int32 delta = newValue - oldValue;
+        int128 delta = newValue - oldValue;
         if (delta == 0)
             continue;
 
@@ -1689,7 +1740,7 @@ void ItemEnhancementMgr::SyncEnhancementAttributesToItemAttributes(Player* playe
         {
             if (ids[i] == statType)
             {
-                values[i] += delta;
+                values[i] = SaturatingAddInt128(values[i], delta);
                 if (values[i] <= 0)
                 {
                     ids.erase(ids.begin() + i);
@@ -1723,8 +1774,8 @@ void ItemEnhancementMgr::SyncEnhancementAttributesToItemAttributes(Player* playe
                 // 对每个属性类型，计算增量并直接应用
                 for (uint32 statType : keys)
                 {
-                    int32 oldValue = 0;
-                    int32 newValue = 0;
+                    int128 oldValue = 0;
+                    int128 newValue = 0;
 
                     auto itOld = oldStats.find(statType);
                     if (itOld != oldStats.end()) oldValue = itOld->second;
@@ -1732,16 +1783,16 @@ void ItemEnhancementMgr::SyncEnhancementAttributesToItemAttributes(Player* playe
                     auto itNew = newStats.find(statType);
                     if (itNew != newStats.end()) newValue = itNew->second;
 
-                    int32 delta = newValue - oldValue;
+                    int128 delta = newValue - oldValue;
 
                     if (delta != 0)
                     {
                         // 直接应用增量：delta > 0 表示增加属性，delta < 0 表示减少属性
-                        ApplyStatModifier(player, statType, std::abs(delta), delta > 0);
+                        ApplyStatModifier(player, statType, AbsInt128Saturated(delta), delta > 0);
 
                         LOG_DEBUG("module.itemenhancement",
                             "[强化属性同步] 玩家:{} 物品:{} 属性类型:{} 旧值:{} 新值:{} 增量:{}",
-                            player->GetName(), item->GetEntry(), statType, oldValue, newValue, delta);
+                            player->GetName(), item->GetEntry(), statType, Acore::ToString(oldValue), Acore::ToString(newValue), Acore::ToString(delta));
                     }
                 }
 
@@ -1823,7 +1874,7 @@ void ItemEnhancementMgr::ClearSlotEnhancements(Player* player, uint8 slot)
         if (shouldRemove)
         {
             // 移除属性效果
-            std::map<uint32, int32> stats = ParseStatValues(appliedStats);
+            std::map<uint32, int128> stats = ParseStatValues(appliedStats);
             for (const auto& stat : stats)
             {
                 if (stat.second > 0)
@@ -1883,7 +1934,7 @@ void ItemEnhancementMgr::OnPlayerEquipItem(Player* player, Item* item)
         // ChatHandler(player->GetSession()).PSendSysMessage("强化系统：装备穿戴 - 从数据库读取强化数据 +{} 级", record->level);
 
         // 应用强化加成给玩家
-        std::map<uint32, int32> stats = ParseStatValues(record->statValues);
+        std::map<uint32, int128> stats = ParseStatValues(record->statValues);
         for (const auto& stat : stats)
         {
             if (stat.second > 0)
@@ -1937,7 +1988,7 @@ void ItemEnhancementMgr::OnPlayerUnequipItem(Player* player, Item* item)
     // ChatHandler(player->GetSession()).PSendSysMessage("强化系统：装备脱下 - 开始移除强化效果");
 
     // 解析并移除已应用的属性值
-    std::map<uint32, int32> stats = ParseStatValues(appliedStats);
+    std::map<uint32, int128> stats = ParseStatValues(appliedStats);
     for (const auto& stat : stats)
     {
         if (stat.second > 0)
@@ -1984,7 +2035,7 @@ void ItemEnhancementMgr::RemoveOfficialItemEnhancement(Player* player, Item* ite
         // 如果有跟踪的应用效果，优先使用跟踪的数据移除
         // ChatHandler(player->GetSession()).PSendSysMessage("使用跟踪数据移除强化效果: {}", appliedStats);
 
-        std::map<uint32, int32> stats = ParseStatValues(appliedStats);
+        std::map<uint32, int128> stats = ParseStatValues(appliedStats);
         for (const auto& stat : stats)
         {
             if (stat.second > 0)
@@ -2007,7 +2058,7 @@ void ItemEnhancementMgr::RemoveOfficialItemEnhancement(Player* player, Item* ite
         }
 
         // 解析属性值
-        std::map<uint32, int32> stats = ParseStatValues(record->statValues);
+        std::map<uint32, int128> stats = ParseStatValues(record->statValues);
 
         // ChatHandler(player->GetSession()).PSendSysMessage("使用数据库记录移除强化属性: {}", record->statValues);
 
@@ -2015,7 +2066,7 @@ void ItemEnhancementMgr::RemoveOfficialItemEnhancement(Player* player, Item* ite
         for (const auto& stat : stats)
         {
             uint32 statType = stat.first;
-            int32 statValue = stat.second;
+            int128 statValue = stat.second;
 
             if (statValue > 0)
             {
@@ -2060,7 +2111,7 @@ std::string ItemEnhancementMgr::GetEnhancementTooltip(Item* item) const
     tooltip += "|cff00ff00强化等级: +" + std::to_string(record->level) + "|r\n";
 
     // 解析并显示强化属性
-    std::map<uint32, int32> stats = ParseStatValues(record->statValues);
+    std::map<uint32, int128> stats = ParseStatValues(record->statValues);
     if (!stats.empty())
     {
         tooltip += "|cff00ff00强化属性:|r\n";
@@ -2069,7 +2120,7 @@ std::string ItemEnhancementMgr::GetEnhancementTooltip(Item* item) const
             if (stat.second > 0)
             {
                 std::string statName = GetStatTypeName(stat.first);
-                tooltip += "|cff00ff00  +" + std::to_string(stat.second) + " " + statName + "|r\n";
+                tooltip += "|cff00ff00  +" + Acore::ToString(stat.second) + " " + statName + "|r\n";
             }
         }
     }
@@ -2078,10 +2129,13 @@ std::string ItemEnhancementMgr::GetEnhancementTooltip(Item* item) const
 }
 
 // 应用属性修正到玩家身上
-void ItemEnhancementMgr::ApplyStatModifier(Player* player, uint32 statType, int32 value, bool apply)
+void ItemEnhancementMgr::ApplyStatModifier(Player* player, uint32 statType, int128 const& value, bool apply)
 {
     if (!player || value == 0)
         return;
+
+    float statModValue = Acore::Number::ToFloat(value);
+    int64 legacyValue = Acore::Number::ToInt64Saturated(value);
 
     // 详细调试信息
     // ChatHandler(player->GetSession()).PSendSysMessage("DEBUG: {} 属性 {} (类型{}) 值:{}",
@@ -2091,125 +2145,125 @@ void ItemEnhancementMgr::ApplyStatModifier(Player* player, uint32 statType, int3
     {
         case ITEM_MOD_MANA:
         {
-            player->HandleStatModifier(UNIT_MOD_MANA, BASE_VALUE, float(value), apply);
+            player->HandleStatModifier(UNIT_MOD_MANA, BASE_VALUE, statModValue, apply);
             player->UpdateMaxPower(POWER_MANA);
             break;
         }
         case ITEM_MOD_HEALTH:
         {
-            player->HandleStatModifier(UNIT_MOD_HEALTH, BASE_VALUE, float(value), apply);
+            player->HandleStatModifier(UNIT_MOD_HEALTH, BASE_VALUE, statModValue, apply);
             player->UpdateMaxHealth();
             break;
         }
         case ITEM_MOD_AGILITY:
         {
             // 参考物品成长系统：同时修改BASE_VALUE与BuffMod，确保能正确参与倍率计算
-            player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, BASE_VALUE, float(value), apply);
-            player->ApplyStatBuffMod(STAT_AGILITY, float(value), apply);
+            player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, BASE_VALUE, statModValue, apply);
+            player->ApplyStatBuffMod(STAT_AGILITY, statModValue, apply);
             player->UpdateStats(STAT_AGILITY);
             break;
         }
         case ITEM_MOD_STRENGTH:
         {
-            player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, BASE_VALUE, float(value), apply);
-            player->ApplyStatBuffMod(STAT_STRENGTH, float(value), apply);
+            player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, BASE_VALUE, statModValue, apply);
+            player->ApplyStatBuffMod(STAT_STRENGTH, statModValue, apply);
             player->UpdateStats(STAT_STRENGTH);
             break;
         }
         case ITEM_MOD_INTELLECT:
         {
-            player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, BASE_VALUE, float(value), apply);
-            player->ApplyStatBuffMod(STAT_INTELLECT, float(value), apply);
+            player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, BASE_VALUE, statModValue, apply);
+            player->ApplyStatBuffMod(STAT_INTELLECT, statModValue, apply);
             player->UpdateStats(STAT_INTELLECT);
             player->UpdateMaxPower(POWER_MANA);
             break;
         }
         case ITEM_MOD_SPIRIT:
         {
-            player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, BASE_VALUE, float(value), apply);
-            player->ApplyStatBuffMod(STAT_SPIRIT, float(value), apply);
+            player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, BASE_VALUE, statModValue, apply);
+            player->ApplyStatBuffMod(STAT_SPIRIT, statModValue, apply);
             player->UpdateStats(STAT_SPIRIT);
             break;
         }
         case ITEM_MOD_STAMINA:
         {
-            player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, BASE_VALUE, float(value), apply);
-            player->ApplyStatBuffMod(STAT_STAMINA, float(value), apply);
+            player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, BASE_VALUE, statModValue, apply);
+            player->ApplyStatBuffMod(STAT_STAMINA, statModValue, apply);
             player->UpdateStats(STAT_STAMINA);
             player->UpdateMaxHealth();
             break;
         }
         case ITEM_MOD_DEFENSE_SKILL_RATING:
-            player->ApplyRatingMod(CR_DEFENSE_SKILL, value, apply);
+            player->ApplyRatingMod(CR_DEFENSE_SKILL, legacyValue, apply);
             break;
         case ITEM_MOD_DODGE_RATING:
-            player->ApplyRatingMod(CR_DODGE, value, apply);
+            player->ApplyRatingMod(CR_DODGE, legacyValue, apply);
             break;
         case ITEM_MOD_PARRY_RATING:
-            player->ApplyRatingMod(CR_PARRY, value, apply);
+            player->ApplyRatingMod(CR_PARRY, legacyValue, apply);
             break;
         case ITEM_MOD_BLOCK_RATING:
-            player->ApplyRatingMod(CR_BLOCK, value, apply);
+            player->ApplyRatingMod(CR_BLOCK, legacyValue, apply);
             break;
         case ITEM_MOD_HIT_MELEE_RATING:
-            player->ApplyRatingMod(CR_HIT_MELEE, value, apply);
+            player->ApplyRatingMod(CR_HIT_MELEE, legacyValue, apply);
             break;
         case ITEM_MOD_HIT_RANGED_RATING:
-            player->ApplyRatingMod(CR_HIT_RANGED, value, apply);
+            player->ApplyRatingMod(CR_HIT_RANGED, legacyValue, apply);
             break;
         case ITEM_MOD_HIT_SPELL_RATING:
-            player->ApplyRatingMod(CR_HIT_SPELL, value, apply);
+            player->ApplyRatingMod(CR_HIT_SPELL, legacyValue, apply);
             break;
         case ITEM_MOD_CRIT_MELEE_RATING:
-            player->ApplyRatingMod(CR_CRIT_MELEE, value, apply);
+            player->ApplyRatingMod(CR_CRIT_MELEE, legacyValue, apply);
             break;
         case ITEM_MOD_CRIT_RANGED_RATING:
-            player->ApplyRatingMod(CR_CRIT_RANGED, value, apply);
+            player->ApplyRatingMod(CR_CRIT_RANGED, legacyValue, apply);
             break;
         case ITEM_MOD_CRIT_SPELL_RATING:
-            player->ApplyRatingMod(CR_CRIT_SPELL, value, apply);
+            player->ApplyRatingMod(CR_CRIT_SPELL, legacyValue, apply);
             break;
         case ITEM_MOD_HASTE_MELEE_RATING:
-            player->ApplyRatingMod(CR_HASTE_MELEE, value, apply);
+            player->ApplyRatingMod(CR_HASTE_MELEE, legacyValue, apply);
             break;
         case ITEM_MOD_HASTE_RANGED_RATING:
-            player->ApplyRatingMod(CR_HASTE_RANGED, value, apply);
+            player->ApplyRatingMod(CR_HASTE_RANGED, legacyValue, apply);
             break;
         case ITEM_MOD_HASTE_SPELL_RATING:
-            player->ApplyRatingMod(CR_HASTE_SPELL, value, apply);
+            player->ApplyRatingMod(CR_HASTE_SPELL, legacyValue, apply);
             break;
         case ITEM_MOD_HIT_RATING:
-            player->ApplyRatingMod(CR_HIT_MELEE, value, apply);
-            player->ApplyRatingMod(CR_HIT_RANGED, value, apply);
-            player->ApplyRatingMod(CR_HIT_SPELL, value, apply);
+            player->ApplyRatingMod(CR_HIT_MELEE, legacyValue, apply);
+            player->ApplyRatingMod(CR_HIT_RANGED, legacyValue, apply);
+            player->ApplyRatingMod(CR_HIT_SPELL, legacyValue, apply);
             break;
         case ITEM_MOD_CRIT_RATING:
-            player->ApplyRatingMod(CR_CRIT_MELEE, value, apply);
-            player->ApplyRatingMod(CR_CRIT_RANGED, value, apply);
-            player->ApplyRatingMod(CR_CRIT_SPELL, value, apply);
+            player->ApplyRatingMod(CR_CRIT_MELEE, legacyValue, apply);
+            player->ApplyRatingMod(CR_CRIT_RANGED, legacyValue, apply);
+            player->ApplyRatingMod(CR_CRIT_SPELL, legacyValue, apply);
             break;
         case ITEM_MOD_RESILIENCE_RATING:
-            player->ApplyRatingMod(CR_CRIT_TAKEN_MELEE, value, apply);
-            player->ApplyRatingMod(CR_CRIT_TAKEN_RANGED, value, apply);
-            player->ApplyRatingMod(CR_CRIT_TAKEN_SPELL, value, apply);
+            player->ApplyRatingMod(CR_CRIT_TAKEN_MELEE, legacyValue, apply);
+            player->ApplyRatingMod(CR_CRIT_TAKEN_RANGED, legacyValue, apply);
+            player->ApplyRatingMod(CR_CRIT_TAKEN_SPELL, legacyValue, apply);
             break;
         case ITEM_MOD_HASTE_RATING:
-            player->ApplyRatingMod(CR_HASTE_MELEE, value, apply);
-            player->ApplyRatingMod(CR_HASTE_RANGED, value, apply);
-            player->ApplyRatingMod(CR_HASTE_SPELL, value, apply);
+            player->ApplyRatingMod(CR_HASTE_MELEE, legacyValue, apply);
+            player->ApplyRatingMod(CR_HASTE_RANGED, legacyValue, apply);
+            player->ApplyRatingMod(CR_HASTE_SPELL, legacyValue, apply);
             break;
         case ITEM_MOD_EXPERTISE_RATING:
-            player->ApplyRatingMod(CR_EXPERTISE, value, apply);
+            player->ApplyRatingMod(CR_EXPERTISE, legacyValue, apply);
             break;
         case ITEM_MOD_ATTACK_POWER:
         {
-            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, BASE_VALUE, float(value), apply);
+            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, BASE_VALUE, statModValue, apply);
             player->UpdateAttackPowerAndDamage();
             break;
         }
         case ITEM_MOD_RANGED_ATTACK_POWER:
         {
-            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, BASE_VALUE, float(value), apply);
+            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, BASE_VALUE, statModValue, apply);
             player->UpdateAttackPowerAndDamage(true);
             break;
         }
@@ -2218,7 +2272,7 @@ void ItemEnhancementMgr::ApplyStatModifier(Player* player, uint32 statType, int3
             player->ApplySpellPowerBonus(value, apply);
             break;
         case ITEM_MOD_ARMOR_PENETRATION_RATING:
-            player->ApplyRatingMod(CR_ARMOR_PENETRATION, value, apply);
+            player->ApplyRatingMod(CR_ARMOR_PENETRATION, legacyValue, apply);
             break;
         default:
             // ChatHandler(player->GetSession()).PSendSysMessage("警告：未知的属性类型 {}", statType);
@@ -2227,113 +2281,116 @@ void ItemEnhancementMgr::ApplyStatModifier(Player* player, uint32 statType, int3
 }
 
 // 批量应用属性修正（不立即更新，用于批量优化）
-void ItemEnhancementMgr::ApplyStatModifierBatch(Player* player, uint32 statType, int32 value, bool apply)
+void ItemEnhancementMgr::ApplyStatModifierBatch(Player* player, uint32 statType, int128 const& value, bool apply)
 {
     if (!player || value == 0)
         return;
+
+    float statModValue = Acore::Number::ToFloat(value);
+    int64 legacyValue = Acore::Number::ToInt64Saturated(value);
 
     // 批量版本：只设置属性值，不调用任何Update函数
     switch (statType)
     {
         case ITEM_MOD_MANA:
-            player->HandleStatModifier(UNIT_MOD_MANA, BASE_VALUE, float(value), apply);
+            player->HandleStatModifier(UNIT_MOD_MANA, BASE_VALUE, statModValue, apply);
             break;
         case ITEM_MOD_HEALTH:
-            player->HandleStatModifier(UNIT_MOD_HEALTH, BASE_VALUE, float(value), apply);
+            player->HandleStatModifier(UNIT_MOD_HEALTH, BASE_VALUE, statModValue, apply);
             break;
         case ITEM_MOD_AGILITY:
-            player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, BASE_VALUE, float(value), apply);
-            player->ApplyStatBuffMod(STAT_AGILITY, float(value), apply);
+            player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, BASE_VALUE, statModValue, apply);
+            player->ApplyStatBuffMod(STAT_AGILITY, statModValue, apply);
             break;
         case ITEM_MOD_STRENGTH:
-            player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, BASE_VALUE, float(value), apply);
-            player->ApplyStatBuffMod(STAT_STRENGTH, float(value), apply);
+            player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, BASE_VALUE, statModValue, apply);
+            player->ApplyStatBuffMod(STAT_STRENGTH, statModValue, apply);
             break;
         case ITEM_MOD_INTELLECT:
-            player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, BASE_VALUE, float(value), apply);
-            player->ApplyStatBuffMod(STAT_INTELLECT, float(value), apply);
+            player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, BASE_VALUE, statModValue, apply);
+            player->ApplyStatBuffMod(STAT_INTELLECT, statModValue, apply);
             break;
         case ITEM_MOD_SPIRIT:
-            player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, BASE_VALUE, float(value), apply);
-            player->ApplyStatBuffMod(STAT_SPIRIT, float(value), apply);
+            player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, BASE_VALUE, statModValue, apply);
+            player->ApplyStatBuffMod(STAT_SPIRIT, statModValue, apply);
             break;
         case ITEM_MOD_STAMINA:
-            player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, BASE_VALUE, float(value), apply);
-            player->ApplyStatBuffMod(STAT_STAMINA, float(value), apply);
+            player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, BASE_VALUE, statModValue, apply);
+            player->ApplyStatBuffMod(STAT_STAMINA, statModValue, apply);
             break;
         case ITEM_MOD_DEFENSE_SKILL_RATING:
-            player->ApplyRatingMod(CR_DEFENSE_SKILL, value, apply);
+            player->ApplyRatingMod(CR_DEFENSE_SKILL, legacyValue, apply);
             break;
         case ITEM_MOD_DODGE_RATING:
-            player->ApplyRatingMod(CR_DODGE, value, apply);
+            player->ApplyRatingMod(CR_DODGE, legacyValue, apply);
             break;
         case ITEM_MOD_PARRY_RATING:
-            player->ApplyRatingMod(CR_PARRY, value, apply);
+            player->ApplyRatingMod(CR_PARRY, legacyValue, apply);
             break;
         case ITEM_MOD_BLOCK_RATING:
-            player->ApplyRatingMod(CR_BLOCK, value, apply);
+            player->ApplyRatingMod(CR_BLOCK, legacyValue, apply);
             break;
         case ITEM_MOD_HIT_MELEE_RATING:
-            player->ApplyRatingMod(CR_HIT_MELEE, value, apply);
+            player->ApplyRatingMod(CR_HIT_MELEE, legacyValue, apply);
             break;
         case ITEM_MOD_HIT_RANGED_RATING:
-            player->ApplyRatingMod(CR_HIT_RANGED, value, apply);
+            player->ApplyRatingMod(CR_HIT_RANGED, legacyValue, apply);
             break;
         case ITEM_MOD_HIT_SPELL_RATING:
-            player->ApplyRatingMod(CR_HIT_SPELL, value, apply);
+            player->ApplyRatingMod(CR_HIT_SPELL, legacyValue, apply);
             break;
         case ITEM_MOD_CRIT_MELEE_RATING:
-            player->ApplyRatingMod(CR_CRIT_MELEE, value, apply);
+            player->ApplyRatingMod(CR_CRIT_MELEE, legacyValue, apply);
             break;
         case ITEM_MOD_CRIT_RANGED_RATING:
-            player->ApplyRatingMod(CR_CRIT_RANGED, value, apply);
+            player->ApplyRatingMod(CR_CRIT_RANGED, legacyValue, apply);
             break;
         case ITEM_MOD_CRIT_SPELL_RATING:
-            player->ApplyRatingMod(CR_CRIT_SPELL, value, apply);
+            player->ApplyRatingMod(CR_CRIT_SPELL, legacyValue, apply);
             break;
         case ITEM_MOD_HASTE_MELEE_RATING:
-            player->ApplyRatingMod(CR_HASTE_MELEE, value, apply);
+            player->ApplyRatingMod(CR_HASTE_MELEE, legacyValue, apply);
             break;
         case ITEM_MOD_HASTE_RANGED_RATING:
-            player->ApplyRatingMod(CR_HASTE_RANGED, value, apply);
+            player->ApplyRatingMod(CR_HASTE_RANGED, legacyValue, apply);
             break;
         case ITEM_MOD_HASTE_SPELL_RATING:
-            player->ApplyRatingMod(CR_HASTE_SPELL, value, apply);
+            player->ApplyRatingMod(CR_HASTE_SPELL, legacyValue, apply);
             break;
         case ITEM_MOD_HIT_RATING:
-            player->ApplyRatingMod(CR_HIT_MELEE, value, apply);
-            player->ApplyRatingMod(CR_HIT_RANGED, value, apply);
-            player->ApplyRatingMod(CR_HIT_SPELL, value, apply);
+            player->ApplyRatingMod(CR_HIT_MELEE, legacyValue, apply);
+            player->ApplyRatingMod(CR_HIT_RANGED, legacyValue, apply);
+            player->ApplyRatingMod(CR_HIT_SPELL, legacyValue, apply);
             break;
         case ITEM_MOD_CRIT_RATING:
-            player->ApplyRatingMod(CR_CRIT_MELEE, value, apply);
-            player->ApplyRatingMod(CR_CRIT_RANGED, value, apply);
-            player->ApplyRatingMod(CR_CRIT_SPELL, value, apply);
+            player->ApplyRatingMod(CR_CRIT_MELEE, legacyValue, apply);
+            player->ApplyRatingMod(CR_CRIT_RANGED, legacyValue, apply);
+            player->ApplyRatingMod(CR_CRIT_SPELL, legacyValue, apply);
             break;
         case ITEM_MOD_RESILIENCE_RATING:
-            player->ApplyRatingMod(CR_CRIT_TAKEN_MELEE, value, apply);
-            player->ApplyRatingMod(CR_CRIT_TAKEN_RANGED, value, apply);
-            player->ApplyRatingMod(CR_CRIT_TAKEN_SPELL, value, apply);
+            player->ApplyRatingMod(CR_CRIT_TAKEN_MELEE, legacyValue, apply);
+            player->ApplyRatingMod(CR_CRIT_TAKEN_RANGED, legacyValue, apply);
+            player->ApplyRatingMod(CR_CRIT_TAKEN_SPELL, legacyValue, apply);
             break;
         case ITEM_MOD_HASTE_RATING:
-            player->ApplyRatingMod(CR_HASTE_MELEE, value, apply);
-            player->ApplyRatingMod(CR_HASTE_RANGED, value, apply);
-            player->ApplyRatingMod(CR_HASTE_SPELL, value, apply);
+            player->ApplyRatingMod(CR_HASTE_MELEE, legacyValue, apply);
+            player->ApplyRatingMod(CR_HASTE_RANGED, legacyValue, apply);
+            player->ApplyRatingMod(CR_HASTE_SPELL, legacyValue, apply);
             break;
         case ITEM_MOD_EXPERTISE_RATING:
-            player->ApplyRatingMod(CR_EXPERTISE, value, apply);
+            player->ApplyRatingMod(CR_EXPERTISE, legacyValue, apply);
             break;
         case ITEM_MOD_ATTACK_POWER:
-            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, BASE_VALUE, float(value), apply);
+            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, BASE_VALUE, statModValue, apply);
             break;
         case ITEM_MOD_RANGED_ATTACK_POWER:
-            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, BASE_VALUE, float(value), apply);
+            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, BASE_VALUE, statModValue, apply);
             break;
         case ITEM_MOD_SPELL_POWER:
             player->ApplySpellPowerBonus(value, apply);
             break;
         case ITEM_MOD_ARMOR_PENETRATION_RATING:
-            player->ApplyRatingMod(CR_ARMOR_PENETRATION, value, apply);
+            player->ApplyRatingMod(CR_ARMOR_PENETRATION, legacyValue, apply);
             break;
         default:
             break;
@@ -2349,13 +2406,13 @@ void ItemEnhancementMgr::RemovePreviousEnhancementStats(Player* player, const st
     // ChatHandler(player->GetSession()).PSendSysMessage("移除之前的强化属性: {}", statValues);
 
     // 解析属性值
-    std::map<uint32, int32> stats = ParseStatValues(statValues);
+    std::map<uint32, int128> stats = ParseStatValues(statValues);
 
     // 移除玩家身上的属性修正值
     for (const auto& stat : stats)
     {
         uint32 statType = stat.first;
-        int32 statValue = stat.second;
+        int128 statValue = stat.second;
 
         if (statValue > 0)
         {
@@ -2520,7 +2577,7 @@ void ItemEnhancementMgr::ClearPlayerAppliedEnhancements(Player* player)
             if (!appliedStats.empty())
             {
                 // 解析并移除属性
-                std::map<uint32, int32> stats = ParseStatValues(appliedStats);
+                std::map<uint32, int128> stats = ParseStatValues(appliedStats);
                 for (const auto& stat : stats)
                 {
                     if (stat.second > 0)
@@ -2556,21 +2613,21 @@ std::string ItemEnhancementMgr::GetItemBaseStatsInfo(Item* item) const
     std::string baseStats = "";
 
     // 护甲值
-    if (itemTemplate->Armor > 0)
+    if (itemTemplate->Armor128 > 0)
     {
         if (!baseStats.empty()) baseStats += " ";
-        baseStats += "护甲:" + std::to_string(itemTemplate->Armor);
+        baseStats += "护甲:" + itemTemplate->Armor128.convert_to<std::string>();
     }
 
     // 基础属性
     for (uint8 i = 0; i < itemTemplate->StatsCount && i < MAX_ITEM_PROTO_STATS; ++i)
     {
-        if (itemTemplate->ItemStat[i].ItemStatValue != 0)
+        if (itemTemplate->ItemStatValue128[i] != 0)
         {
             if (!baseStats.empty()) baseStats += " ";
 
             std::string statName = GetStatTypeName(itemTemplate->ItemStat[i].ItemStatType);
-            baseStats += statName + ":" + std::to_string(itemTemplate->ItemStat[i].ItemStatValue);
+            baseStats += statName + ":" + itemTemplate->ItemStatValue128[i].convert_to<std::string>();
         }
     }
 

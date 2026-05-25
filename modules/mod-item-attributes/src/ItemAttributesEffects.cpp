@@ -3,8 +3,36 @@
 #include "SpellMgr.h"
 #include "SpellAuraEffects.h"
 #include "ItemAttributesDBHelper.h"
+#include "StringConvert.h"
+#include "Util.h"
 #include <sstream>
 #include <chrono>
+
+namespace
+{
+float ToStatFloat(int128 const& value)
+{
+    return Acore::Number::ToFloat(value);
+}
+
+int64 ToRatingValue(int128 const& value)
+{
+    return Acore::Number::ToInt64Saturated(value);
+}
+
+int32 ToLegacyInt32(int128 const& value)
+{
+    return Acore::Number::ToInt32Saturated(value);
+}
+
+uint32 ToSettingUInt32(int128 const& value)
+{
+    if (value <= 0)
+        return 0;
+
+    return Acore::Number::ToUInt32Saturated(static_cast<uint128>(value));
+}
+}
 
 // 【线程安全】Meyer's Singleton - C++11保证静态局部变量初始化的线程安全性
 // 编译器会自动添加同步机制，确保多线程并发调用时只初始化一次
@@ -35,7 +63,7 @@ void ItemAttributesEffects::Initialize()
     // 力量属性 (类型 4)
     RegisterAttributeEffectHandler(4,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             // 【关键修复】安全获取物品GUID用于日志
             uint64 itemGuid = 0;
             if (item) {
@@ -43,11 +71,11 @@ void ItemAttributesEffects::Initialize()
                 if (!guidObj.IsEmpty()) itemGuid = guidObj.GetCounter();
             }
             LOG_DEBUG("module.itemattributes.effects", "【应用】力量 +{} (玩家:{}, 物品GUID:{})",
-                value, player->GetName(), itemGuid);
-            player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, TOTAL_VALUE, float(value), true);
+                Acore::ToString(value), player->GetName(), itemGuid);
+            player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, TOTAL_VALUE, ToStatFloat(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             // 【关键修复】安全获取物品GUID用于日志
             uint64 itemGuid = 0;
             if (item) {
@@ -55,11 +83,11 @@ void ItemAttributesEffects::Initialize()
                 if (!guidObj.IsEmpty()) itemGuid = guidObj.GetCounter();
             }
             LOG_DEBUG("module.itemattributes.effects", "【移除】力量 -{} (玩家:{}, 物品GUID:{})",
-                value, player->GetName(), itemGuid);
-            player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, TOTAL_VALUE, float(value), false);
+                Acore::ToString(value), player->GetName(), itemGuid);
+            player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, TOTAL_VALUE, ToStatFloat(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "力量 +" << value;
             return ss.str();
@@ -69,15 +97,15 @@ void ItemAttributesEffects::Initialize()
     // 敏捷属性 (类型 3)
     RegisterAttributeEffectHandler(3,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, TOTAL_VALUE, float(value), true);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, TOTAL_VALUE, ToStatFloat(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, TOTAL_VALUE, float(value), false);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, TOTAL_VALUE, ToStatFloat(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "敏捷 +" << value;
             return ss.str();
@@ -87,15 +115,15 @@ void ItemAttributesEffects::Initialize()
     // 耐力属性 (类型 7)
     RegisterAttributeEffectHandler(7,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, TOTAL_VALUE, float(value), true);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, TOTAL_VALUE, ToStatFloat(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, TOTAL_VALUE, float(value), false);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, TOTAL_VALUE, ToStatFloat(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "耐力 +" << value;
             return ss.str();
@@ -105,15 +133,15 @@ void ItemAttributesEffects::Initialize()
     // 智力属性 (类型 5)
     RegisterAttributeEffectHandler(5,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, TOTAL_VALUE, float(value), true);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, TOTAL_VALUE, ToStatFloat(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, TOTAL_VALUE, float(value), false);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, TOTAL_VALUE, ToStatFloat(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "智力 +" << value;
             return ss.str();
@@ -123,15 +151,15 @@ void ItemAttributesEffects::Initialize()
     // 精神属性 (类型 6)
     RegisterAttributeEffectHandler(6,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, TOTAL_VALUE, float(value), true);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, TOTAL_VALUE, ToStatFloat(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, TOTAL_VALUE, float(value), false);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, TOTAL_VALUE, ToStatFloat(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "精神 +" << value;
             return ss.str();
@@ -141,15 +169,15 @@ void ItemAttributesEffects::Initialize()
     // 生命值属性 (类型 1)
     RegisterAttributeEffectHandler(1,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, float(value), true);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, ToStatFloat(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, float(value), false);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, ToStatFloat(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "生命值 +" << value;
             return ss.str();
@@ -159,15 +187,15 @@ void ItemAttributesEffects::Initialize()
     // 法力值属性 (类型 0)
     RegisterAttributeEffectHandler(0,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->HandleStatModifier(UNIT_MOD_MANA, TOTAL_VALUE, float(value), true);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->HandleStatModifier(UNIT_MOD_MANA, TOTAL_VALUE, ToStatFloat(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->HandleStatModifier(UNIT_MOD_MANA, TOTAL_VALUE, float(value), false);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->HandleStatModifier(UNIT_MOD_MANA, TOTAL_VALUE, ToStatFloat(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "法力值 +" << value;
             return ss.str();
@@ -177,15 +205,15 @@ void ItemAttributesEffects::Initialize()
     // 攻击强度属性 (类型 38)
     RegisterAttributeEffectHandler(38,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, float(value), true);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, ToStatFloat(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, float(value), false);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, ToStatFloat(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "攻击强度 +" << value;
             return ss.str();
@@ -195,15 +223,15 @@ void ItemAttributesEffects::Initialize()
     // 法术强度属性 (类型 45)
     RegisterAttributeEffectHandler(45,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             player->ApplySpellPowerBonus(value, true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             player->ApplySpellPowerBonus(value, false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "法术强度 +" << value;
             return ss.str();
@@ -213,19 +241,19 @@ void ItemAttributesEffects::Initialize()
     // 暴击等级属性 (类型 32)
     RegisterAttributeEffectHandler(32,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyRatingMod(CR_CRIT_MELEE, value, true);
-            player->ApplyRatingMod(CR_CRIT_RANGED, value, true);
-            player->ApplyRatingMod(CR_CRIT_SPELL, value, true);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyRatingMod(CR_CRIT_MELEE, ToRatingValue(value), true);
+            player->ApplyRatingMod(CR_CRIT_RANGED, ToRatingValue(value), true);
+            player->ApplyRatingMod(CR_CRIT_SPELL, ToRatingValue(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyRatingMod(CR_CRIT_MELEE, value, false);
-            player->ApplyRatingMod(CR_CRIT_RANGED, value, false);
-            player->ApplyRatingMod(CR_CRIT_SPELL, value, false);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyRatingMod(CR_CRIT_MELEE, ToRatingValue(value), false);
+            player->ApplyRatingMod(CR_CRIT_RANGED, ToRatingValue(value), false);
+            player->ApplyRatingMod(CR_CRIT_SPELL, ToRatingValue(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "暴击等级 +" << value;
             return ss.str();
@@ -235,19 +263,19 @@ void ItemAttributesEffects::Initialize()
     // 命中等级属性 (类型 31)
     RegisterAttributeEffectHandler(31,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyRatingMod(CR_HIT_MELEE, value, true);
-            player->ApplyRatingMod(CR_HIT_RANGED, value, true);
-            player->ApplyRatingMod(CR_HIT_SPELL, value, true);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyRatingMod(CR_HIT_MELEE, ToRatingValue(value), true);
+            player->ApplyRatingMod(CR_HIT_RANGED, ToRatingValue(value), true);
+            player->ApplyRatingMod(CR_HIT_SPELL, ToRatingValue(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyRatingMod(CR_HIT_MELEE, value, false);
-            player->ApplyRatingMod(CR_HIT_RANGED, value, false);
-            player->ApplyRatingMod(CR_HIT_SPELL, value, false);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyRatingMod(CR_HIT_MELEE, ToRatingValue(value), false);
+            player->ApplyRatingMod(CR_HIT_RANGED, ToRatingValue(value), false);
+            player->ApplyRatingMod(CR_HIT_SPELL, ToRatingValue(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "命中等级 +" << value;
             return ss.str();
@@ -257,19 +285,19 @@ void ItemAttributesEffects::Initialize()
     // 急速等级属性 (类型 36)
     RegisterAttributeEffectHandler(36,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyRatingMod(CR_HASTE_MELEE, value, true);
-            player->ApplyRatingMod(CR_HASTE_RANGED, value, true);
-            player->ApplyRatingMod(CR_HASTE_SPELL, value, true);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyRatingMod(CR_HASTE_MELEE, ToRatingValue(value), true);
+            player->ApplyRatingMod(CR_HASTE_RANGED, ToRatingValue(value), true);
+            player->ApplyRatingMod(CR_HASTE_SPELL, ToRatingValue(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyRatingMod(CR_HASTE_MELEE, value, false);
-            player->ApplyRatingMod(CR_HASTE_RANGED, value, false);
-            player->ApplyRatingMod(CR_HASTE_SPELL, value, false);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyRatingMod(CR_HASTE_MELEE, ToRatingValue(value), false);
+            player->ApplyRatingMod(CR_HASTE_RANGED, ToRatingValue(value), false);
+            player->ApplyRatingMod(CR_HASTE_SPELL, ToRatingValue(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "急速等级 +" << value;
             return ss.str();
@@ -279,15 +307,15 @@ void ItemAttributesEffects::Initialize()
     // 护甲穿透等级属性 (类型 44)
     RegisterAttributeEffectHandler(44,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyRatingMod(CR_ARMOR_PENETRATION, value, true);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyRatingMod(CR_ARMOR_PENETRATION, ToRatingValue(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyRatingMod(CR_ARMOR_PENETRATION, value, false);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyRatingMod(CR_ARMOR_PENETRATION, ToRatingValue(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "护甲穿透等级 +" << value;
             return ss.str();
@@ -297,15 +325,15 @@ void ItemAttributesEffects::Initialize()
     // 法术穿透属性 (类型 47)
     RegisterAttributeEffectHandler(47,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplySpellPenetrationBonus(value, true);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplySpellPenetrationBonus(ToLegacyInt32(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplySpellPenetrationBonus(value, false);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplySpellPenetrationBonus(ToLegacyInt32(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "法术穿透 +" << value;
             return ss.str();
@@ -315,15 +343,15 @@ void ItemAttributesEffects::Initialize()
     // 防御等级属性 (类型 12)
     RegisterAttributeEffectHandler(12,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyRatingMod(CR_DEFENSE_SKILL, value, true);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyRatingMod(CR_DEFENSE_SKILL, ToRatingValue(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyRatingMod(CR_DEFENSE_SKILL, value, false);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyRatingMod(CR_DEFENSE_SKILL, ToRatingValue(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "防御等级 +" << value;
             return ss.str();
@@ -333,15 +361,15 @@ void ItemAttributesEffects::Initialize()
     // 躲闪等级属性 (类型 13)
     RegisterAttributeEffectHandler(13,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyRatingMod(CR_DODGE, value, true);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyRatingMod(CR_DODGE, ToRatingValue(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyRatingMod(CR_DODGE, value, false);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyRatingMod(CR_DODGE, ToRatingValue(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "躲闪等级 +" << value;
             return ss.str();
@@ -351,15 +379,15 @@ void ItemAttributesEffects::Initialize()
     // 招架等级属性 (类型 14)
     RegisterAttributeEffectHandler(14,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyRatingMod(CR_PARRY, value, true);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyRatingMod(CR_PARRY, ToRatingValue(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyRatingMod(CR_PARRY, value, false);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyRatingMod(CR_PARRY, ToRatingValue(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "招架等级 +" << value;
             return ss.str();
@@ -369,15 +397,15 @@ void ItemAttributesEffects::Initialize()
     // 格挡等级属性 (类型 15)
     RegisterAttributeEffectHandler(15,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyRatingMod(CR_BLOCK, value, true);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyRatingMod(CR_BLOCK, ToRatingValue(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyRatingMod(CR_BLOCK, value, false);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyRatingMod(CR_BLOCK, ToRatingValue(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "格挡等级 +" << value;
             return ss.str();
@@ -387,19 +415,19 @@ void ItemAttributesEffects::Initialize()
     // 韧性等级属性 (类型 35)
     RegisterAttributeEffectHandler(35,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyRatingMod(CR_CRIT_TAKEN_MELEE, value, true);
-            player->ApplyRatingMod(CR_CRIT_TAKEN_RANGED, value, true);
-            player->ApplyRatingMod(CR_CRIT_TAKEN_SPELL, value, true);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyRatingMod(CR_CRIT_TAKEN_MELEE, ToRatingValue(value), true);
+            player->ApplyRatingMod(CR_CRIT_TAKEN_RANGED, ToRatingValue(value), true);
+            player->ApplyRatingMod(CR_CRIT_TAKEN_SPELL, ToRatingValue(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyRatingMod(CR_CRIT_TAKEN_MELEE, value, false);
-            player->ApplyRatingMod(CR_CRIT_TAKEN_RANGED, value, false);
-            player->ApplyRatingMod(CR_CRIT_TAKEN_SPELL, value, false);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyRatingMod(CR_CRIT_TAKEN_MELEE, ToRatingValue(value), false);
+            player->ApplyRatingMod(CR_CRIT_TAKEN_RANGED, ToRatingValue(value), false);
+            player->ApplyRatingMod(CR_CRIT_TAKEN_SPELL, ToRatingValue(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "韧性等级 +" << value;
             return ss.str();
@@ -409,15 +437,15 @@ void ItemAttributesEffects::Initialize()
     // 精准等级属性 (类型 37)
     RegisterAttributeEffectHandler(37,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyRatingMod(CR_EXPERTISE, value, true);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyRatingMod(CR_EXPERTISE, ToRatingValue(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyRatingMod(CR_EXPERTISE, value, false);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyRatingMod(CR_EXPERTISE, ToRatingValue(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "精准等级 +" << value;
             return ss.str();
@@ -427,15 +455,15 @@ void ItemAttributesEffects::Initialize()
     // 远程攻击强度属性 (类型 39)
     RegisterAttributeEffectHandler(39,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, float(value), true);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, ToStatFloat(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, float(value), false);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, ToStatFloat(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "远程攻击强度 +" << value;
             return ss.str();
@@ -445,15 +473,15 @@ void ItemAttributesEffects::Initialize()
     // 法力恢复属性 (类型 43)
     RegisterAttributeEffectHandler(43,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyManaRegenBonus(value, true);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyManaRegenBonus(ToLegacyInt32(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyManaRegenBonus(value, false);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyManaRegenBonus(ToLegacyInt32(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "法力恢复 +" << value;
             return ss.str();
@@ -463,15 +491,15 @@ void ItemAttributesEffects::Initialize()
     // 生命恢复属性 (类型 46)
     RegisterAttributeEffectHandler(46,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyHealthRegenBonus(value, true);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyHealthRegenBonus(ToLegacyInt32(value), true);
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
-            player->ApplyHealthRegenBonus(value, false);
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
+            player->ApplyHealthRegenBonus(ToLegacyInt32(value), false);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "生命恢复 +" << value;
             return ss.str();
@@ -483,18 +511,18 @@ void ItemAttributesEffects::Initialize()
     // 这里仅提供描述支持，不实际应用效果
     RegisterAttributeEffectHandler(48,
         // 应用效果（占位，不实际应用）
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             // 格挡值是装备固有属性，在AzerothCore中无法通过附加属性系统修改
             // 这里仅记录日志
-            LOG_DEBUG("module.itemattributes", "格挡值属性 +{} 已添加到物品（仅显示，不影响实际游戏）", value);
+            LOG_DEBUG("module.itemattributes", "格挡值属性 +{} 已添加到物品（仅显示，不影响实际游戏）", Acore::ToString(value));
         },
         // 移除效果（占位，不实际移除）
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             // 格挡值是装备固有属性，无需移除
-            LOG_DEBUG("module.itemattributes", "格挡值属性 +{} 已移除（仅显示）", value);
+            LOG_DEBUG("module.itemattributes", "格挡值属性 +{} 已移除（仅显示）", Acore::ToString(value));
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "格挡值 +" << value << " (显示)";
             return ss.str();
@@ -508,19 +536,19 @@ void ItemAttributesEffects::Initialize()
     // 经验获取加成属性 (类型 400)
     RegisterAttributeEffectHandler(400,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             // 这里需要自定义实现经验获取加成逻辑
             // 示例：记录玩家的经验获取加成
             // 使用玩家设置系统存储经验加成
-            player->UpdatePlayerSetting("item_attributes", 400, value);
+            player->UpdatePlayerSetting("item_attributes", 400, ToSettingUInt32(value));
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             // 移除经验获取加成
             player->UpdatePlayerSetting("item_attributes", 400, 0);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "经验获取 +" << value << "%";
             return ss.str();
@@ -530,19 +558,19 @@ void ItemAttributesEffects::Initialize()
     // 掉落加成属性 (类型 401)
     RegisterAttributeEffectHandler(401,
         // 应用效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             // 这里需要自定义实现掉落加成逻辑
             // 示例：记录玩家的掉落加成
             // 使用玩家设置系统存储掉落加成
-            player->UpdatePlayerSetting("item_attributes", 401, value);
+            player->UpdatePlayerSetting("item_attributes", 401, ToSettingUInt32(value));
         },
         // 移除效果
-        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Player* player, Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             // 移除掉落加成
             player->UpdatePlayerSetting("item_attributes", 401, 0);
         },
         // 生成描述
-        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int32 value) {
+        [](Item* item, ItemAttributeTemplate const* attributeTemplate, int128 value) {
             std::ostringstream ss;
             ss << "掉落几率 +" << value << "%";
             return ss.str();
@@ -630,7 +658,7 @@ void ItemAttributesEffects::ApplyItemAttributeEffects(Player* player, Item* item
         return;
 
     std::vector<uint32> attributes;
-    std::vector<int32> values;
+    std::vector<int128> values;
 
     // 【关键修复】添加 sItemAttributesLoader 的空指针检查
     if (!sItemAttributesLoader)
@@ -672,7 +700,7 @@ void ItemAttributesEffects::ApplyItemAttributeEffects(Player* player, Item* item
     for (size_t i = 0; i < attributes.size(); ++i)
     {
         uint32 attributeType = attributes[i];
-        int32 value = values[i];
+        int128 value = values[i];
 
         auto handlerItr = _attributeEffectHandlers.find(attributeType);
         if (handlerItr != _attributeEffectHandlers.end())
@@ -713,7 +741,7 @@ void ItemAttributesEffects::RemoveItemAttributeEffects(Player* player, Item* ite
         return;
 
     std::vector<uint32> attributes;
-    std::vector<int32> values;
+    std::vector<int128> values;
 
     // 【关键修复】添加 sItemAttributesLoader 的空指针检查
     if (!sItemAttributesLoader)
@@ -754,7 +782,7 @@ void ItemAttributesEffects::RemoveItemAttributeEffects(Player* player, Item* ite
     for (size_t i = 0; i < attributes.size(); ++i)
     {
         uint32 attributeType = attributes[i];
-        int32 value = values[i];
+        int128 value = values[i];
 
         auto removerItr = _attributeEffectRemovers.find(attributeType);
         if (removerItr != _attributeEffectRemovers.end())
@@ -842,7 +870,7 @@ void ItemAttributesEffects::RemoveItemAttributeEffectsByGuid(Player* player, uin
 
     // 合并基础属性和追加属性
     std::vector<uint32> attributes;
-    std::vector<int32> values;
+    std::vector<int128> values;
 
     attributes.insert(attributes.end(), data->baseAttributeIds.begin(), data->baseAttributeIds.end());
     attributes.insert(attributes.end(), data->additionalAttributeIds.begin(), data->additionalAttributeIds.end());
@@ -872,7 +900,7 @@ void ItemAttributesEffects::RemoveItemAttributeEffectsByGuid(Player* player, uin
     for (size_t i = 0; i < attributes.size(); ++i)
     {
         uint32 attributeId = attributes[i];
-        int32 value = values[i];
+        int128 value = values[i];
 
         // 使用属性类型查询属性模板（因为数据库中保存的是属性类型）
         ItemAttributeTemplate const* attributeTemplate = sItemAttributesLoader->GetItemAttributeTemplateByType(attributeId);
@@ -921,7 +949,7 @@ std::string ItemAttributesEffects::GetAttributeDescription(Item* item, uint32 at
         return "";
 
     // 【审计修复】从数据库读取实际保存的值，而不是重新计算随机值
-    int32 value = 0;
+    int128 value = 0;
     uint64 itemGuid = item->GetGUID().GetCounter();
     auto data = ItemAttributesDBHelper::LoadItemAttributes(itemGuid);
     if (data)
@@ -960,4 +988,3 @@ std::string ItemAttributesEffects::GetAttributeDescription(Item* item, uint32 at
     ss << attributeTemplate->clientDisplay << ": " << value;
     return ss.str();
 }
-

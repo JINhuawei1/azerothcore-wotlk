@@ -305,15 +305,15 @@ class spell_pri_guardian_spirit : public AuraScript
         if (dmgInfo.GetDamage() < target->GetHealthForCombat())
             return;
 
-        uint64 healAmount64 = target->CountPctFromMaxHealth(healPct);
-        int32 healAmount = healAmount64 > static_cast<uint64>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(healAmount64);
+        uint128 healAmount128 = target->CountPctFromMaxHealth128(healPct);
+        int32 healAmount = SpellScriptCombat::ToClientSpellValue(Acore::Number::ToLongDouble(healAmount128));
         // remove the aura now, we don't want 40% healing bonus
         Remove(AURA_REMOVE_BY_ENEMY_SPELL);
         target->CastCustomSpell(target, SPELL_PRIEST_GUARDIAN_SPIRIT_HEAL, &healAmount, nullptr, nullptr, true);
         if (Player* player = target->ToPlayer())
-            if (player->GetExtendedMaxHealth() > player->GetMaxHealth() && player->GetExtendedHealth() < healAmount64)
+            if (player->GetExtendedMaxHealth128() > player->GetMaxHealth() && player->GetExtendedHealth128() < healAmount128)
             {
-                player->SetExtendedHealth(healAmount64);
+                player->SetExtendedHealth(healAmount128);
                 player->SyncClientHealthFromExtended();
             }
         dmgInfo.AbsorbDamage(dmgInfo.GetDamage());

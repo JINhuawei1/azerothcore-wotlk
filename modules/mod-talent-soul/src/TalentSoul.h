@@ -120,6 +120,7 @@ public:
 
     // 升级技能
     bool UpgradePlayerSpell(Player* player, uint32 spellId, TalentSoulUpgradeType upgradeType);
+    bool UpgradePlayerSpellAll(Player* player, uint32 spellId, TalentSoulUpgradeType upgradeType, uint32& upgradedLevels);
 
     // 检查玩家是否可以升级技能
     bool CanUpgradeSpell(Player* player, uint32 spellId, std::string& errorMsg) const;
@@ -138,7 +139,7 @@ public:
     void ApplyGCDReduction(Player* player, uint32 spellId, int32& gcd) const;
     void ApplyCooldownReduction(Player* player, uint32 spellId, int32& cooldown) const;
     void ApplyCostReduction(Player* player, uint32 spellId, int64& cost) const;
-    void ApplyDamageBonus(Unit* attacker, uint32 spellId, uint64& damage) const;
+    void ApplyDamageBonus(Unit* attacker, uint32 spellId, uint128& damage) const;
 
     uint32 GetDataCount() const { return static_cast<uint32>(_talentSoulData.size()); }
 

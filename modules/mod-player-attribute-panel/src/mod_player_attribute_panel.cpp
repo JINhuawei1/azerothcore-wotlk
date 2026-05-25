@@ -9,6 +9,7 @@
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "Util.h"
 #include "World.h"
 #include "WorldSession.h"
 #if __has_include("HuanJingSystem.h")
@@ -45,27 +46,12 @@ constexpr PlayerAttributePanelStatDef PLAYER_ATTRIBUTE_PANEL_STATS[] =
     { 6, STAT_SPIRIT    }
 };
 
-uint64 SaturateToUInt64(double value)
+int128 ToPositiveInt128(double value)
 {
     if (std::isnan(value) || value <= 0.0)
         return 0;
 
-    if (std::isinf(value) || value >= static_cast<double>(std::numeric_limits<uint64>::max()))
-        return std::numeric_limits<uint64>::max();
-
-    return static_cast<uint64>(value);
-}
-
-uint64 SaturateToUInt64(long double value)
-{
-    if (std::isnan(value) || value <= 0.0L)
-        return 0;
-
-    long double maxValue = static_cast<long double>(std::numeric_limits<uint64>::max());
-    if (std::isinf(value) || value >= maxValue)
-        return std::numeric_limits<uint64>::max();
-
-    return static_cast<uint64>(value);
+    return Acore::Number::ToInt128Saturated(static_cast<long double>(value));
 }
 
 float GetCreatureRankHealthModForPanel(uint32 rank)
@@ -87,7 +73,7 @@ float GetCreatureRankHealthModForPanel(uint32 rank)
     }
 }
 
-uint64 GetCreatureTemplateMaxHealthForPanel(Creature* creature)
+uint128 GetCreatureTemplateMaxHealthForPanel(Creature* creature)
 {
     if (!creature)
         return 0;
@@ -100,15 +86,15 @@ uint64 GetCreatureTemplateMaxHealthForPanel(Creature* creature)
     if (!stats)
         return 0;
 
-    uint64 baseHealth = stats->GenerateHealth(creatureTemplate);
-    long double rankHealth = static_cast<long double>(baseHealth) * static_cast<long double>(GetCreatureRankHealthModForPanel(creatureTemplate->rank));
-    return SaturateToUInt64(rankHealth);
+    uint128 baseHealth = stats->GenerateHealth(creatureTemplate);
+    long double rankHealth = Acore::Number::ToLongDouble(baseHealth) * static_cast<long double>(GetCreatureRankHealthModForPanel(creatureTemplate->rank));
+    return Acore::Number::ToUInt128Saturated(rankHealth);
 }
 
-std::string BuildRangePayload(double minValue, double maxValue)
+std::string BuildRangePayload(int128 const& minValue, int128 const& maxValue)
 {
     std::ostringstream range;
-    range << SaturateToUInt64(minValue) << '~' << SaturateToUInt64(maxValue);
+    range << (minValue > 0 ? minValue : int128(0)) << '~' << (maxValue > 0 ? maxValue : int128(0));
     return range.str();
 }
 
@@ -117,14 +103,29 @@ std::string ToPanelValue(int64 value)
     return std::to_string(value > 0 ? value : 0);
 }
 
+std::string ToPanelValue(int128 const& value)
+{
+    return value > 0 ? value.convert_to<std::string>() : "0";
+}
+
+std::string ToPanelValue(double value)
+{
+    return ToPanelValue(ToPositiveInt128(value));
+}
+
 std::string ToPanelValue(uint64 value)
 {
     return std::to_string(value);
 }
 
-uint32 ScalePanelCombatValueToClient(uint64 currentValue, uint64 maxValue, uint32 clientMaxValue)
+std::string ToPanelValue(uint128 const& value)
 {
-    if (!currentValue || !maxValue)
+    return value.convert_to<std::string>();
+}
+
+uint32 ScalePanelCombatValueToClient(uint128 const& currentValue, uint128 const& maxValue, uint32 clientMaxValue)
+{
+    if (currentValue == 0 || maxValue == 0)
         return 0;
 
     if (!clientMaxValue)
@@ -134,9 +135,9 @@ uint32 ScalePanelCombatValueToClient(uint64 currentValue, uint64 maxValue, uint3
         return clientMaxValue;
 
     if (maxValue <= clientMaxValue)
-        return currentValue > clientMaxValue ? clientMaxValue : static_cast<uint32>(currentValue);
+        return currentValue > clientMaxValue ? clientMaxValue : Acore::Number::ToUInt32Saturated(currentValue);
 
-    long double scaled = (static_cast<long double>(clientMaxValue) * static_cast<long double>(currentValue)) / static_cast<long double>(maxValue);
+    long double scaled = (static_cast<long double>(clientMaxValue) * Acore::Number::ToLongDouble(currentValue)) / Acore::Number::ToLongDouble(maxValue);
     uint32 clientValue = static_cast<uint32>(scaled + 0.5L);
     if (!clientValue)
         return 1;
@@ -144,7 +145,7 @@ uint32 ScalePanelCombatValueToClient(uint64 currentValue, uint64 maxValue, uint3
     return clientValue > clientMaxValue ? clientMaxValue : clientValue;
 }
 
-uint32 GetPanelClientPowerValue(Powers power, uint64 currentValue, uint64 maxValue, uint32 clientMaxValue)
+uint32 GetPanelClientPowerValue(Powers power, uint128 const& currentValue, uint128 const& maxValue, uint32 clientMaxValue)
 {
     uint32 clientPower = ScalePanelCombatValueToClient(currentValue, maxValue, clientMaxValue);
     if (power == POWER_MANA && maxValue > clientMaxValue && clientPower >= clientMaxValue && clientMaxValue > 1)
@@ -166,34 +167,30 @@ std::string SanitizePayloadValue(std::string value)
     return value;
 }
 
-int64 GetPanelStat(Player* player, Stats stat)
+int128 GetPanelStat(Player* player, Stats stat)
 {
-    int64 extendedValue = player->GetExtendedStat(stat);
-    return extendedValue > 0 ? extendedValue : player->GetStat(stat);
+    int128 extendedValue = player->GetExtendedStat128(stat);
+    return extendedValue > 0 ? extendedValue : Acore::Number::ToInt128Saturated(static_cast<long double>(player->GetStat(stat)));
 }
 
-int64 GetPanelCombatRating(Player* player, CombatRating combatRating)
+int128 GetPanelCombatRating(Player* player, CombatRating combatRating)
 {
-    int64 extendedValue = player->GetExtendedCombatRating(combatRating);
+    int128 extendedValue = player->GetExtendedCombatRating(combatRating);
     if (extendedValue > 0)
         return extendedValue;
 
     int32 fieldValue = player->GetInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + combatRating);
-    return fieldValue > 0 ? fieldValue : 0;
+    return fieldValue > 0 ? int128(fieldValue) : int128(0);
 }
 
-int64 GetPanelBaseSpellPowerBonus(Player* player)
+int128 GetPanelBaseSpellPowerBonus(Player* player)
 {
-    uint64 baseSpellPower = player->GetBaseSpellPowerBonus();
-    if (baseSpellPower > static_cast<uint64>(std::numeric_limits<int64>::max()))
-        return std::numeric_limits<int64>::max();
-
-    return static_cast<int64>(baseSpellPower);
+    return Acore::Number::ToInt128Saturated(player->GetBaseSpellPowerBonus128());
 }
 
-int64 GetPanelHealingBonus(Player* player)
+int128 GetPanelHealingBonus(Player* player)
 {
-    int64 extendedValue = player->GetExtendedHealingBonus();
+    int128 extendedValue = player->GetExtendedHealingBonus128();
     if (extendedValue > 0)
         return extendedValue;
 
@@ -204,9 +201,9 @@ int64 GetPanelHealingBonus(Player* player)
     return GetPanelBaseSpellPowerBonus(player);
 }
 
-int64 GetPanelSpellDamageBonus(Player* player)
+int128 GetPanelSpellDamageBonus(Player* player)
 {
-    int64 extendedValue = player->GetExtendedSpellDamageBonus();
+    int128 extendedValue = player->GetExtendedSpellDamageBonus128();
     if (extendedValue > 0)
         return extendedValue;
 
@@ -224,9 +221,9 @@ int64 GetPanelSpellDamageBonus(Player* player)
     return GetPanelBaseSpellPowerBonus(player);
 }
 
-int64 GetPanelSpellPowerBonus(Player* player)
+int128 GetPanelSpellPowerBonus(Player* player)
 {
-    int64 extendedValue = player->GetExtendedSpellPowerBonus();
+    int128 extendedValue = player->GetExtendedSpellPowerBonus128();
     if (extendedValue > 0)
         return extendedValue;
 
@@ -313,12 +310,12 @@ void SendPlayerAttributePanelData(Player* player)
     std::vector<std::string> stats;
     stats.reserve(50);
 
-    stats.push_back(std::string("CUR_HEALTH=") + ToPanelValue(player->GetExtendedHealth()));
-    stats.push_back(std::string("CURRENT_HEALTH=") + ToPanelValue(player->GetExtendedHealth()));
-    stats.push_back(std::string("CUR_MANA=") + ToPanelValue(player->GetPowerForCombat(POWER_MANA)));
-    stats.push_back(std::string("CURRENT_MANA=") + ToPanelValue(player->GetPowerForCombat(POWER_MANA)));
-    AddPanelStat(stats, 1, ToPanelValue(player->GetExtendedMaxHealth()));
-    AddPanelStat(stats, 0, ToPanelValue(player->GetExtendedMaxPower(POWER_MANA)));
+    stats.push_back(std::string("CUR_HEALTH=") + ToPanelValue(player->GetExtendedHealth128()));
+    stats.push_back(std::string("CURRENT_HEALTH=") + ToPanelValue(player->GetExtendedHealth128()));
+    stats.push_back(std::string("CUR_MANA=") + ToPanelValue(player->GetPowerForCombat128(POWER_MANA)));
+    stats.push_back(std::string("CURRENT_MANA=") + ToPanelValue(player->GetPowerForCombat128(POWER_MANA)));
+    AddPanelStat(stats, 1, ToPanelValue(player->GetExtendedMaxHealth128()));
+    AddPanelStat(stats, 0, ToPanelValue(player->GetExtendedMaxPower128(POWER_MANA)));
     for (PlayerAttributePanelStatDef const& statDef : PLAYER_ATTRIBUTE_PANEL_STATS)
         AddPanelStat(stats, statDef.id, ToPanelValue(GetPanelStat(player, statDef.stat)));
 
@@ -352,8 +349,8 @@ void SendPlayerAttributePanelData(Player* player)
     AddPanelStat(stats, 35, ToPanelValue(GetPanelCombatRating(player, CR_CRIT_TAKEN_MELEE)));
     AddPanelStat(stats, 36, ToPanelValue(GetPanelCombatRating(player, CR_HASTE_MELEE)));
     AddPanelStat(stats, 37, ToPanelValue(GetPanelCombatRating(player, CR_EXPERTISE)));
-    AddPanelStat(stats, 38, ToPanelValue(SaturateToUInt64(player->GetExtendedTotalAttackPowerValue(BASE_ATTACK))));
-    AddPanelStat(stats, 39, ToPanelValue(SaturateToUInt64(player->GetExtendedTotalAttackPowerValue(RANGED_ATTACK))));
+    AddPanelStat(stats, 38, ToPanelValue(player->GetExtendedTotalAttackPowerValue(BASE_ATTACK)));
+    AddPanelStat(stats, 39, ToPanelValue(player->GetExtendedTotalAttackPowerValue(RANGED_ATTACK)));
     AddPanelStat(stats, 41, ToPanelValue(GetPanelHealingBonus(player)));
     AddPanelStat(stats, 42, ToPanelValue(GetPanelSpellDamageBonus(player)));
     AddPanelStat(stats, 43, ToPanelValue(static_cast<uint64>(player->GetBaseManaRegenBonus())));
@@ -376,35 +373,35 @@ void SendPlayerAttributePanelResourceData(Player* player)
 
     std::vector<std::string> stats;
     stats.reserve(6);
-    stats.push_back(std::string("CUR_HEALTH=") + ToPanelValue(player->GetExtendedHealth()));
-    stats.push_back(std::string("CURRENT_HEALTH=") + ToPanelValue(player->GetExtendedHealth()));
-    stats.push_back(std::string("CUR_MANA=") + ToPanelValue(player->GetPowerForCombat(POWER_MANA)));
-    stats.push_back(std::string("CURRENT_MANA=") + ToPanelValue(player->GetPowerForCombat(POWER_MANA)));
-    AddPanelStat(stats, 1, ToPanelValue(player->GetExtendedMaxHealth()));
-    AddPanelStat(stats, 0, ToPanelValue(player->GetExtendedMaxPower(POWER_MANA)));
+    stats.push_back(std::string("CUR_HEALTH=") + ToPanelValue(player->GetExtendedHealth128()));
+    stats.push_back(std::string("CURRENT_HEALTH=") + ToPanelValue(player->GetExtendedHealth128()));
+    stats.push_back(std::string("CUR_MANA=") + ToPanelValue(player->GetPowerForCombat128(POWER_MANA)));
+    stats.push_back(std::string("CURRENT_MANA=") + ToPanelValue(player->GetPowerForCombat128(POWER_MANA)));
+    AddPanelStat(stats, 1, ToPanelValue(player->GetExtendedMaxHealth128()));
+    AddPanelStat(stats, 0, ToPanelValue(player->GetExtendedMaxPower128(POWER_MANA)));
     SendPanelStats(player, stats);
 }
 
-uint64 GetPanelMaxMana(Unit* unit)
+uint128 GetPanelMaxMana(Unit* unit)
 {
     if (!unit)
         return 0;
 
-    return unit->GetMaxPowerForCombat(POWER_MANA);
+    return unit->GetMaxPowerForCombat128(POWER_MANA);
 }
 
-void GetPanelTargetHealth(Player* player, Unit* target, uint64& currentHealth, uint64& maxHealth)
+void GetPanelTargetHealth(Player* player, Unit* target, uint128& currentHealth, uint128& maxHealth)
 {
-    currentHealth = target ? target->GetHealthForCombat() : 0;
-    maxHealth = target ? target->GetMaxHealthForCombat() : 0;
-    uint64 fieldCurrentHealth = currentHealth;
-    uint64 fieldMaxHealth = maxHealth;
+    currentHealth = target ? target->GetHealthForCombat128() : 0;
+    maxHealth = target ? target->GetMaxHealthForCombat128() : 0;
+    uint128 fieldCurrentHealth = currentHealth;
+    uint128 fieldMaxHealth = maxHealth;
 
 #ifdef MODULE_HUANJING_SYSTEM
     if (target && target->IsCreature() && sHuanJingSystem)
     {
-        uint64 virtualCurrentHealth = 0;
-        uint64 virtualMaxHealth = 0;
+        uint128 virtualCurrentHealth = 0;
+        uint128 virtualMaxHealth = 0;
         if (sHuanJingSystem->GetCreatureVirtualHealth(target->GetGUID(), virtualCurrentHealth, virtualMaxHealth))
         {
             currentHealth = virtualCurrentHealth;
@@ -417,7 +414,7 @@ void GetPanelTargetHealth(Player* player, Unit* target, uint64& currentHealth, u
     if (target && target->IsCreature())
     {
         Creature* creature = target->ToCreature();
-        uint64 templateMaxHealth = GetCreatureTemplateMaxHealthForPanel(creature);
+        uint128 templateMaxHealth = GetCreatureTemplateMaxHealthForPanel(creature);
         if (templateMaxHealth > maxHealth)
         {
             maxHealth = templateMaxHealth;
@@ -425,18 +422,18 @@ void GetPanelTargetHealth(Player* player, Unit* target, uint64& currentHealth, u
             {
                 currentHealth = maxHealth;
             }
-            else if (fieldMaxHealth > 0)
+            else if (fieldMaxHealth != 0)
             {
-                long double scaledHealth = (static_cast<long double>(maxHealth) * static_cast<long double>(fieldCurrentHealth)) / static_cast<long double>(fieldMaxHealth);
-                currentHealth = SaturateToUInt64(scaledHealth);
+                long double scaledHealth = (Acore::Number::ToLongDouble(maxHealth) * Acore::Number::ToLongDouble(fieldCurrentHealth)) / Acore::Number::ToLongDouble(fieldMaxHealth);
+                currentHealth = Acore::Number::ToUInt128Saturated(scaledHealth);
             }
         }
     }
 }
 
-void GetPanelTargetMana(Unit* target, uint64& currentMana, uint64& maxMana)
+void GetPanelTargetMana(Unit* target, uint128& currentMana, uint128& maxMana)
 {
-    currentMana = target ? target->GetPowerForCombat(POWER_MANA) : 0;
+    currentMana = target ? target->GetPowerForCombat128(POWER_MANA) : 0;
     maxMana = GetPanelMaxMana(target);
 
 #ifdef MODULE_HUANJING_SYSTEM
@@ -444,8 +441,8 @@ void GetPanelTargetMana(Unit* target, uint64& currentMana, uint64& maxMana)
     {
         if (Creature* creature = target->ToCreature())
         {
-            uint64 virtualCurrentMana = 0;
-            uint64 virtualMaxMana = 0;
+            uint128 virtualCurrentMana = 0;
+            uint128 virtualMaxMana = 0;
             if (sHuanJingSystem->GetCreatureVirtualMana(creature, virtualCurrentMana, virtualMaxMana))
             {
                 currentMana = virtualCurrentMana;
@@ -474,10 +471,10 @@ void SendPlayerAttributePanelTargetData(Player* player, std::string const& reque
         return;
     }
 
-    uint64 currentHealth = 0;
-    uint64 maxHealth = 0;
-    uint64 currentMana = 0;
-    uint64 maxMana = 0;
+    uint128 currentHealth = 0;
+    uint128 maxHealth = 0;
+    uint128 currentMana = 0;
+    uint128 maxMana = 0;
     GetPanelTargetHealth(player, target, currentHealth, maxHealth);
     GetPanelTargetMana(target, currentMana, maxMana);
 
@@ -575,10 +572,10 @@ public:
 
         bool clientResourceSynced = SyncPlayerClientResourceFields(player);
 
-        uint64 currentHealth = player->GetExtendedHealth();
-        uint64 maxHealth = player->GetExtendedMaxHealth();
-        uint64 currentMana = player->GetPowerForCombat(POWER_MANA);
-        uint64 maxMana = player->GetExtendedMaxPower(POWER_MANA);
+        std::string currentHealth = ToPanelValue(player->GetExtendedHealth128());
+        std::string maxHealth = ToPanelValue(player->GetExtendedMaxHealth128());
+        std::string currentMana = ToPanelValue(player->GetPowerForCombat128(POWER_MANA));
+        std::string maxMana = ToPanelValue(player->GetExtendedMaxPower128(POWER_MANA));
         if (!clientResourceSynced && _lastHealth[guid] == currentHealth && _lastMaxHealth[guid] == maxHealth && _lastMana[guid] == currentMana && _lastMaxMana[guid] == maxMana)
             return;
 
@@ -607,8 +604,8 @@ private:
     {
         bool synced = false;
 
-        uint64 extendedHealth = player->GetExtendedHealth();
-        uint64 extendedMaxHealth = player->GetExtendedMaxHealth();
+        uint128 extendedHealth = player->GetExtendedHealth128();
+        uint128 extendedMaxHealth = player->GetExtendedMaxHealth128();
         uint32 clientMaxHealth = player->GetMaxHealth();
         if (clientMaxHealth > MaxPanelClientResourceValue)
         {
@@ -629,8 +626,8 @@ private:
             }
         }
 
-        uint64 extendedMana = player->GetPowerForCombat(POWER_MANA);
-        uint64 extendedMaxMana = player->GetExtendedMaxPower(POWER_MANA);
+        uint128 extendedMana = player->GetPowerForCombat128(POWER_MANA);
+        uint128 extendedMaxMana = player->GetExtendedMaxPower128(POWER_MANA);
         uint32 clientMaxMana = player->GetMaxPower(POWER_MANA);
         if (clientMaxMana > MaxPanelClientResourceValue)
         {
@@ -655,10 +652,10 @@ private:
     }
 
     std::unordered_map<uint32, uint32> _healthSyncElapsed;
-    std::unordered_map<uint32, uint64> _lastHealth;
-    std::unordered_map<uint32, uint64> _lastMaxHealth;
-    std::unordered_map<uint32, uint64> _lastMana;
-    std::unordered_map<uint32, uint64> _lastMaxMana;
+    std::unordered_map<uint32, std::string> _lastHealth;
+    std::unordered_map<uint32, std::string> _lastMaxHealth;
+    std::unordered_map<uint32, std::string> _lastMana;
+    std::unordered_map<uint32, std::string> _lastMaxMana;
 };
 }
 

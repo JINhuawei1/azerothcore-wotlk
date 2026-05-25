@@ -17,6 +17,7 @@
 #include "Log.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "Util.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -50,7 +51,7 @@ struct HealRuneEntry
     uint32 healLevel = 0;
     uint32 requirementTemplateId = 0;
     uint8 healMode = HEAL_RUNE_MODE_VALUE;
-    uint32 healValue = 0;
+    uint128 healValue = 0;
 };
 
 struct PlayerHealRuneState
@@ -69,14 +70,31 @@ std::string SanitizeAddonText(std::string text)
     return text;
 }
 
-std::string FormatHealValue(uint32 value)
+std::string FormatHealValue(uint128 const& value)
 {
-    return std::to_string(value);
+    return value.convert_to<std::string>();
 }
 
-uint32 GetSecondaryDisplayValue(uint32 value)
+uint128 GetSecondaryDisplayValue(uint128 const& value)
 {
     return value / 10;
+}
+
+uint32 GetPercentValue(uint128 const& value)
+{
+    return value > 100 ? 100 : static_cast<uint32>(value);
+}
+
+uint128 SaturatingMultiplyUInt128(uint128 const& value, uint32 multiplier)
+{
+    if (multiplier == 0 || value == 0)
+        return 0;
+
+    uint128 const maxValue = std::numeric_limits<uint128>::max();
+    if (value > maxValue / multiplier)
+        return maxValue;
+
+    return value * multiplier;
 }
 
 std::string BuildHealRuneValueText(HealRuneEntry const& entry)
@@ -170,7 +188,7 @@ public:
             entry.healLevel = fields[3].Get<uint32>();
             entry.requirementTemplateId = fields[4].Get<uint32>();
             entry.healMode = fields[5].Get<uint8>();
-            entry.healValue = fields[6].Get<uint32>();
+            entry.healValue = fields[6].GetUInt128();
             entry.requirementText = fields[7].Get<std::string>();
 
             if (!entry.id || !entry.healLevel || entry.healLevel > 999999)
@@ -187,13 +205,13 @@ public:
 
             if (entry.healValue == 0)
             {
-                LOG_ERROR("sql.sql", "回血神符 id={} 的血蓝值 {} 非法，必须大于 0。", entry.id, entry.healValue);
+                LOG_ERROR("sql.sql", "回血神符 id={} 的血蓝值 {} 非法，必须大于 0。", entry.id, FormatHealValue(entry.healValue));
                 continue;
             }
 
             if (entry.healMode == HEAL_RUNE_MODE_PERCENT && entry.healValue > 100)
             {
-                LOG_WARN("sql.sql", "回血神符 id={} 的百分比数值 {} 超过 100，已按 100 处理。", entry.id, entry.healValue);
+                LOG_WARN("sql.sql", "回血神符 id={} 的百分比数值 {} 超过 100，已按 100 处理。", entry.id, FormatHealValue(entry.healValue));
                 entry.healValue = 100;
             }
 
@@ -305,14 +323,47 @@ public:
         return entry ? entry->id : 0;
     }
 
-    void LoadPlayerData(Player* player)
+    std::vector<HealRuneEntry const*> GetUiEntries(Player* player) const
+    {
+        std::vector<HealRuneEntry const*> result;
+
+        HealRuneEntry const* currentEntry = GetHighestUnlockedEntry(player);
+        if (currentEntry)
+            result.push_back(currentEntry);
+
+        for (HealRuneEntry const& entry : _entries)
+        {
+            if (currentEntry && entry.id == currentEntry->id)
+                continue;
+
+            if (!IsPlayerUnlocked(player, entry.id))
+            {
+                result.push_back(&entry);
+                break;
+            }
+        }
+
+        return result;
+    }
+
+    void LoadPlayerData(Player* player, bool keepOnlineCacheIfDbEmpty = false)
     {
         if (!player)
             return;
 
         uint32 playerGuid = player->GetGUID().GetCounter();
-        _playerRunes[playerGuid].clear();
-        _playerTickTimers[playerGuid] = 0;
+        uint32 onlineHealLevel = 0;
+        auto cachedRunesItr = _playerRunes.find(playerGuid);
+        if (cachedRunesItr != _playerRunes.end())
+        {
+            for (auto const& [runeId, state] : cachedRunesItr->second)
+            {
+                (void)runeId;
+                onlineHealLevel = std::max(onlineHealLevel, state.healLevel);
+            }
+        }
+
+        bool hasOnlineCache = onlineHealLevel > 0;
 
         QueryResult result = CharacterDatabase.Query(
             "SELECT `神符ID`, `回血等级` FROM `_玩家回血神符` WHERE `玩家GUID` = {} "
@@ -320,9 +371,16 @@ public:
             playerGuid);
 
         if (!result)
-            return;
+        {
+            if (!keepOnlineCacheIfDbEmpty || !hasOnlineCache)
+                _playerRunes[playerGuid].clear();
 
-        uint32 currentRuneId = 0;
+            _playerTickTimers[playerGuid] = 0;
+            return;
+        }
+
+        uint32 loadedHealLevel = 0;
+        std::unordered_map<uint32, PlayerHealRuneState> loadedRunes;
         do
         {
             Field* fields = result->Fetch();
@@ -333,18 +391,20 @@ public:
             if (!runeId)
                 continue;
 
-            _playerRunes[playerGuid][runeId] = state;
-            currentRuneId = runeId;
+            loadedRunes[runeId] = state;
+            loadedHealLevel = std::max(loadedHealLevel, state.healLevel);
         }
         while (result->NextRow());
 
-        if (currentRuneId)
+        if (keepOnlineCacheIfDbEmpty && onlineHealLevel > loadedHealLevel)
         {
-            CharacterDatabase.Execute(
-                "DELETE FROM `_玩家回血神符` WHERE `玩家GUID` = {} AND `神符ID` <> {}",
-                playerGuid,
-                currentRuneId);
+            _playerTickTimers[playerGuid] = 0;
+            return;
         }
+
+        _playerRunes[playerGuid] = loadedRunes;
+        _playerTickTimers[playerGuid] = 0;
+
     }
 
     void UnloadPlayerData(uint32 playerGuid)
@@ -468,27 +528,11 @@ public:
             return false;
 
         uint32 playerGuid = player->GetGUID().GetCounter();
-        uint32 previousRuneId = GetHighestUnlockedRuneId(player);
         auto& playerRunes = _playerRunes[playerGuid];
         playerRunes.clear();
         playerRunes[runeId] = { entry->healLevel };
 
-        if (previousRuneId)
-        {
-            CharacterDatabase.Execute(
-                "DELETE FROM `_玩家回血神符` WHERE `玩家GUID` = {} AND `神符ID` <> {}",
-                playerGuid,
-                previousRuneId);
-
-            CharacterDatabase.Execute(
-                "UPDATE `_玩家回血神符` SET `神符ID` = {}, `回血等级` = {} WHERE `玩家GUID` = {} AND `神符ID` = {}",
-                runeId,
-                entry->healLevel,
-                playerGuid,
-                previousRuneId);
-        }
-
-        CharacterDatabase.Execute(
+        CharacterDatabase.DirectExecute(
             "INSERT INTO `_玩家回血神符` (`玩家GUID`, `神符ID`, `回血等级`) VALUES ({}, {}, {}) "
             "ON DUPLICATE KEY UPDATE `神符ID` = VALUES(`神符ID`), `回血等级` = VALUES(`回血等级`)",
             playerGuid,
@@ -564,92 +608,87 @@ public:
     }
 
 private:
-    int64 CalculateTickAmount(HealRuneEntry const& entry, uint64 maxValue) const
+    uint128 CalculateTickAmount(HealRuneEntry const& entry, uint128 const& maxValue) const
     {
         if (maxValue == 0)
             return 0;
 
         if (entry.healMode == HEAL_RUNE_MODE_PERCENT)
         {
-            uint32 percent = std::min<uint32>(entry.healValue, 100);
-            long double amount = std::ceil(static_cast<long double>(maxValue) * static_cast<long double>(percent) / 100.0L);
-            if (amount >= static_cast<long double>(std::numeric_limits<int64>::max()))
-                return std::numeric_limits<int64>::max();
+            uint32 percent = GetPercentValue(entry.healValue);
+            uint128 amount = Acore::Number::ToUInt128Saturated(std::ceil(Acore::Number::ToLongDouble(maxValue) * static_cast<long double>(percent) / 100.0L));
 
-            return std::max<int64>(1, static_cast<int64>(amount));
+            return amount > 0 ? amount : 1;
         }
 
-        return std::max<int64>(1, static_cast<int64>(entry.healValue));
+        return entry.healValue > 0 ? entry.healValue : 1;
     }
 
-    int64 CalculateSecondaryTickAmount(HealRuneEntry const& entry, uint64 maxValue, Powers powerType) const
+    uint128 CalculateSecondaryTickAmount(HealRuneEntry const& entry, uint128 const& maxValue, Powers powerType) const
     {
         if (maxValue == 0)
             return 0;
 
         if (entry.healMode == HEAL_RUNE_MODE_PERCENT)
         {
-            uint32 percent = std::min<uint32>(entry.healValue, 100) / 10;
+            uint32 percent = GetPercentValue(entry.healValue) / 10;
             if (percent == 0)
                 return 0;
 
-            long double amount = std::ceil(static_cast<long double>(maxValue) * static_cast<long double>(percent) / 100.0L);
-            if (amount >= static_cast<long double>(std::numeric_limits<int64>::max()))
-                return std::numeric_limits<int64>::max();
+            uint128 amount = Acore::Number::ToUInt128Saturated(std::ceil(Acore::Number::ToLongDouble(maxValue) * static_cast<long double>(percent) / 100.0L));
 
-            return std::max<int64>(1, static_cast<int64>(amount));
+            return amount > 0 ? amount : 1;
         }
 
-        uint32 displayValue = GetSecondaryDisplayValue(entry.healValue);
+        uint128 displayValue = GetSecondaryDisplayValue(entry.healValue);
         if (displayValue == 0)
             return 0;
 
         if (powerType == POWER_RAGE || powerType == POWER_RUNIC_POWER)
-            return static_cast<int64>(displayValue) * 10;
+            return SaturatingMultiplyUInt128(displayValue, 10);
 
-        return static_cast<int64>(displayValue);
+        return displayValue;
     }
 
-    uint64 ClampRestoreAmount(int64 amount, uint64 currentValue, uint64 maxValue) const
+    uint128 ClampRestoreAmount(uint128 const& amount, uint128 const& currentValue, uint128 const& maxValue) const
     {
-        if (amount <= 0 || currentValue >= maxValue)
+        if (amount == 0 || currentValue >= maxValue)
             return 0;
 
-        uint64 missingValue = maxValue - currentValue;
-        uint64 restoreAmount = static_cast<uint64>(amount);
-        return restoreAmount > missingValue ? missingValue : restoreAmount;
+        uint128 missingValue = maxValue - currentValue;
+        return amount > missingValue ? missingValue : amount;
     }
 
-    void TryRestoreHealth(Player* player, int64 amount, bool& applied) const
+    void TryRestoreHealth(Player* player, uint128 const& amount, bool& applied) const
     {
-        if (!player || amount <= 0)
+        if (!player || amount == 0)
             return;
 
-        uint64 maxHealth = player->GetMaxHealthForCombat();
-        uint64 currentHealth = player->GetHealthForCombat();
-        uint64 restoreAmount = ClampRestoreAmount(amount, currentHealth, maxHealth);
-        if (!restoreAmount)
+        uint128 maxHealth = player->GetMaxHealthForCombat128();
+        uint128 currentHealth = player->GetHealthForCombat128();
+        uint128 restoreAmount = ClampRestoreAmount(amount, currentHealth, maxHealth);
+        if (restoreAmount == 0)
             return;
 
-        player->SetHealthForCombat(currentHealth + restoreAmount);
+        player->SetHealthForCombat128(currentHealth + restoreAmount);
         applied = true;
     }
 
-    void TryRestorePower(Player* player, Powers powerType, int64 amount, bool& applied) const
+    void TryRestorePower(Player* player, Powers powerType, uint128 const& amount, bool& applied) const
     {
-        if (!player || amount <= 0)
+        if (!player || amount == 0)
             return;
 
         if (powerType != POWER_MANA && !player->HasActivePowerType(powerType))
             return;
 
-        uint64 maxPower = player->GetMaxPowerForCombat(powerType);
-        uint64 currentPower = player->GetPowerForCombat(powerType);
-        uint64 restoreAmount = ClampRestoreAmount(amount, currentPower, maxPower);
-        if (!restoreAmount)
+        uint128 maxPower = player->GetMaxPowerForCombat128(powerType);
+        uint128 currentPower = player->GetPowerForCombat128(powerType);
+        uint128 restoreAmount = ClampRestoreAmount(amount, currentPower, maxPower);
+        if (restoreAmount == 0)
             return;
 
-        player->SetPowerForCombat(powerType, currentPower + restoreAmount);
+        player->SetPowerForCombat128(powerType, currentPower + restoreAmount);
 
         applied = true;
     }
@@ -658,13 +697,13 @@ private:
     {
         bool applied = false;
 
-        TryRestoreHealth(player, CalculateTickAmount(entry, player->GetMaxHealthForCombat()), applied);
+        TryRestoreHealth(player, CalculateTickAmount(entry, player->GetMaxHealthForCombat128()), applied);
 
-        TryRestorePower(player, POWER_MANA, CalculateTickAmount(entry, player->GetMaxPowerForCombat(POWER_MANA)), applied);
+        TryRestorePower(player, POWER_MANA, CalculateTickAmount(entry, player->GetMaxPowerForCombat128(POWER_MANA)), applied);
 
-        TryRestorePower(player, POWER_ENERGY, CalculateSecondaryTickAmount(entry, player->GetMaxPowerForCombat(POWER_ENERGY), POWER_ENERGY), applied);
-        TryRestorePower(player, POWER_RAGE, CalculateSecondaryTickAmount(entry, player->GetMaxPowerForCombat(POWER_RAGE), POWER_RAGE), applied);
-        TryRestorePower(player, POWER_RUNIC_POWER, CalculateSecondaryTickAmount(entry, player->GetMaxPowerForCombat(POWER_RUNIC_POWER), POWER_RUNIC_POWER), applied);
+        TryRestorePower(player, POWER_ENERGY, CalculateSecondaryTickAmount(entry, player->GetMaxPowerForCombat128(POWER_ENERGY), POWER_ENERGY), applied);
+        TryRestorePower(player, POWER_RAGE, CalculateSecondaryTickAmount(entry, player->GetMaxPowerForCombat128(POWER_RAGE), POWER_RAGE), applied);
+        TryRestorePower(player, POWER_RUNIC_POWER, CalculateSecondaryTickAmount(entry, player->GetMaxPowerForCombat128(POWER_RUNIC_POWER), POWER_RUNIC_POWER), applied);
 
         if (applied && IsDebugEnabled())
         {
@@ -726,12 +765,29 @@ void SendHealRuneListToPlayer(Player* player)
     std::ostringstream payload;
     payload << "HR_LIST:";
 
-    bool first = true;
-    for (HealRuneEntry const& entry : HealRuneMgr::Instance()->GetEntries())
+    HealRuneMgr* mgr = HealRuneMgr::Instance();
+    std::vector<HealRuneEntry const*> entries = mgr->GetUiEntries(player);
+    uint32 currentRuneId = mgr->GetHighestUnlockedRuneId(player);
+    if (mgr->IsDebugEnabled())
     {
+        LOG_INFO("server.loading", "[回血神符UI] 下发列表: 玩家={}, 当前神符ID={}, 下发条数={}, 总配置={}",
+            player->GetName(), currentRuneId, static_cast<uint32>(entries.size()), static_cast<uint32>(mgr->GetEntries().size()));
+    }
+
+    bool first = true;
+    for (HealRuneEntry const* entryPtr : entries)
+    {
+        if (!entryPtr)
+            continue;
+
+        HealRuneEntry const& entry = *entryPtr;
         if (!first)
             payload << '~';
         first = false;
+
+        bool unlocked = mgr->IsPlayerUnlocked(player, entry.id);
+        bool current = currentRuneId == entry.id;
+        bool eligible = !unlocked && mgr->CanActivateEntry(player, entry, false, false);
 
         payload << entry.id << '^'
                 << SanitizeAddonText(entry.name) << '^'
@@ -739,8 +795,11 @@ void SendHealRuneListToPlayer(Player* player)
                 << entry.healLevel << '^'
                 << entry.requirementTemplateId << '^'
                 << static_cast<uint32>(entry.healMode) << '^'
-                << entry.healValue << '^'
-                << SanitizeAddonText(entry.requirementText);
+                << FormatHealValue(entry.healValue) << '^'
+                << SanitizeAddonText(entry.requirementText) << '^'
+                << (unlocked ? 1 : 0) << '^'
+                << (current ? 1 : 0) << '^'
+                << (eligible ? 1 : 0);
     }
 
     SendHealRunePayload(player, payload.str());
@@ -755,10 +814,15 @@ void SendHealRuneStateToPlayer(Player* player)
     payload << "HR_STATE:";
 
     uint32 currentRuneId = HealRuneMgr::Instance()->GetHighestUnlockedRuneId(player);
+    std::vector<HealRuneEntry const*> entries = HealRuneMgr::Instance()->GetUiEntries(player);
     bool first = true;
 
-    for (HealRuneEntry const& entry : HealRuneMgr::Instance()->GetEntries())
+    for (HealRuneEntry const* entryPtr : entries)
     {
+        if (!entryPtr)
+            continue;
+
+        HealRuneEntry const& entry = *entryPtr;
         if (!first)
             payload << '~';
         first = false;
@@ -781,7 +845,7 @@ void SendHealRuneAllDataToPlayer(Player* player)
     if (!player)
         return;
 
-    HealRuneMgr::Instance()->LoadPlayerData(player);
+    HealRuneMgr::Instance()->LoadPlayerData(player, true);
     SendHealRuneListToPlayer(player);
     SendHealRuneStateToPlayer(player);
 }
@@ -918,13 +982,14 @@ public:
 
         if (command == "REQ_LIST")
         {
+            HealRuneMgr::Instance()->LoadPlayerData(player, true);
             SendHealRuneListToPlayer(player);
             return;
         }
 
         if (command == "REQ_STATE")
         {
-            HealRuneMgr::Instance()->LoadPlayerData(player);
+            HealRuneMgr::Instance()->LoadPlayerData(player, true);
             SendHealRuneStateToPlayer(player);
             return;
         }
@@ -941,7 +1006,7 @@ public:
             std::ostringstream message;
             message << "本次激活 " << count << " 个神符";
             SendHealRuneActionResult(player, "ACT_ALL", true, 0, message.str());
-            SendHealRuneStateToPlayer(player);
+            SendHealRuneAllDataToPlayer(player);
             return;
         }
 
@@ -969,7 +1034,7 @@ public:
             std::string failureMessage;
             bool success = HealRuneMgr::Instance()->UnlockRune(player, runeId, true, &failureMessage);
             SendHealRuneActionResult(player, "ACTIVATE", success, runeId, success ? "激活成功" : (failureMessage.empty() ? "激活失败" : failureMessage));
-            SendHealRuneStateToPlayer(player);
+            SendHealRuneAllDataToPlayer(player);
             return;
         }
     }

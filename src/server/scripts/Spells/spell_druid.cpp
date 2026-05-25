@@ -708,7 +708,7 @@ class spell_dru_moonkin_form_passive : public AuraScript
     {
         // reduces all damage taken while Stunned in Moonkin Form
         if (GetTarget()->GetUnitFlags() & (UNIT_FLAG_STUNNED) && GetTarget()->HasAuraWithMechanic(1 << MECHANIC_STUN))
-            absorbAmount = SpellScriptCombat::CalculatePctInt32Saturated(dmgInfo.GetDamage(), absorbPct);
+            absorbAmount = SpellScriptCombat::CalculatePctInt32Saturated(Acore::Number::ToUInt64Saturated(dmgInfo.GetDamage()), absorbPct);
     }
 
     void Register() override
@@ -775,7 +775,7 @@ class spell_dru_primal_tenacity : public AuraScript
     {
         // reduces all damage taken while Stunned in Cat Form
         if (GetTarget()->GetShapeshiftForm() == FORM_CAT && GetTarget()->HasUnitFlag(UNIT_FLAG_STUNNED) && GetTarget()->HasAuraWithMechanic(1 << MECHANIC_STUN))
-            absorbAmount = SpellScriptCombat::CalculatePctInt32Saturated(dmgInfo.GetDamage(), absorbPct);
+            absorbAmount = SpellScriptCombat::CalculatePctInt32Saturated(Acore::Number::ToUInt64Saturated(dmgInfo.GetDamage()), absorbPct);
     }
 
     void Register() override

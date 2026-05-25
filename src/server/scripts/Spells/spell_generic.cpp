@@ -297,8 +297,8 @@ class spell_gen_reduced_above_60 : public SpellScript
         if (Unit* target = GetHitUnit())
             if (target->GetLevel() > 60)
             {
-                int64 damage = SpellScriptCombat::AddPctInt64Saturated(GetHitDamage(), -4 * int8(std::min(target->GetLevel(), uint8(85)) - 60)); // prevents reduce by more than 100%
-                SetHitDamage(damage);
+                int32 damagePct = 100 - 4 * int8(std::min(target->GetLevel(), uint8(85)) - 60); // prevents reduce by more than 100%
+                SetHitDamage128(Acore::Number::CalculatePct(GetHitDamage128(), damagePct));
             }
     }
 

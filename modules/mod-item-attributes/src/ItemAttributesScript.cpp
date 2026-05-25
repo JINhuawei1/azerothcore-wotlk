@@ -10,7 +10,10 @@
 #include "Chat.h"
 #include "Player.h"
 #include "Item.h"
+#include "StringConvert.h"
+#include "Util.h"
 #include "World.h"
+#include <algorithm>
 #include <sstream>
 #include <vector>
 
@@ -199,7 +202,7 @@ static Item* FindPlayerItemByPosition(Player* player, uint32 itemId, int32 bag, 
 static std::string FormatAttributesForClient(const std::string& attrIds, const std::string& attrVals)
 {
     std::vector<uint32> ids;
-    std::vector<int32> vals;
+    std::vector<int128> vals;
     
     // 解析ID列表
     std::istringstream idsStream(attrIds);
@@ -207,7 +210,10 @@ static std::string FormatAttributesForClient(const std::string& attrIds, const s
     while (std::getline(idsStream, id, ','))
     {
         if (!id.empty())
-            ids.push_back(atoi(id.c_str()));
+        {
+            if (Optional<uint32> parsedId = Acore::StringTo<uint32>(id))
+                ids.push_back(*parsedId);
+        }
     }
     
     // 解析值列表
@@ -216,7 +222,10 @@ static std::string FormatAttributesForClient(const std::string& attrIds, const s
     while (std::getline(valsStream, val, ','))
     {
         if (!val.empty())
-            vals.push_back(atoi(val.c_str()));
+        {
+            if (Optional<int128> parsedValue = Acore::StringTo<int128>(val))
+                vals.push_back(*parsedValue);
+        }
     }
     
     // 构造 "属性名+值" 格式
@@ -229,9 +238,9 @@ static std::string FormatAttributesForClient(const std::string& attrIds, const s
         // 【重要】ids中存的是属性类型，不是模板ID
         ItemAttributeTemplate const* tpl = sItemAttributesLoader->GetItemAttributeTemplateByType(ids[i]);
         if (tpl)
-            result += tpl->clientDisplay + "+" + std::to_string(vals[i]);
+            result += tpl->clientDisplay + "+" + Acore::ToString(vals[i]);
         else
-            result += "未知属性+" + std::to_string(vals[i]);
+            result += "未知属性+" + Acore::ToString(vals[i]);
     }
     
     return result;
@@ -555,34 +564,33 @@ public:
         }
 
         // 计算属性值（如果未指定）
-        int32 attributeValue = 0;
+        int128 attributeValue = 0;
         if (!attributeValueStr.empty())
         {
-            // 【安全修复】使用 strtol 替代 atoi
-            endPtr = nullptr;
-            long valLong = strtol(attributeValueStr.c_str(), &endPtr, 10);
-            if (endPtr != attributeValueStr.c_str())
-                attributeValue = static_cast<int32>(valLong);
+            if (Optional<int128> parsedValue = Acore::StringTo<int128>(attributeValueStr))
+                attributeValue = *parsedValue;
         }
         else
         {
             // 使用模板中的随机范围生成属性值
             uint32 itemLevel = item->GetTemplate()->ItemLevel;
-            int32 minPercent = attrTemplate->minPercent;
-            int32 maxPercent = attrTemplate->maxPercent;
+            int128 minPercent = attrTemplate->minPercent;
+            int128 maxPercent = attrTemplate->maxPercent;
+            if (minPercent > maxPercent)
+                std::swap(minPercent, maxPercent);
             
             if (attrTemplate->calcType == 1) // 乘以物品等级
             {
-                int32 baseValue = (minPercent + maxPercent) / 2;
-                attributeValue = (baseValue * itemLevel) / 100;
+                int128 baseValue = minPercent + ((maxPercent - minPercent) / 2);
+                attributeValue = Acore::Number::CalculatePct(baseValue, itemLevel);
             }
             else if (attrTemplate->calcType == 2) // 固定值
             {
-                attributeValue = (minPercent + maxPercent) / 2;
+                attributeValue = minPercent + ((maxPercent - minPercent) / 2);
             }
             else // 常规值
             {
-                attributeValue = (minPercent + maxPercent) / 2;
+                attributeValue = minPercent + ((maxPercent - minPercent) / 2);
             }
         }
 
@@ -603,7 +611,7 @@ public:
             item->SaveToDB(nullptr); // 保存到数据库
             
             handler->PSendSysMessage("成功为物品 [{}] (ID: {}) 添加属性: {} +{}", 
-                item->GetTemplate()->Name1, itemId, attrTemplate->clientDisplay, attributeValue);
+                item->GetTemplate()->Name1, itemId, attrTemplate->clientDisplay, Acore::ToString(attributeValue));
             
             // 更新物品显示和属性效果（如果已装备）
             if (item->IsEquipped())
@@ -1119,7 +1127,6 @@ public:
 
         uint64 itemGuid = item->GetGUID().GetCounter();
         uint32 itemId = item->GetEntry();
-        uint32 itemLevel = item->GetTemplate()->ItemLevel;
         uint32 successCount = 0;
 
         // 随机生成属性
@@ -1130,24 +1137,13 @@ public:
             ItemAttributeTemplate const* attrTemplate = templates[index];
             
             // 计算属性值
-            int32 minValue = attrTemplate->minPercent;
-            int32 maxValue = attrTemplate->maxPercent;
-            int32 attributeValue = urand(minValue, maxValue);
-
-            if (attrTemplate->calcType == 1) // 乘以物品等级
-            {
-                attributeValue = (attributeValue * itemLevel) / 100;
-            }
-            else if (attrTemplate->calcType == 2) // 固定值
-            {
-                // 已经是最终值
-            }
+            int128 attributeValue = sItemAttributesLoader->CalculateAttributeValue(item, attrTemplate);
 
             // 添加属性
             // 【审计修复】保存属性类型而不是模板ID，确保与效果系统一致
             if (ItemAttributesDBHelper::AddAttributeToItem(itemGuid, itemId, attrTemplate->attributeType, attributeValue))
             {
-                handler->PSendSysMessage("生成属性: {} +{}", attrTemplate->clientDisplay, attributeValue);
+                handler->PSendSysMessage("生成属性: {} +{}", attrTemplate->clientDisplay, Acore::ToString(attributeValue));
                 successCount++;
                 
                 // 从列表中移除已使用的属性（避免重复）

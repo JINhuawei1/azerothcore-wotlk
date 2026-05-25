@@ -41,9 +41,9 @@ namespace
 {
 constexpr uint64 PET_CLIENT_VISIBLE_HEALTH_LIMIT = 2147483520ULL;
 
-uint32 ToPetUpdateFieldValue(uint64 value)
+uint32 ToPetUpdateFieldValue(uint128 const& value)
 {
-    return value > PET_CLIENT_VISIBLE_HEALTH_LIMIT ? static_cast<uint32>(PET_CLIENT_VISIBLE_HEALTH_LIMIT) : static_cast<uint32>(value);
+    return value > PET_CLIENT_VISIBLE_HEALTH_LIMIT ? static_cast<uint32>(PET_CLIENT_VISIBLE_HEALTH_LIMIT) : Acore::Number::ToUInt32Saturated(value);
 }
 }
 
@@ -473,29 +473,29 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
             }
         }
 
-        uint64 curHealth = savedhealth;
+        uint128 curHealth = savedhealth;
         if (healthPct)
         {
-            curHealth = CountPctFromMaxHealth(healthPct);
+            curHealth = CountPctFromMaxHealth128(healthPct);
         }
 
-        uint64 curMana = savedmana;
+        uint128 curMana = savedmana;
         if (fullMana)
-            curMana = GetMaxPowerForCombat(POWER_MANA);
+            curMana = GetMaxPowerForCombat128(POWER_MANA);
 
         if (getPetType() == SUMMON_PET && !current) //all (?) summon pets come with full health when called, but not when they are current
         {
-            SetPowerForCombat(POWER_MANA, GetMaxPowerForCombat(POWER_MANA));
+            SetPowerForCombat128(POWER_MANA, GetMaxPowerForCombat128(POWER_MANA));
             SetFullHealth();
         }
         else
         {
-            if (!curHealth && getPetType() == HUNTER_PET)
+            if (curHealth == 0 && getPetType() == HUNTER_PET)
                 setDeathState(DeathState::JustDied);
             else
             {
-                SetHealthForCombat(curHealth);
-                SetPowerForCombat(POWER_MANA, curMana);
+                SetHealthForCombat128(curHealth);
+                SetPowerForCombat128(POWER_MANA, curMana);
             }
         }
 
@@ -531,8 +531,8 @@ void Pet::SavePetToDB(PetSaveMode mode)
         mode = PET_SAVE_NOT_IN_SLOT;
     }
 
-    uint64 curhealth = GetHealthForCombat();
-    uint64 curmana = GetPowerForCombat(POWER_MANA);
+    uint128 curhealth = GetHealthForCombat128();
+    uint128 curmana = GetPowerForCombat128(POWER_MANA);
 
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
     // save auras before possibly removing them
@@ -1119,19 +1119,19 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
             factorHealth *= _GetHealthMod(cinfo->rank);
         }
 
-        uint64 health64 = std::max<uint64>(1, uint64(static_cast<long double>(pInfo->health) * static_cast<long double>(factorHealth)));
+        uint128 health64 = std::max<uint128>(1, Acore::Number::ToUInt128Saturated(Acore::Number::ToLongDouble(pInfo->health) * static_cast<long double>(factorHealth)));
         uint32 health = ToPetUpdateFieldValue(health64);
         m_extendedCreateHealth = health64;
         SetCreateHealth(health);
-        SetModifierValue(UNIT_MOD_HEALTH, BASE_VALUE, static_cast<float>(health64));
+        SetModifierValue(UNIT_MOD_HEALTH, BASE_VALUE, Acore::Number::ToFloat(health64));
         SetExtendedMaxHealth(health64);
         if (petType != HUNTER_PET) //hunter pet use focus
         {
-            uint64 mana64 = pInfo->mana;
+            uint128 mana64 = pInfo->mana;
             uint32 mana = ToPetUpdateFieldValue(mana64);
             m_extendedCreateMana = mana64;
             SetCreateMana(mana);
-            SetModifierValue(UNIT_MOD_MANA, BASE_VALUE, static_cast<float>(mana64));
+            SetModifierValue(UNIT_MOD_MANA, BASE_VALUE, Acore::Number::ToFloat(mana64));
             SetExtendedMaxPower(POWER_MANA, mana64);
         }
 
@@ -1154,18 +1154,18 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
             factorHealth *= _GetHealthMod(cinfo->rank);
         }
 
-        uint64 health64 = std::max<uint64>(1, uint64(static_cast<long double>(stats->BaseHealth[cinfo->expansion]) * static_cast<long double>(factorHealth)));
+        uint128 health64 = std::max<uint128>(1, Acore::Number::ToUInt128Saturated(Acore::Number::ToLongDouble(stats->BaseHealth[cinfo->expansion]) * static_cast<long double>(factorHealth)));
         uint32 health = ToPetUpdateFieldValue(health64);
         m_extendedCreateHealth = health64;
         SetCreateHealth(health);
-        SetModifierValue(UNIT_MOD_HEALTH, BASE_VALUE, static_cast<float>(health64));
+        SetModifierValue(UNIT_MOD_HEALTH, BASE_VALUE, Acore::Number::ToFloat(health64));
         SetExtendedMaxHealth(health64);
 
-        uint64 mana64 = uint64(static_cast<long double>(stats->BaseMana) * static_cast<long double>(factorMana));
+        uint128 mana64 = Acore::Number::ToUInt128Saturated(Acore::Number::ToLongDouble(stats->BaseMana) * static_cast<long double>(factorMana));
         uint32 mana = ToPetUpdateFieldValue(mana64);
         m_extendedCreateMana = mana64;
         SetCreateMana(mana);
-        SetModifierValue(UNIT_MOD_MANA, BASE_VALUE, static_cast<float>(mana64));
+        SetModifierValue(UNIT_MOD_MANA, BASE_VALUE, Acore::Number::ToFloat(mana64));
         SetExtendedMaxPower(POWER_MANA, mana64);
 
         // xinef: added some multipliers so debuffs can affect pets in any way...
@@ -1425,7 +1425,7 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
     if (GetEntry() == NPC_RISEN_GHOUL)
     {
         // 100% energy after summon
-        SetPowerForCombat(POWER_ENERGY, GetMaxPowerForCombat(POWER_ENERGY));
+        SetPowerForCombat128(POWER_ENERGY, GetMaxPowerForCombat128(POWER_ENERGY));
 
         // xinef: fixes orc death knight command racial
         if (owner->getRace() == RACE_ORC)
@@ -1451,7 +1451,7 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
     UpdateAllStats();
 
     SetFullHealth();
-    SetPowerForCombat(POWER_MANA, GetMaxPowerForCombat(POWER_MANA));
+    SetPowerForCombat128(POWER_MANA, GetMaxPowerForCombat128(POWER_MANA));
 
     if (owner->IsPlayer())
         sScriptMgr->OnPlayerAfterGuardianInitStatsForLevel(owner->ToPlayer(), this);
@@ -2504,8 +2504,8 @@ void Pet::FillPetInfo(PetStable::PetInfo* petInfo) const
     petInfo->ReactState = GetReactState();
     petInfo->Name = GetName();
     petInfo->WasRenamed = !HasByteFlag(UNIT_FIELD_BYTES_2, 2, UNIT_CAN_BE_RENAMED);
-    petInfo->Health = GetHealthForCombat();
-    petInfo->Mana = GetPowerForCombat(POWER_MANA);
+    petInfo->Health = GetHealthForCombat128();
+    petInfo->Mana = GetPowerForCombat128(POWER_MANA);
     petInfo->Happiness = GetPower(POWER_HAPPINESS);
     petInfo->ActionBar = GenerateActionBarData();
     petInfo->LastSaveTime = GameTime::GetGameTime().count();

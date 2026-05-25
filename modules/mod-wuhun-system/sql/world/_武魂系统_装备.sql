@@ -3,11 +3,14 @@
 CREATE TABLE IF NOT EXISTS `_武魂系统_装备` (
   `槽位` tinyint UNSIGNED NOT NULL COMMENT '对应玩家装备槽位',
   `名称` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
-  `魂力消耗` bigint UNSIGNED NOT NULL DEFAULT 0,
+  `魂力消耗` decimal(39,0) UNSIGNED NOT NULL DEFAULT 0,
   `需求模板ID` int UNSIGNED NOT NULL DEFAULT 0 COMMENT '0=无额外需求',
   `备注` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
   PRIMARY KEY (`槽位`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='武魂系统装备槽解锁配置';
+
+ALTER TABLE `_武魂系统_装备`
+  MODIFY COLUMN `魂力消耗` decimal(39,0) UNSIGNED NOT NULL DEFAULT 0;
 
 DELETE FROM `_武魂系统_装备` WHERE `槽位` BETWEEN 0 AND 18;
 INSERT INTO `_武魂系统_装备`

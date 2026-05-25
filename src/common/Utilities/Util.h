@@ -25,9 +25,12 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <list>
 #include <map>
+#include <limits>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 // Searcher for map of structs
@@ -57,10 +60,44 @@ inline void ApplyPercentModFloatVar(float& var, float val, bool apply)
 }
 
 // Percentage calculation
-template <class T, class U>
+// Exclude uint128/int128 — they have their own overloads below
+// (the generic body `T(base * float(pct) / 100.f)` fails on boost::multiprecision).
+template <class T, class U,
+    std::enable_if_t<!std::is_same_v<T, uint128> && !std::is_same_v<T, int128>, int> = 0>
 inline T CalculatePct(T base, U pct)
 {
     return T(base * static_cast<float>(pct) / 100.0f);
+}
+
+// uint128/int128 overloads — self-contained, used by AddPct below.
+template <class U>
+inline uint128 CalculatePct(uint128 const& base, U pct)
+{
+    long double v = base.template convert_to<long double>() * static_cast<long double>(pct) / 100.0L;
+    if (v <= 0.0L || std::isnan(static_cast<double>(v)))
+        return uint128(0);
+    uint128 const maxValue = std::numeric_limits<uint128>::max();
+    long double const maxLD = maxValue.template convert_to<long double>();
+    if (!std::isfinite(static_cast<double>(v)) || v >= maxLD)
+        return maxValue;
+    return static_cast<uint128>(v);
+}
+
+template <class U>
+inline int128 CalculatePct(int128 const& base, U pct)
+{
+    long double v = base.template convert_to<long double>() * static_cast<long double>(pct) / 100.0L;
+    if (std::isnan(static_cast<double>(v)))
+        return int128(0);
+    int128 const maxValue = std::numeric_limits<int128>::max();
+    int128 const minValue = std::numeric_limits<int128>::min();
+    long double const maxLD = maxValue.template convert_to<long double>();
+    long double const minLD = minValue.template convert_to<long double>();
+    if (!std::isfinite(static_cast<double>(v)))
+        return v > 0.0L ? maxValue : minValue;
+    if (v >= maxLD) return maxValue;
+    if (v <= minLD) return minValue;
+    return static_cast<int128>(v);
 }
 
 template <class T, class U>
@@ -79,6 +116,193 @@ template <class T>
 inline T RoundToInterval(T& num, T floor, T ceil)
 {
     return num = std::min<T>(std::max<T>(num, floor), ceil);
+}
+
+namespace Acore::Number
+{
+    inline long double ToLongDouble(uint128 const& value)
+    {
+        return value.convert_to<long double>();
+    }
+
+    inline long double ToLongDouble(int128 const& value)
+    {
+        return value.convert_to<long double>();
+    }
+
+    inline double ToDouble(uint128 const& value)
+    {
+        double result = value.convert_to<double>();
+        return std::isfinite(result) ? result : std::numeric_limits<double>::max();
+    }
+
+    inline double ToDouble(int128 const& value)
+    {
+        double result = value.convert_to<double>();
+        if (std::isfinite(result))
+            return result;
+
+        return value > 0 ? std::numeric_limits<double>::max() : std::numeric_limits<double>::lowest();
+    }
+
+    inline float ToFloat(uint128 const& value)
+    {
+        float result = value.convert_to<float>();
+        return std::isfinite(result) ? result : std::numeric_limits<float>::max();
+    }
+
+    inline float ToFloat(int128 const& value)
+    {
+        float result = value.convert_to<float>();
+        if (std::isfinite(result))
+            return result;
+
+        return value > 0 ? std::numeric_limits<float>::max() : std::numeric_limits<float>::lowest();
+    }
+
+    inline uint64 ToUInt64Saturated(uint128 const& value)
+    {
+        if (value > static_cast<uint128>(std::numeric_limits<uint64>::max()))
+            return std::numeric_limits<uint64>::max();
+
+        return static_cast<uint64>(value);
+    }
+
+    inline uint32 ToUInt32Saturated(uint128 const& value)
+    {
+        if (value > static_cast<uint128>(std::numeric_limits<uint32>::max()))
+            return std::numeric_limits<uint32>::max();
+
+        return static_cast<uint32>(value);
+    }
+
+    inline int64 ToInt64Saturated(int128 const& value)
+    {
+        if (value > static_cast<int128>(std::numeric_limits<int64>::max()))
+            return std::numeric_limits<int64>::max();
+
+        if (value < static_cast<int128>(std::numeric_limits<int64>::min()))
+            return std::numeric_limits<int64>::min();
+
+        return static_cast<int64>(value);
+    }
+
+    inline int32 ToInt32Saturated(int128 const& value)
+    {
+        int64 value64 = ToInt64Saturated(value);
+        if (value64 > std::numeric_limits<int32>::max())
+            return std::numeric_limits<int32>::max();
+
+        if (value64 < std::numeric_limits<int32>::min())
+            return std::numeric_limits<int32>::min();
+
+        return static_cast<int32>(value64);
+    }
+
+    inline uint128 ToUInt128Saturated(long double value)
+    {
+        if (std::isnan(static_cast<double>(value)) || value <= 0.0L)
+            return 0;
+
+        uint128 const maxValue = std::numeric_limits<uint128>::max();
+        long double const maxLongDouble = ToLongDouble(maxValue);
+        if (!std::isfinite(value) || value >= maxLongDouble)
+            return maxValue;
+
+        return static_cast<uint128>(value);
+    }
+
+    inline int128 ToInt128Saturated(long double value)
+    {
+        if (std::isnan(static_cast<double>(value)))
+            return 0;
+
+        int128 const maxValue = std::numeric_limits<int128>::max();
+        int128 const minValue = std::numeric_limits<int128>::min();
+        long double const maxLongDouble = maxValue.convert_to<long double>();
+        long double const minLongDouble = minValue.convert_to<long double>();
+
+        if (!std::isfinite(value))
+            return value > 0.0L ? maxValue : minValue;
+
+        if (value >= maxLongDouble)
+            return maxValue;
+
+        if (value <= minLongDouble)
+            return minValue;
+
+        return static_cast<int128>(value);
+    }
+
+    inline int128 ToInt128Saturated(uint128 const& value)
+    {
+        uint128 const maxValue = static_cast<uint128>(std::numeric_limits<int128>::max());
+        if (value > maxValue)
+            return std::numeric_limits<int128>::max();
+
+        return static_cast<int128>(value);
+    }
+
+    inline uint128 ToUInt128Saturated(int128 const& value)
+    {
+        if (value <= 0)
+            return 0;
+
+        return static_cast<uint128>(value);
+    }
+
+    template <class T>
+    inline uint128 CalculatePct(uint128 const& base, T pct)
+    {
+        return ToUInt128Saturated(ToLongDouble(base) * static_cast<long double>(pct) / 100.0L);
+    }
+
+    template <class T>
+    inline int128 CalculatePct(int128 const& base, T pct)
+    {
+        return ToInt128Saturated(ToLongDouble(base) * static_cast<long double>(pct) / 100.0L);
+    }
+}
+
+// Damage pipeline helpers (global namespace) — callable from any TU
+inline uint32 ToUInt32Damage(uint64 damage)
+{
+    return damage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(damage);
+}
+
+inline uint32 ToUInt32Damage(uint128 const& damage)
+{
+    return Acore::Number::ToUInt32Saturated(damage);
+}
+
+inline uint64 ToUInt64Damage(long double damage)
+{
+    if (damage <= 0.0L || std::isnan(static_cast<double>(damage)))
+        return 0;
+
+    if (damage > static_cast<long double>(std::numeric_limits<uint64>::max()))
+        return std::numeric_limits<uint64>::max();
+
+    return static_cast<uint64>(damage);
+}
+
+inline uint64 AddUInt64Damage(uint64 left, uint64 right)
+{
+    return left > std::numeric_limits<uint64>::max() - right ? std::numeric_limits<uint64>::max() : left + right;
+}
+
+inline uint128 ToUInt128Damage(long double damage)
+{
+    if (damage <= 0.0L || std::isnan(static_cast<double>(damage)))
+        return 0;
+
+    return Acore::Number::ToUInt128Saturated(damage);
+}
+
+inline uint128 AddUInt128Damage(uint128 const& left, uint128 const& right)
+{
+    uint128 const maxV = std::numeric_limits<uint128>::max();
+    return left > maxV - right ? maxV : left + right;
 }
 
 // UTF8 handling

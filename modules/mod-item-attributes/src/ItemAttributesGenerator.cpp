@@ -47,10 +47,14 @@ bool ItemAttributesGenerator::GenerateRandomAttributes(Item* item, ItemAttribute
         for (ItemAttributeTemplate const* attributeTemplate : suitableAttributes)
         {
             // 检查属性模板的值范围是否与要求的范围有交集
-            uint32 attrMin = attributeTemplate->minPercent;
-            uint32 attrMax = attributeTemplate->maxPercent;
-            uint32 reqMin = options.minItemLevel;
-            uint32 reqMax = options.maxItemLevel;
+            int128 attrMin = attributeTemplate->minPercent;
+            int128 attrMax = attributeTemplate->maxPercent;
+            int128 reqMin = options.minItemLevel;
+            int128 reqMax = options.maxItemLevel;
+            if (attrMin > attrMax)
+                std::swap(attrMin, attrMax);
+            if (reqMin > reqMax)
+                std::swap(reqMin, reqMax);
 
             // 如果两个范围有交集，则该属性合格
             // 两个范围无交集的条件是：attrMax < reqMin 或 attrMin > reqMax
@@ -277,4 +281,3 @@ bool ItemAttributesGenerator::IsAttributeSuitableForItem(Item* item, ItemAttribu
 
     return true;
 }
-

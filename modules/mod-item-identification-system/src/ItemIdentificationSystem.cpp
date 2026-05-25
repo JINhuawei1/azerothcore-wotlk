@@ -1,4 +1,5 @@
 #include "ItemIdentificationSystem.h"
+#include "Define.h"
 #include <limits>
 #include "ScriptMgr.h"
 #include "Player.h"
@@ -9,6 +10,8 @@
 #include "ItemTemplate.h"
 #include "ObjectMgr.h"
 #include "Log.h"
+#include "StringConvert.h"
+#include "Util.h"
 #include "WorldPacket.h"
 #include "Opcodes.h"
 #include "ScriptedGossip.h"
@@ -130,14 +133,15 @@ namespace
 
         for (uint32 i = 0; i < proto->StatsCount && i < MAX_ITEM_PROTO_STATS; ++i)
         {
-            if (!proto->ItemStat[i].ItemStatValue)
+            int128 statValue = proto->ItemStatValue128[i];
+            if (!statValue)
                 continue;
 
             if (hasStats)
                 stats << ",";
 
             hasStats = true;
-            stats << proto->ItemStat[i].ItemStatType << " " << proto->ItemStat[i].ItemStatValue;
+            stats << proto->ItemStat[i].ItemStatType << " " << statValue.convert_to<std::string>();
         }
 
         std::ostringstream damage;
@@ -157,13 +161,13 @@ namespace
                    << proto->Damage[i].DamageType;
         }
 
-        if (!hasStats && !proto->Armor && !hasDamage)
+        if (!hasStats && proto->Armor128 == 0 && !hasDamage)
             return "";
 
         std::ostringstream data;
         data << "TPL64|" << stats.str() << "|";
-        if (proto->Armor)
-            data << proto->Armor;
+        if (proto->Armor128 != 0)
+            data << proto->Armor128.convert_to<std::string>();
         data << "|" << damage.str();
 
         return data.str();
@@ -315,6 +319,7 @@ namespace
 std::vector<uint32> ParseCommaSeparatedNumbers(const std::string& str);
 uint32 SelectRandomFromList(const std::vector<uint32>& list);
 uint32 GenerateRandomNumber(uint32 min, uint32 max);
+uint128 GenerateRandomUInt128(uint128 min, uint128 max);
 uint32 GetIdentificationTemplateMatchLevel(Item* item);
 
 // 单例实例
@@ -386,14 +391,14 @@ struct IdentificationTemplate
     std::string itemGrowthGroups;
     uint32 growthAttrMinCount;
     uint32 growthAttrMaxCount;
-    uint32 growthAttrMinValue;
-    uint32 growthAttrMaxValue;
+    uint128 growthAttrMinValue;
+    uint128 growthAttrMaxValue;
 
     std::string itemEnhancementGroups;
     uint32 enhancementAttrMinCount;
     uint32 enhancementAttrMaxCount;
-    uint32 enhancementAttrMinValue;
-    uint32 enhancementAttrMaxValue;
+    uint128 enhancementAttrMinValue;
+    uint128 enhancementAttrMaxValue;
 
     std::string itemAttributesGroups;
     std::string itemAttributesAdditionalGroups;
@@ -405,15 +410,15 @@ struct IdentificationTemplate
     // 基础属性配置
     uint32 baseAttrMinCount;
     uint32 baseAttrMaxCount;
-    uint32 baseAttrMinValue;
-    uint32 baseAttrMaxValue;
+    uint128 baseAttrMinValue;
+    uint128 baseAttrMaxValue;
     bool baseAttrAllowDuplicate;
 
     // 追加属性配置
     uint32 additionalAttrMinCount;
     uint32 additionalAttrMaxCount;
-    uint32 additionalAttrMinValue;
-    uint32 additionalAttrMaxValue;
+    uint128 additionalAttrMinValue;
+    uint128 additionalAttrMaxValue;
     bool additionalAttrAllowDuplicate;
 
     // 追加技能配置
@@ -550,30 +555,30 @@ void ItemIdentificationSystem::LoadIdentificationTemplates()
         tmpl.itemGrowthGroups      = fields[5].Get<std::string>();              // 物品成长_系统
         tmpl.growthAttrMinCount    = fields[6].Get<uint32>();                   // 成长属性最小数量
         tmpl.growthAttrMaxCount    = fields[7].Get<uint32>();                   // 成长属性最大数量
-        tmpl.growthAttrMinValue    = fields[8].Get<uint32>();                   // 成长属性最小属性值
-        tmpl.growthAttrMaxValue    = fields[9].Get<uint32>();                   // 成长属性最大属性值
+        tmpl.growthAttrMinValue    = fields[8].Get<uint128>();                  // 成长属性最小属性值
+        tmpl.growthAttrMaxValue    = fields[9].Get<uint128>();                  // 成长属性最大属性值
 
         tmpl.itemEnhancementGroups   = fields[10].Get<std::string>();           // 物品强化_系统
         tmpl.enhancementAttrMinCount = fields[11].Get<uint32>();                // 强化属性最小数量
         tmpl.enhancementAttrMaxCount = fields[12].Get<uint32>();                // 强化属性最大数量
-        tmpl.enhancementAttrMinValue = fields[13].Get<uint32>();                // 强化属性最小属性值
-        tmpl.enhancementAttrMaxValue = fields[14].Get<uint32>();                // 强化属性最大属性值
+        tmpl.enhancementAttrMinValue = fields[13].Get<uint128>();               // 强化属性最小属性值
+        tmpl.enhancementAttrMaxValue = fields[14].Get<uint128>();               // 强化属性最大属性值
 
         tmpl.itemAttributesGroups = fields[15].Get<std::string>();              // 物品属性_模板（基础属性）
 
         // 基础属性配置
         tmpl.baseAttrMinCount = fields[16].Get<uint32>();                       // 基础属性最小数量
         tmpl.baseAttrMaxCount = fields[17].Get<uint32>();                       // 基础属性最大数量
-        tmpl.baseAttrMinValue = fields[18].Get<uint32>();                       // 基础最小属性值
-        tmpl.baseAttrMaxValue = fields[19].Get<uint32>();                       // 基础最大属性值
+        tmpl.baseAttrMinValue = fields[18].Get<uint128>();                      // 基础最小属性值
+        tmpl.baseAttrMaxValue = fields[19].Get<uint128>();                      // 基础最大属性值
         tmpl.baseAttrAllowDuplicate = fields[20].Get<uint32>() == 0;           // 基础属性允许重复
 
         // 追加属性配置
         tmpl.itemAttributesAdditionalGroups = fields[21].Get<std::string>();   // 物品属性_模板_组（追加属性）
         tmpl.additionalAttrMinCount = fields[22].Get<uint32>();                // 追加属性最小数量
         tmpl.additionalAttrMaxCount = fields[23].Get<uint32>();                // 追加属性最大数量
-        tmpl.additionalAttrMinValue = fields[24].Get<uint32>();                // 追加属性最小值
-        tmpl.additionalAttrMaxValue = fields[25].Get<uint32>();                // 追加属性最大值
+        tmpl.additionalAttrMinValue = fields[24].Get<uint128>();               // 追加属性最小值
+        tmpl.additionalAttrMaxValue = fields[25].Get<uint128>();               // 追加属性最大值
         tmpl.additionalAttrAllowDuplicate = fields[26].Get<uint32>() == 0;     // 追加属性允许重复
 
         // 追加技能配置
@@ -1130,6 +1135,27 @@ uint32 GenerateRandomNumber(uint32 min, uint32 max)
     return dis(sItemIdentificationSystem->GetRandomGenerator());
 }
 
+uint128 GenerateRandomUInt128(uint128 min, uint128 max)
+{
+    if (min >= max)
+        return min;
+
+    uint128 span = max - min;
+    uint128 randomValue = 0;
+    std::uniform_int_distribution<uint32> dis(0, std::numeric_limits<uint32>::max());
+
+    for (uint8 i = 0; i < 4; ++i)
+    {
+        randomValue <<= 32;
+        randomValue += dis(sItemIdentificationSystem->GetRandomGenerator());
+    }
+
+    if (span == std::numeric_limits<uint128>::max())
+        return randomValue;
+
+    return min + (randomValue % (span + 1));
+}
+
 uint32 GetIdentificationTemplateMatchLevel(Item* item)
 {
     if (!item || !item->GetTemplate())
@@ -1139,24 +1165,24 @@ uint32 GetIdentificationTemplateMatchLevel(Item* item)
 }
 
 #ifdef MODULE_ITEM_ATTRIBUTES
-uint32 GetOfficialStatReferenceValue(Item* item, uint32 attributeType)
+uint128 GetOfficialStatReferenceValue(Item* item, uint32 attributeType)
 {
     if (!item || !item->GetTemplate())
         return 1;
 
     ItemTemplate const* proto = item->GetTemplate();
-    std::vector<uint32> values;
-    uint32 matchedValue = 0;
+    std::vector<uint128> values;
+    uint128 matchedValue = 0;
 
     for (uint32 i = 0; i < proto->StatsCount && i < MAX_ITEM_PROTO_STATS; ++i)
     {
         uint32 statType = proto->ItemStat[i].ItemStatType;
-        int64 statValue = proto->ItemStat[i].ItemStatValue;
+        int128 statValue = proto->ItemStatValue128[i];
 
         if (statType == 0 || statValue <= 0)
             continue;
 
-        uint32 value = statValue > static_cast<int64>(std::numeric_limits<uint32>::max()) ? std::numeric_limits<uint32>::max() : static_cast<uint32>(statValue);
+        uint128 value = Acore::Number::ToUInt128Saturated(statValue);
         values.push_back(value);
 
         if (statType == attributeType)
@@ -1174,31 +1200,28 @@ uint32 GetOfficialStatReferenceValue(Item* item, uint32 attributeType)
         if (values.size() % 2 == 1)
             return values[middle];
 
-        uint64 median = (static_cast<uint64>(values[middle - 1]) + values[middle]) / 2;
-        return std::max<uint64>(1, median);
+        uint128 median = values[middle - 1] + ((values[middle] - values[middle - 1]) / 2);
+        return std::max<uint128>(1, median);
     }
 
     uint32 itemLevelFallback = proto->ItemLevel / 4;
     return std::max<uint32>(1, itemLevelFallback);
 }
 
-int32 CalculateOfficialPercentAttributeValue(Item* item, uint32 attributeType, uint32 minPercent, uint32 maxPercent)
+int128 CalculateOfficialPercentAttributeValue(Item* item, uint32 attributeType, uint128 minPercent, uint128 maxPercent)
 {
     if (minPercent > maxPercent)
         std::swap(minPercent, maxPercent);
 
-    uint32 percent = GenerateRandomNumber(minPercent, maxPercent);
-    uint32 referenceValue = GetOfficialStatReferenceValue(item, attributeType);
-    double scaledValue = static_cast<double>(referenceValue) * static_cast<double>(percent) / 100.0;
-    int64 value = static_cast<int64>(std::llround(scaledValue));
+    uint128 percent = GenerateRandomUInt128(minPercent, maxPercent);
+    uint128 referenceValue = GetOfficialStatReferenceValue(item, attributeType);
+    long double scaledValue = Acore::Number::ToLongDouble(referenceValue) * Acore::Number::ToLongDouble(percent) / 100.0L;
+    int128 value = Acore::Number::ToInt128Saturated(std::round(scaledValue));
 
     if (percent > 0 && value < 1)
         value = 1;
 
-    if (value > std::numeric_limits<int32>::max())
-        value = std::numeric_limits<int32>::max();
-
-    return static_cast<int32>(value);
+    return value;
 }
 
 std::vector<ItemAttributeTemplate const*> GetIdentificationAttributeCandidates(
@@ -1288,7 +1311,7 @@ uint32 ApplyOfficialPercentAdditionalAttributes(
             if (!attributeTemplate)
                 continue;
 
-            int32 value = CalculateOfficialPercentAttributeValue(
+            int128 value = CalculateOfficialPercentAttributeValue(
                 item,
                 attributeTemplate->attributeType,
                 tmpl.additionalAttrMinValue,
@@ -1327,7 +1350,7 @@ uint32 ApplyOfficialPercentBaseAttributes(
     uint32 appliedCount = 0;
     std::set<uint32> selectedTypes;
     std::vector<uint32> baseAttributes;
-    std::vector<int32> baseValues;
+    std::vector<int128> baseValues;
     uint32 maxAttempts = std::max<uint32>(attrCount * 8, 8);
 
     for (uint32 attempt = 0; appliedCount < attrCount && attempt < maxAttempts; ++attempt)
@@ -1347,7 +1370,7 @@ uint32 ApplyOfficialPercentBaseAttributes(
             if (!attributeTemplate)
                 continue;
 
-            int32 value = CalculateOfficialPercentAttributeValue(
+            int128 value = CalculateOfficialPercentAttributeValue(
                 item,
                 attributeTemplate->attributeType,
                 tmpl.baseAttrMinValue,
@@ -1421,7 +1444,7 @@ uint32 FilterItemAdditionalAttributesByGroups(Item* item, const std::vector<uint
         return static_cast<uint32>(data->additionalAttributeIds.size());
 
     std::vector<uint32> filteredIds;
-    std::vector<int32> filteredValues;
+    std::vector<int128> filteredValues;
     filteredIds.reserve(data->additionalAttributeIds.size());
     filteredValues.reserve(data->additionalAttributeValues.size());
 
@@ -1538,8 +1561,8 @@ uint32 ItemIdentificationSystem::ApplyItemGrowth(Player* player, Item* item, con
             selectedGroup,
             tmpl.growthAttrMinCount,
             tmpl.growthAttrMaxCount,
-            tmpl.growthAttrMinValue,
-            tmpl.growthAttrMaxValue);
+            Acore::Number::ToInt128Saturated(tmpl.growthAttrMinValue),
+            Acore::Number::ToInt128Saturated(tmpl.growthAttrMaxValue));
 
         // ChatHandler(player->GetSession()).PSendSysMessage("物品获得成长属性（组{}）", selectedGroup);
 
@@ -1643,7 +1666,7 @@ void ItemIdentificationSystem::ApplyBaseAttributes(Player* player, Item* item, c
 
     DebugLog("应用基础属性，组列表: {}，数量: {}，值范围: {}-{}",
              tmpl.itemAttributesGroups, attrCount,
-             tmpl.baseAttrMinValue, tmpl.baseAttrMaxValue);
+             Acore::ToString(tmpl.baseAttrMinValue), Acore::ToString(tmpl.baseAttrMaxValue));
 
 #ifdef MODULE_ITEM_ATTRIBUTES
     if (!sItemAttributesGenerator || !sItemAttributesLoader)
@@ -1653,7 +1676,7 @@ void ItemIdentificationSystem::ApplyBaseAttributes(Player* player, Item* item, c
     }
 
     // 【修复】统一使用GetCounter()获取32位GUID，与数据库字段类型一致
-    uint32 itemGuid = item->GetGUID().GetCounter();
+    uint64 itemGuid = item->GetGUID().GetCounter();
 
     // 使用属性数据库助手清除物品现有的属性
     // 检查物品是否已有属性
@@ -1703,8 +1726,8 @@ void ItemIdentificationSystem::ApplyBaseAttributes(Player* player, Item* item, c
     options.minAttributes = attrCount;        // 最少属性数量
     options.maxAttributes = attrCount;        // 最多属性数量
     options.attributeGroup = selectedGroup;   // 指定属性组
-    options.minItemLevel = tmpl.baseAttrMinValue;   // 属性值最小值
-    options.maxItemLevel = tmpl.baseAttrMaxValue;   // 属性值最大值
+    options.minItemLevel = Acore::Number::ToInt128Saturated(tmpl.baseAttrMinValue);   // 属性值最小值
+    options.maxItemLevel = Acore::Number::ToInt128Saturated(tmpl.baseAttrMaxValue);   // 属性值最大值
     options.respectChance = true;             // 考虑属性获取几率
     options.allowDuplicateTypes = tmpl.baseAttrAllowDuplicate;  // 是否允许重复
     options.useValueRangeFilter = true;       // 启用属性值范围过滤
@@ -1721,7 +1744,7 @@ void ItemIdentificationSystem::ApplyBaseAttributes(Player* player, Item* item, c
         // 如果读取失败，接受属性延迟加载（不影响鉴定成功）
 
         std::vector<uint32> baseAttributes;
-        std::vector<int32> baseValues;
+        std::vector<int128> baseValues;
 
         uint64 itemGuid = item->GetGUID().GetCounter();
 
@@ -1827,8 +1850,8 @@ uint32 ItemIdentificationSystem::ApplyAdditionalAttributes(Player* player, Item*
             options.minAttributes = attrCount;  // 使用配置的数量
             options.maxAttributes = attrCount;
             options.attributeGroup = attributeGroups[0];
-            options.minItemLevel = tmpl.additionalAttrMinValue;
-            options.maxItemLevel = tmpl.additionalAttrMaxValue;
+            options.minItemLevel = Acore::Number::ToInt128Saturated(tmpl.additionalAttrMinValue);
+            options.maxItemLevel = Acore::Number::ToInt128Saturated(tmpl.additionalAttrMaxValue);
             options.respectChance = true;
             options.allowDuplicateTypes = tmpl.additionalAttrAllowDuplicate;
             options.useValueRangeFilter = true;
@@ -1853,8 +1876,8 @@ uint32 ItemIdentificationSystem::ApplyAdditionalAttributes(Player* player, Item*
                 options.minAttributes = 1;
                 options.maxAttributes = 1;
                 options.attributeGroup = groupId;
-                options.minItemLevel = tmpl.additionalAttrMinValue;
-                options.maxItemLevel = tmpl.additionalAttrMaxValue;
+                options.minItemLevel = Acore::Number::ToInt128Saturated(tmpl.additionalAttrMinValue);
+                options.maxItemLevel = Acore::Number::ToInt128Saturated(tmpl.additionalAttrMaxValue);
                 options.respectChance = true;
                 options.allowDuplicateTypes = tmpl.additionalAttrAllowDuplicate;
                 options.useValueRangeFilter = true;

@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS `_玩家武魂数据` (
   `武魂ID` int UNSIGNED NOT NULL DEFAULT 1 COMMENT '当前武魂定义ID',
   `已激活` tinyint UNSIGNED NOT NULL DEFAULT 0 COMMENT '0=未激活，1=已激活武魂分身',
   `已召唤` tinyint UNSIGNED NOT NULL DEFAULT 0 COMMENT '0=未召唤，1=玩家希望武魂保持召唤并跟随',
-  `魂力` bigint UNSIGNED NOT NULL DEFAULT 0 COMMENT '当前可用魂力',
+  `魂力` decimal(39,0) UNSIGNED NOT NULL DEFAULT 0 COMMENT '当前可用魂力',
   `魂环1等级` int UNSIGNED NOT NULL DEFAULT 0 COMMENT '第1魂环等级',
   `魂环2等级` int UNSIGNED NOT NULL DEFAULT 0 COMMENT '第2魂环等级',
   `魂环3等级` int UNSIGNED NOT NULL DEFAULT 0 COMMENT '第3魂环等级',
@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS `_玩家武魂数据` (
   `魂环9等级` int UNSIGNED NOT NULL DEFAULT 0 COMMENT '第9魂环等级',
   PRIMARY KEY (`角色id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='玩家武魂主数据';
+
+ALTER TABLE `_玩家武魂数据`
+  MODIFY COLUMN `魂力` decimal(39,0) UNSIGNED NOT NULL DEFAULT 0 COMMENT '当前可用魂力';
 
 CREATE TABLE IF NOT EXISTS `_玩家武魂技能` (
   `角色id` int UNSIGNED NOT NULL DEFAULT 0 COMMENT '玩家GUID',

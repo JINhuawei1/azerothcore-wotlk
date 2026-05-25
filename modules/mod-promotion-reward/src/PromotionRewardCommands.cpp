@@ -10,6 +10,7 @@
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "StringConvert.h"
 #include "World.h"
 
 #ifndef SEC_PLAYER
@@ -168,14 +169,14 @@ bool PromotionReward_CommandScript::HandleQueryCommand(ChatHandler* handler, Opt
         return true;
     }
 
-    int32 attr = sPromotionRewardMgr->CalcTotalAttr(d->days);
+    int128 attr = sPromotionRewardMgr->CalcTotalAttr(d->days);
     bool held = online ? sPromotionRewardMgr->IsWeaponHeld(online) : false;
 
     handler->PSendSysMessage("========================================");
     handler->PSendSysMessage("玩家: {}", name);
     handler->PSendSysMessage("  累计宣传天数: {}", d->days);
     handler->PSendSysMessage("  持有宣传武器: {}", online ? (held ? "是" : "否") : "(离线无法判定)");
-    handler->PSendSysMessage("  全属性加成: +{} {}", attr, held ? "(已生效)" : "(未生效,需持有武器)");
+    handler->PSendSysMessage("  全属性加成: +{} {}", Acore::ToString(attr), held ? "(已生效)" : "(未生效,需持有武器)");
     handler->PSendSysMessage("========================================");
     return true;
 }
@@ -190,7 +191,7 @@ bool PromotionReward_CommandScript::HandleReloadCommand(ChatHandler* handler, ch
     handler->PSendSysMessage("宣传奖励系统已重新加载");
     handler->PSendSysMessage("  启用: {}", c.enabled ? "是" : "否");
     handler->PSendSysMessage("  武器entry: {}", c.weaponEntry);
-    handler->PSendSysMessage("  初始全属性: {} / 每日增量: {}", c.baseAttrValue, c.perDayAttrValue);
+    handler->PSendSysMessage("  初始全属性: {} / 每日增量: {}", Acore::ToString(c.baseAttrValue), Acore::ToString(c.perDayAttrValue));
     handler->PSendSysMessage("  对接 _奖励_兑换码 [组={}, 需求={}, 奖励={}]",
         c.groupId, c.requireId, c.rewardId);
     handler->PSendSysMessage("========================================");

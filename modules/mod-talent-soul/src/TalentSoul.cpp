@@ -6,8 +6,70 @@
 #include "Log.h"
 #include "DatabaseEnv.h"
 #include "SpellMgr.h"
+#include "Util.h"
+#include <algorithm>
 #include <limits>
+#include <cmath>
 #include <cctype>
+
+namespace
+{
+uint64 ToTalentSoulUInt64Damage(uint128 const& value)
+{
+    return Acore::Number::ToUInt64Saturated(value);
+}
+
+uint32 GetTalentSoulMaxLevel(TalentSoulData const& config, TalentSoulUpgradeType upgradeType)
+{
+    switch (upgradeType)
+    {
+        case TALENT_SOUL_UPGRADE_GCD:
+            return config.gcdMaxLevel;
+        case TALENT_SOUL_UPGRADE_COOLDOWN:
+            return config.cooldownMaxLevel;
+        case TALENT_SOUL_UPGRADE_COST:
+            return config.costMaxLevel;
+        case TALENT_SOUL_UPGRADE_DAMAGE:
+            return config.damageMaxLevel;
+        default:
+            return 0;
+    }
+}
+
+uint32& GetTalentSoulLevel(PlayerSkillData& skill, TalentSoulUpgradeType upgradeType)
+{
+    switch (upgradeType)
+    {
+        case TALENT_SOUL_UPGRADE_GCD:
+            return skill.gcdLevel;
+        case TALENT_SOUL_UPGRADE_COOLDOWN:
+            return skill.cooldownLevel;
+        case TALENT_SOUL_UPGRADE_COST:
+            return skill.costLevel;
+        case TALENT_SOUL_UPGRADE_DAMAGE:
+            return skill.damageLevel;
+        default:
+            return skill.gcdLevel;
+    }
+}
+
+uint32 GetTalentSoulLevel(PlayerSkillData const& skill, TalentSoulUpgradeType upgradeType)
+{
+    switch (upgradeType)
+    {
+        case TALENT_SOUL_UPGRADE_GCD:
+            return skill.gcdLevel;
+        case TALENT_SOUL_UPGRADE_COOLDOWN:
+            return skill.cooldownLevel;
+        case TALENT_SOUL_UPGRADE_COST:
+            return skill.costLevel;
+        case TALENT_SOUL_UPGRADE_DAMAGE:
+            return skill.damageLevel;
+        default:
+            return 0;
+    }
+}
+}
 
 TalentSoulMgr::TalentSoulMgr()
 {
@@ -534,6 +596,72 @@ bool TalentSoulMgr::UpgradePlayerSpell(Player* player, uint32 spellId, TalentSou
     return success;
 }
 
+bool TalentSoulMgr::UpgradePlayerSpellAll(Player* player, uint32 spellId, TalentSoulUpgradeType upgradeType, uint32& upgradedLevels)
+{
+    upgradedLevels = 0;
+
+    if (!player || upgradeType >= TALENT_SOUL_UPGRADE_MAX)
+        return false;
+
+    TalentSoulData const* config = GetTalentSoulData(spellId);
+    if (!config)
+        return false;
+
+    if (config->classType != 0 && config->classType != player->getClass())
+        return false;
+
+    uint32 maxLevel = GetTalentSoulMaxLevel(*config, upgradeType);
+    if (maxLevel == 0)
+        return false;
+
+    uint32 playerGuid = player->GetGUID().GetCounter();
+    uint32 totalPoints = player->CalculateTalentsPoints();
+
+    {
+        std::unique_lock<std::shared_mutex> lock(_playerDataMutex);
+
+        PlayerTalentSoulData& playerData = _playerData[playerGuid];
+        bool isNewSkill = playerData.skills.find(spellId) == playerData.skills.end();
+        uint32 unlockCost = (isNewSkill && config->talentPointCost > 0) ? config->talentPointCost : 0;
+        uint32 availablePoints = totalPoints > playerData.usedTalentPoints ? totalPoints - playerData.usedTalentPoints : 0;
+
+        if (availablePoints <= unlockCost)
+            return false;
+
+        uint32 currentLevel = 0;
+        if (!isNewSkill)
+            currentLevel = GetTalentSoulLevel(playerData.skills[spellId], upgradeType);
+
+        if (currentLevel >= maxLevel)
+            return false;
+
+        uint32 canAddByLevel = maxLevel - currentLevel;
+        uint32 canAddByPoints = availablePoints - unlockCost;
+        upgradedLevels = std::min(canAddByLevel, canAddByPoints);
+
+        if (upgradedLevels == 0)
+            return false;
+
+        if (isNewSkill)
+        {
+            PlayerSkillData newSkill;
+            newSkill.spellId = spellId;
+            playerData.skills[spellId] = newSkill;
+
+            if (unlockCost > 0)
+                playerData.usedTalentPoints += unlockCost;
+        }
+
+        PlayerSkillData& skill = playerData.skills[spellId];
+        uint32& level = GetTalentSoulLevel(skill, upgradeType);
+        level += upgradedLevels;
+        playerData.usedTalentPoints += upgradedLevels;
+        _dirtyPlayers.insert(playerGuid);
+    }
+
+    return true;
+}
+
 uint32 TalentSoulMgr::GetPlayerUsedTalentPoints(uint32 playerGuid) const
 {
     // 加读锁保护玩家数据
@@ -689,7 +817,7 @@ void TalentSoulMgr::ApplyCostReduction(Player* player, uint32 spellId, int64& co
     }
 }
 
-void TalentSoulMgr::ApplyDamageBonus(Unit* attacker, uint32 spellId, uint64& damage) const
+void TalentSoulMgr::ApplyDamageBonus(Unit* attacker, uint32 spellId, uint128& damage) const
 {
     if (!attacker || damage == 0)
         return;
@@ -701,10 +829,19 @@ void TalentSoulMgr::ApplyDamageBonus(Unit* attacker, uint32 spellId, uint64& dam
     float bonusPercent = GetPlayerDamageBonus(player->GetGUID().GetCounter(), spellId);
     if (bonusPercent > 0)
     {
-        long double bonusAmount = static_cast<long double>(damage) * static_cast<long double>(bonusPercent) / 100.0L;
-        if (bonusAmount > static_cast<long double>(std::numeric_limits<uint64>::max() - damage))
-            damage = std::numeric_limits<uint64>::max();
-        else
-            damage += static_cast<uint64>(bonusAmount);
+        uint128 baseDamage = damage;
+        long double bonusAmount = Acore::Number::ToLongDouble(baseDamage) * static_cast<long double>(bonusPercent) / 100.0L;
+        uint128 bonusDamage = !std::isfinite(static_cast<double>(bonusAmount))
+            ? std::numeric_limits<uint128>::max()
+            : Acore::Number::ToUInt128Saturated(bonusAmount);
+
+        if (!bonusDamage && bonusAmount > 0.0L)
+            bonusDamage = 1;
+
+        uint128 finalDamage = bonusDamage > std::numeric_limits<uint128>::max() - baseDamage
+            ? std::numeric_limits<uint128>::max()
+            : baseDamage + bonusDamage;
+
+        damage = finalDamage;
     }
 }

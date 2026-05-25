@@ -151,7 +151,7 @@ public:
     TalentSoulUnitScript() : UnitScript("TalentSoulUnitScript") { }
 
     // 修改法术伤害
-    void ModifySpellDamageTaken(Unit* target, Unit* attacker, uint64& damage, SpellInfo const* spellInfo) override
+    void ModifySpellDamageTaken(Unit* target, Unit* attacker, uint128& damage, SpellInfo const* spellInfo) override
     {
         if (!attacker || !spellInfo || damage <= 0)
             return;
@@ -164,21 +164,22 @@ public:
             return;
 
         uint32 spellId = spellInfo->Id;
-        uint64 originalDamage = damage;
+        uint128 originalDamage = damage;
 
         // 应用伤害加成
         sTalentSoulMgr->ApplyDamageBonus(attacker, spellId, damage);
 
         if (damage != originalDamage)
         {
-            LOG_DEBUG("module", "[天赋之魂-伤害] 玩家 {} 技能 {} 伤害 {} -> {} (+{:.1f}%)",
-                player->GetName(), spellId, originalDamage, damage,
-                static_cast<double>((static_cast<long double>(damage - originalDamage) / static_cast<long double>(originalDamage)) * 100.0L));
+            LOG_DEBUG("module", "[天赋之魂-伤害] 玩家 {} 技能 {} 伤害 {} -> {}",
+                player->GetName(), spellId,
+                originalDamage.convert_to<std::string>(),
+                damage.convert_to<std::string>());
         }
     }
 
     // 修改近战伤害
-    void ModifyMeleeDamage(Unit* target, Unit* attacker, uint64& damage) override
+    void ModifyMeleeDamage(Unit* target, Unit* attacker, uint128& damage) override
     {
         // 近战伤害不在此系统处理范围内
     }

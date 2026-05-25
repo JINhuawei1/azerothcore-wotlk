@@ -1,6 +1,7 @@
 #include "ItemAttributesDBHelper.h"
 #include "ItemAttributesLoader.h"
 #include "Log.h"
+#include "StringConvert.h"
 #include <sstream>
 
 std::mutex ItemAttributesDBHelper::_cacheMutex;
@@ -8,7 +9,7 @@ std::unordered_map<uint64, ItemAttributesDBHelper::ItemAttributeData> ItemAttrib
 
 // 读取物品的所有属性
 // 辅助方法：将属性转换为紧凑字符串格式 "id value,id value,..."
-std::string ItemAttributesDBHelper::ItemAttributeData::ToCompactString(const std::vector<uint32>& ids, const std::vector<int32>& values)
+std::string ItemAttributesDBHelper::ItemAttributeData::ToCompactString(const std::vector<uint32>& ids, const std::vector<int128>& values)
 {
     if (ids.empty() || ids.size() != values.size())
         return "";
@@ -18,13 +19,13 @@ std::string ItemAttributesDBHelper::ItemAttributeData::ToCompactString(const std
     {
         if (i > 0)
             oss << ",";
-        oss << ids[i] << " " << values[i];
+        oss << ids[i] << " " << Acore::ToString(values[i]);
     }
     return oss.str();
 }
 
 // 辅助方法：从紧凑字符串解析属性 "id value,id value,..."
-void ItemAttributesDBHelper::ItemAttributeData::FromCompactString(const std::string& str, std::vector<uint32>& ids, std::vector<int32>& values)
+void ItemAttributesDBHelper::ItemAttributeData::FromCompactString(const std::string& str, std::vector<uint32>& ids, std::vector<int128>& values)
 {
     ids.clear();
     values.clear();
@@ -38,13 +39,18 @@ void ItemAttributesDBHelper::ItemAttributeData::FromCompactString(const std::str
     while (std::getline(iss, pair, ','))
     {
         std::istringstream pairStream(pair);
-        uint32 id;
-        int32 value;
+        std::string idToken;
+        std::string valueToken;
         
-        if (pairStream >> id >> value)
+        if (pairStream >> idToken >> valueToken)
         {
-            ids.push_back(id);
-            values.push_back(value);
+            Optional<uint32> id = Acore::StringTo<uint32>(idToken);
+            Optional<int128> value = Acore::StringTo<int128>(valueToken);
+            if (id && value)
+            {
+                ids.push_back(*id);
+                values.push_back(*value);
+            }
         }
     }
 }
@@ -126,13 +132,13 @@ bool ItemAttributesDBHelper::SaveItemAttributes(const ItemAttributeData& data)
 }
 
 // 添加单个属性到物品（默认添加到追加属性）
-bool ItemAttributesDBHelper::AddAttributeToItem(uint64 itemGuid, uint32 itemId, uint32 attributeId, int32 attributeValue)
+bool ItemAttributesDBHelper::AddAttributeToItem(uint64 itemGuid, uint32 itemId, uint32 attributeId, int128 attributeValue)
 {
     return AddAdditionalAttributeToItem(itemGuid, itemId, attributeId, attributeValue);
 }
 
 // 添加单个基础属性
-bool ItemAttributesDBHelper::AddBaseAttributeToItem(uint64 itemGuid, uint32 itemId, uint32 attributeId, int32 attributeValue)
+bool ItemAttributesDBHelper::AddBaseAttributeToItem(uint64 itemGuid, uint32 itemId, uint32 attributeId, int128 attributeValue)
 {
     auto existingData = LoadItemAttributes(itemGuid);  // 【智能指针修复】自动管理内存
     ItemAttributeData data;
@@ -167,7 +173,7 @@ bool ItemAttributesDBHelper::AddBaseAttributeToItem(uint64 itemGuid, uint32 item
 }
 
 // 添加单个追加属性
-bool ItemAttributesDBHelper::AddAdditionalAttributeToItem(uint64 itemGuid, uint32 itemId, uint32 attributeId, int32 attributeValue)
+bool ItemAttributesDBHelper::AddAdditionalAttributeToItem(uint64 itemGuid, uint32 itemId, uint32 attributeId, int128 attributeValue)
 {
     auto existingData = LoadItemAttributes(itemGuid);  // 【智能指针修复】自动管理内存
     ItemAttributeData data;
@@ -202,7 +208,7 @@ bool ItemAttributesDBHelper::AddAdditionalAttributeToItem(uint64 itemGuid, uint3
 }
 
 // 保存基础属性（替换官方属性）
-bool ItemAttributesDBHelper::SaveBaseAttributes(uint64 itemGuid, uint32 itemId, const std::vector<uint32>& attributeIds, const std::vector<int32>& attributeValues)
+bool ItemAttributesDBHelper::SaveBaseAttributes(uint64 itemGuid, uint32 itemId, const std::vector<uint32>& attributeIds, const std::vector<int128>& attributeValues)
 {
     // 【调试日志】记录基础属性完整替换
     std::string newAttrs = ItemAttributeData::ToCompactString(attributeIds, attributeValues);
@@ -239,7 +245,7 @@ bool ItemAttributesDBHelper::SaveBaseAttributes(uint64 itemGuid, uint32 itemId, 
 }
 
 // 保存追加属性（额外添加）
-bool ItemAttributesDBHelper::SaveAdditionalAttributes(uint64 itemGuid, uint32 itemId, const std::vector<uint32>& attributeIds, const std::vector<int32>& attributeValues)
+bool ItemAttributesDBHelper::SaveAdditionalAttributes(uint64 itemGuid, uint32 itemId, const std::vector<uint32>& attributeIds, const std::vector<int128>& attributeValues)
 {
     auto existingData = LoadItemAttributes(itemGuid);  // 【智能指针修复】自动管理内存
     ItemAttributeData data;
@@ -385,7 +391,7 @@ std::string ItemAttributesDBHelper::FormatAttributesForClient(const ItemAttribut
         {
             if (!first)
                 result += ",";
-            result += attrTemplate->clientDisplay + "+" + std::to_string(data.baseAttributeValues[i]);
+            result += attrTemplate->clientDisplay + "+" + Acore::ToString(data.baseAttributeValues[i]);
             first = false;
         }
     }
@@ -398,7 +404,7 @@ std::string ItemAttributesDBHelper::FormatAttributesForClient(const ItemAttribut
         {
             if (!first)
                 result += ",";
-            result += attrTemplate->clientDisplay + "+" + std::to_string(data.additionalAttributeValues[i]);
+            result += attrTemplate->clientDisplay + "+" + Acore::ToString(data.additionalAttributeValues[i]);
             first = false;
         }
     }

@@ -215,8 +215,8 @@ public:
         uint32 CreatureId = 0;
         uint32 DisplayId = 0;
         uint32 Experience = 0;
-        uint64 Health = 0;
-        uint64 Mana = 0;
+        uint128 Health = 0;
+        uint128 Mana = 0;
         uint32 Happiness = 0;
         uint32 LastSaveTime = 0;
         uint32 CreatedBySpellId = 0;

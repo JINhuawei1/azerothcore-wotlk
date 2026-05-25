@@ -19,6 +19,7 @@
 #include "CommandScript.h"
 #include "Language.h"
 #include "Player.h"
+#include "StringConvert.h"
 #include "WorldSession.h"
 
 using namespace Acore::ChatCommands;
@@ -98,22 +99,24 @@ public:
             if (result)
             {
                 Field* fields = result->Fetch();
-                uint32 MaxHealth = fields[0].Get<uint32>();
-                uint64 Strength = fields[1].Get<uint64>();
-                uint64 Agility = fields[2].Get<uint64>();
-                uint64 Stamina = fields[3].Get<uint64>();
-                uint64 Intellect = fields[4].Get<uint64>();
-                uint64 Spirit = fields[5].Get<uint64>();
-                uint32 Armor = fields[6].Get<uint32>();
-                uint32 AttackPower = fields[7].Get<uint32>();
-                uint32 SpellPower = fields[8].Get<uint32>();
-                uint32 Resilience = fields[9].Get<uint32>();
+                auto toString = [](uint128 const& value) { return Acore::ToString(value); };
 
-                handler->PSendSysMessage("Health: |cff00ffff{}|r - Stamina: |cff00ffff{}|r", MaxHealth, Stamina);
-                handler->PSendSysMessage("Strength: |cff00ffff{}|r - Agility: |cff00ffff{}|r", Strength, Agility);
-                handler->PSendSysMessage("Intellect: |cff00ffff{}|r - Spirit: |cff00ffff{}|r", Intellect, Spirit);
-                handler->PSendSysMessage("AttackPower: |cff00ffff{}|r - SpellPower: |cff00ffff{}|r", AttackPower, SpellPower);
-                handler->PSendSysMessage("Armor: |cff00ffff{}|r - Resilience: |cff00ffff{}|r", Armor, Resilience);
+                uint128 MaxHealth = fields[0].GetUInt128();
+                uint128 Strength = fields[1].GetUInt128();
+                uint128 Agility = fields[2].GetUInt128();
+                uint128 Stamina = fields[3].GetUInt128();
+                uint128 Intellect = fields[4].GetUInt128();
+                uint128 Spirit = fields[5].GetUInt128();
+                uint128 Armor = fields[6].GetUInt128();
+                uint128 AttackPower = fields[7].GetUInt128();
+                uint128 SpellPower = fields[8].GetUInt128();
+                uint128 Resilience = fields[9].GetUInt128();
+
+                handler->PSendSysMessage("Health: |cff00ffff{}|r - Stamina: |cff00ffff{}|r", toString(MaxHealth), toString(Stamina));
+                handler->PSendSysMessage("Strength: |cff00ffff{}|r - Agility: |cff00ffff{}|r", toString(Strength), toString(Agility));
+                handler->PSendSysMessage("Intellect: |cff00ffff{}|r - Spirit: |cff00ffff{}|r", toString(Intellect), toString(Spirit));
+                handler->PSendSysMessage("AttackPower: |cff00ffff{}|r - SpellPower: |cff00ffff{}|r", toString(AttackPower), toString(SpellPower));
+                handler->PSendSysMessage("Armor: |cff00ffff{}|r - Resilience: |cff00ffff{}|r", toString(Armor), toString(Resilience));
             }
         }
 

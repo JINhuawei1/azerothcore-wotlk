@@ -375,7 +375,7 @@ class spell_black_temple_spell_absorption_aura : public AuraScript
 
     void Absorb(AuraEffect* /*aurEff*/, DamageInfo& dmgInfo, uint32& absorbAmount)
     {
-        absorbAmount = dmgInfo.GetDamage();
+        absorbAmount = Acore::Number::ToUInt32Saturated(dmgInfo.GetDamage());
     }
 
     void Update(AuraEffect const* effect)
@@ -421,7 +421,7 @@ class spell_black_temple_consuming_strikes_aura : public AuraScript
     void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
     {
         PreventDefaultAction();
-        GetTarget()->CastCustomSpell(GetSpellInfo()->Effects[EFFECT_1].CalcValue(), SPELLVALUE_BASE_POINT0, eventInfo.GetDamageInfo()->GetDamage(), GetTarget(), true);
+        GetTarget()->CastCustomSpell(GetSpellInfo()->Effects[EFFECT_1].CalcValue(), SPELLVALUE_BASE_POINT0, Acore::Number::ToInt32Saturated(Acore::Number::ToInt128Saturated(eventInfo.GetDamageInfo()->GetDamage())), GetTarget(), true);
     }
 
     void Register() override
@@ -501,7 +501,7 @@ class spell_black_temple_l5_arcane_charge : public SpellScript
 
     void RecalculateDamage()
     {
-        uint32 damage = GetHitUnit()->SpellDamageBonusTaken(GetCaster(), GetSpellInfo(), GetHitUnit()->CountPctFromMaxHealth(100), SPELL_DIRECT_DAMAGE);
+        uint32 damage = Acore::Number::ToUInt32Saturated(GetHitUnit()->SpellDamageBonusTaken(GetCaster(), GetSpellInfo(), GetHitUnit()->CountPctFromMaxHealth(100), SPELL_DIRECT_DAMAGE));
         SetHitDamage(int32(damage));
     }
 

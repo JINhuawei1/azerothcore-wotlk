@@ -115,6 +115,18 @@ public:
     }
 
     template<typename T>
+    inline std::enable_if_t<std::is_same_v<int128, T>, T> Get() const
+    {
+        return GetInt128();
+    }
+
+    template<typename T>
+    inline std::enable_if_t<std::is_same_v<uint128, T>, T> Get() const
+    {
+        return GetUInt128();
+    }
+
+    template<typename T>
     inline std::enable_if_t<std::is_same_v<std::string, T>, T> Get() const
     {
         return GetDataString();
@@ -145,6 +157,9 @@ public:
     {
         return convertToUin32 ? T(GetData<uint32>()) : T(GetData<uint64>());
     }
+
+    [[nodiscard]] int128 GetInt128() const;
+    [[nodiscard]] uint128 GetUInt128() const;
 
     DatabaseFieldTypes GetType() { return meta->Type; }
 

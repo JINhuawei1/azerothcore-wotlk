@@ -7,6 +7,7 @@
 #include "ObjectMgr.h"
 #include "Item.h"
 #include "SpellMgr.h"
+#include "Util.h"
 
 #if __has_include("RequirementSystem.h")
     #ifndef MODULE_REQUIREMENT_TEMPLATE
@@ -60,6 +61,41 @@ namespace
         return static_cast<int32>(value);
     }
 
+    int64 ToInt64Saturated(uint128 const& value)
+    {
+        return Acore::Number::ToInt64Saturated(Acore::Number::ToInt128Saturated(value));
+    }
+
+    int64 ToInt64Saturated(int128 const& value)
+    {
+        return Acore::Number::ToInt64Saturated(value);
+    }
+
+    int32 ToInt32ForLegacyStatPath(int128 const& value)
+    {
+        return ToInt32ForLegacyStatPath(ToInt64Saturated(value));
+    }
+
+    int128 AddInt128Saturated(int128 const& left, int128 const& right)
+    {
+        if (right > 0 && left > std::numeric_limits<int128>::max() - right)
+            return std::numeric_limits<int128>::max();
+        if (right < 0 && left < std::numeric_limits<int128>::min() - right)
+            return std::numeric_limits<int128>::min();
+        return left + right;
+    }
+
+    int128 MultiplyInt128Saturated(int128 const& value, uint32 multiplier)
+    {
+        if (value == 0 || multiplier == 0)
+            return 0;
+        if (value > 0 && value > std::numeric_limits<int128>::max() / static_cast<int128>(multiplier))
+            return std::numeric_limits<int128>::max();
+        if (value < 0 && value < std::numeric_limits<int128>::min() / static_cast<int128>(multiplier))
+            return std::numeric_limits<int128>::min();
+        return value * static_cast<int128>(multiplier);
+    }
+
     struct TuJianEntry
     {
         uint32 id = 0;
@@ -78,7 +114,7 @@ namespace
         uint32 activationRequirement = 0;
         std::string activationCommand;
         uint8 attributeEffectMode = TUJIAN_ATTR_MODE_EQUIP;
-        int32 fixedAllStatsValue = 0;
+        int128 fixedAllStatsValue = 0;
     };
 
     struct TuJianSetEntry
@@ -131,11 +167,11 @@ namespace
 
     struct AggregatedItemBonusCache
     {
-        std::unordered_map<uint32, int64> itemStatTotals;
+        std::unordered_map<uint32, int128> itemStatTotals;
         std::array<int64, MAX_SPELL_SCHOOL> resistanceTotals = {};
-        int64 armorBase = 0;
-        int64 armorTotal = 0;
-        int64 armorDamageModifierTotal = 0;
+        int128 armorBase = 0;
+        int128 armorTotal = 0;
+        int128 armorDamageModifierTotal = 0;
         int64 blockFromTemplate = 0;
         int64 feralApBonus = 0;
 
@@ -182,7 +218,7 @@ namespace
     std::unordered_map<uint32, AggregatedItemBonusCache> playerAggregatedItemBonuses;
     std::unordered_map<uint32, std::vector<AggregatedItemSetContribution>> playerItemSetContributions;
     std::unordered_map<uint32, PlayerWeaponDamageBonusCache> playerWeaponDamageBonuses;
-    std::unordered_map<uint32, int32> playerFixedAllStatsBonus;
+    std::unordered_map<uint32, int128> playerFixedAllStatsBonus;
     std::unordered_set<uint32> blockedVirtualEquipSpellItemGuids;
 
     uint8 GetAttackSlotForVirtualItem(ItemTemplate const* proto);
@@ -280,151 +316,154 @@ namespace
         return applyCount;
     }
 
-    void ApplyFixedAllStatsBonus(Player* player, int32 amount, bool apply)
+    void ApplyFixedAllStatsBonus(Player* player, int128 const& amount, bool apply)
     {
         if (!player || amount == 0)
             return;
 
+        float legacyAmount = Acore::Number::ToFloat(amount);
         for (uint8 stat = STAT_STRENGTH; stat < MAX_STATS; ++stat)
         {
-            player->HandleStatModifier(UnitMods(UNIT_MOD_STAT_START + stat), BASE_VALUE, float(amount), apply);
-            player->ApplyStatBuffMod(Stats(stat), float(amount), apply);
+            player->HandleStatModifier(UnitMods(UNIT_MOD_STAT_START + stat), BASE_VALUE, legacyAmount, apply);
+            player->ApplyStatBuffMod(Stats(stat), legacyAmount, apply);
         }
     }
 
-    void ApplyAggregatedItemStat(Player* player, uint32 statType, int64 value, bool apply)
+    void ApplyAggregatedItemStat(Player* player, uint32 statType, int128 const& value, bool apply)
     {
         if (!player || value == 0)
             return;
 
-        int64 val = value;
+        int128 val = value;
+        float statModValue = Acore::Number::ToFloat(val);
+        int64 legacyVal64 = ToInt64Saturated(val);
         int32 legacyVal = ToInt32ForLegacyStatPath(value);
         switch (statType)
         {
             case ITEM_MOD_MANA:
-                player->HandleStatModifier(UNIT_MOD_MANA, BASE_VALUE, float(val), apply);
+                player->HandleStatModifier(UNIT_MOD_MANA, BASE_VALUE, statModValue, apply);
                 break;
             case ITEM_MOD_HEALTH:
-                player->HandleStatModifier(UNIT_MOD_HEALTH, BASE_VALUE, float(val), apply);
+                player->HandleStatModifier(UNIT_MOD_HEALTH, BASE_VALUE, statModValue, apply);
                 break;
             case ITEM_MOD_AGILITY:
-                player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, BASE_VALUE, float(val), apply);
-                player->ApplyStatBuffMod(STAT_AGILITY, float(val), apply);
+                player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, BASE_VALUE, statModValue, apply);
+                player->ApplyStatBuffMod(STAT_AGILITY, statModValue, apply);
                 break;
             case ITEM_MOD_STRENGTH:
-                player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, BASE_VALUE, float(val), apply);
-                player->ApplyStatBuffMod(STAT_STRENGTH, float(val), apply);
+                player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, BASE_VALUE, statModValue, apply);
+                player->ApplyStatBuffMod(STAT_STRENGTH, statModValue, apply);
                 break;
             case ITEM_MOD_INTELLECT:
-                player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, BASE_VALUE, float(val), apply);
-                player->ApplyStatBuffMod(STAT_INTELLECT, float(val), apply);
+                player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, BASE_VALUE, statModValue, apply);
+                player->ApplyStatBuffMod(STAT_INTELLECT, statModValue, apply);
                 break;
             case ITEM_MOD_SPIRIT:
-                player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, BASE_VALUE, float(val), apply);
-                player->ApplyStatBuffMod(STAT_SPIRIT, float(val), apply);
+                player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, BASE_VALUE, statModValue, apply);
+                player->ApplyStatBuffMod(STAT_SPIRIT, statModValue, apply);
                 break;
             case ITEM_MOD_STAMINA:
-                player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, BASE_VALUE, float(val), apply);
-                player->ApplyStatBuffMod(STAT_STAMINA, float(val), apply);
+                player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, BASE_VALUE, statModValue, apply);
+                player->ApplyStatBuffMod(STAT_STAMINA, statModValue, apply);
                 break;
             case ITEM_MOD_DEFENSE_SKILL_RATING:
-                player->ApplyRatingMod(CR_DEFENSE_SKILL, val, apply);
+                player->ApplyRatingMod(CR_DEFENSE_SKILL, legacyVal64, apply);
                 break;
             case ITEM_MOD_DODGE_RATING:
-                player->ApplyRatingMod(CR_DODGE, val, apply);
+                player->ApplyRatingMod(CR_DODGE, legacyVal64, apply);
                 break;
             case ITEM_MOD_PARRY_RATING:
-                player->ApplyRatingMod(CR_PARRY, val, apply);
+                player->ApplyRatingMod(CR_PARRY, legacyVal64, apply);
                 break;
             case ITEM_MOD_BLOCK_RATING:
-                player->ApplyRatingMod(CR_BLOCK, val, apply);
+                player->ApplyRatingMod(CR_BLOCK, legacyVal64, apply);
                 break;
             case ITEM_MOD_HIT_MELEE_RATING:
-                player->ApplyRatingMod(CR_HIT_MELEE, val, apply);
+                player->ApplyRatingMod(CR_HIT_MELEE, legacyVal64, apply);
                 break;
             case ITEM_MOD_HIT_RANGED_RATING:
-                player->ApplyRatingMod(CR_HIT_RANGED, val, apply);
+                player->ApplyRatingMod(CR_HIT_RANGED, legacyVal64, apply);
                 break;
             case ITEM_MOD_HIT_SPELL_RATING:
-                player->ApplyRatingMod(CR_HIT_SPELL, val, apply);
+                player->ApplyRatingMod(CR_HIT_SPELL, legacyVal64, apply);
                 break;
             case ITEM_MOD_CRIT_MELEE_RATING:
-                player->ApplyRatingMod(CR_CRIT_MELEE, val, apply);
+                player->ApplyRatingMod(CR_CRIT_MELEE, legacyVal64, apply);
                 break;
             case ITEM_MOD_CRIT_RANGED_RATING:
-                player->ApplyRatingMod(CR_CRIT_RANGED, val, apply);
+                player->ApplyRatingMod(CR_CRIT_RANGED, legacyVal64, apply);
                 break;
             case ITEM_MOD_CRIT_SPELL_RATING:
-                player->ApplyRatingMod(CR_CRIT_SPELL, val, apply);
+                player->ApplyRatingMod(CR_CRIT_SPELL, legacyVal64, apply);
                 break;
             case ITEM_MOD_HIT_TAKEN_MELEE_RATING:
-                player->ApplyRatingMod(CR_HIT_TAKEN_MELEE, val, apply);
+                player->ApplyRatingMod(CR_HIT_TAKEN_MELEE, legacyVal64, apply);
                 break;
             case ITEM_MOD_HIT_TAKEN_RANGED_RATING:
-                player->ApplyRatingMod(CR_HIT_TAKEN_RANGED, val, apply);
+                player->ApplyRatingMod(CR_HIT_TAKEN_RANGED, legacyVal64, apply);
                 break;
             case ITEM_MOD_HIT_TAKEN_SPELL_RATING:
-                player->ApplyRatingMod(CR_HIT_TAKEN_SPELL, val, apply);
+                player->ApplyRatingMod(CR_HIT_TAKEN_SPELL, legacyVal64, apply);
                 break;
             case ITEM_MOD_CRIT_TAKEN_MELEE_RATING:
-                player->ApplyRatingMod(CR_CRIT_TAKEN_MELEE, val, apply);
+                player->ApplyRatingMod(CR_CRIT_TAKEN_MELEE, legacyVal64, apply);
                 break;
             case ITEM_MOD_CRIT_TAKEN_RANGED_RATING:
-                player->ApplyRatingMod(CR_CRIT_TAKEN_RANGED, val, apply);
+                player->ApplyRatingMod(CR_CRIT_TAKEN_RANGED, legacyVal64, apply);
                 break;
             case ITEM_MOD_CRIT_TAKEN_SPELL_RATING:
-                player->ApplyRatingMod(CR_CRIT_TAKEN_SPELL, val, apply);
+                player->ApplyRatingMod(CR_CRIT_TAKEN_SPELL, legacyVal64, apply);
                 break;
             case ITEM_MOD_HASTE_MELEE_RATING:
-                player->ApplyRatingMod(CR_HASTE_MELEE, val, apply);
+                player->ApplyRatingMod(CR_HASTE_MELEE, legacyVal64, apply);
                 break;
             case ITEM_MOD_HASTE_RANGED_RATING:
-                player->ApplyRatingMod(CR_HASTE_RANGED, val, apply);
+                player->ApplyRatingMod(CR_HASTE_RANGED, legacyVal64, apply);
                 break;
             case ITEM_MOD_HASTE_SPELL_RATING:
-                player->ApplyRatingMod(CR_HASTE_SPELL, val, apply);
+                player->ApplyRatingMod(CR_HASTE_SPELL, legacyVal64, apply);
                 break;
             case ITEM_MOD_HIT_RATING:
-                player->ApplyRatingMod(CR_HIT_MELEE, val, apply);
-                player->ApplyRatingMod(CR_HIT_RANGED, val, apply);
-                player->ApplyRatingMod(CR_HIT_SPELL, val, apply);
+                player->ApplyRatingMod(CR_HIT_MELEE, legacyVal64, apply);
+                player->ApplyRatingMod(CR_HIT_RANGED, legacyVal64, apply);
+                player->ApplyRatingMod(CR_HIT_SPELL, legacyVal64, apply);
                 break;
             case ITEM_MOD_CRIT_RATING:
-                player->ApplyRatingMod(CR_CRIT_MELEE, val, apply);
-                player->ApplyRatingMod(CR_CRIT_RANGED, val, apply);
-                player->ApplyRatingMod(CR_CRIT_SPELL, val, apply);
+                player->ApplyRatingMod(CR_CRIT_MELEE, legacyVal64, apply);
+                player->ApplyRatingMod(CR_CRIT_RANGED, legacyVal64, apply);
+                player->ApplyRatingMod(CR_CRIT_SPELL, legacyVal64, apply);
                 break;
             case ITEM_MOD_HIT_TAKEN_RATING:
-                player->ApplyRatingMod(CR_HIT_TAKEN_MELEE, val, apply);
-                player->ApplyRatingMod(CR_HIT_TAKEN_RANGED, val, apply);
-                player->ApplyRatingMod(CR_HIT_TAKEN_SPELL, val, apply);
+                player->ApplyRatingMod(CR_HIT_TAKEN_MELEE, legacyVal64, apply);
+                player->ApplyRatingMod(CR_HIT_TAKEN_RANGED, legacyVal64, apply);
+                player->ApplyRatingMod(CR_HIT_TAKEN_SPELL, legacyVal64, apply);
                 break;
             case ITEM_MOD_CRIT_TAKEN_RATING:
             case ITEM_MOD_RESILIENCE_RATING:
-                player->ApplyRatingMod(CR_CRIT_TAKEN_MELEE, val, apply);
-                player->ApplyRatingMod(CR_CRIT_TAKEN_RANGED, val, apply);
-                player->ApplyRatingMod(CR_CRIT_TAKEN_SPELL, val, apply);
+                player->ApplyRatingMod(CR_CRIT_TAKEN_MELEE, legacyVal64, apply);
+                player->ApplyRatingMod(CR_CRIT_TAKEN_RANGED, legacyVal64, apply);
+                player->ApplyRatingMod(CR_CRIT_TAKEN_SPELL, legacyVal64, apply);
                 break;
             case ITEM_MOD_HASTE_RATING:
-                player->ApplyRatingMod(CR_HASTE_MELEE, val, apply);
-                player->ApplyRatingMod(CR_HASTE_RANGED, val, apply);
-                player->ApplyRatingMod(CR_HASTE_SPELL, val, apply);
+                player->ApplyRatingMod(CR_HASTE_MELEE, legacyVal64, apply);
+                player->ApplyRatingMod(CR_HASTE_RANGED, legacyVal64, apply);
+                player->ApplyRatingMod(CR_HASTE_SPELL, legacyVal64, apply);
                 break;
             case ITEM_MOD_EXPERTISE_RATING:
-                player->ApplyRatingMod(CR_EXPERTISE, val, apply);
+                player->ApplyRatingMod(CR_EXPERTISE, legacyVal64, apply);
                 break;
             case ITEM_MOD_ATTACK_POWER:
-                player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, float(val), apply);
-                player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, float(val), apply);
+                player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, statModValue, apply);
+                player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, statModValue, apply);
                 break;
             case ITEM_MOD_RANGED_ATTACK_POWER:
-                player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, float(val), apply);
+                player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, statModValue, apply);
                 break;
             case ITEM_MOD_MANA_REGENERATION:
                 player->ApplyManaRegenBonus(legacyVal, apply);
                 break;
             case ITEM_MOD_ARMOR_PENETRATION_RATING:
-                player->ApplyRatingMod(CR_ARMOR_PENETRATION, val, apply);
+                player->ApplyRatingMod(CR_ARMOR_PENETRATION, legacyVal64, apply);
                 break;
             case ITEM_MOD_SPELL_POWER:
                 player->ApplySpellPowerBonus(val, apply);
@@ -436,7 +475,7 @@ namespace
                 player->ApplySpellPenetrationBonus(legacyVal, apply);
                 break;
             case ITEM_MOD_BLOCK_VALUE:
-                player->HandleBaseModValue(SHIELD_BLOCK_VALUE, FLAT_MOD, float(val), apply);
+                player->HandleBaseModValue(SHIELD_BLOCK_VALUE, FLAT_MOD, statModValue, apply);
                 break;
             case ITEM_MOD_SPELL_HEALING_DONE:
             case ITEM_MOD_SPELL_DAMAGE_DONE:
@@ -455,11 +494,11 @@ namespace
             ApplyAggregatedItemStat(player, pair.first, pair.second, apply);
 
         if (cache.armorBase != 0)
-            player->HandleStatModifier(UNIT_MOD_ARMOR, BASE_VALUE, float(cache.armorBase), apply);
+            player->HandleStatModifier(UNIT_MOD_ARMOR, BASE_VALUE, Acore::Number::ToFloat(cache.armorBase), apply);
         if (cache.armorTotal != 0)
-            player->HandleStatModifier(UNIT_MOD_ARMOR, TOTAL_VALUE, float(cache.armorTotal), apply);
+            player->HandleStatModifier(UNIT_MOD_ARMOR, TOTAL_VALUE, Acore::Number::ToFloat(cache.armorTotal), apply);
         if (cache.armorDamageModifierTotal != 0)
-            player->HandleStatModifier(UNIT_MOD_ARMOR, TOTAL_VALUE, float(cache.armorDamageModifierTotal), apply);
+            player->HandleStatModifier(UNIT_MOD_ARMOR, TOTAL_VALUE, Acore::Number::ToFloat(cache.armorDamageModifierTotal), apply);
         if (cache.blockFromTemplate != 0)
             player->HandleBaseModValue(SHIELD_BLOCK_VALUE, FLAT_MOD, float(cache.blockFromTemplate), apply);
         if (cache.resistanceTotals[SPELL_SCHOOL_HOLY] != 0)
@@ -494,18 +533,18 @@ namespace
         for (uint8 i = 0; i < MAX_ITEM_PROTO_STATS && i < proto->StatsCount; ++i)
         {
             uint32 statType = proto->ItemStat[i].ItemStatType;
-            int64 val = proto->ItemStat[i].ItemStatValue;
+            int128 val = proto->ItemStatValue128[i];
             if (val == 0)
                 continue;
 
-            cache.itemStatTotals[statType] += val * applyCount;
+            cache.itemStatTotals[statType] = AddInt128Saturated(cache.itemStatTotals[statType], MultiplyInt128Saturated(val, applyCount));
         }
 
-        uint32 armor = proto->Armor;
-        if (armor && proto->ArmorDamageModifier)
-            armor -= uint32(proto->ArmorDamageModifier);
+        uint128 armor = proto->Armor128;
+        if (armor != 0 && proto->ArmorDamageModifier)
+            armor = proto->ArmorDamageModifier >= Acore::Number::ToDouble(armor) ? 0 : armor - Acore::Number::ToUInt128Saturated(static_cast<long double>(proto->ArmorDamageModifier));
 
-        if (armor)
+        if (armor != 0)
         {
             bool isBaseArmor =
                 proto->Class == ITEM_CLASS_ARMOR &&
@@ -515,14 +554,18 @@ namespace
                  proto->SubClass == ITEM_SUBCLASS_ARMOR_PLATE ||
                  proto->SubClass == ITEM_SUBCLASS_ARMOR_SHIELD);
 
+            int128 armorAmount = MultiplyInt128Saturated(Acore::Number::ToInt128Saturated(armor), applyCount);
             if (isBaseArmor)
-                cache.armorBase += static_cast<int64>(armor) * applyCount;
+                cache.armorBase = AddInt128Saturated(cache.armorBase, armorAmount);
             else
-                cache.armorTotal += static_cast<int64>(armor) * applyCount;
+                cache.armorTotal = AddInt128Saturated(cache.armorTotal, armorAmount);
         }
 
         if (proto->ArmorDamageModifier > 0 && sScriptMgr->OnPlayerCanArmorDamageModifier(player))
-            cache.armorDamageModifierTotal += static_cast<int64>(proto->ArmorDamageModifier * applyCount);
+        {
+            int128 armorDamageModifier = Acore::Number::ToInt128Saturated(static_cast<long double>(proto->ArmorDamageModifier) * static_cast<long double>(applyCount));
+            cache.armorDamageModifierTotal = AddInt128Saturated(cache.armorDamageModifierTotal, armorDamageModifier);
+        }
 
         if (proto->Block)
             cache.blockFromTemplate += static_cast<int64>(proto->Block) * applyCount;
@@ -1395,7 +1438,7 @@ namespace
 
             uint8 nextFieldIndex = 15;
             entry.attributeEffectMode = hasAttributeEffectModeColumn ? fields[nextFieldIndex++].Get<uint8>() : TUJIAN_ATTR_MODE_EQUIP;
-            entry.fixedAllStatsValue = hasFixedAllStatsValueColumn ? fields[nextFieldIndex++].Get<int32>() : 0;
+            entry.fixedAllStatsValue = hasFixedAllStatsValueColumn ? fields[nextFieldIndex++].Get<int128>() : 0;
 
             if (entry.attributeEffectMode != TUJIAN_ATTR_MODE_FIXED)
                 entry.attributeEffectMode = TUJIAN_ATTR_MODE_EQUIP;
@@ -1634,7 +1677,7 @@ namespace
         std::unordered_map<uint32, uint32> aggregatedItemSetCounts;
         aggregatedItemSetCounts.reserve(activationRecordCount);
         PlayerWeaponDamageBonusCache weaponDamageBonuses;
-        int32 totalFixedAllStatsBonus = 0;
+        int128 totalFixedAllStatsBonus = 0;
 
 #ifdef MODULE_ITEM_SKILLS
         std::unordered_map<uint32, std::unordered_set<uint32>> activatedTuJianIdsByGroup;
@@ -1668,7 +1711,7 @@ namespace
             TuJianEntry const& tuJian = tuJianItr->second;
             if (tuJian.attributeEffectMode == TUJIAN_ATTR_MODE_FIXED)
             {
-                totalFixedAllStatsBonus += tuJian.fixedAllStatsValue;
+                totalFixedAllStatsBonus = AddInt128Saturated(totalFixedAllStatsBonus, tuJian.fixedAllStatsValue);
                 continue;
             }
 

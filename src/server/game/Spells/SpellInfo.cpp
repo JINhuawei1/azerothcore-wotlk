@@ -27,6 +27,7 @@
 #include "SpellAuraDefines.h"
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
+#include "Util.h"
 #include <limits>
 
 namespace
@@ -42,6 +43,11 @@ namespace
         return static_cast<int64>(value);
     }
 
+    int64 ToInt64Saturated(uint128 const& value)
+    {
+        return value > static_cast<uint128>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(value);
+    }
+
     int64 CalculatePctInt64Saturated(uint64 base, float pct)
     {
         if (!base || pct <= 0.0f)
@@ -51,7 +57,24 @@ namespace
         return ToInt64Saturated(value);
     }
 
+    int64 CalculatePctInt64Saturated(uint128 const& base, float pct)
+    {
+        if (base == 0 || pct <= 0.0f)
+            return 0;
+
+        return ToInt64Saturated(Acore::Number::CalculatePct(base, pct));
+    }
+
     void AddPowerCostPct(int64& powerCost, uint64 base, float pct)
+    {
+        int64 pctCost = CalculatePctInt64Saturated(base, pct);
+        if (pctCost > 0 && powerCost > std::numeric_limits<int64>::max() - pctCost)
+            powerCost = std::numeric_limits<int64>::max();
+        else
+            powerCost += pctCost;
+    }
+
+    void AddPowerCostPct(int64& powerCost, uint128 const& base, float pct)
     {
         int64 pctCost = CalculatePctInt64Saturated(base, pct);
         if (pctCost > 0 && powerCost > std::numeric_limits<int64>::max() - pctCost)
@@ -2464,10 +2487,10 @@ int64 SpellInfo::CalcPowerCost(Unit const* caster, SpellSchoolMask schoolMask, S
     {
         // If power type - health drain all
         if (PowerType == POWER_HEALTH)
-            return ToInt64Saturated(static_cast<long double>(caster->GetHealthForCombat()));
+            return ToInt64Saturated(caster->GetHealthForCombat128());
         // Else drain all power
         if (PowerType < MAX_POWERS)
-            return ToInt64Saturated(static_cast<long double>(caster->GetPowerForCombat(Powers(PowerType))));
+            return ToInt64Saturated(caster->GetPowerForCombat128(Powers(PowerType)));
         LOG_ERROR("spells", "SpellInfo::CalcPowerCost: Unknown power type '{}' in spell {}", PowerType, Id);
         return 0;
     }
@@ -2481,16 +2504,16 @@ int64 SpellInfo::CalcPowerCost(Unit const* caster, SpellSchoolMask schoolMask, S
         {
             // health as power used
             case POWER_HEALTH:
-                AddPowerCostPct(powerCost, caster->GetCreateHealthForCombat(), ManaCostPercentage);
+                AddPowerCostPct(powerCost, caster->GetCreateHealthForCombat128(), ManaCostPercentage);
                 break;
             case POWER_MANA:
-                AddPowerCostPct(powerCost, caster->GetCreatePowerForCombat(POWER_MANA), ManaCostPercentage);
+                AddPowerCostPct(powerCost, caster->GetCreatePowerForCombat128(POWER_MANA), ManaCostPercentage);
                 break;
             case POWER_RAGE:
             case POWER_FOCUS:
             case POWER_ENERGY:
             case POWER_HAPPINESS:
-                AddPowerCostPct(powerCost, caster->GetMaxPowerForCombat(Powers(PowerType)), ManaCostPercentage);
+                AddPowerCostPct(powerCost, caster->GetMaxPowerForCombat128(Powers(PowerType)), ManaCostPercentage);
                 break;
             case POWER_RUNE:
             case POWER_RUNIC_POWER:

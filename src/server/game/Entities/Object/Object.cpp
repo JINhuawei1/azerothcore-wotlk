@@ -707,8 +707,9 @@ void Object::SetInt32Value(uint16 index, int32 value)
             if (result)
             {
                 Field* fields = result->Fetch();
-                uint32 apLimit = fields[0].Get<uint32>();
-                LOG_INFO("entities.player", "远程攻击强度拦截: 职业={}, 原值={}, 上限={}", player->getClass(), value, apLimit);
+                uint128 apLimit128 = fields[0].GetUInt128();
+                int32 apLimit = Acore::Number::ToInt32Saturated(Acore::Number::ToInt128Saturated(apLimit128));
+                LOG_INFO("entities.player", "远程攻击强度拦截: 职业={}, 原值={}, 上限={}", player->getClass(), value, apLimit128.convert_to<std::string>());
                 if (apLimit > 0 && value > apLimit)
                 {
                     LOG_INFO("entities.player", "应用远程攻击强度上限: {} -> {}", value, apLimit);

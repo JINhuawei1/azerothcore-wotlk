@@ -92,6 +92,17 @@ public:
         SetValidData(index, value);
     }
 
+    // MySQL has no native signed/unsigned 128-bit integer binding; send these as decimal strings.
+    inline void SetData(const uint8 index, int128 const& value)
+    {
+        SetValidData(index, value.convert_to<std::string>());
+    }
+
+    inline void SetData(const uint8 index, uint128 const& value)
+    {
+        SetValidData(index, value.convert_to<std::string>());
+    }
+
     // Set nullptr
     inline void SetData(const uint8 index, std::nullptr_t = nullptr)
     {

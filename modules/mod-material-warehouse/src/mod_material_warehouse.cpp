@@ -14,6 +14,8 @@
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "StringConvert.h"
+#include "Util.h"
 #include "WorldPacket.h"
 #include <algorithm>
 #include <limits>
@@ -40,9 +42,17 @@ struct MaterialWarehouseType
 
 struct MaterialWarehouseStoredItem
 {
-    uint64 count = 0;
+    uint128 count = 0;
     bool autoStore = true;
 };
+
+uint128 SaturatingAddUInt128(uint128 const& left, uint128 const& right)
+{
+    if (right > std::numeric_limits<uint128>::max() - left)
+        return std::numeric_limits<uint128>::max();
+
+    return left + right;
+}
 
 std::string SanitizeAddonField(std::string value)
 {
@@ -95,22 +105,15 @@ bool TryParseUInt32(std::string const& text, uint32& value)
     }
 }
 
-bool TryParseUInt64(std::string const& text, uint64& value)
+bool TryParseUInt128(std::string const& text, uint128& value)
 {
-    try
+    if (Optional<uint128> parsed = Acore::StringTo<uint128>(text))
     {
-        size_t pos = 0;
-        unsigned long long parsed = std::stoull(text, &pos, 10);
-        if (pos != text.length())
-            return false;
-
-        value = static_cast<uint64>(parsed);
+        value = *parsed;
         return true;
     }
-    catch (...)
-    {
-        return false;
-    }
+
+    return false;
 }
 
 std::vector<std::string> Split(std::string const& text, char delimiter)
@@ -225,7 +228,7 @@ public:
             Field* fields = result->Fetch();
             MaterialWarehouseStoredItem state;
             uint32 itemId = fields[0].Get<uint32>();
-            state.count = fields[1].Get<uint64>();
+            state.count = fields[1].Get<uint128>();
             state.autoStore = fields[2].Get<uint8>() != 0;
             items[itemId] = state;
         }
@@ -270,9 +273,9 @@ public:
             "INSERT INTO `_材料仓库玩家` (`玩家GUID`, `物品ID`, `数量`, `自动存储`) "
             "VALUES ({}, {}, {}, 1) "
             "ON DUPLICATE KEY UPDATE `自动存储` = 1",
-            playerGuid, itemId, state.count);
+            playerGuid, itemId, Acore::ToString(state.count));
 
-        uint64 deposited = 0;
+        uint128 deposited = 0;
         if (_depositExistingOnAdd)
             deposited = DepositFromInventory(player, itemId, 0, false);
 
@@ -347,7 +350,7 @@ public:
         return true;
     }
 
-    uint64 DepositFromInventory(Player* player, uint32 itemId, uint64 requestedCount, bool notify = true)
+    uint128 DepositFromInventory(Player* player, uint32 itemId, uint128 const& requestedCount, bool notify = true)
     {
         if (!player || !_enabled)
             return 0;
@@ -368,11 +371,11 @@ public:
             return 0;
         }
 
-        uint64 amount = requestedCount ? std::min<uint64>(requestedCount, available) : available;
+        uint128 amount = requestedCount != 0 ? std::min<uint128>(requestedCount, uint128(available)) : uint128(available);
         if (!amount)
             return 0;
 
-        uint32 destroyCount = static_cast<uint32>(std::min<uint64>(amount, std::numeric_limits<uint32>::max()));
+        uint32 destroyCount = Acore::Number::ToUInt32Saturated(amount);
         EnsureTracked(player, itemId);
         player->DestroyItemCount(itemId, destroyCount, true, false);
         AddStoredCount(player->GetGUID().GetCounter(), itemId, destroyCount);
@@ -386,7 +389,7 @@ public:
         return destroyCount;
     }
 
-    uint64 DepositAllTracked(Player* player)
+    uint128 DepositAllTracked(Player* player)
     {
         if (!player || !_enabled)
             return 0;
@@ -407,16 +410,16 @@ public:
                 itemIds.push_back(itemId);
         }
 
-        uint64 total = 0;
+        uint128 total = 0;
         for (uint32 itemId : itemIds)
-            total += DepositFromInventory(player, itemId, 0, false);
+            total = SaturatingAddUInt128(total, DepositFromInventory(player, itemId, 0, false));
 
         SendResult(player, "DEPOSIT_ALL", total > 0, total > 0 ? "已存入所有已开启自动存储的物品" : "没有可存入的物品");
         SendWarehouse(player);
         return total;
     }
 
-    bool Withdraw(Player* player, uint32 itemId, uint64 requestedCount)
+    bool Withdraw(Player* player, uint32 itemId, uint128 const& requestedCount)
     {
         if (!player || !_enabled)
             return false;
@@ -429,17 +432,18 @@ public:
             return false;
         }
 
-        uint64 amount = requestedCount ? std::min<uint64>(requestedCount, state->count) : state->count;
-        amount = std::min<uint64>(amount, _maxWithdrawPerRequest);
-        amount = std::min<uint64>(amount, std::numeric_limits<uint32>::max());
-        if (!amount)
+        uint128 amount = requestedCount != 0 ? std::min<uint128>(requestedCount, state->count) : state->count;
+        amount = std::min<uint128>(amount, uint128(_maxWithdrawPerRequest));
+        amount = std::min<uint128>(amount, uint128(std::numeric_limits<uint32>::max()));
+        uint32 amount32 = Acore::Number::ToUInt32Saturated(amount);
+        if (!amount32)
         {
             SendResult(player, "WITHDRAW", false, "取出数量无效");
             return false;
         }
 
         ItemPosCountVec dest;
-        InventoryResult msg = player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, itemId, static_cast<uint32>(amount));
+        InventoryResult msg = player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, itemId, amount32);
         if (msg != EQUIP_ERR_OK)
         {
             player->SendEquipError(msg, nullptr, nullptr, itemId);
@@ -447,7 +451,7 @@ public:
             return false;
         }
 
-        Item* newItem = Item::CreateItem(itemId, static_cast<uint32>(amount), player);
+        Item* newItem = Item::CreateItem(itemId, amount32, player);
         if (!newItem)
         {
             SendResult(player, "WITHDRAW", false, "创建物品失败");
@@ -488,7 +492,8 @@ public:
         if (!IsItemAllowed(itemId))
             return;
 
-        _pendingAutoStore[playerGuid][itemId] += count;
+        uint128& pendingCount = _pendingAutoStore[playerGuid][itemId];
+        pendingCount = SaturatingAddUInt128(pendingCount, count);
     }
 
     void Update(Player* player, uint32 /*diff*/)
@@ -535,7 +540,7 @@ public:
 
                 std::ostringstream payload;
                 payload << "ITEM:" << itemId << '^'
-                        << state.count << '^'
+                        << Acore::ToString(state.count) << '^'
                         << (state.autoStore ? 1 : 0) << '^'
                         << SanitizeAddonField(itemTemplate->Name1) << '^'
                         << static_cast<uint32>(itemTemplate->Quality) << '^'
@@ -596,7 +601,7 @@ public:
             return;
 
         uint32 itemId = 0;
-        uint64 count = 0;
+        uint128 count = 0;
 
         if ((parts[0] == "ADD" || parts[0] == "添加" || parts[0] == "提交" || parts[0] == "提交存储") && parts.size() >= 2 && TryParseUInt32(parts[1], itemId))
         {
@@ -613,7 +618,7 @@ public:
         if ((parts[0] == "STORE" || parts[0] == "DEPOSIT" || parts[0] == "存储" || parts[0] == "存入") && parts.size() >= 2 && TryParseUInt32(parts[1], itemId))
         {
             if (parts.size() >= 3)
-                TryParseUInt64(parts[2], count);
+                TryParseUInt128(parts[2], count);
             DepositFromInventory(player, itemId, count);
             return;
         }
@@ -621,7 +626,7 @@ public:
         if ((parts[0] == "WITHDRAW" || parts[0] == "EXTRACT" || parts[0] == "取出" || parts[0] == "提取") && parts.size() >= 2 && TryParseUInt32(parts[1], itemId))
         {
             if (parts.size() >= 3)
-                TryParseUInt64(parts[2], count);
+                TryParseUInt128(parts[2], count);
             Withdraw(player, itemId, count);
             return;
         }
@@ -660,19 +665,19 @@ private:
         CharacterDatabase.Execute(
             "INSERT INTO `_材料仓库玩家` (`玩家GUID`, `物品ID`, `数量`, `自动存储`) "
             "VALUES ({}, {}, {}, 1) ON DUPLICATE KEY UPDATE `自动存储` = `自动存储`",
-            playerGuid, itemId, state.count);
+            playerGuid, itemId, Acore::ToString(state.count));
     }
 
-    void AddStoredCount(uint32 playerGuid, uint32 itemId, uint64 count)
+    void AddStoredCount(uint32 playerGuid, uint32 itemId, uint128 const& count)
     {
         MaterialWarehouseStoredItem& state = _players[playerGuid][itemId];
-        state.count += count;
+        state.count = SaturatingAddUInt128(state.count, count);
 
         CharacterDatabase.Execute(
             "INSERT INTO `_材料仓库玩家` (`玩家GUID`, `物品ID`, `数量`, `自动存储`) "
             "VALUES ({}, {}, {}, {}) "
-            "ON DUPLICATE KEY UPDATE `数量` = `数量` + VALUES(`数量`)",
-            playerGuid, itemId, count, state.autoStore ? 1 : 0);
+            "ON DUPLICATE KEY UPDATE `数量` = VALUES(`数量`), `自动存储` = VALUES(`自动存储`)",
+            playerGuid, itemId, Acore::ToString(state.count), state.autoStore ? 1 : 0);
     }
 
     void ProcessPendingAutoStore(Player* player, uint32 budget)
@@ -686,13 +691,13 @@ private:
             return;
 
         uint32 remainingBudget = budget;
-        uint64 storedTotal = 0;
+        uint128 storedTotal = 0;
         auto& pendingItems = pendingPlayerItr->second;
 
         for (auto itr = pendingItems.begin(); itr != pendingItems.end() && remainingBudget > 0; )
         {
             uint32 itemId = itr->first;
-            uint64 pendingCount = itr->second;
+            uint128 pendingCount = itr->second;
 
             MaterialWarehouseStoredItem* state = GetStoredState(playerGuid, itemId);
             if (!state || !state->autoStore || !IsItemAllowed(itemId))
@@ -708,8 +713,8 @@ private:
                 continue;
             }
 
-            uint64 storeCount64 = std::min<uint64>(pendingCount, std::min<uint64>(available, remainingBudget));
-            uint32 storeCount = static_cast<uint32>(storeCount64);
+            uint128 storeCountWide = std::min<uint128>(pendingCount, uint128(std::min<uint32>(available, remainingBudget)));
+            uint32 storeCount = Acore::Number::ToUInt32Saturated(storeCountWide);
             if (!storeCount)
             {
                 ++itr;
@@ -718,7 +723,7 @@ private:
 
             player->DestroyItemCount(itemId, storeCount, true, false);
             AddStoredCount(playerGuid, itemId, storeCount);
-            storedTotal += storeCount;
+            storedTotal = SaturatingAddUInt128(storedTotal, storeCount);
             remainingBudget -= storeCount;
 
             if (available <= storeCount || pendingCount <= storeCount)
@@ -737,7 +742,7 @@ private:
             SendWarehouse(player);
     }
 
-    void SubtractStoredCount(uint32 playerGuid, uint32 itemId, uint64 count)
+    void SubtractStoredCount(uint32 playerGuid, uint32 itemId, uint128 const& count)
     {
         MaterialWarehouseStoredItem* state = GetStoredState(playerGuid, itemId);
         if (!state)
@@ -746,9 +751,9 @@ private:
         state->count = state->count > count ? state->count - count : 0;
 
         CharacterDatabase.Execute(
-            "UPDATE `_材料仓库玩家` SET `数量` = IF(`数量` > {}, `数量` - {}, 0) "
+            "UPDATE `_材料仓库玩家` SET `数量` = {} "
             "WHERE `玩家GUID` = {} AND `物品ID` = {}",
-            count, count, playerGuid, itemId);
+            Acore::ToString(state->count), playerGuid, itemId);
     }
 
     void SendPayload(Player* player, std::string const& payload)
@@ -785,7 +790,7 @@ private:
     uint32 _maxWithdrawPerRequest = 100000;
     std::vector<MaterialWarehouseType> _allowedTypes;
     std::unordered_map<uint32, std::unordered_map<uint32, MaterialWarehouseStoredItem>> _players;
-    std::unordered_map<uint32, std::unordered_map<uint32, uint64>> _pendingAutoStore;
+    std::unordered_map<uint32, std::unordered_map<uint32, uint128>> _pendingAutoStore;
     std::unordered_set<uint32> _withdrawGuard;
 };
 
@@ -949,10 +954,11 @@ private:
     {
         Player* player = GetPlayer(handler);
         std::string first;
-        uint64 count = 0;
+        std::string countText;
+        uint128 count = 0;
         std::istringstream stream(args ? args : "");
         stream >> first;
-        stream >> count;
+        stream >> countText;
 
         if (!player || first.empty())
         {
@@ -972,6 +978,9 @@ private:
             handler->PSendSysMessage("物品ID无效");
             return false;
         }
+
+        if (!countText.empty())
+            TryParseUInt128(countText, count);
 
         sMaterialWarehouseMgr->DepositFromInventory(player, itemId, count);
         return true;
@@ -1001,7 +1010,7 @@ private:
         Player* player = GetPlayer(handler);
         uint32 itemId = 0;
         std::string countText;
-        uint64 count = 0;
+        uint128 count = 0;
         std::istringstream stream(args ? args : "");
         stream >> itemId;
         stream >> countText;
@@ -1013,7 +1022,7 @@ private:
         }
 
         if (!countText.empty() && countText != "all" && countText != "全部")
-            TryParseUInt64(countText, count);
+            TryParseUInt128(countText, count);
 
         sMaterialWarehouseMgr->Withdraw(player, itemId, count);
         return true;

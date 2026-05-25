@@ -20,7 +20,7 @@ CREATE TEMPORARY TABLE `_tmp_ascension_slot_defs` (
   `boss_weapon_main` int unsigned NOT NULL,
   `boss_weapon_off` int unsigned NOT NULL,
   `boss_weapon_ranged` int unsigned NOT NULL,
-  `boss_health` bigint unsigned NOT NULL,
+  `boss_health` decimal(39,0) unsigned NOT NULL,
   `boss_damage_modifier` int unsigned NOT NULL,
   `stat_budget` int unsigned NOT NULL,
   PRIMARY KEY (`slot_id`)

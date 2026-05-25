@@ -9,11 +9,52 @@
 #include "Item.h"
 #include "Player.h"
 #include "ObjectMgr.h"
+#include "Random.h"
+#include "StringConvert.h"
+#include "Util.h"
 #include <random>
 #include <sstream>
 #include <ctime>
 #include <iomanip>
 #include <algorithm>
+#include <limits>
+
+namespace
+{
+uint128 RandomUInt128InRange(uint128 minValue, uint128 maxValue)
+{
+    if (maxValue <= minValue)
+        return minValue;
+
+    uint128 span = maxValue - minValue;
+    uint128 randomValue = 0;
+    for (uint8 i = 0; i < 4; ++i)
+    {
+        randomValue <<= 32;
+        randomValue += rand32();
+    }
+
+    if (span == std::numeric_limits<uint128>::max())
+        return randomValue;
+
+    return minValue + (randomValue % (span + 1));
+}
+
+int128 RandomInt128InRange(int128 minValue, int128 maxValue)
+{
+    if (maxValue <= minValue)
+        return minValue;
+
+    uint128 span = static_cast<uint128>(maxValue - minValue);
+    uint128 offset = RandomUInt128InRange(0, span);
+    return minValue + static_cast<int128>(offset);
+}
+
+int128 ScaleAttributeValueByItemLevel(int128 const& value, uint32 itemLevel)
+{
+    return Acore::Number::CalculatePct(value, itemLevel);
+}
+}
 
 // 【根本性修复】将时间戳转换为可读的时间字符串（线程安全版本）
 std::string TimeToTimestampStr(time_t t)
@@ -94,8 +135,8 @@ void ItemAttributesLoader::LoadItemAttributeTemplates()
         attributeTemplate.group = fields[3].Get<uint32>();
         attributeTemplate.attributeType = fields[4].Get<uint32>();
         attributeTemplate.chance = fields[5].Get<uint32>();
-        attributeTemplate.minPercent = fields[6].Get<int32>();
-        attributeTemplate.maxPercent = fields[7].Get<int32>();
+        attributeTemplate.minPercent = fields[6].Get<int128>();
+        attributeTemplate.maxPercent = fields[7].Get<int128>();
         attributeTemplate.calcType = fields[8].Get<uint32>();
         attributeTemplate.skillGroup = fields[9].Get<uint32>();
         attributeTemplate.qualityRequirement = fields[10].Get<uint32>();
@@ -191,7 +232,7 @@ std::vector<ItemAttributeTemplate const*> ItemAttributesLoader::GetAllItemAttrib
     return result;
 }
 
-ItemAttributeResult ItemAttributesLoader::ApplyAttributeToItem(Item* item, uint32 attributeId, Player* player, AttributeCategory category, int32 minValue, int32 maxValue)
+ItemAttributeResult ItemAttributesLoader::ApplyAttributeToItem(Item* item, uint32 attributeId, Player* player, AttributeCategory category, int128 minValue, int128 maxValue)
 {
     if (!item)
         return ItemAttributeResult::INVALID_ITEM;
@@ -217,8 +258,8 @@ ItemAttributeResult ItemAttributesLoader::ApplyAttributeToItem(Item* item, uint3
         return ItemAttributeResult::ITEM_NOT_SUITABLE;
 
     // 计算属性值
-    int32 attributeValue;
-    if (minValue > 0 || maxValue > 0)
+    int128 attributeValue;
+    if (minValue != 0 || maxValue != 0)
     {
         // 如果指定了自定义值范围，使用自定义范围
         attributeValue = CalculateAttributeValueWithRange(item, attributeTemplate, minValue, maxValue);
@@ -283,7 +324,7 @@ bool ItemAttributesLoader::HasAttribute(Item* item, uint32 attributeId) const
         return false;
 
     std::vector<uint32> attributes;
-    std::vector<int32> values;
+    std::vector<int128> values;
     if (!GetItemAttributesWithValues(item, attributes, values))
         return false;
 
@@ -296,14 +337,14 @@ bool ItemAttributesLoader::HasAttributeByType(Item* item, uint32 attributeType) 
         return false;
 
     std::vector<uint32> attributes;
-    std::vector<int32> values;
+    std::vector<int128> values;
     if (!GetItemAttributesWithValues(item, attributes, values))
         return false;
 
     return std::find(attributes.begin(), attributes.end(), attributeType) != attributes.end();
 }
 
-bool ItemAttributesLoader::GetItemAttributesWithValues(Item* item, std::vector<uint32>& attributes, std::vector<int32>& values, uint32* itemId) const
+bool ItemAttributesLoader::GetItemAttributesWithValues(Item* item, std::vector<uint32>& attributes, std::vector<int128>& values, uint32* itemId) const
 {
     attributes.clear();
     values.clear();
@@ -340,14 +381,14 @@ std::vector<uint32> ItemAttributesLoader::GetItemAttributes(Item* item) const
     if (!item)
         return result;
 
-    std::vector<int32> values;
+    std::vector<int128> values;
     GetItemAttributesWithValues(item, result, values);
     return result;
 }
 
-std::vector<int32> ItemAttributesLoader::GetItemAttributeValues(Item* item) const
+std::vector<int128> ItemAttributesLoader::GetItemAttributeValues(Item* item) const
 {
-    std::vector<int32> result;
+    std::vector<int128> result;
 
     if (!item)
         return result;
@@ -357,53 +398,55 @@ std::vector<int32> ItemAttributesLoader::GetItemAttributeValues(Item* item) cons
     return result;
 }
 
-int32 ItemAttributesLoader::CalculateAttributeValue(Item* item, ItemAttributeTemplate const* attributeTemplate) const
+int128 ItemAttributesLoader::CalculateAttributeValue(Item* item, ItemAttributeTemplate const* attributeTemplate) const
 {
     if (!item || !attributeTemplate)
         return 0;
 
-    int32 baseValue = 0;
+    int128 baseValue = 0;
+    int128 minValue = attributeTemplate->minPercent;
+    int128 maxValue = attributeTemplate->maxPercent;
+    if (minValue > maxValue)
+        std::swap(minValue, maxValue);
 
     // 根据计算方式确定基础值
     switch (attributeTemplate->calcType)
     {
         case 0: // 常规
-            baseValue = attributeTemplate->minPercent;
+            baseValue = minValue;
             break;
         case 1: // 乘以物品等级
-            baseValue = attributeTemplate->minPercent * item->GetTemplate()->ItemLevel / 100;
+            baseValue = ScaleAttributeValueByItemLevel(minValue, item->GetTemplate()->ItemLevel);
             break;
         case 2: // 固定值
-            baseValue = attributeTemplate->minPercent;
+            baseValue = minValue;
             break;
         default:
-            baseValue = attributeTemplate->minPercent;
+            baseValue = minValue;
             break;
     }
 
     // 如果最小值和最大值不同，随机生成一个范围内的值
-    if (attributeTemplate->minPercent != attributeTemplate->maxPercent)
+    if (minValue != maxValue)
     {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<> dis(attributeTemplate->minPercent, attributeTemplate->maxPercent);
+        int128 randomValue = RandomInt128InRange(minValue, maxValue);
 
         if (attributeTemplate->calcType == 1) // 乘以物品等级
-            baseValue = dis(gen) * item->GetTemplate()->ItemLevel / 100;
+            baseValue = ScaleAttributeValueByItemLevel(randomValue, item->GetTemplate()->ItemLevel);
         else
-            baseValue = dis(gen);
+            baseValue = randomValue;
     }
 
     return baseValue;
 }
 
-int32 ItemAttributesLoader::CalculateAttributeValueWithRange(Item* item, ItemAttributeTemplate const* attributeTemplate, int32 minValue, int32 maxValue) const
+int128 ItemAttributesLoader::CalculateAttributeValueWithRange(Item* item, ItemAttributeTemplate const* attributeTemplate, int128 minValue, int128 maxValue) const
 {
     if (!item || !attributeTemplate)
         return 0;
 
     // 使用指定的值范围直接生成属性值
-    if (minValue <= 0 && maxValue <= 0)
+    if (minValue == 0 && maxValue == 0)
     {
         // 如果范围无效，回退到默认计算
         return CalculateAttributeValue(item, attributeTemplate);
@@ -416,11 +459,7 @@ int32 ItemAttributesLoader::CalculateAttributeValueWithRange(Item* item, ItemAtt
     }
 
     // 在指定范围内随机生成属性值
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(minValue, maxValue);
-    
-    return dis(gen);
+    return RandomInt128InRange(minValue, maxValue);
 }
 
 void ItemAttributesLoader::DumpItemAttributes(Item* item) const
@@ -435,7 +474,7 @@ void ItemAttributesLoader::DumpItemAttributes(Item* item) const
     LOG_INFO("module.item-attributes", "物品属性信息 - [{}] {}:", itemTemplate->ItemId, itemTemplate->Name1);
 
     std::vector<uint32> attributes;
-    std::vector<int32> values;
+    std::vector<int128> values;
     uint32 itemId = 0;
 
     if (!GetItemAttributesWithValues(item, attributes, values, &itemId) || attributes.empty())
@@ -461,11 +500,11 @@ void ItemAttributesLoader::DumpItemAttributes(Item* item) const
             continue;
         }
 
-        int32 value = (i < values.size()) ? values[i] : 0;
+        int128 value = (i < values.size()) ? values[i] : 0;
         LOG_INFO("module.item-attributes", "    [{}] {}: {} (类型: {}, 组: {})",
             attributeTemplate->id,
             attributeTemplate->clientDisplay,
-            value,
+            Acore::ToString(value),
             attributeTemplate->attributeType,
             attributeTemplate->group);
 

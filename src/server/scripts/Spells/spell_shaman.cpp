@@ -434,7 +434,7 @@ class spell_sha_astral_shift : public AuraScript
     {
         // reduces all damage taken while stun, fear or silence
         if (GetTarget()->GetUnitFlags() & (UNIT_FLAG_FLEEING | UNIT_FLAG_SILENCED) || (GetTarget()->GetUnitFlags() & (UNIT_FLAG_STUNNED) && GetTarget()->HasAuraWithMechanic(1 << MECHANIC_STUN)))
-            absorbAmount = SpellScriptCombat::CalculatePctInt32Saturated(dmgInfo.GetDamage(), absorbPct);
+            absorbAmount = SpellScriptCombat::CalculatePctInt32Saturated(Acore::Number::ToUInt64Saturated(dmgInfo.GetDamage()), absorbPct);
     }
 
     void Register() override
@@ -977,13 +977,13 @@ class spell_sha_lava_lash : public SpellScript
         if (Player* caster = GetCaster()->ToPlayer())
         {
             int32 damage = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(GetEffectValue()));
-            int64 hitDamage = GetHitDamage();
+            uint128 hitDamage = GetHitDamage128();
             if (caster->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND))
             {
                 // Damage is increased by 25% if your off-hand weapon is enchanted with Flametongue.
                 if (caster->GetAuraEffect(SPELL_AURA_DUMMY, SPELLFAMILY_SHAMAN, 0x200000, 0, 0))
-                    hitDamage = SpellScriptCombat::AddPctInt64Saturated(hitDamage, damage);
-                SetHitDamage(hitDamage);
+                    hitDamage = AddUInt128Damage(hitDamage, Acore::Number::CalculatePct(hitDamage, damage));
+                SetHitDamage128(hitDamage);
             }
         }
     }

@@ -20,6 +20,7 @@
 
 #include "Player.h"
 #include "Unit.h"
+#include "Util.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -134,9 +135,9 @@ namespace SpellScriptCombat
 
         if (Player* player = unit->ToPlayer())
         {
-            int64 extended = player->GetExtendedStat(stat);
+            int128 extended = player->GetExtendedStat128(stat);
             if (extended > 0)
-                return static_cast<long double>(extended);
+                return Acore::Number::ToLongDouble(extended);
         }
 
         float value = unit->GetStat(stat);
@@ -166,9 +167,9 @@ namespace SpellScriptCombat
 
         if (Player* player = unit->ToPlayer())
         {
-            int64 extended = player->GetExtendedSpellDamageBonus(schoolMask);
+            int128 extended = player->GetExtendedSpellDamageBonus128(schoolMask);
             if (extended > 0)
-                return static_cast<long double>(extended);
+                return Acore::Number::ToLongDouble(extended);
         }
 
         int32 value = unit->SpellBaseDamageBonusDone(schoolMask);
@@ -182,9 +183,9 @@ namespace SpellScriptCombat
 
         if (Player* player = unit->ToPlayer())
         {
-            int64 extended = player->GetExtendedHealingBonus();
+            int128 extended = player->GetExtendedHealingBonus128();
             if (extended > 0)
-                return static_cast<long double>(extended);
+                return Acore::Number::ToLongDouble(extended);
         }
 
         int32 value = unit->SpellBaseHealingBonusDone(schoolMask);

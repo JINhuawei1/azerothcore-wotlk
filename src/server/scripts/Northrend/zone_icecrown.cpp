@@ -1148,7 +1148,7 @@ class spell_charge_shield_bomber_aura : public AuraScript
     void Absorb(AuraEffect* /*aurEff*/, DamageInfo& dmgInfo, uint32& absorbAmount)
     {
         uint32 absorbPct = GetStackAmount() / 2;
-        absorbAmount = CalculatePct(dmgInfo.GetDamage(), absorbPct);
+        absorbAmount = ToUInt32Damage(CalculatePct(dmgInfo.GetDamage(), absorbPct));
         ModStackAmount(-1);
     }
 

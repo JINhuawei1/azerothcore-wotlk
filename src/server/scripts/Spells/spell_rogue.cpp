@@ -180,7 +180,7 @@ class spell_rog_cheat_death : public AuraScript
 
         uint64 health10 = target->CountPctFromMaxHealth(10);
 
-        uint64 amountToAbsorb = targetHealth > health10 ? dmgInfo.GetDamage() - targetHealth + health10 : dmgInfo.GetDamage();
+        uint64 amountToAbsorb = targetHealth > health10 ? Acore::Number::ToUInt64Saturated(dmgInfo.GetDamage() - targetHealth + health10) : Acore::Number::ToUInt64Saturated(dmgInfo.GetDamage());
         dmgInfo.AbsorbDamage(amountToAbsorb);
         absorbAmount = 0;
     }
@@ -421,7 +421,7 @@ class spell_rog_nerves_of_steel : public AuraScript
     {
         // reduces all damage taken while stun or fear
         if (GetTarget()->GetUnitFlags() & (UNIT_FLAG_FLEEING) || (GetTarget()->GetUnitFlags() & (UNIT_FLAG_STUNNED) && GetTarget()->HasAuraWithMechanic(1 << MECHANIC_STUN)))
-            absorbAmount = SpellScriptCombat::CalculatePctInt32Saturated(dmgInfo.GetDamage(), absorbPct);
+            absorbAmount = SpellScriptCombat::CalculatePctInt32Saturated(Acore::Number::ToUInt64Saturated(dmgInfo.GetDamage()), absorbPct);
     }
 
     void Register() override

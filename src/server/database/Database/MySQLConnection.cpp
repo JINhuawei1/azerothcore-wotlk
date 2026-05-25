@@ -634,10 +634,7 @@ bool MySQLConnection::_HandleMySQLErrno(uint32 errNo, char const* err, uint8 att
             ABORT("{}\n\n[{}] {}", str, errNo, err);
             return false;
         case ER_PARSE_ERROR:
-            str = "Error while parsing SQL. Core fix required.";
-            LOG_FATAL("sql.sql", "{}", str);
-            std::this_thread::sleep_for(10s);
-            ABORT("{}\n\n[{}] {}", str, errNo, err);
+            LOG_ERROR("sql.sql", "Error while parsing SQL. Skipping query. [{}] {}", errNo, err);
             return false;
         default:
             LOG_ERROR("sql.sql", "Unhandled MySQL errno {}. Unexpected behaviour possible.", errNo);

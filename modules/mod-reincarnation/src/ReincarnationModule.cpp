@@ -14,20 +14,28 @@
 #include "World.h"
 #include "Player.h"
 #include "Unit.h"
+#include "Util.h"
 #include "Chat.h"
 #include <limits>
 
 namespace
 {
-int64 ScaleRatingForReincarnation(int64 amount, float bonusPercent)
+int128 ScaleRatingForReincarnation(int128 const& amount, float bonusPercent)
 {
-    long double scaled = static_cast<long double>(amount) * (1.0L + static_cast<long double>(bonusPercent) / 100.0L);
+    long double scaled = Acore::Number::ToLongDouble(amount) * (1.0L + static_cast<long double>(bonusPercent) / 100.0L);
     if (scaled <= 0.0L)
         return 0;
-    if (scaled >= static_cast<long double>(std::numeric_limits<int64>::max()))
-        return std::numeric_limits<int64>::max();
 
-    return static_cast<int64>(scaled);
+    return Acore::Number::ToInt128Saturated(scaled);
+}
+
+int128 ScaleSpellPowerForReincarnation(int128 const& amount, float bonusPercent)
+{
+    long double scaled = Acore::Number::ToLongDouble(amount) * (1.0L + static_cast<long double>(bonusPercent) / 100.0L);
+    if (scaled <= 0.0L)
+        return 0;
+
+    return Acore::Number::ToInt128Saturated(scaled);
 }
 }
 
@@ -299,7 +307,7 @@ public:
     // CR_HIT_TAKEN_MELEE, CR_HIT_TAKEN_RANGED, CR_HIT_TAKEN_SPELL, CR_CRIT_TAKEN_MELEE,
     // CR_CRIT_TAKEN_RANGED, CR_CRIT_TAKEN_SPELL, CR_HASTE_MELEE, CR_HASTE_RANGED, CR_HASTE_SPELL,
     // CR_WEAPON_SKILL_MAINHAND, CR_WEAPON_SKILL_OFFHAND, CR_WEAPON_SKILL_RANGED, CR_EXPERTISE, CR_ARMOR_PENETRATION
-    void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int64& amount) override
+    void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int128& amount) override
     {
         if (!player || !sConfigMgr->GetOption("Reincarnation.Enable", true))
             return;
@@ -313,7 +321,7 @@ public:
     }
 
     // 计算法术强度和治疗强度时调用
-    void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int64& healingBonus, int64 spellDamage[7]) override
+    void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int128& healingBonus, int128 spellDamage[7]) override
     {
         if (!player || !sConfigMgr->GetOption("Reincarnation.Enable", true))
             return;
@@ -323,14 +331,14 @@ public:
         {
             // 对治疗强度应用百分比加成
             if (healingBonus > 0)
-                healingBonus = ScaleRatingForReincarnation(healingBonus, bonusPercent);
+                healingBonus = ScaleSpellPowerForReincarnation(healingBonus, bonusPercent);
 
             // 对所有学派的法术强度应用百分比加成
             // spellDamage[0] = 物理(不处理), [1]=神圣, [2]=火焰, [3]=自然, [4]=冰霜, [5]=暗影, [6]=奥术
             for (int i = 1; i < 7; ++i)
             {
                 if (spellDamage[i] > 0)
-                    spellDamage[i] = ScaleRatingForReincarnation(spellDamage[i], bonusPercent);
+                    spellDamage[i] = ScaleSpellPowerForReincarnation(spellDamage[i], bonusPercent);
             }
         }
     }

@@ -3,11 +3,14 @@
 CREATE TABLE IF NOT EXISTS `_武魂系统_魂环` (
   `等级` int UNSIGNED NOT NULL,
   `名称` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
-  `魂力消耗` bigint UNSIGNED NOT NULL DEFAULT 0,
+  `魂力消耗` decimal(39,0) UNSIGNED NOT NULL DEFAULT 0,
   `每级继承加成` float NOT NULL DEFAULT 1 COMMENT '最高魂环达到该等级时的最终继承百分比，100=100%',
   `备注` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
   PRIMARY KEY (`等级`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='武魂系统魂环升级消耗配置';
+
+ALTER TABLE `_武魂系统_魂环`
+  MODIFY COLUMN `魂力消耗` decimal(39,0) UNSIGNED NOT NULL DEFAULT 0;
 
 DELETE FROM `_武魂系统_魂环` WHERE `等级` BETWEEN 1 AND 100;
 INSERT INTO `_武魂系统_魂环`

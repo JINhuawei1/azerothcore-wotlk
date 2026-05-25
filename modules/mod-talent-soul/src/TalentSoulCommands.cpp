@@ -37,6 +37,46 @@ static const char* GetClassName(uint32 classType)
     }
 }
 
+static uint32 GetUpgradeCurrentLevel(PlayerSkillData const* data, TalentSoulUpgradeType type)
+{
+    if (!data)
+        return 0;
+
+    switch (type)
+    {
+        case TALENT_SOUL_UPGRADE_GCD:
+            return data->gcdLevel;
+        case TALENT_SOUL_UPGRADE_COOLDOWN:
+            return data->cooldownLevel;
+        case TALENT_SOUL_UPGRADE_COST:
+            return data->costLevel;
+        case TALENT_SOUL_UPGRADE_DAMAGE:
+            return data->damageLevel;
+        default:
+            return 0;
+    }
+}
+
+static uint32 GetUpgradeMaxLevel(TalentSoulData const* config, TalentSoulUpgradeType type)
+{
+    if (!config)
+        return 0;
+
+    switch (type)
+    {
+        case TALENT_SOUL_UPGRADE_GCD:
+            return config->gcdMaxLevel;
+        case TALENT_SOUL_UPGRADE_COOLDOWN:
+            return config->cooldownMaxLevel;
+        case TALENT_SOUL_UPGRADE_COST:
+            return config->costMaxLevel;
+        case TALENT_SOUL_UPGRADE_DAMAGE:
+            return config->damageMaxLevel;
+        default:
+            return 0;
+    }
+}
+
 class TalentSoulCommandScript : public CommandScript
 {
 public:
@@ -52,6 +92,14 @@ public:
             { "伤害",     HandleUpgradeDamageCommand,   SEC_PLAYER,        Console::No },
         };
 
+        static ChatCommandTable talentSoulUpgradeAllTable =
+        {
+            { "公共cd",   HandleUpgradeAllGCDCommand,      SEC_PLAYER,        Console::No },
+            { "冷却",     HandleUpgradeAllCooldownCommand, SEC_PLAYER,        Console::No },
+            { "消耗",     HandleUpgradeAllCostCommand,     SEC_PLAYER,        Console::No },
+            { "伤害",     HandleUpgradeAllDamageCommand,   SEC_PLAYER,        Console::No },
+        };
+
         static ChatCommandTable talentSoulCommandTable =
         {
             { "重载",     HandleTalentSoulReloadCommand,  SEC_ADMINISTRATOR, Console::Yes },
@@ -61,6 +109,7 @@ public:
             { "我的",     HandleTalentSoulMyDataCommand,  SEC_PLAYER,        Console::No  },
             { "天赋点",   HandleTalentSoulPointsCommand,  SEC_PLAYER,        Console::No  },
             { "升级",     talentSoulUpgradeTable },
+            { "全加",     talentSoulUpgradeAllTable },
             { "设置",     HandleTalentSoulSetCommand,     SEC_ADMINISTRATOR, Console::No  },
             { "重置",     HandleTalentSoulResetCommand,   SEC_ADMINISTRATOR, Console::No  },
             { "界面",     HandleTalentSoulOpenUICommand,  SEC_PLAYER,        Console::No  },
@@ -299,6 +348,30 @@ public:
         return HandleUpgrade(handler, spellId, TALENT_SOUL_UPGRADE_DAMAGE, "伤害加成");
     }
 
+    // 全加公共CD
+    static bool HandleUpgradeAllGCDCommand(ChatHandler* handler, uint32 spellId)
+    {
+        return HandleUpgradeAll(handler, spellId, TALENT_SOUL_UPGRADE_GCD, "公共CD");
+    }
+
+    // 全加技能冷却
+    static bool HandleUpgradeAllCooldownCommand(ChatHandler* handler, uint32 spellId)
+    {
+        return HandleUpgradeAll(handler, spellId, TALENT_SOUL_UPGRADE_COOLDOWN, "技能冷却");
+    }
+
+    // 全加技能消耗
+    static bool HandleUpgradeAllCostCommand(ChatHandler* handler, uint32 spellId)
+    {
+        return HandleUpgradeAll(handler, spellId, TALENT_SOUL_UPGRADE_COST, "技能消耗");
+    }
+
+    // 全加伤害加成
+    static bool HandleUpgradeAllDamageCommand(ChatHandler* handler, uint32 spellId)
+    {
+        return HandleUpgradeAll(handler, spellId, TALENT_SOUL_UPGRADE_DAMAGE, "伤害加成");
+    }
+
     // 通用升级处理
     static bool HandleUpgrade(ChatHandler* handler, uint32 spellId, TalentSoulUpgradeType type, const char* typeName)
     {
@@ -355,6 +428,38 @@ public:
         else
         {
             handler->PSendSysMessage("技能 {} 的{}已达到最大等级，无法继续升级", spellId, typeName);
+        }
+
+        return true;
+    }
+
+    // 批量升级处理
+    static bool HandleUpgradeAll(ChatHandler* handler, uint32 spellId, TalentSoulUpgradeType type, const char* typeName)
+    {
+        Player* player = handler->GetSession()->GetPlayer();
+        if (!player)
+            return false;
+
+        TalentSoulData const* config = sTalentSoulMgr->GetTalentSoulData(spellId);
+        if (!config)
+        {
+            handler->PSendSysMessage("技能ID {} 没有配置天赋之魂效果", spellId);
+            return true;
+        }
+
+        uint32 upgradedLevels = 0;
+        if (sTalentSoulMgr->UpgradePlayerSpellAll(player, spellId, type, upgradedLevels))
+        {
+            PlayerSkillData* data = sTalentSoulMgr->GetPlayerSkillData(player->GetGUID().GetCounter(), spellId);
+            uint32 currentLevel = GetUpgradeCurrentLevel(data, type);
+            uint32 maxLevel = GetUpgradeMaxLevel(config, type);
+
+            handler->PSendSysMessage("技能 {} 的{}全加成功！提升 {} 级，当前等级: {}/{}",
+                spellId, typeName, upgradedLevels, currentLevel, maxLevel);
+        }
+        else
+        {
+            handler->PSendSysMessage("技能 {} 的{}无法全加：天赋点不足或已达到最大等级", spellId, typeName);
         }
 
         return true;
@@ -545,6 +650,10 @@ public:
         {
             HandleSkillUpgrade(player, command.substr(strlen("SKILL_UPGRADE:")));
         }
+        else if (command.rfind("SKILL_UPGRADE_ALL:", 0) == 0)
+        {
+            HandleSkillUpgradeAll(player, command.substr(strlen("SKILL_UPGRADE_ALL:")));
+        }
         else if (command == "RESET_TALENT")
         {
             HandleResetTalent(player);
@@ -733,25 +842,7 @@ private:
         if (sTalentSoulMgr->UpgradePlayerSpell(player, spellId, type))
         {
             PlayerSkillData* data = sTalentSoulMgr->GetPlayerSkillData(player->GetGUID().GetCounter(), spellId);
-            uint32 currentLevel = 0;
-
-            switch (type)
-            {
-                case TALENT_SOUL_UPGRADE_GCD:
-                    currentLevel = data ? data->gcdLevel : 0;
-                    break;
-                case TALENT_SOUL_UPGRADE_COOLDOWN:
-                    currentLevel = data ? data->cooldownLevel : 0;
-                    break;
-                case TALENT_SOUL_UPGRADE_COST:
-                    currentLevel = data ? data->costLevel : 0;
-                    break;
-                case TALENT_SOUL_UPGRADE_DAMAGE:
-                    currentLevel = data ? data->damageLevel : 0;
-                    break;
-                default:
-                    break;
-            }
+            uint32 currentLevel = GetUpgradeCurrentLevel(data, type);
 
             uint32 remainPoints = sTalentSoulMgr->GetPlayerAvailableTalentPoints(player);
 
@@ -765,6 +856,68 @@ private:
             // 升级失败（已达最大等级）
             std::ostringstream failResponse;
             failResponse << "TALENTSOUL_UPGRADE_FAIL:" << spellId << ":" << upgradeType << ":MAX_LEVEL";
+            SendAddonMessage(player, failResponse.str());
+        }
+    }
+
+    // 处理技能全加请求
+    // 格式: spellId:upgradeType (upgradeType: 1=GCD, 2=冷却, 3=消耗, 4=伤害)
+    void HandleSkillUpgradeAll(Player* player, std::string const& args)
+    {
+        if (!player)
+            return;
+
+        uint32 spellId = 0;
+        uint32 upgradeType = 0;
+
+        try
+        {
+            size_t colonPos = args.find(':');
+            if (colonPos == std::string::npos)
+                return;
+
+            spellId = std::stoul(args.substr(0, colonPos));
+            upgradeType = std::stoul(args.substr(colonPos + 1));
+        }
+        catch (...)
+        {
+            return;
+        }
+
+        if (spellId == 0 || upgradeType == 0 || upgradeType > 4)
+            return;
+
+        TalentSoulUpgradeType type = static_cast<TalentSoulUpgradeType>(upgradeType - 1);
+
+        TalentSoulData const* config = sTalentSoulMgr->GetTalentSoulData(spellId);
+        if (!config)
+        {
+            std::ostringstream failResponse;
+            failResponse << "TALENTSOUL_UPGRADE_FAIL:" << spellId << ":" << upgradeType << ":CONFIG_NOT_FOUND";
+            SendAddonMessage(player, failResponse.str());
+            return;
+        }
+
+        uint32 upgradedLevels = 0;
+        if (sTalentSoulMgr->UpgradePlayerSpellAll(player, spellId, type, upgradedLevels))
+        {
+            PlayerSkillData* data = sTalentSoulMgr->GetPlayerSkillData(player->GetGUID().GetCounter(), spellId);
+            uint32 currentLevel = GetUpgradeCurrentLevel(data, type);
+            uint32 remainPoints = sTalentSoulMgr->GetPlayerAvailableTalentPoints(player);
+
+            std::ostringstream successResponse;
+            successResponse << "TALENTSOUL_UPGRADE:" << spellId << ":" << upgradeType << ":" << currentLevel << ":" << remainPoints;
+            SendAddonMessage(player, successResponse.str());
+        }
+        else
+        {
+            PlayerSkillData* data = sTalentSoulMgr->GetPlayerSkillData(player->GetGUID().GetCounter(), spellId);
+            uint32 currentLevel = GetUpgradeCurrentLevel(data, type);
+            uint32 maxLevel = GetUpgradeMaxLevel(config, type);
+
+            std::ostringstream failResponse;
+            failResponse << "TALENTSOUL_UPGRADE_FAIL:" << spellId << ":" << upgradeType << ":"
+                         << (maxLevel > 0 && currentLevel >= maxLevel ? "MAX_LEVEL" : "NOT_ENOUGH_POINTS");
             SendAddonMessage(player, failResponse.str());
         }
     }

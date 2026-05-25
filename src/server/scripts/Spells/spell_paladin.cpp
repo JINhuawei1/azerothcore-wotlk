@@ -49,19 +49,6 @@ namespace
         return static_cast<int32>(value);
     }
 
-    int64 ToSpellDamageInt64(long double value)
-    {
-        if (value != value)
-            return 0;
-
-        if (value >= static_cast<long double>(std::numeric_limits<int64>::max()))
-            return std::numeric_limits<int64>::max();
-
-        if (value <= static_cast<long double>(std::numeric_limits<int64>::min()))
-            return std::numeric_limits<int64>::min();
-
-        return static_cast<int64>(value);
-    }
 }
 /*
  * Scripts for spells with SPELLFAMILY_PALADIN and SPELLFAMILY_GENERIC spells used by paladin players.
@@ -382,11 +369,12 @@ private:
     void Absorb(AuraEffect* aurEff, DamageInfo& dmgInfo, uint32& absorbAmount)
     {
         Unit* victim = GetTarget();
-        uint64 victimHealth = victim->GetHealthForCombat();
-        uint64 remainingHealth = victimHealth > dmgInfo.GetDamage() ? victimHealth - dmgInfo.GetDamage() : 0;
-        uint64 allowedHealth = victim->CountPctFromMaxHealth(35);
+        uint128 victimHealth = victim->GetHealthForCombat128();
+        uint128 damageTaken = dmgInfo.GetDamage();
+        uint128 remainingHealth = victimHealth > damageTaken ? victimHealth - damageTaken : 0;
+        uint128 allowedHealth = victim->CountPctFromMaxHealth128(35);
         // If damage kills us
-        if (!remainingHealth && !victim->ToPlayer()->HasAura(PAL_SPELL_ARDENT_DEFENDER_DEBUFF))
+        if (remainingHealth == 0 && !victim->ToPlayer()->HasAura(PAL_SPELL_ARDENT_DEFENDER_DEBUFF))
         {
             // Cast healing spell, completely avoid damage
             dmgInfo.AbsorbDamage(dmgInfo.GetDamage());
@@ -400,13 +388,13 @@ private:
                                     ? 1.0f
                                     : float(defenseSkillValue) / float(reqDefForMaxHeal);
 
-            uint64 healAmount64 = victim->CountPctFromMaxHealth(uint32(healPct * pctFromDefense));
-            int32 healAmount = ToSpellValueInt32(healAmount64);
+            uint128 healAmount128 = victim->CountPctFromMaxHealth128(uint32(healPct * pctFromDefense));
+            int32 healAmount = ToSpellValueInt32(Acore::Number::ToLongDouble(healAmount128));
             victim->CastCustomSpell(PAL_SPELL_ARDENT_DEFENDER_HEAL, SPELLVALUE_BASE_POINT0, healAmount, victim, true, nullptr, aurEff);
             if (Player* player = victim->ToPlayer())
-                if (player->GetExtendedMaxHealth() > player->GetMaxHealth() && player->GetExtendedHealth() < healAmount64)
+                if (player->GetExtendedMaxHealth128() > player->GetMaxHealth() && player->GetExtendedHealth128() < healAmount128)
                 {
-                    player->SetExtendedHealth(healAmount64);
+                    player->SetExtendedHealth(healAmount128);
                     player->SyncClientHealthFromExtended();
                 }
         }
@@ -414,8 +402,8 @@ private:
         {
             // Reduce damage that brings us under 35% (or full damage if we are already under 35%) by x%
             uint64 damageToReduce = (victimHealth < allowedHealth)
-                                    ? dmgInfo.GetDamage()
-                                    : allowedHealth - remainingHealth;
+                                    ? Acore::Number::ToUInt64Saturated(dmgInfo.GetDamage())
+                                    : Acore::Number::ToUInt64Saturated(allowedHealth - remainingHealth);
             uint64 amountToAbsorb = CalculatePct(damageToReduce, absorbPct);
             dmgInfo.AbsorbDamage(amountToAbsorb);
             absorbAmount = 0;
@@ -717,7 +705,7 @@ class spell_pal_eye_for_an_eye : public AuraScript
         }
 
         // return damage % to attacker but < 50% own total health
-        uint64 reflectedDamage = SpellScriptCombat::CalculatePctUInt64(damageInfo->GetDamage(), aurEff->GetAmount());
+        uint64 reflectedDamage = SpellScriptCombat::CalculatePctUInt64(Acore::Number::ToUInt64Saturated(damageInfo->GetDamage()), aurEff->GetAmount());
         uint64 maxReflectedDamage = GetTarget()->GetMaxHealthForCombat() / 2;
         uint64 cappedDamage = std::min(reflectedDamage, maxReflectedDamage);
         int32 damage = ToSpellValueInt32(cappedDamage);
@@ -1188,7 +1176,7 @@ class spell_pal_seal_of_vengeance : public SpellScript
         uint32 auraId = (spellId == SPELL_PALADIN_SEAL_OF_VENGEANCE_EFFECT)
             ? SPELL_PALADIN_HOLY_VENGEANCE
             : SPELL_PALADIN_BLOOD_CORRUPTION;
-        int64 damage = GetHitDamage();
+        uint128 damage = GetHitDamage128();
         uint8 stacks = 0;
 
         if (target)
@@ -1197,9 +1185,9 @@ class spell_pal_seal_of_vengeance : public SpellScript
             if (aura)
                 stacks = aura->GetStackAmount();
 
-            damage = ToSpellDamageInt64(static_cast<long double>(damage) * static_cast<long double>(stacks) / 5.0L);
+            damage = Acore::Number::ToUInt128Saturated(Acore::Number::ToLongDouble(damage) * static_cast<long double>(stacks) / 5.0L);
 
-            SetHitDamage(damage);
+            SetHitDamage128(damage);
         }
     }
 

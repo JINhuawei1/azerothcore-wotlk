@@ -381,8 +381,8 @@ public: /* PlayerScript */
     void OnPlayerAfterUpdateCritPercentage(Player* player, WeaponAttackType attType, float& value);
     void OnPlayerAfterUpdateSpellCritChance(Player* player, uint32 school, float& value);
     void OnPlayerAfterUpdateHitChances(Player* player, float& meleeHit, float& rangedHit, float& spellHit);
-    void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int64& healingBonus, int64 spellDamage[7]);
-    void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int64& amount);
+    void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int128& healingBonus, int128 spellDamage[7]);
+    void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int128& amount);
     void OnPlayerBeforeInitTalentForLevel(Player* player, uint8& level, uint32& talentPointsForLevel);
     void OnPlayerFirstLogin(Player* player);
     void OnPlayerSetMaxLevel(Player* player, uint32& maxPlayerLevel);
@@ -548,12 +548,12 @@ public: /* Scheduled scripts */
 
 public: /* UnitScript */
     void OnHeal(Unit* healer, Unit* reciever, int64& gain);
-    void OnDamage(Unit* attacker, Unit* victim, uint64& damage);
-    void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint64& damage, SpellInfo const* spellInfo);
-    void ModifyMeleeDamage(Unit* target, Unit* attacker, uint64& damage);
-    void ModifySpellDamageTaken(Unit* target, Unit* attacker, uint64& damage, SpellInfo const* spellInfo);
+    void OnDamage(Unit* attacker, Unit* victim, uint128& damage);
+    void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint128& damage, SpellInfo const* spellInfo);
+    void ModifyMeleeDamage(Unit* target, Unit* attacker, uint128& damage);
+    void ModifySpellDamageTaken(Unit* target, Unit* attacker, uint128& damage, SpellInfo const* spellInfo);
     void ModifyHealReceived(Unit* target, Unit* healer, uint64& addHealth, SpellInfo const* spellInfo);
-    uint64 DealDamage(Unit* AttackerUnit, Unit* pVictim, uint64 damage, DamageEffectType damagetype);
+    uint128 DealDamage(Unit* AttackerUnit, Unit* pVictim, uint128 damage, DamageEffectType damagetype);
     void OnBeforeRollMeleeOutcomeAgainst(Unit const* attacker, Unit const* victim, WeaponAttackType attType, int32& attackerMaxSkillValueForLevel, int32& victimMaxSkillValueForLevel, int32& attackerWeaponSkill, int32& victimDefenseSkill, int32& crit_chance, int32& miss_chance, int32& dodge_chance, int32& parry_chance, int32& block_chance);
     void OnAuraApply(Unit* /*unit*/, Aura* /*aura*/);
     void OnAuraRemove(Unit* unit, AuraApplication* aurApp, AuraRemoveMode mode);

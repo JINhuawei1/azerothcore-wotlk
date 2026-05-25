@@ -90,6 +90,130 @@ namespace Acore::Impl::StringConvertImpl
         }
     };
 
+    inline Optional<uint8> GetIntegerDigit(char c)
+    {
+        if (c >= '0' && c <= '9')
+            return uint8(c - '0');
+
+        if (c >= 'a' && c <= 'z')
+            return uint8(c - 'a' + 10);
+
+        if (c >= 'A' && c <= 'Z')
+            return uint8(c - 'A' + 10);
+
+        return std::nullopt;
+    }
+
+    inline bool NormalizeIntegerBase(std::string_view& str, int& base)
+    {
+        if (base == 0)
+        {
+            if (StringEqualI(str.substr(0, 2), "0x"))
+            {
+                base = 16;
+                str.remove_prefix(2);
+            }
+            else if (StringEqualI(str.substr(0, 2), "0b"))
+            {
+                base = 2;
+                str.remove_prefix(2);
+            }
+            else
+                base = 10;
+        }
+
+        return !str.empty() && base >= 2 && base <= 36;
+    }
+
+    inline Optional<boost::multiprecision::cpp_int> StringToUnsignedMagnitude(std::string_view str, int base, boost::multiprecision::cpp_int const& maxValue)
+    {
+        if (!NormalizeIntegerBase(str, base))
+            return std::nullopt;
+
+        boost::multiprecision::cpp_int value = 0;
+        for (char c : str)
+        {
+            Optional<uint8> digit = GetIntegerDigit(c);
+            if (!digit || *digit >= base)
+                return std::nullopt;
+
+            if (value > (maxValue - *digit) / base)
+                return std::nullopt;
+
+            value *= base;
+            value += *digit;
+        }
+
+        return value;
+    }
+
+    template <>
+    struct For<uint128, void>
+    {
+        static Optional<uint128> FromString(std::string_view str, int base = 10)
+        {
+            if (str.empty())
+                return std::nullopt;
+
+            if (str.front() == '-')
+                return std::nullopt;
+
+            if (str.front() == '+')
+            {
+                str.remove_prefix(1);
+                if (str.empty())
+                    return std::nullopt;
+            }
+
+            boost::multiprecision::cpp_int const maxValue = (boost::multiprecision::cpp_int(1) << 128) - 1;
+            Optional<boost::multiprecision::cpp_int> value = StringToUnsignedMagnitude(str, base, maxValue);
+            if (!value)
+                return std::nullopt;
+
+            return static_cast<uint128>(*value);
+        }
+
+        static std::string ToString(uint128 val)
+        {
+            return val.convert_to<std::string>();
+        }
+    };
+
+    template <>
+    struct For<int128, void>
+    {
+        static Optional<int128> FromString(std::string_view str, int base = 10)
+        {
+            if (str.empty())
+                return std::nullopt;
+
+            bool negative = false;
+            if (str.front() == '-' || str.front() == '+')
+            {
+                negative = str.front() == '-';
+                str.remove_prefix(1);
+                if (str.empty())
+                    return std::nullopt;
+            }
+
+            boost::multiprecision::cpp_int const maxMagnitude = negative
+                ? (boost::multiprecision::cpp_int(1) << 127)
+                : ((boost::multiprecision::cpp_int(1) << 127) - 1);
+
+            Optional<boost::multiprecision::cpp_int> magnitude = StringToUnsignedMagnitude(str, base, maxMagnitude);
+            if (!magnitude)
+                return std::nullopt;
+
+            boost::multiprecision::cpp_int value = negative ? -*magnitude : *magnitude;
+            return static_cast<int128>(value);
+        }
+
+        static std::string ToString(int128 val)
+        {
+            return val.convert_to<std::string>();
+        }
+    };
+
     template <>
     struct For<bool, void>
     {

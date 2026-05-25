@@ -21,7 +21,9 @@
 #include "ScriptMgr.h"
 #include "SpellInfo.h"
 #include "Unit.h"
+#include "Util.h"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <limits>
@@ -55,6 +57,66 @@ long double ParseCutDamageValue(std::string const& text)
     }
 }
 
+uint128 ParseFixedCutDamageValue(std::string const& text)
+{
+    uint128 value = 0;
+    bool hasDigit = false;
+    bool inFraction = false;
+    bool hasFractionValue = false;
+    bool saturated = false;
+    uint128 const maxValue = std::numeric_limits<uint128>::max();
+
+    for (char ch : text)
+    {
+        unsigned char uch = static_cast<unsigned char>(ch);
+        if (std::isspace(uch))
+            continue;
+
+        if (ch == '-')
+            return 0;
+
+        if (ch == '.')
+        {
+            if (inFraction)
+                break;
+
+            inFraction = true;
+            continue;
+        }
+
+        if (!std::isdigit(uch))
+            break;
+
+        hasDigit = true;
+        uint8 digit = static_cast<uint8>(ch - '0');
+        if (inFraction)
+        {
+            if (digit != 0)
+                hasFractionValue = true;
+            continue;
+        }
+
+        if (!saturated)
+        {
+            if (value > (maxValue - digit) / 10)
+            {
+                value = maxValue;
+                saturated = true;
+            }
+            else
+                value = value * 10 + digit;
+        }
+    }
+
+    if (!hasDigit)
+        return 0;
+
+    if (hasFractionValue && value < maxValue)
+        ++value;
+
+    return value;
+}
+
 std::string SanitizeAddonText(std::string text)
 {
     for (char& ch : text)
@@ -80,8 +142,20 @@ struct CutEntry
     std::string requirementText;
     uint8 damageType = CUT_DAMAGE_FIXED;
     long double cutDamage = 0.0L;
+    uint128 fixedCutDamage = 0;
+    std::string cutDamageText;
     float chance = 0.0f;
 };
+
+std::string FormatCutDamageValue(CutEntry const& entry)
+{
+    if (entry.damageType == CUT_DAMAGE_FIXED)
+        return entry.fixedCutDamage.convert_to<std::string>();
+
+    std::ostringstream stream;
+    stream << entry.cutDamage;
+    return stream.str();
+}
 
 void SendCutSystemHitNotification(Player* player, std::vector<uint64> const& damages);
 
@@ -128,7 +202,9 @@ public:
             entry.cutLevel = fields[1].Get<uint32>();
             entry.requirementTemplateId = fields[2].Get<uint32>();
             entry.damageType = fields[3].Get<uint8>();
-            entry.cutDamage = ParseCutDamageValue(fields[4].Get<std::string>());
+            entry.cutDamageText = fields[4].Get<std::string>();
+            entry.cutDamage = ParseCutDamageValue(entry.cutDamageText);
+            entry.fixedCutDamage = ParseFixedCutDamageValue(entry.cutDamageText);
             entry.chance = fields[5].Get<float>();
             entry.requirementText = fields[6].Get<std::string>();
 
@@ -144,9 +220,15 @@ public:
                 continue;
             }
 
-            if (entry.cutDamage <= 0.0f)
+            if (entry.damageType == CUT_DAMAGE_FIXED && entry.fixedCutDamage == 0)
             {
-                LOG_ERROR("sql.sql", "切割系统 id={} 的切割伤害 {} 非法，必须大于 0。", entry.id, entry.cutDamage);
+                LOG_ERROR("sql.sql", "切割系统 id={} 的固定切割伤害 {} 非法，必须大于 0。", entry.id, entry.cutDamageText);
+                continue;
+            }
+
+            if (entry.damageType == CUT_DAMAGE_PERCENT && entry.cutDamage <= 0.0f)
+            {
+                LOG_ERROR("sql.sql", "切割系统 id={} 的百分比切割伤害 {} 非法，必须大于 0。", entry.id, entry.cutDamageText);
                 continue;
             }
 
@@ -154,6 +236,7 @@ public:
             {
                 LOG_WARN("sql.sql", "切割系统 id={} 的百分比伤害 {} 超过 100，已按 100 处理。", entry.id, entry.cutDamage);
                 entry.cutDamage = 100.0f;
+                entry.cutDamageText = "100";
             }
 
             if (entry.chance <= 0.0f || entry.chance > 100.0f)
@@ -389,7 +472,7 @@ public:
                 entry->id,
                 entry->requirementTemplateId,
                 static_cast<uint32>(entry->damageType),
-                entry->cutDamage,
+                FormatCutDamageValue(*entry),
                 entry->chance);
         }
 
@@ -434,29 +517,21 @@ public:
         }
     }
 
-    uint64 CalculateCutDamage(Unit* attacker, Unit* victim, CutEntry const& entry) const
+    uint128 CalculateCutDamage(Unit* attacker, Unit* victim, CutEntry const& entry) const
     {
         if (!attacker || !victim)
             return 0;
 
         if (entry.damageType == CUT_DAMAGE_FIXED)
-        {
-            long double fixedDamage = std::ceil(entry.cutDamage);
-            if (fixedDamage >= static_cast<long double>(std::numeric_limits<uint64>::max()))
-                return std::numeric_limits<uint64>::max();
-
-            return std::max<uint64>(1, static_cast<uint64>(fixedDamage));
-        }
+            return std::max<uint128>(uint128(1), entry.fixedCutDamage);
 
         long double percent = std::min(entry.cutDamage, 100.0L);
-        long double rawDamage = std::ceil(static_cast<long double>(victim->GetHealthForCombat()) * percent / 100.0L);
-        uint64 finalDamage = rawDamage >= static_cast<long double>(std::numeric_limits<uint64>::max())
-            ? std::numeric_limits<uint64>::max()
-            : static_cast<uint64>(rawDamage);
-        return std::max<uint64>(1, finalDamage);
+        long double rawDamage = std::ceil(Acore::Number::ToLongDouble(victim->GetHealthForCombat128()) * percent / 100.0L);
+        uint128 finalDamage = Acore::Number::ToUInt128Saturated(rawDamage);
+        return std::max<uint128>(uint128(1), finalDamage);
     }
 
-    bool TryPrepareCutDamage(Unit* attacker, Unit* victim, uint64& cutDamage) const
+    bool TryPrepareCutDamage(Unit* attacker, Unit* victim, uint128& cutDamage) const
     {
         cutDamage = 0;
 
@@ -489,30 +564,30 @@ public:
                 player->GetName(),
                 playerCutLevel,
                 victim->GetName(),
-                cutDamage,
+                cutDamage.convert_to<std::string>(),
                 entry->cutLevel,
                 static_cast<uint32>(entry->damageType),
-                entry->cutDamage,
+                FormatCutDamageValue(*entry),
                 entry->chance);
         }
 
         return true;
     }
 
-    bool TryApplyCutDamage(Unit* attacker, Unit* victim, uint64& damage, uint64& appliedDamage) const
+    bool TryApplyCutDamage(Unit* attacker, Unit* victim, uint128& damage, uint128& appliedDamage) const
     {
         appliedDamage = 0;
 
         if (!attacker || !victim || !victim->IsAlive())
             return false;
 
-        uint64 cutDamage = 0;
+        uint128 cutDamage = 0;
         if (!TryPrepareCutDamage(attacker, victim, cutDamage))
             return false;
 
-        appliedDamage = damage > std::numeric_limits<uint64>::max() - cutDamage
-            ? std::numeric_limits<uint64>::max() - damage
-            : cutDamage;
+        uint128 const maxV = std::numeric_limits<uint128>::max();
+        uint128 remainingSpace = damage >= maxV ? uint128(0) : (maxV - damage);
+        appliedDamage = std::min<uint128>(cutDamage, remainingSpace);
         if (appliedDamage == 0)
             return false;
 
@@ -527,7 +602,7 @@ public:
         if (!attacker || !victim || !victim->IsAlive() || damage < 0)
             return false;
 
-        uint64 cutDamage = 0;
+        uint128 cutDamage = 0;
         if (!TryPrepareCutDamage(attacker, victim, cutDamage))
             return false;
 
@@ -535,12 +610,12 @@ public:
         if (remainingSpace <= 0)
             return false;
 
-        uint64 appliedWideDamage = std::min<uint64>(cutDamage, static_cast<uint64>(remainingSpace));
+        uint128 appliedWideDamage = std::min(cutDamage, static_cast<uint128>(remainingSpace));
         if (appliedWideDamage == 0)
             return false;
 
-        damage += static_cast<int64>(appliedWideDamage);
-        appliedDamage = appliedWideDamage;
+        appliedDamage = Acore::Number::ToUInt64Saturated(appliedWideDamage);
+        damage += static_cast<int64>(appliedDamage);
         return true;
     }
 
@@ -614,7 +689,7 @@ void SendCutSystemListToPlayer(Player* player)
                 << entry.cutLevel << '^'
                 << entry.requirementTemplateId << '^'
                 << static_cast<uint32>(entry.damageType) << '^'
-                << entry.cutDamage << '^'
+                << FormatCutDamageValue(entry) << '^'
                 << entry.chance << '^'
                 << SanitizeAddonText(entry.requirementText);
     }
@@ -894,34 +969,34 @@ public:
         UNITHOOK_MODIFY_SPELL_DAMAGE_TAKEN
     }) { }
 
-    void ModifyPeriodicDamageAurasTick(Unit* victim, Unit* attacker, uint64& damage, SpellInfo const* spellInfo) override
+    void ModifyPeriodicDamageAurasTick(Unit* victim, Unit* attacker, uint128& damage, SpellInfo const* spellInfo) override
     {
         if (!spellInfo || spellInfo->IsPositive())
             return;
 
-        uint64 appliedDamage = 0;
+        uint128 appliedDamage = 0;
         if (!CutSystemMgr::Instance()->TryApplyCutDamage(attacker, victim, damage, appliedDamage))
             return;
 
-        QueueCutHitNotification(attacker, appliedDamage);
+        QueueCutHitNotification(attacker, Acore::Number::ToUInt64Saturated(appliedDamage));
     }
 
-    void ModifyMeleeDamage(Unit* victim, Unit* attacker, uint64& damage) override
+    void ModifyMeleeDamage(Unit* victim, Unit* attacker, uint128& damage) override
     {
-        uint64 appliedDamage = 0;
+        uint128 appliedDamage = 0;
         if (!CutSystemMgr::Instance()->TryApplyCutDamage(attacker, victim, damage, appliedDamage))
             return;
 
-        QueueCutHitNotification(attacker, appliedDamage);
+        QueueCutHitNotification(attacker, Acore::Number::ToUInt64Saturated(appliedDamage));
     }
 
-    void ModifySpellDamageTaken(Unit* victim, Unit* attacker, uint64& damage, SpellInfo const* /*spellInfo*/) override
+    void ModifySpellDamageTaken(Unit* victim, Unit* attacker, uint128& damage, SpellInfo const* /*spellInfo*/) override
     {
-        uint64 appliedDamage = 0;
+        uint128 appliedDamage = 0;
         if (!CutSystemMgr::Instance()->TryApplyCutDamage(attacker, victim, damage, appliedDamage))
             return;
 
-        QueueCutHitNotification(attacker, appliedDamage);
+        QueueCutHitNotification(attacker, Acore::Number::ToUInt64Saturated(appliedDamage));
     }
 
 private:
@@ -1004,7 +1079,7 @@ public:
             entry->cutLevel,
             entry->requirementTemplateId,
             static_cast<uint32>(entry->damageType),
-            entry->cutDamage,
+            FormatCutDamageValue(*entry),
             entry->chance);
 
         return true;
@@ -1128,7 +1203,7 @@ public:
                 entry.cutLevel,
                 entry.requirementTemplateId,
                 static_cast<uint32>(entry.damageType),
-                entry.cutDamage,
+                FormatCutDamageValue(entry),
                 entry.chance);
         }
 

@@ -20,6 +20,7 @@
 #include "SpellScript.h"
 #include "AllCreatureScript.h"
 #include "ScriptedCreature.h"
+#include "Util.h"
 
 #include <algorithm>
 #include <array>
@@ -468,36 +469,42 @@ uint32 ScaleUIntValue(uint32 value, float scale)
     return std::max<uint32>(1u, static_cast<uint32>(std::lround(static_cast<double>(value) * scale)));
 }
 
-int64 ScaleUInt64ToInt64(uint64 value, long double scale)
+int64 ScaleUInt128ToPowerInt64(uint128 const& value, long double scale)
 {
     if (value == 0 || scale <= 0.0L)
         return 0;
 
-    long double scaledValue = static_cast<long double>(value) * scale;
+    long double scaledValue = Acore::Number::ToLongDouble(value) * scale;
     if (scaledValue >= static_cast<long double>(std::numeric_limits<int64>::max()))
         return std::numeric_limits<int64>::max();
 
     return std::max<int64>(1, static_cast<int64>(std::llround(scaledValue)));
 }
 
-uint64 ScaleUInt64ToUInt64(uint64 value, long double scale)
+int128 ScaleUInt128ToInt128(uint128 const& value, long double scale)
 {
     if (value == 0 || scale <= 0.0L)
         return 0;
 
-    long double scaledValue = static_cast<long double>(value) * scale;
-    if (scaledValue >= static_cast<long double>(std::numeric_limits<uint64>::max()))
-        return std::numeric_limits<uint64>::max();
-
-    return std::max<uint64>(1, static_cast<uint64>(std::llround(scaledValue)));
+    int128 scaledValue = Acore::Number::ToInt128Saturated(Acore::Number::ToLongDouble(value) * scale);
+    return scaledValue == 0 ? 1 : scaledValue;
 }
 
-float ScaleUInt64ToFloat(uint64 value, long double scale)
+uint128 ScaleUInt128ToUInt128(uint128 const& value, long double scale)
+{
+    if (value == 0 || scale <= 0.0L)
+        return 0;
+
+    uint128 scaledValue = Acore::Number::ToUInt128Saturated(Acore::Number::ToLongDouble(value) * scale);
+    return scaledValue == 0 ? 1 : scaledValue;
+}
+
+float ScaleUInt128ToFloat(uint128 const& value, long double scale)
 {
     if (value == 0 || scale <= 0.0L)
         return 0.0f;
 
-    long double scaledValue = static_cast<long double>(value) * scale;
+    long double scaledValue = Acore::Number::ToLongDouble(value) * scale;
     if (scaledValue >= static_cast<long double>(std::numeric_limits<float>::max()))
         return std::numeric_limits<float>::max();
 
@@ -509,6 +516,11 @@ constexpr uint64 ABYSS_CLIENT_VISIBLE_HEALTH_LIMIT = 2147483520ULL;
 uint32 ToAbyssClientHealth(uint64 value)
 {
     return value > ABYSS_CLIENT_VISIBLE_HEALTH_LIMIT ? static_cast<uint32>(ABYSS_CLIENT_VISIBLE_HEALTH_LIMIT) : static_cast<uint32>(value);
+}
+
+uint32 ToAbyssClientHealth(uint128 const& value)
+{
+    return value > ABYSS_CLIENT_VISIBLE_HEALTH_LIMIT ? static_cast<uint32>(ABYSS_CLIENT_VISIBLE_HEALTH_LIMIT) : Acore::Number::ToUInt32Saturated(value);
 }
 
 int64 ScaleIntValue(int64 value, float scale)
@@ -525,25 +537,67 @@ int64 ScaleIntValue(int64 value, float scale)
     return static_cast<int64>(std::llround(scaledValue));
 }
 
-int64 AddInt64Saturated(int64 left, int64 right)
+int128 ScalePositiveLongDoubleToInt128(long double value, long double scale)
 {
-    if (right > 0 && left > std::numeric_limits<int64>::max() - right)
-        return std::numeric_limits<int64>::max();
-    if (right < 0 && left < std::numeric_limits<int64>::min() - right)
-        return std::numeric_limits<int64>::min();
+    if (value <= 0.0L || scale <= 0.0L)
+        return 0;
 
-    return left + right;
+    long double scaledValue = value * scale;
+    if (!std::isfinite(scaledValue))
+        return std::numeric_limits<int128>::max();
+
+    int128 result = Acore::Number::ToInt128Saturated(scaledValue);
+    return result == 0 ? 1 : result;
 }
 
-int32 ToInt32Saturated(int64 value)
+uint64 ToAbyssUInt64Damage(int128 const& value)
 {
-    if (value > std::numeric_limits<int32>::max())
-        return std::numeric_limits<int32>::max();
+    if (value <= 0)
+        return 0;
 
-    if (value < std::numeric_limits<int32>::min())
-        return std::numeric_limits<int32>::min();
+    return Acore::Number::ToUInt64Saturated(Acore::Number::ToUInt128Saturated(value));
+}
 
-    return static_cast<int32>(value);
+int64 ToAbyssInt64Amount(int128 const& value)
+{
+    return Acore::Number::ToInt64Saturated(value);
+}
+
+std::string FormatAbyssInt128(int128 const& value)
+{
+    return value.convert_to<std::string>();
+}
+
+int128 ScaleMaxHealthPctToInt128(Unit* unit, int32 pct, long double scale)
+{
+    if (!unit)
+        return 0;
+
+    return ScaleUInt128ToInt128(unit->CountPctFromMaxHealth128(pct), scale);
+}
+
+int64 ToAbyssInt64Saturated(uint128 const& value)
+{
+    return Acore::Number::ToInt64Saturated(Acore::Number::ToInt128Saturated(value));
+}
+
+int128 ScaleInt128Value(int128 const& value, float scale)
+{
+    if (value == 0 || scale <= 0.0f)
+        return 0;
+
+    long double scaledValue = Acore::Number::ToLongDouble(value) * static_cast<long double>(scale);
+    return Acore::Number::ToInt128Saturated(std::round(scaledValue));
+}
+
+int128 AddInt128Saturated(int128 const& left, int128 const& right)
+{
+    if (right > 0 && left > std::numeric_limits<int128>::max() - right)
+        return std::numeric_limits<int128>::max();
+    if (right < 0 && left < std::numeric_limits<int128>::min() - right)
+        return std::numeric_limits<int128>::min();
+
+    return left + right;
 }
 
 constexpr uint32 ABYSS_RELIC_MANAGED_SPELL_START = 89101;
@@ -985,12 +1039,12 @@ struct AbyssEquipmentTemplate
     uint16 baseItemLevel = 0;
     uint8 armorType = 0;
     uint8 damageType = 0;
-    uint16 minPrimaryBudget = 0;
-    uint16 maxPrimaryBudget = 0;
-    uint16 minSecondaryBudget = 0;
-    uint16 maxSecondaryBudget = 0;
-    uint16 minEffectBudget = 0;
-    uint16 maxEffectBudget = 0;
+    uint128 minPrimaryBudget = 0;
+    uint128 maxPrimaryBudget = 0;
+    uint128 minSecondaryBudget = 0;
+    uint128 maxSecondaryBudget = 0;
+    uint128 minEffectBudget = 0;
+    uint128 maxEffectBudget = 0;
     std::string fixedAffixGroup;
     uint32 fixedEffectId = 0;
     bool fromCacheBoss = false;
@@ -1039,31 +1093,31 @@ struct AbyssSetBonusConfig
     uint8 actId = 0;
     uint8 sourceMode = 0;
     // 2件效果
-    uint16 twoPieceAllStat = 0;
-    uint16 twoPieceCrit = 0;
-    uint16 twoPieceHaste = 0;
-    uint16 twoPieceAP = 0;
-    uint16 twoPieceSP = 0;
+    uint128 twoPieceAllStat = 0;
+    uint128 twoPieceCrit = 0;
+    uint128 twoPieceHaste = 0;
+    uint128 twoPieceAP = 0;
+    uint128 twoPieceSP = 0;
     std::string twoPieceDesc;
     // 4件效果
-    uint8  fourPieceDmgPct = 0;
-    uint8  fourPieceHpPct = 0;
-    uint16 fourPieceCrit = 0;
-    uint16 fourPieceHaste = 0;
+    uint128 fourPieceDmgPct = 0;
+    uint128 fourPieceHpPct = 0;
+    uint128 fourPieceCrit = 0;
+    uint128 fourPieceHaste = 0;
     std::string fourPieceSpecialEffect;
     std::string fourPieceDesc;
     // 6件效果
-    uint8  sixPieceDmgPct = 0;
-    uint8  sixPieceHpPct = 0;
-    uint16 sixPieceCrit = 0;
-    uint16 sixPieceHaste = 0;
+    uint128 sixPieceDmgPct = 0;
+    uint128 sixPieceHpPct = 0;
+    uint128 sixPieceCrit = 0;
+    uint128 sixPieceHaste = 0;
     std::string sixPieceSpecialEffect;
     std::string sixPieceDesc;
     // 8件效果
-    uint8  eightPieceDmgPct = 0;
-    uint8  eightPieceHpPct = 0;
-    uint16 eightPieceCrit = 0;
-    uint16 eightPieceHaste = 0;
+    uint128 eightPieceDmgPct = 0;
+    uint128 eightPieceHpPct = 0;
+    uint128 eightPieceCrit = 0;
+    uint128 eightPieceHaste = 0;
     std::string eightPieceSpecialEffect;
     std::string eightPieceDesc;
     bool enabled = true;
@@ -1813,12 +1867,12 @@ public:
             config.baseItemLevel = fields[8].Get<uint16>();
             config.armorType = fields[9].Get<uint8>();
             config.damageType = fields[10].Get<uint8>();
-            config.minPrimaryBudget = fields[11].Get<uint16>();
-            config.maxPrimaryBudget = fields[12].Get<uint16>();
-            config.minSecondaryBudget = fields[13].Get<uint16>();
-            config.maxSecondaryBudget = fields[14].Get<uint16>();
-            config.minEffectBudget = fields[15].Get<uint16>();
-            config.maxEffectBudget = fields[16].Get<uint16>();
+            config.minPrimaryBudget = fields[11].Get<uint128>();
+            config.maxPrimaryBudget = fields[12].Get<uint128>();
+            config.minSecondaryBudget = fields[13].Get<uint128>();
+            config.maxSecondaryBudget = fields[14].Get<uint128>();
+            config.minEffectBudget = fields[15].Get<uint128>();
+            config.maxEffectBudget = fields[16].Get<uint128>();
             config.fixedAffixGroup = fields[17].Get<std::string>();
             config.fixedEffectId = fields[18].Get<uint32>();
             config.fromCacheBoss = fields[19].Get<bool>();
@@ -1856,28 +1910,28 @@ public:
             config.actId            = fields[2].Get<uint8>();
             config.sourceMode       = fields[3].Get<uint8>();
             config.twoPieceDesc     = fields[4].Get<std::string>();
-            config.twoPieceAllStat  = fields[5].Get<uint16>();
-            config.twoPieceCrit     = fields[6].Get<uint16>();
-            config.twoPieceHaste    = fields[7].Get<uint16>();
-            config.twoPieceAP       = fields[8].Get<uint16>();
-            config.twoPieceSP       = fields[9].Get<uint16>();
+            config.twoPieceAllStat  = fields[5].Get<uint128>();
+            config.twoPieceCrit     = fields[6].Get<uint128>();
+            config.twoPieceHaste    = fields[7].Get<uint128>();
+            config.twoPieceAP       = fields[8].Get<uint128>();
+            config.twoPieceSP       = fields[9].Get<uint128>();
             config.fourPieceDesc    = fields[10].Get<std::string>();
-            config.fourPieceDmgPct  = fields[11].Get<uint8>();
-            config.fourPieceHpPct   = fields[12].Get<uint8>();
-            config.fourPieceCrit    = fields[13].Get<uint16>();
-            config.fourPieceHaste   = fields[14].Get<uint16>();
+            config.fourPieceDmgPct  = fields[11].Get<uint128>();
+            config.fourPieceHpPct   = fields[12].Get<uint128>();
+            config.fourPieceCrit    = fields[13].Get<uint128>();
+            config.fourPieceHaste   = fields[14].Get<uint128>();
             config.fourPieceSpecialEffect = fields[15].Get<std::string>();
             config.sixPieceDesc     = fields[16].Get<std::string>();
-            config.sixPieceDmgPct   = fields[17].Get<uint8>();
-            config.sixPieceHpPct    = fields[18].Get<uint8>();
-            config.sixPieceCrit     = fields[19].Get<uint16>();
-            config.sixPieceHaste    = fields[20].Get<uint16>();
+            config.sixPieceDmgPct   = fields[17].Get<uint128>();
+            config.sixPieceHpPct    = fields[18].Get<uint128>();
+            config.sixPieceCrit     = fields[19].Get<uint128>();
+            config.sixPieceHaste    = fields[20].Get<uint128>();
             config.sixPieceSpecialEffect = fields[21].Get<std::string>();
             config.eightPieceDesc   = fields[22].Get<std::string>();
-            config.eightPieceDmgPct = fields[23].Get<uint8>();
-            config.eightPieceHpPct  = fields[24].Get<uint8>();
-            config.eightPieceCrit   = fields[25].Get<uint16>();
-            config.eightPieceHaste  = fields[26].Get<uint16>();
+            config.eightPieceDmgPct = fields[23].Get<uint128>();
+            config.eightPieceHpPct  = fields[24].Get<uint128>();
+            config.eightPieceCrit   = fields[25].Get<uint128>();
+            config.eightPieceHaste  = fields[26].Get<uint128>();
             config.eightPieceSpecialEffect = fields[27].Get<std::string>();
             config.enabled          = fields[28].Get<bool>();
 
@@ -4153,7 +4207,7 @@ public:
                 float scale = GetActiveScriptGroupScale(player, "遗物_残垒战契");
                 if (scale > 0.0f)
                 {
-                    player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(4), scale));
+                    player->ModifyHealth(ToAbyssInt64Amount(ScaleMaxHealthPctToInt128(player, 4, static_cast<long double>(scale))));
                     if (Unit* target = GetPrimaryCombatTarget(player))
                         DealConfiguredBurst(player, target, 160, 240, SPELL_SCHOOL_MASK_NORMAL, scale);
                 }
@@ -4164,7 +4218,7 @@ public:
                 float scale = GetActiveScriptGroupScale(player, "遗物_邪血蒸馏器");
                 if (scale > 0.0f)
                 {
-                    player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(3), scale));
+                    player->ModifyHealth(ToAbyssInt64Amount(ScaleMaxHealthPctToInt128(player, 3, static_cast<long double>(scale))));
                     if (Unit* target = GetPrimaryCombatTarget(player))
                         DealConfiguredBurst(player, target, 150, 230, SPELL_SCHOOL_MASK_SHADOW, scale);
                 }
@@ -4279,7 +4333,7 @@ public:
                 float scale = GetActiveScriptGroupScale(player, "遗物_维库战祷");
                 if (scale > 0.0f)
                 {
-                    player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(2), scale));
+                    player->ModifyHealth(ToAbyssInt64Amount(ScaleMaxHealthPctToInt128(player, 2, static_cast<long double>(scale))));
                     if (Unit* target = GetPrimaryCombatTarget(player))
                         DealConfiguredBurst(player, target, 60, 100, SPELL_SCHOOL_MASK_NORMAL, scale);
 
@@ -4599,11 +4653,11 @@ public:
         if (scaledMaxDamage < scaledMinDamage)
             scaledMaxDamage = scaledMinDamage;
 
-        uint64 damage = scaledMinDamage;
+        uint128 damage = scaledMinDamage;
         if (scaledMaxDamage > scaledMinDamage)
             damage += RollWeight(scaledMaxDamage - scaledMinDamage + 1);
 
-        player->DealDamage(player, target, damage, nullptr, SPELL_DIRECT_DAMAGE, schoolMask);
+        player->DealDamage(player, target, Acore::Number::ToUInt64Saturated(damage), nullptr, SPELL_DIRECT_DAMAGE, schoolMask);
     }
 
     void PlayChainLightningArc(Unit* source, Unit* target) const
@@ -4738,7 +4792,7 @@ public:
         if (!player || scale <= 0.0f)
             return;
 
-        player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(6), scale));
+        player->ModifyHealth(ToAbyssInt64Amount(ScaleMaxHealthPctToInt128(player, 6, static_cast<long double>(scale))));
         player->ModifyPower64(player->getPowerType(), ScaleIntValue(20, scale));
         cooldownTime = GetNow();
 
@@ -4753,7 +4807,7 @@ public:
         if (!player || scale <= 0.0f)
             return;
 
-        player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(12), scale));
+        player->ModifyHealth(ToAbyssInt64Amount(ScaleMaxHealthPctToInt128(player, 12, static_cast<long double>(scale))));
         if (Unit* target = GetPrimaryCombatTarget(player))
             DealConfiguredBurst(player, target, 180, 260, SPELL_SCHOOL_MASK_NORMAL, scale);
 
@@ -4774,7 +4828,7 @@ public:
         if (Unit* splash = player->SelectNearbyTarget(primaryTarget, 10.0f))
             DealConfiguredBurst(player, splash, 70, 110, SPELL_SCHOOL_MASK_NATURE, scale);
 
-        player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(3), scale));
+        player->ModifyHealth(ToAbyssInt64Amount(ScaleMaxHealthPctToInt128(player, 3, static_cast<long double>(scale))));
         cooldownTime = GetNow();
         SendAbyssEffectMessage(player, "[AbyssEffect] 蛇蜕毒爆触发。");
     }
@@ -4846,7 +4900,7 @@ public:
         if (Unit* bounce = player->SelectNearbyTarget(primaryTarget, 14.0f))
             DealConfiguredBurst(player, bounce, 100, 150, SPELL_SCHOOL_MASK_FROST, scale);
 
-        player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(4), scale));
+        player->ModifyHealth(ToAbyssInt64Amount(ScaleMaxHealthPctToInt128(player, 4, static_cast<long double>(scale))));
         cooldownTime = GetNow();
         SendAbyssEffectMessage(player, "[AbyssEffect] 潮汐回流触发。");
     }
@@ -4861,7 +4915,7 @@ public:
             return;
 
         DealConfiguredBurst(player, target, 140, 210, SPELL_SCHOOL_MASK_NATURE, scale);
-        player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(5), scale));
+        player->ModifyHealth(ToAbyssInt64Amount(ScaleMaxHealthPctToInt128(player, 5, static_cast<long double>(scale))));
 
         cooldownTime = GetNow();
         SendAbyssEffectMessage(player, "[AbyssEffect] 古树/腐花协战触发。");
@@ -4915,7 +4969,7 @@ public:
             return;
 
         DealConfiguredBurst(player, target, 180, 260, SPELL_SCHOOL_MASK_NORMAL, scale);
-        player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(3), scale));
+        player->ModifyHealth(ToAbyssInt64Amount(ScaleMaxHealthPctToInt128(player, 3, static_cast<long double>(scale))));
         cooldownTime = GetNow();
 
         SendAbyssEffectMessage(player, "[AbyssEffect] 守望战旌触发。");
@@ -4955,7 +5009,7 @@ public:
         if (!player || scale <= 0.0f)
             return;
 
-        player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(18), scale));
+        player->ModifyHealth(ToAbyssInt64Amount(ScaleMaxHealthPctToInt128(player, 18, static_cast<long double>(scale))));
         if (Unit* target = GetPrimaryCombatTarget(player))
             DealConfiguredBurst(player, target, 220, 320, SPELL_SCHOOL_MASK_NORMAL, scale);
 
@@ -5144,7 +5198,7 @@ public:
         float soulDevourScale = GetActiveSetSpecialEffectScale(player, "套装_腐焰噬魂");
         if (soulDevourScale > 0.0f && GetNow() > procState.lastSetSoulDevourTime + 2)
         {
-            player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(5), soulDevourScale));
+            player->ModifyHealth(ToAbyssInt64Amount(ScaleMaxHealthPctToInt128(player, 5, static_cast<long double>(soulDevourScale))));
             RestorePlayerPrimaryPowerPct(player, 5.0f * soulDevourScale);
             procState.lastSetSoulDevourTime = GetNow();
             if (player->GetSession())
@@ -5290,7 +5344,7 @@ public:
                 RollPercentage() < std::min(50.0f, 18.0f * artifactAbyssScale))
             {
                 DealConfiguredBurst(player, target, 240, 360, SPELL_SCHOOL_MASK_SHADOW, artifactAbyssScale);
-                player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(6), artifactAbyssScale));
+                player->ModifyHealth(ToAbyssInt64Amount(ScaleMaxHealthPctToInt128(player, 6, static_cast<long double>(artifactAbyssScale))));
                 RestorePlayerPrimaryPowerPct(player, 4.0f * artifactAbyssScale);
                 procState.lastSetAbyssDrainTime = now;
             }
@@ -5302,7 +5356,7 @@ public:
                 RollPercentage() < std::min(40.0f, 15.0f * abyssDrainScale))
             {
                 DealConfiguredBurst(player, target, 180, 260, SPELL_SCHOOL_MASK_SHADOW, abyssDrainScale);
-                player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(4), abyssDrainScale));
+                player->ModifyHealth(ToAbyssInt64Amount(ScaleMaxHealthPctToInt128(player, 4, static_cast<long double>(abyssDrainScale))));
                 procState.lastSetAbyssDrainTime = now;
             }
 
@@ -6069,7 +6123,7 @@ private:
         }
     }
 
-    int64 GetRelicAttributeContribution(AbyssRelicConfig const& relic, uint8 slot, RelicRuntimeAttribute attribute, float modeScale) const
+    int128 GetRelicAttributeContribution(AbyssRelicConfig const& relic, uint8 slot, RelicRuntimeAttribute attribute, float modeScale) const
     {
         uint32 totalWeight = GetRelicWeightTotal(relic);
         uint32 weight = GetRelicAttributeWeight(relic, attribute);
@@ -6082,13 +6136,11 @@ private:
 
         long double budget = static_cast<long double>(GetRelicBaseBudget(relic)) * static_cast<long double>(slotScale) * static_cast<long double>(std::max(modeScale, 0.1f));
         long double value = budget * (static_cast<long double>(weight) / static_cast<long double>(totalWeight));
-        if (value >= static_cast<long double>(std::numeric_limits<int64>::max()))
-            return std::numeric_limits<int64>::max();
 
-        return static_cast<int64>(std::llround(value));
+        return Acore::Number::ToInt128Saturated(std::round(value));
     }
 
-    int64 GetPlayerRuntimeRelicAttributeBonus(Player* player, RelicRuntimeAttribute attribute) const
+    int128 GetPlayerRuntimeRelicAttributeBonus(Player* player, RelicRuntimeAttribute attribute) const
     {
         if (!player)
             return 0;
@@ -6110,7 +6162,7 @@ private:
         }};
 
         float modeScale = GetRelicModeScale(player);
-        int64 total = 0;
+        int128 total = 0;
         for (auto const& slotEntry : slots)
         {
             if (slotEntry.second == 0)
@@ -6120,7 +6172,7 @@ private:
             if (!relic)
                 continue;
 
-            total = AddInt64Saturated(total, GetRelicAttributeContribution(*relic, slotEntry.first, attribute, modeScale));
+            total = AddInt128Saturated(total, GetRelicAttributeContribution(*relic, slotEntry.first, attribute, modeScale));
         }
 
         return total;
@@ -6203,20 +6255,20 @@ private:
 
 public:
 
-    int32 GetPlayerRuntimeRelicStatFlatBonus(Player* player, Stats stat) const
+    int128 GetPlayerRuntimeRelicStatFlatBonus(Player* player, Stats stat) const
     {
         switch (stat)
         {
-            case STAT_AGILITY: return ToInt32Saturated(GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_AGILITY));
-            case STAT_STRENGTH: return ToInt32Saturated(GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_STRENGTH));
-            case STAT_INTELLECT: return ToInt32Saturated(GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_INTELLECT));
-            case STAT_SPIRIT: return ToInt32Saturated(GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_SPIRIT));
-            case STAT_STAMINA: return ToInt32Saturated(GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_STAMINA));
+            case STAT_AGILITY: return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_AGILITY);
+            case STAT_STRENGTH: return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_STRENGTH);
+            case STAT_INTELLECT: return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_INTELLECT);
+            case STAT_SPIRIT: return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_SPIRIT);
+            case STAT_STAMINA: return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_STAMINA);
             default: return 0;
         }
     }
 
-    int64 GetPlayerRuntimeRelicRatingBonus(Player* player, CombatRating cr) const
+    int128 GetPlayerRuntimeRelicRatingBonus(Player* player, CombatRating cr) const
     {
         switch (cr)
         {
@@ -6237,14 +6289,14 @@ public:
         }
     }
 
-    int32 GetPlayerRuntimeRelicAttackPowerBonus(Player* player) const
+    int128 GetPlayerRuntimeRelicAttackPowerBonus(Player* player) const
     {
-        return ToInt32Saturated(GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_ATTACK_POWER));
+        return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_ATTACK_POWER);
     }
 
-    int32 GetPlayerRuntimeRelicSpellPowerBonus(Player* player) const
+    int128 GetPlayerRuntimeRelicSpellPowerBonus(Player* player) const
     {
-        return ToInt32Saturated(GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_SPELL_POWER));
+        return GetPlayerRuntimeRelicAttributeBonus(player, RELIC_ATTR_SPELL_POWER);
     }
 
     float GetPlayerRuntimeStatBonusPct(Player* player) const
@@ -6417,11 +6469,11 @@ public:
         if (powerType == POWER_HEALTH)
             return;
 
-        uint64 maxPower = player->GetMaxPowerForCombat(powerType);
+        uint128 maxPower = player->GetMaxPowerForCombat128(powerType);
         if (maxPower == 0)
             return;
 
-        int64 addPower = ScaleUInt64ToInt64(maxPower, static_cast<long double>(pct) / 100.0L);
+        int64 addPower = ScaleUInt128ToPowerInt64(maxPower, static_cast<long double>(pct) / 100.0L);
         if (addPower <= 0)
             return;
 
@@ -6441,7 +6493,7 @@ public:
         {
             procState.lastSetRebirthTime = now;
             player->ResurrectPlayer(1.0f, false);
-            player->SetExtendedHealth(player->GetMaxHealthForCombat());
+            player->SetExtendedHealth(player->GetMaxHealthForCombat128());
             player->SyncClientHealthFromExtended();
             RestorePlayerPrimaryPowerPct(player, 100.0f);
             player->UpdateAllStats();
@@ -6458,7 +6510,7 @@ public:
         {
             procState.lastSetRebirthTime = now;
             player->ResurrectPlayer(1.0f, false);
-            player->SetExtendedHealth(player->GetMaxHealthForCombat());
+            player->SetExtendedHealth(player->GetMaxHealthForCombat128());
             player->SyncClientHealthFromExtended();
             RestorePlayerPrimaryPowerPct(player, 100.0f);
             player->UpdateAllStats();
@@ -6476,7 +6528,7 @@ public:
             {
                 procState.lastSetDeathWardTime = now;
                 player->ResurrectPlayer(0.0f, false);
-                player->SetExtendedHealth(std::max<uint64>(1u, player->CountPctFromMaxHealth(20)));
+                player->SetExtendedHealth(std::max<uint128>(uint128(1), player->CountPctFromMaxHealth128(20)));
                 player->SyncClientHealthFromExtended();
                 RestorePlayerPrimaryPowerPct(player, 20.0f);
                 player->UpdateAllStats();
@@ -6497,12 +6549,12 @@ public:
     }
 
 private:
-    void ApplySetDamagePctBonus(Player* player, uint8 damagePct, bool apply)
+    void ApplySetDamagePctBonus(Player* player, uint128 const& damagePct, bool apply)
     {
         if (!player || damagePct == 0)
             return;
 
-        float pctValue = float(damagePct);
+        float pctValue = Acore::Number::ToFloat(damagePct);
         player->HandleStatModifier(UNIT_MOD_DAMAGE_MAINHAND, TOTAL_PCT, pctValue, apply);
         player->HandleStatModifier(UNIT_MOD_DAMAGE_OFFHAND, TOTAL_PCT, pctValue, apply);
         player->HandleStatModifier(UNIT_MOD_DAMAGE_RANGED, TOTAL_PCT, pctValue, apply);
@@ -6521,20 +6573,21 @@ private:
             // 2件效果：直接加属性
             if (config->twoPieceAllStat > 0)
             {
-                player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, TOTAL_VALUE, float(config->twoPieceAllStat), true);
-                player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, TOTAL_VALUE, float(config->twoPieceAllStat), true);
-                player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, TOTAL_VALUE, float(config->twoPieceAllStat), true);
-                player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, TOTAL_VALUE, float(config->twoPieceAllStat), true);
-                player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, TOTAL_VALUE, float(config->twoPieceAllStat), true);
+                float statValue = Acore::Number::ToFloat(config->twoPieceAllStat);
+                player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, TOTAL_VALUE, statValue, true);
+                player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, TOTAL_VALUE, statValue, true);
+                player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, TOTAL_VALUE, statValue, true);
+                player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, TOTAL_VALUE, statValue, true);
+                player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, TOTAL_VALUE, statValue, true);
             }
             if (config->twoPieceCrit > 0)
-                player->ApplyRatingMod(CR_CRIT_MELEE, config->twoPieceCrit, true);
+                player->ApplyRatingMod(CR_CRIT_MELEE, ToAbyssInt64Saturated(config->twoPieceCrit), true);
             if (config->twoPieceHaste > 0)
-                player->ApplyRatingMod(CR_HASTE_MELEE, config->twoPieceHaste, true);
+                player->ApplyRatingMod(CR_HASTE_MELEE, ToAbyssInt64Saturated(config->twoPieceHaste), true);
             if (config->twoPieceAP > 0)
-                player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, float(config->twoPieceAP), true);
+                player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, Acore::Number::ToFloat(config->twoPieceAP), true);
             if (config->twoPieceSP > 0)
-                player->ApplySpellPowerBonus(config->twoPieceSP, true);
+                player->ApplySpellPowerBonus(Acore::Number::ToInt128Saturated(config->twoPieceSP), true);
 
             ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff00[套装] 已激活 %s (2件)：%s|r",
                 config->setName.c_str(), config->twoPieceDesc.c_str());
@@ -6545,12 +6598,12 @@ private:
             if (config->fourPieceDmgPct > 0)
                 ApplySetDamagePctBonus(player, config->fourPieceDmgPct, true);
             if (config->fourPieceCrit > 0)
-                player->ApplyRatingMod(CR_CRIT_MELEE, config->fourPieceCrit, true);
+                player->ApplyRatingMod(CR_CRIT_MELEE, ToAbyssInt64Saturated(config->fourPieceCrit), true);
             if (config->fourPieceHaste > 0)
-                player->ApplyRatingMod(CR_HASTE_MELEE, config->fourPieceHaste, true);
+                player->ApplyRatingMod(CR_HASTE_MELEE, ToAbyssInt64Saturated(config->fourPieceHaste), true);
             if (config->fourPieceHpPct > 0)
             {
-                float bonus = ScaleUInt64ToFloat(player->GetMaxHealthForCombat(), static_cast<long double>(config->fourPieceHpPct) / 100.0L);
+                float bonus = ScaleUInt128ToFloat(player->GetMaxHealthForCombat128(), Acore::Number::ToLongDouble(config->fourPieceHpPct) / 100.0L);
                 player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, bonus, true);
             }
 
@@ -6562,12 +6615,12 @@ private:
             if (config->sixPieceDmgPct > 0)
                 ApplySetDamagePctBonus(player, config->sixPieceDmgPct, true);
             if (config->sixPieceCrit > 0)
-                player->ApplyRatingMod(CR_CRIT_MELEE, config->sixPieceCrit, true);
+                player->ApplyRatingMod(CR_CRIT_MELEE, ToAbyssInt64Saturated(config->sixPieceCrit), true);
             if (config->sixPieceHaste > 0)
-                player->ApplyRatingMod(CR_HASTE_MELEE, config->sixPieceHaste, true);
+                player->ApplyRatingMod(CR_HASTE_MELEE, ToAbyssInt64Saturated(config->sixPieceHaste), true);
             if (config->sixPieceHpPct > 0)
             {
-                float bonus = ScaleUInt64ToFloat(player->GetMaxHealthForCombat(), static_cast<long double>(config->sixPieceHpPct) / 100.0L);
+                float bonus = ScaleUInt128ToFloat(player->GetMaxHealthForCombat128(), Acore::Number::ToLongDouble(config->sixPieceHpPct) / 100.0L);
                 player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, bonus, true);
             }
 
@@ -6579,12 +6632,12 @@ private:
             if (config->eightPieceDmgPct > 0)
                 ApplySetDamagePctBonus(player, config->eightPieceDmgPct, true);
             if (config->eightPieceCrit > 0)
-                player->ApplyRatingMod(CR_CRIT_MELEE, config->eightPieceCrit, true);
+                player->ApplyRatingMod(CR_CRIT_MELEE, ToAbyssInt64Saturated(config->eightPieceCrit), true);
             if (config->eightPieceHaste > 0)
-                player->ApplyRatingMod(CR_HASTE_MELEE, config->eightPieceHaste, true);
+                player->ApplyRatingMod(CR_HASTE_MELEE, ToAbyssInt64Saturated(config->eightPieceHaste), true);
             if (config->eightPieceHpPct > 0)
             {
-                float bonus = ScaleUInt64ToFloat(player->GetMaxHealthForCombat(), static_cast<long double>(config->eightPieceHpPct) / 100.0L);
+                float bonus = ScaleUInt128ToFloat(player->GetMaxHealthForCombat128(), Acore::Number::ToLongDouble(config->eightPieceHpPct) / 100.0L);
                 player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, bonus, true);
             }
 
@@ -6606,20 +6659,21 @@ private:
         {
             if (config->twoPieceAllStat > 0)
             {
-                player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, TOTAL_VALUE, float(config->twoPieceAllStat), false);
-                player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, TOTAL_VALUE, float(config->twoPieceAllStat), false);
-                player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, TOTAL_VALUE, float(config->twoPieceAllStat), false);
-                player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, TOTAL_VALUE, float(config->twoPieceAllStat), false);
-                player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, TOTAL_VALUE, float(config->twoPieceAllStat), false);
+                float statValue = Acore::Number::ToFloat(config->twoPieceAllStat);
+                player->HandleStatModifier(UNIT_MOD_STAT_AGILITY, TOTAL_VALUE, statValue, false);
+                player->HandleStatModifier(UNIT_MOD_STAT_STRENGTH, TOTAL_VALUE, statValue, false);
+                player->HandleStatModifier(UNIT_MOD_STAT_INTELLECT, TOTAL_VALUE, statValue, false);
+                player->HandleStatModifier(UNIT_MOD_STAT_SPIRIT, TOTAL_VALUE, statValue, false);
+                player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, TOTAL_VALUE, statValue, false);
             }
             if (config->twoPieceCrit > 0)
-                player->ApplyRatingMod(CR_CRIT_MELEE, config->twoPieceCrit, false);
+                player->ApplyRatingMod(CR_CRIT_MELEE, ToAbyssInt64Saturated(config->twoPieceCrit), false);
             if (config->twoPieceHaste > 0)
-                player->ApplyRatingMod(CR_HASTE_MELEE, config->twoPieceHaste, false);
+                player->ApplyRatingMod(CR_HASTE_MELEE, ToAbyssInt64Saturated(config->twoPieceHaste), false);
             if (config->twoPieceAP > 0)
-                player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, float(config->twoPieceAP), false);
+                player->HandleStatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, Acore::Number::ToFloat(config->twoPieceAP), false);
             if (config->twoPieceSP > 0)
-                player->ApplySpellPowerBonus(config->twoPieceSP, false);
+                player->ApplySpellPowerBonus(Acore::Number::ToInt128Saturated(config->twoPieceSP), false);
 
             ChatHandler(player->GetSession()).PSendSysMessage("|cffff0000[套装] 已失去 %s (2件) 效果|r",
                 config->setName.c_str());
@@ -6629,12 +6683,12 @@ private:
             if (config->fourPieceDmgPct > 0)
                 ApplySetDamagePctBonus(player, config->fourPieceDmgPct, false);
             if (config->fourPieceCrit > 0)
-                player->ApplyRatingMod(CR_CRIT_MELEE, config->fourPieceCrit, false);
+                player->ApplyRatingMod(CR_CRIT_MELEE, ToAbyssInt64Saturated(config->fourPieceCrit), false);
             if (config->fourPieceHaste > 0)
-                player->ApplyRatingMod(CR_HASTE_MELEE, config->fourPieceHaste, false);
+                player->ApplyRatingMod(CR_HASTE_MELEE, ToAbyssInt64Saturated(config->fourPieceHaste), false);
             if (config->fourPieceHpPct > 0)
             {
-                float bonus = ScaleUInt64ToFloat(player->GetMaxHealthForCombat(), static_cast<long double>(config->fourPieceHpPct) / 100.0L);
+                float bonus = ScaleUInt128ToFloat(player->GetMaxHealthForCombat128(), Acore::Number::ToLongDouble(config->fourPieceHpPct) / 100.0L);
                 player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, bonus, false);
             }
 
@@ -6646,12 +6700,12 @@ private:
             if (config->sixPieceDmgPct > 0)
                 ApplySetDamagePctBonus(player, config->sixPieceDmgPct, false);
             if (config->sixPieceCrit > 0)
-                player->ApplyRatingMod(CR_CRIT_MELEE, config->sixPieceCrit, false);
+                player->ApplyRatingMod(CR_CRIT_MELEE, ToAbyssInt64Saturated(config->sixPieceCrit), false);
             if (config->sixPieceHaste > 0)
-                player->ApplyRatingMod(CR_HASTE_MELEE, config->sixPieceHaste, false);
+                player->ApplyRatingMod(CR_HASTE_MELEE, ToAbyssInt64Saturated(config->sixPieceHaste), false);
             if (config->sixPieceHpPct > 0)
             {
-                float bonus = ScaleUInt64ToFloat(player->GetMaxHealthForCombat(), static_cast<long double>(config->sixPieceHpPct) / 100.0L);
+                float bonus = ScaleUInt128ToFloat(player->GetMaxHealthForCombat128(), Acore::Number::ToLongDouble(config->sixPieceHpPct) / 100.0L);
                 player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, bonus, false);
             }
 
@@ -6663,12 +6717,12 @@ private:
             if (config->eightPieceDmgPct > 0)
                 ApplySetDamagePctBonus(player, config->eightPieceDmgPct, false);
             if (config->eightPieceCrit > 0)
-                player->ApplyRatingMod(CR_CRIT_MELEE, config->eightPieceCrit, false);
+                player->ApplyRatingMod(CR_CRIT_MELEE, ToAbyssInt64Saturated(config->eightPieceCrit), false);
             if (config->eightPieceHaste > 0)
-                player->ApplyRatingMod(CR_HASTE_MELEE, config->eightPieceHaste, false);
+                player->ApplyRatingMod(CR_HASTE_MELEE, ToAbyssInt64Saturated(config->eightPieceHaste), false);
             if (config->eightPieceHpPct > 0)
             {
-                float bonus = ScaleUInt64ToFloat(player->GetMaxHealthForCombat(), static_cast<long double>(config->eightPieceHpPct) / 100.0L);
+                float bonus = ScaleUInt128ToFloat(player->GetMaxHealthForCombat128(), Acore::Number::ToLongDouble(config->eightPieceHpPct) / 100.0L);
                 player->HandleStatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, bonus, false);
             }
 
@@ -6860,11 +6914,11 @@ public:
         float scale = 1.0f + ((healthScale - 1.0f) * 0.10f);
         scale = std::min(std::max(scale, 1.0f), 2.0f);
 
-        uint64 baseHealth = creature->GetMaxHealthForCombat();
+        uint128 baseHealth = creature->GetMaxHealthForCombat128();
         if (baseHealth > 0)
         {
-            uint64 tunedHealth = ScaleUInt64ToUInt64(baseHealth, static_cast<long double>(healthScale));
-            tunedHealth = std::max<uint64>(tunedHealth, baseHealth);
+            uint128 tunedHealth = ScaleUInt128ToUInt128(baseHealth, static_cast<long double>(healthScale));
+            tunedHealth = std::max<uint128>(tunedHealth, baseHealth);
             uint32 clientHealth = ToAbyssClientHealth(tunedHealth);
             creature->SetMaxHealth(clientHealth);
             if (tunedHealth > clientHealth)
@@ -9602,7 +9656,7 @@ public:
                 RollPercentage() < std::min(50.0f, 15.0f * artifactAbyssScale))
             {
                 sAbyssCultivationMgr->DealConfiguredBurst(player, target, 220, 320, SPELL_SCHOOL_MASK_SHADOW, artifactAbyssScale);
-                player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(5), artifactAbyssScale));
+                player->ModifyHealth(ToAbyssInt64Amount(ScaleMaxHealthPctToInt128(player, 5, static_cast<long double>(artifactAbyssScale))));
                 sAbyssCultivationMgr->RestorePlayerPrimaryPowerPct(player, 4.0f * artifactAbyssScale);
                 procState.lastSetAbyssDrainTime = now;
             }
@@ -9614,7 +9668,7 @@ public:
                 RollPercentage() < std::min(40.0f, 12.0f * abyssDrainScale))
             {
                 sAbyssCultivationMgr->DealConfiguredBurst(player, target, 150, 220, SPELL_SCHOOL_MASK_SHADOW, abyssDrainScale);
-                player->ModifyHealth(ScaleIntValue(player->CountPctFromMaxHealth(3), abyssDrainScale));
+                player->ModifyHealth(ToAbyssInt64Amount(ScaleMaxHealthPctToInt128(player, 3, static_cast<long double>(abyssDrainScale))));
                 procState.lastSetAbyssDrainTime = now;
             }
         }
@@ -9755,9 +9809,9 @@ public:
         if (bonusPct != 0.0f)
             value *= (1.0f + bonusPct / 100.0f);
 
-        int32 flatBonus = sAbyssCultivationMgr->GetPlayerRuntimeRelicStatFlatBonus(player, stat);
+        int128 flatBonus = sAbyssCultivationMgr->GetPlayerRuntimeRelicStatFlatBonus(player, stat);
         if (flatBonus != 0)
-            value += static_cast<float>(flatBonus);
+            value += Acore::Number::ToFloat(flatBonus);
 
         PlayerAbyssProcState& procState = sAbyssCultivationMgr->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
         uint32 now = GetNow();
@@ -9796,9 +9850,9 @@ public:
         if (bonusPct != 0.0f)
             attPowerMultiplier += bonusPct / 100.0f;
 
-        int32 flatAttackPower = sAbyssCultivationMgr->GetPlayerRuntimeRelicAttackPowerBonus(player);
+        int128 flatAttackPower = sAbyssCultivationMgr->GetPlayerRuntimeRelicAttackPowerBonus(player);
         if (flatAttackPower != 0)
-            attPowerMod += static_cast<float>(flatAttackPower);
+            attPowerMod += Acore::Number::ToFloat(flatAttackPower);
     }
 
     void OnPlayerAfterUpdateArmor(Player* player, float& value) override
@@ -9811,38 +9865,38 @@ public:
             value *= (1.0f + bonusPct / 100.0f);
     }
 
-    void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int64& healingBonus, int64 spellDamage[7]) override
+    void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int128& healingBonus, int128 spellDamage[7]) override
     {
         if (!player || !IsModuleEnabled())
             return;
 
         float bonusPct = sAbyssCultivationMgr->GetPlayerRuntimeSpellBonusPct(player);
-        int32 flatSpellPower = sAbyssCultivationMgr->GetPlayerRuntimeRelicSpellPowerBonus(player);
+        int128 flatSpellPower = sAbyssCultivationMgr->GetPlayerRuntimeRelicSpellPowerBonus(player);
         if (bonusPct == 0.0f && flatSpellPower == 0)
             return;
 
         if (bonusPct != 0.0f)
         {
             float multiplier = 1.0f + bonusPct / 100.0f;
-            healingBonus = ScaleIntValue(healingBonus, multiplier);
+            healingBonus = ScaleInt128Value(healingBonus, multiplier);
             for (uint8 school = 0; school < 7; ++school)
-                spellDamage[school] = ScaleIntValue(spellDamage[school], multiplier);
+                spellDamage[school] = ScaleInt128Value(spellDamage[school], multiplier);
         }
 
         if (flatSpellPower != 0)
         {
-            healingBonus = AddInt64Saturated(healingBonus, flatSpellPower);
+            healingBonus = AddInt128Saturated(healingBonus, flatSpellPower);
             for (uint8 school = 0; school < 7; ++school)
-                spellDamage[school] = AddInt64Saturated(spellDamage[school], flatSpellPower);
+                spellDamage[school] = AddInt128Saturated(spellDamage[school], flatSpellPower);
         }
     }
 
-    void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int64& amount) override
+    void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int128& amount) override
     {
         if (!player || !IsModuleEnabled())
             return;
 
-        amount = AddInt64Saturated(amount, sAbyssCultivationMgr->GetPlayerRuntimeRelicRatingBonus(player, cr));
+        amount = AddInt128Saturated(amount, sAbyssCultivationMgr->GetPlayerRuntimeRelicRatingBonus(player, cr));
     }
 
     void OnPlayerCompleteQuest(Player* player, Quest const* quest) override
@@ -12316,48 +12370,48 @@ SpellSchoolMask GetArtifactWeaponSchoolMask(uint8 actId, ArtifactWeaponFamilyId 
     }
 }
 
-double GetAbyssAttackPower(Unit* caster)
+long double GetAbyssAttackPower(Unit* caster)
 {
     if (!caster)
-        return 0.0;
+        return 0.0L;
 
     if (Player* player = caster->ToPlayer())
-        return player->GetExtendedTotalAttackPowerValue(BASE_ATTACK);
+        return static_cast<long double>(player->GetExtendedTotalAttackPowerValue(BASE_ATTACK));
 
-    return caster->GetTotalAttackPowerValue(BASE_ATTACK);
+    return static_cast<long double>(caster->GetTotalAttackPowerValue(BASE_ATTACK));
 }
 
-double GetAbyssSpellPower(Unit* caster, SpellSchoolMask schoolMask)
+long double GetAbyssSpellPower(Unit* caster, SpellSchoolMask schoolMask)
 {
     if (!caster)
-        return 0.0;
+        return 0.0L;
 
     if (Player* player = caster->ToPlayer())
-        return player->GetExtendedSpellDamageBonus();
+        return Acore::Number::ToLongDouble(player->GetExtendedSpellDamageBonus128());
 
-    return caster->SpellBaseDamageBonusDone(schoolMask);
+    return static_cast<long double>(caster->SpellBaseDamageBonusDone(schoolMask));
 }
 
-double GetArtifactWeaponPower(Player* player, ArtifactWeaponFamilyId familyId, SpellSchoolMask /*schoolMask*/)
+long double GetArtifactWeaponPower(Player* player, ArtifactWeaponFamilyId familyId, SpellSchoolMask /*schoolMask*/)
 {
     if (!player)
-        return 0.0f;
+        return 0.0L;
 
-    double attackPower = player->GetExtendedTotalAttackPowerValue(BASE_ATTACK);
-    double spellPower = player->GetExtendedSpellDamageBonus();
+    long double attackPower = static_cast<long double>(player->GetExtendedTotalAttackPowerValue(BASE_ATTACK));
+    long double spellPower = Acore::Number::ToLongDouble(player->GetExtendedSpellDamageBonus128());
 
     switch (familyId)
     {
         case ARTIFACT_WEAPON_STAFF:
         case ARTIFACT_WEAPON_WAND:
         case ARTIFACT_WEAPON_FALUN:
-            return std::max(spellPower, attackPower * 0.65f);
+            return std::max(spellPower, attackPower * 0.65L);
         case ARTIFACT_WEAPON_BOW:
         case ARTIFACT_WEAPON_GUN:
         case ARTIFACT_WEAPON_CROSSBOW:
-            return std::max(attackPower, spellPower * 0.45f);
+            return std::max(attackPower, spellPower * 0.45L);
         default:
-            return std::max(attackPower, spellPower * 0.35f);
+            return std::max(attackPower, spellPower * 0.35L);
     }
 }
 
@@ -12387,9 +12441,9 @@ void DealArtifactWeaponDamage(Player* player, Unit* target, ArtifactWeaponFamily
     if (!player || !target || scale <= 0.0f)
         return;
 
-    double power = GetArtifactWeaponPower(player, familyId, schoolMask);
-    int64 damage = std::max<int64>(1, static_cast<int64>(std::llround(power * scale)));
-    player->DealDamage(player, target, damage, nullptr, SPELL_DIRECT_DAMAGE, schoolMask);
+    long double power = GetArtifactWeaponPower(player, familyId, schoolMask);
+    int128 damage = ScalePositiveLongDoubleToInt128(power, static_cast<long double>(scale));
+    player->DealDamage(player, target, ToAbyssUInt64Damage(damage), nullptr, SPELL_DIRECT_DAMAGE, schoolMask);
 }
 
 void DealArtifactWeaponAreaDamage(Player* player, Unit* center, ArtifactWeaponFamilyId familyId, SpellSchoolMask schoolMask, float scale, float radius, bool frontOnly = false)
@@ -12432,8 +12486,8 @@ void ApplyArtifactWeaponActFollowup(Player* player, Unit* target, uint8 actId, A
             break;
         case 2:
         {
-            int64 healAmount = ScaleUInt64ToInt64(player->GetMaxHealthForCombat(), 0.02L * static_cast<long double>(scale));
-            player->ModifyHealth(healAmount);
+            int128 healAmount = ScaleUInt128ToInt128(player->GetMaxHealthForCombat128(), 0.02L * static_cast<long double>(scale));
+            player->ModifyHealth(ToAbyssInt64Amount(healAmount));
             break;
         }
         case 3:
@@ -12492,8 +12546,8 @@ void HandleArtifactWeaponAxeProc(uint32 spellId, Player* player, Unit* target)
     {
         DealArtifactWeaponDamage(player, target, ARTIFACT_WEAPON_AXE, theme.primarySchool, 2.40f * theme.scalar);
         DealArtifactWeaponAreaDamage(player, target, ARTIFACT_WEAPON_AXE, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_AXE, true), 0.80f * theme.scalar, 6.0f);
-        int64 healAmount = ScaleUInt64ToInt64(player->GetMaxHealthForCombat(), 0.04L * static_cast<long double>(theme.scalar));
-        player->ModifyHealth(healAmount);
+        int128 healAmount = ScaleUInt128ToInt128(player->GetMaxHealthForCombat128(), 0.04L * static_cast<long double>(theme.scalar));
+        player->ModifyHealth(ToAbyssInt64Amount(healAmount));
         return;
     }
 
@@ -12579,8 +12633,8 @@ void HandleArtifactWeaponGreataxeProc(uint32 spellId, Player* player, Unit* targ
     {
         DealArtifactWeaponDamage(player, target, ARTIFACT_WEAPON_GREATAXE, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_GREATAXE), 3.20f * theme.scalar);
         DealArtifactWeaponAreaDamage(player, target, ARTIFACT_WEAPON_GREATAXE, GetArtifactWeaponSchoolMask(actId, ARTIFACT_WEAPON_GREATAXE, true), 0.90f * theme.scalar, 8.0f);
-        int64 healAmount = ScaleUInt64ToInt64(player->GetMaxHealthForCombat(), 0.06L * static_cast<long double>(theme.scalar));
-        player->ModifyHealth(healAmount);
+        int128 healAmount = ScaleUInt128ToInt128(player->GetMaxHealthForCombat128(), 0.06L * static_cast<long double>(theme.scalar));
+        player->ModifyHealth(ToAbyssInt64Amount(healAmount));
     }
 }
 
@@ -12706,7 +12760,7 @@ void HandleArtifactWeaponWandProc(uint32 spellId, Player* player, Unit* target)
 
     Powers powerType = player->getPowerType();
     bool highPower = false;
-    if (powerType != POWER_HEALTH && player->GetMaxPowerForCombat(powerType) > 0)
+    if (powerType != POWER_HEALTH && player->GetMaxPowerForCombat128(powerType) > 0)
         highPower = player->GetPowerPct(powerType) >= 80.0f;
 
     PlayerAbyssProcState& procState = sAbyssCultivationMgr->GetOrCreatePlayerProcState(player->GetGUID().GetCounter());
@@ -12758,8 +12812,8 @@ void HandleArtifactWeaponFalunProc(uint32 spellId, Player* player, Unit* target)
             break;
     }
 
-    int64 healAmount = ScaleUInt64ToInt64(player->GetMaxHealthForCombat(), 0.06L * static_cast<long double>(theme.scalar));
-    player->ModifyHealth(healAmount);
+    int128 healAmount = ScaleUInt128ToInt128(player->GetMaxHealthForCombat128(), 0.06L * static_cast<long double>(theme.scalar));
+    player->ModifyHealth(ToAbyssInt64Amount(healAmount));
 }
 
 void HandleArtifactWeaponProc(uint32 spellId, ArtifactWeaponFamilyId familyId, Unit* casterUnit, Unit* hitUnit, Unit* explicitTarget)
@@ -12807,16 +12861,16 @@ class spell_abyss_blood_burst : public SpellScript
         if (!caster || !target)
             return;
 
-        double ap = GetAbyssAttackPower(caster);
-        int64 damage = static_cast<int64>(ap * 2.8);
+        long double ap = GetAbyssAttackPower(caster);
+        int128 damage = ScalePositiveLongDoubleToInt128(ap, 2.8L);
 
         // 连锁递减：每击杀一个目标，后续目标伤害递减25%
         float reduction = 1.0f - (_killCount * 0.25f);
         if (reduction < 0.25f)
             reduction = 0.25f;
-        damage = static_cast<int64>(damage * reduction);
+        damage = ScalePositiveLongDoubleToInt128(Acore::Number::ToLongDouble(damage), static_cast<long double>(reduction));
 
-        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_FIRE);
+        caster->DealDamage(caster, target, ToAbyssUInt64Damage(damage), nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_FIRE);
         ++_hitCount;
 
         if (!target->IsAlive())
@@ -12845,14 +12899,14 @@ class spell_abyss_soul_slash : public SpellScript
         if (!caster || !target)
             return;
 
-        double ap = GetAbyssAttackPower(caster);
+        long double ap = GetAbyssAttackPower(caster);
         // 每多命中一个目标伤害+20%，最高翻倍
         float scale = 1.0f + (_targetIndex * 0.2f);
         if (scale > 2.0f)
             scale = 2.0f;
-        int64 damage = static_cast<int64>(ap * 1.6 * scale);
+        int128 damage = ScalePositiveLongDoubleToInt128(ap, 1.6L * static_cast<long double>(scale));
 
-        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW);
+        caster->DealDamage(caster, target, ToAbyssUInt64Damage(damage), nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW);
         ++_targetIndex;
     }
 
@@ -12905,12 +12959,12 @@ class spell_abyss_poison_detonate : public SpellScript
         if (!caster || !target)
             return;
 
-        double sp = GetAbyssSpellPower(caster, SPELL_SCHOOL_MASK_NATURE);
-        double ap = GetAbyssAttackPower(caster);
-        double power = std::max(sp, ap);
-        int64 damage = static_cast<int64>(power * 2.0);
+        long double sp = GetAbyssSpellPower(caster, SPELL_SCHOOL_MASK_NATURE);
+        long double ap = GetAbyssAttackPower(caster);
+        long double power = std::max(sp, ap);
+        int128 damage = ScalePositiveLongDoubleToInt128(power, 2.0L);
 
-        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE);
+        caster->DealDamage(caster, target, ToAbyssUInt64Damage(damage), nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE);
 
         Unit* explosionTarget = GetExplTargetUnit();
         if (!explosionTarget)
@@ -12959,9 +13013,9 @@ class spell_abyss_hellfire_rain : public SpellScript
         if (!caster || !target)
             return;
 
-        double sp = GetAbyssSpellPower(caster, SPELL_SCHOOL_MASK_FIRE);
-        int64 damage = static_cast<int64>(sp * 1.2);
-        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_FIRE);
+        long double sp = GetAbyssSpellPower(caster, SPELL_SCHOOL_MASK_FIRE);
+        int128 damage = ScalePositiveLongDoubleToInt128(sp, 1.2L);
+        caster->DealDamage(caster, target, ToAbyssUInt64Damage(damage), nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_FIRE);
 
         // 施加点燃DOT（可叠加3层）
         caster->CastSpell(target, SPELL_ABYSS_HELLFIRE_IGNITE, true);
@@ -12987,9 +13041,9 @@ class spell_abyss_void_hole : public AuraScript
         if (!caster || !target)
             return;
 
-        double sp = GetAbyssSpellPower(caster, SPELL_SCHOOL_MASK_SHADOW);
-        int64 damage = static_cast<int64>(sp * 1.8);
-        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW);
+        long double sp = GetAbyssSpellPower(caster, SPELL_SCHOOL_MASK_SHADOW);
+        int128 damage = ScalePositiveLongDoubleToInt128(sp, 1.8L);
+        caster->DealDamage(caster, target, ToAbyssUInt64Damage(damage), nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW);
 
         // 吸引效果：将目标拉向施法者（模拟黑洞吸引）
         float dist = caster->GetDistance(target);
@@ -13030,9 +13084,9 @@ class spell_abyss_corpse_explode : public SpellScript
         float reduction = 1.0f - (_chainCount * 0.15f);
         if (reduction < 0.25f)
             reduction = 0.25f;
-        int64 damage = ScaleUInt64ToInt64(target->GetMaxHealthForCombat(), 0.25L * static_cast<long double>(reduction));
+        int128 damage = ScaleUInt128ToInt128(target->GetMaxHealthForCombat128(), 0.25L * static_cast<long double>(reduction));
 
-        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL);
+        caster->DealDamage(caster, target, ToAbyssUInt64Damage(damage), nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL);
 
         // 如果目标死亡且还有连锁次数，再次触发爆炸
         if (!target->IsAlive() && _chainCount < 5)
@@ -13062,9 +13116,9 @@ class spell_abyss_abyss_touch : public SpellScript
         if (!caster || !target)
             return;
 
-        double ap = GetAbyssAttackPower(caster);
-        int64 damage = static_cast<int64>(ap * 3.0);
-        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW);
+        long double ap = GetAbyssAttackPower(caster);
+        int128 damage = ScalePositiveLongDoubleToInt128(ap, 3.0L);
+        caster->DealDamage(caster, target, ToAbyssUInt64Damage(damage), nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW);
 
         // 施加定身
         caster->CastSpell(target, SPELL_ABYSS_ABYSS_ROOT, true);
@@ -13102,15 +13156,15 @@ class spell_abyss_lava_rift : public SpellScript
         Acore::UnitListSearcher<Acore::AnyUnfriendlyUnitInObjectRangeCheck> searcher(target, nearbyTargets, check);
         Cell::VisitAllObjects(target, searcher, 8.0f);
 
-        double sp = GetAbyssSpellPower(caster, SPELL_SCHOOL_MASK_FIRE);
-        int64 damage = static_cast<int64>(sp * 1.5);
+        long double sp = GetAbyssSpellPower(caster, SPELL_SCHOOL_MASK_FIRE);
+        int128 damage = ScalePositiveLongDoubleToInt128(sp, 1.5L);
 
         for (Unit* nearbyTarget : nearbyTargets)
         {
             if (!nearbyTarget)
                 continue;
 
-            caster->DealDamage(caster, nearbyTarget, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_FIRE);
+            caster->DealDamage(caster, nearbyTarget, ToAbyssUInt64Damage(damage), nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_FIRE);
             caster->CastSpell(nearbyTarget, SPELL_ABYSS_LAVA_SLOW, true);
         }
     }
@@ -13135,11 +13189,11 @@ class spell_abyss_destroy_pulse : public SpellScript
         if (!caster || !target)
             return;
 
-        double sp = GetAbyssSpellPower(caster, SPELL_SCHOOL_MASK_ARCANE);
-        double ap = GetAbyssAttackPower(caster);
-        double power = std::max(sp, ap);
-        int64 damage = static_cast<int64>(power * 4.0);
-        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_ARCANE);
+        long double sp = GetAbyssSpellPower(caster, SPELL_SCHOOL_MASK_ARCANE);
+        long double ap = GetAbyssAttackPower(caster);
+        long double power = std::max(sp, ap);
+        int128 damage = ScalePositiveLongDoubleToInt128(power, 4.0L);
+        caster->DealDamage(caster, target, ToAbyssUInt64Damage(damage), nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_ARCANE);
 
         // 击退
         float angle = caster->GetAngle(target);
@@ -13182,10 +13236,10 @@ class spell_abyss_soul_reap : public SpellScript
         Acore::UnitListSearcher<Acore::AnyUnfriendlyUnitInObjectRangeCheck> searcher(caster, nearbyTargets, check);
         Cell::VisitAllObjects(caster, searcher, 12.0f);
 
-        double sp = GetAbyssSpellPower(caster, SPELL_SCHOOL_MASK_SHADOW);
-        double ap = GetAbyssAttackPower(caster);
-        double power = std::max(sp, ap);
-        int64 damage = static_cast<int64>(power * 2.6);
+        long double sp = GetAbyssSpellPower(caster, SPELL_SCHOOL_MASK_SHADOW);
+        long double ap = GetAbyssAttackPower(caster);
+        long double power = std::max(sp, ap);
+        int128 damage = ScalePositiveLongDoubleToInt128(power, 2.6L);
 
         for (Unit* nearbyTarget : nearbyTargets)
         {
@@ -13195,13 +13249,13 @@ class spell_abyss_soul_reap : public SpellScript
             if (!caster->HasInArc(float(M_PI), nearbyTarget))
                 continue;
 
-            caster->DealDamage(caster, nearbyTarget, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW);
+            caster->DealDamage(caster, nearbyTarget, ToAbyssUInt64Damage(damage), nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW);
             ++_hitCount;
         }
 
         if (_hitCount == 0)
         {
-            caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW);
+            caster->DealDamage(caster, target, ToAbyssUInt64Damage(damage), nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW);
             _hitCount = 1;
         }
     }
@@ -13213,12 +13267,12 @@ class spell_abyss_soul_reap : public SpellScript
         if (!caster || _hitCount == 0)
             return;
 
-        int64 healAmount = ScaleUInt64ToInt64(caster->GetMaxHealthForCombat(), 0.03L * static_cast<long double>(_hitCount));
-        caster->ModifyHealth(healAmount);
+        int128 healAmount = ScaleUInt128ToInt128(caster->GetMaxHealthForCombat128(), 0.03L * static_cast<long double>(_hitCount));
+        caster->ModifyHealth(ToAbyssInt64Amount(healAmount));
 
         if (Player* player = caster->ToPlayer())
             if (player->GetSession())
-                ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff00[噬魂收割]|r 命中{}个目标，回复{}点生命值。", _hitCount, healAmount);
+                ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff00[噬魂收割]|r 命中{}个目标，回复{}点生命值。", _hitCount, FormatAbyssInt128(healAmount));
     }
 
     void Register() override
@@ -13244,9 +13298,9 @@ class spell_abyss_charge_destroy : public SpellScript
         if (!caster || !target)
             return;
 
-        double ap = GetAbyssAttackPower(caster);
-        int64 damage = static_cast<int64>(ap * 3.0);
-        caster->DealDamage(caster, target, damage, nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL);
+        long double ap = GetAbyssAttackPower(caster);
+        int128 damage = ScalePositiveLongDoubleToInt128(ap, 3.0L);
+        caster->DealDamage(caster, target, ToAbyssUInt64Damage(damage), nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL);
 
         // 击飞
         target->KnockbackFrom(caster->GetPositionX(), caster->GetPositionY(), 5.0f, 4.0f);

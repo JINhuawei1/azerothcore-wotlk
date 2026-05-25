@@ -484,7 +484,7 @@ class spell_hun_chimera_shot : public SpellScript
                         spellId = SPELL_HUNTER_CHIMERA_SHOT_SERPENT;
                         basePoint = aurEff->GetAmount();
                         ApplyPct(basePoint, TickCount * 40);
-                        basePoint = unitTarget->SpellDamageBonusTaken(caster, aura->GetSpellInfo(), basePoint, DOT, aura->GetStackAmount());
+                        basePoint = Acore::Number::ToInt32Saturated(Acore::Number::ToInt128Saturated(unitTarget->SpellDamageBonusTaken(caster, aura->GetSpellInfo(), basePoint, DOT, aura->GetStackAmount())));
                     }
                     // Viper Sting - Instantly restores mana to you equal to 60% of the total amount drained by your Viper Sting.
                     else if (familyFlag[1] & 0x00000080)

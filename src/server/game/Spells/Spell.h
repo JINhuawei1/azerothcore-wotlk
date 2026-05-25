@@ -264,8 +264,8 @@ struct TargetInfo
     bool   alive:1;
     bool   crit:1;
     bool   scaleAura:1;
-    uint64 damage;
-    uint64 healing;
+    uint128 damage;
+    uint128 healing;
 };
 
 static const uint32 SPELL_INTERRUPT_NONPLAYER = 32747;
@@ -671,8 +671,8 @@ public:
     GameObject* focusObject;
 
     // Damage and healing in effects need just calculate
-    uint64 m_damage;          // Damage  in effects count here
-    uint64 m_healing;         // Healing in effects count here
+    uint128 m_damage;          // Damage  in effects count here
+    uint128 m_healing;         // Healing in effects count here
 
     // ******************************************
     // Spell trigger system

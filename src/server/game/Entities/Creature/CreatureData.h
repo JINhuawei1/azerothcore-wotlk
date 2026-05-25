@@ -23,6 +23,7 @@
 #include "ItemTemplate.h"
 #include "LootMgr.h"
 #include "Unit.h"
+#include "Util.h"
 #include <list>
 
 #define MAX_AGGRO_RESET_TIME 10 // in seconds
@@ -301,27 +302,27 @@ typedef std::unordered_map<uint32, CreatureTemplate> CreatureTemplateContainer;
 // Defines base stats for creatures (used to calculate HP/mana/armor/attackpower/rangedattackpower/all damage).
 struct CreatureBaseStats
 {
-    uint64 BaseHealth[MAX_EXPANSIONS];
-    uint64 BaseMana;
+    uint128 BaseHealth[MAX_EXPANSIONS];
+    uint128 BaseMana;
     double BaseArmor;
-    uint64 AttackPower;
-    uint64 RangedAttackPower;
+    uint128 AttackPower;
+    uint128 RangedAttackPower;
     double BaseDamage[MAX_EXPANSIONS];
 
     // Helpers
 
-    uint64 GenerateHealth(CreatureTemplate const* info) const
+    uint128 GenerateHealth(CreatureTemplate const* info) const
     {
-        return uint64(std::ceil(static_cast<long double>(BaseHealth[info->expansion]) * static_cast<long double>(info->ModHealth)));
+        return Acore::Number::ToUInt128Saturated(std::ceil(Acore::Number::ToLongDouble(BaseHealth[info->expansion]) * static_cast<long double>(info->ModHealth)));
     }
 
-    uint64 GenerateMana(CreatureTemplate const* info) const
+    uint128 GenerateMana(CreatureTemplate const* info) const
     {
         // Mana can be 0.
-        if (!BaseMana)
+        if (BaseMana == 0)
             return 0;
 
-        return uint64(std::ceil(static_cast<long double>(BaseMana) * static_cast<long double>(info->ModMana)));
+        return Acore::Number::ToUInt128Saturated(std::ceil(Acore::Number::ToLongDouble(BaseMana) * static_cast<long double>(info->ModMana)));
     }
 
     double GenerateArmor(CreatureTemplate const* info) const
@@ -383,8 +384,8 @@ struct CreatureData
     uint32 spawntimesecs{0};
     float wander_distance{0.0f};
     uint32 currentwaypoint{0};
-    uint64 curhealth{0};
-    uint64 curmana{0};
+    uint128 curhealth{0};
+    uint128 curmana{0};
     uint8 movementType{0};
     uint8 spawnMask{0};
     uint32 npcflag{0};

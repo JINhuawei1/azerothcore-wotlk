@@ -433,11 +433,15 @@ public:
     // returns damage calculated before hit, and real dmg done after hit
     int64 GetHitDamage();
     void SetHitDamage(int64 damage);
+    uint128 GetHitDamage128();
+    void SetHitDamage128(uint128 const& damage);
     void PreventHitDamage() { SetHitDamage(0); }
     // setter/getter for for heal done by spell to target of spell hit
     // returns healing calculated before hit, and real dmg done after hit
     int64 GetHitHeal();
     void SetHitHeal(int64 heal);
+    uint128 GetHitHeal128();
+    void SetHitHeal128(uint128 const& heal);
     void PreventHitHeal() { SetHitHeal(0); }
     Spell* GetSpell() { return m_spell; }
     // returns current spell hit target aura

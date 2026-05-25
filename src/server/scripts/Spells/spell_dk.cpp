@@ -26,6 +26,7 @@
 #include "SpellScriptLoader.h"
 #include "Totem.h"
 #include "UnitAI.h"
+#include "Util.h"
 #include <algorithm>
 #include <limits>
 /*
@@ -172,8 +173,8 @@ class spell_dk_raise_ally : public SpellScript
                 PetLevelInfo const* pInfo = sObjectMgr->GetPetLevelInfo(ghoul->GetEntry(), ghoul->GetLevel());
                 if (pInfo)                                      // exist in DB
                 {
-                    ghoul->SetCreateHealth(pInfo->health);
-                    ghoul->SetModifierValue(UNIT_MOD_HEALTH, BASE_VALUE, pInfo->health);
+                    ghoul->SetCreateHealth(Acore::Number::ToUInt32Saturated(pInfo->health));
+                    ghoul->SetModifierValue(UNIT_MOD_HEALTH, BASE_VALUE, Acore::Number::ToDouble(pInfo->health));
                     ghoul->SetModifierValue(UNIT_MOD_ARMOR, BASE_VALUE, float(pInfo->armor));
                     for (uint8 stat = 0; stat < MAX_STATS; ++stat)
                         ghoul->SetCreateStat(Stats(stat), float(pInfo->stats[stat]));
@@ -313,20 +314,20 @@ class spell_dk_death_and_decay : public SpellScript
     {
         Unit* caster = GetCaster();
         Unit* target = GetHitUnit();
-        int64 damage = GetHitDamage();
+        uint128 damage = GetHitDamage128();
 
         // T10P2 bonus
         if (AuraEffect* aurEff = caster->GetAuraEffectDummy(70650))
-            damage = SpellScriptCombat::AddPctInt64Saturated(damage, aurEff->GetAmount());
+            damage = Acore::Number::CalculatePct(damage, 100 + aurEff->GetAmount());
         // Glyph of Death and Decay
         if (AuraEffect* aurEff = caster->GetAuraEffect(58629, EFFECT_0))
-            damage = SpellScriptCombat::AddPctInt64Saturated(damage, aurEff->GetAmount());
+            damage = Acore::Number::CalculatePct(damage, 100 + aurEff->GetAmount());
 
         // Xinef: include AOE damage reducing auras
         if (target)
             damage = target->CalculateAOEDamageReduction(damage, GetSpellInfo()->SchoolMask, false);
 
-        SetHitDamage(damage);
+        SetHitDamage128(damage);
     }
 
     void Register() override
@@ -675,7 +676,7 @@ class spell_dk_dancing_rune_weapon : public AuraScript
             for (uint8 i = 0; i < MAX_ITEM_PROTO_DAMAGES; ++i)
             {
                 Unit::DealDamageMods(target, damageInfo.damages[i].damage, &damageInfo.damages[i].absorb);
-                damageInfo.damages[i].damage /= 2.0f;
+                damageInfo.damages[i].damage = ToUInt128Damage(Acore::Number::ToLongDouble(damageInfo.damages[i].damage) / 2.0L);
             }
             damageInfo.attacker = dancingRuneWeapon;
             dancingRuneWeapon->SendAttackStateUpdate(&damageInfo);
@@ -890,7 +891,7 @@ class spell_dk_anti_magic_shell_raid : public AuraScript
 
     void Absorb(AuraEffect* /*aurEff*/, DamageInfo& dmgInfo, uint32& absorbAmount)
     {
-        absorbAmount = SpellScriptCombat::CalculatePctInt32Saturated(dmgInfo.GetDamage(), absorbPct);
+        absorbAmount = SpellScriptCombat::CalculatePctInt32Saturated(Acore::Number::ToUInt64Saturated(dmgInfo.GetDamage()), absorbPct);
     }
 
     void Register() override
@@ -925,7 +926,7 @@ class spell_dk_anti_magic_shell_self : public AuraScript
 
     void Absorb(AuraEffect* /*aurEff*/, DamageInfo& dmgInfo, uint32& absorbAmount)
     {
-        uint64 damageAbsorb = SpellScriptCombat::CalculatePctUInt64(dmgInfo.GetDamage(), absorbPct);
+        uint64 damageAbsorb = SpellScriptCombat::CalculatePctUInt64(Acore::Number::ToUInt64Saturated(dmgInfo.GetDamage()), absorbPct);
         uint64 healthAbsorb = GetTarget()->CountPctFromMaxHealth(hpPct);
         absorbAmount = static_cast<uint32>(std::min(damageAbsorb, healthAbsorb));
     }
@@ -998,7 +999,7 @@ class spell_dk_anti_magic_zone : public AuraScript
 
     void Absorb(AuraEffect* /*aurEff*/, DamageInfo& dmgInfo, uint32& absorbAmount)
     {
-        absorbAmount = SpellScriptCombat::CalculatePctInt32Saturated(dmgInfo.GetDamage(), absorbPct);
+        absorbAmount = SpellScriptCombat::CalculatePctInt32Saturated(Acore::Number::ToUInt64Saturated(dmgInfo.GetDamage()), absorbPct);
     }
 
     void Register() override
@@ -2127,7 +2128,7 @@ class spell_dk_spell_deflection : public AuraScript
             chance = 0.0f;
 
         if ((dmgInfo.GetDamageType() == SPELL_DIRECT_DAMAGE) && roll_chance_f(chance))
-            absorbAmount = SpellScriptCombat::CalculatePctInt32Saturated(dmgInfo.GetDamage(), absorbPct);
+            absorbAmount = SpellScriptCombat::CalculatePctInt32Saturated(Acore::Number::ToUInt64Saturated(dmgInfo.GetDamage()), absorbPct);
     }
 
     void Register() override
@@ -2196,13 +2197,13 @@ class spell_dk_will_of_the_necropolis : public AuraScript
         SpellInfo const* talentProto = sSpellMgr->AssertSpellInfo(sSpellMgr->GetSpellWithRank(SPELL_DK_WILL_OF_THE_NECROPOLIS_TALENT_R1, rank));
 
         uint64 targetHealth = GetTarget()->GetHealthForCombat();
-        uint64 remainingHp = targetHealth > dmgInfo.GetDamage() ? targetHealth - dmgInfo.GetDamage() : 0;
+        uint64 remainingHp = targetHealth > dmgInfo.GetDamage() ? Acore::Number::ToUInt64Saturated(targetHealth - dmgInfo.GetDamage()) : 0;
         uint64 minHp = GetTarget()->CountPctFromMaxHealth(talentProto->Effects[EFFECT_0].CalcValue(GetCaster()));
 
         // Damage that would take you below [effect0] health or taken while you are at [effect0]
         if (remainingHp < minHp)
         {
-            dmgInfo.AbsorbDamage(SpellScriptCombat::CalculatePctUInt64(dmgInfo.GetDamage(), absorbPct));
+            dmgInfo.AbsorbDamage(SpellScriptCombat::CalculatePctUInt64(Acore::Number::ToUInt64Saturated(dmgInfo.GetDamage()), absorbPct));
             absorbAmount = 0;
         }
     }

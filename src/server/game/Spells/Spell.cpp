@@ -79,35 +79,14 @@ namespace
         return min + static_cast<int64>(roll % (range + 1));
     }
 
-    uint64 AddUInt64Saturated(uint64 left, uint64 right)
-    {
-        return left > std::numeric_limits<uint64>::max() - right ? std::numeric_limits<uint64>::max() : left + right;
-    }
-
-    uint64 ToUInt64Saturated(long double value)
-    {
-        if (std::isnan(static_cast<double>(value)) || value <= 0.0L)
-            return 0;
-
-        if (!std::isfinite(value) || value >= static_cast<long double>(std::numeric_limits<uint64>::max()))
-            return std::numeric_limits<uint64>::max();
-
-        return static_cast<uint64>(value);
-    }
-
-    int64 ToInt64Saturated(uint64 value)
-    {
-        return value > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(value);
-    }
-
     uint32 ToClientSpellPowerMax(uint32 value)
     {
         return value > MaxClientSpellPowerValue ? MaxClientSpellPowerValue : value;
     }
 
-    uint32 ScalePowerToClient(uint64 currentValue, uint64 maxValue, uint32 clientMaxValue)
+    uint32 ScalePowerToClient(uint128 const& currentValue, uint128 const& maxValue, uint32 clientMaxValue)
     {
-        if (!currentValue || !maxValue)
+        if (currentValue == 0 || maxValue == 0)
             return 0;
 
         if (!clientMaxValue)
@@ -117,9 +96,9 @@ namespace
             return clientMaxValue;
 
         if (maxValue <= clientMaxValue)
-            return currentValue > clientMaxValue ? clientMaxValue : static_cast<uint32>(currentValue);
+            return currentValue > clientMaxValue ? clientMaxValue : Acore::Number::ToUInt32Saturated(currentValue);
 
-        long double scaled = (static_cast<long double>(clientMaxValue) * static_cast<long double>(currentValue)) / static_cast<long double>(maxValue);
+        long double scaled = (static_cast<long double>(clientMaxValue) * Acore::Number::ToLongDouble(currentValue)) / Acore::Number::ToLongDouble(maxValue);
         uint32 clientValue = static_cast<uint32>(scaled + 0.5L);
         if (!clientValue)
             return 1;
@@ -133,8 +112,8 @@ namespace
             return 0;
 
         uint32 clientMaxPower = ToClientSpellPowerMax(caster->GetMaxPower(power));
-        uint64 maxPower = caster->GetMaxPowerForCombat(power);
-        uint64 currentPower = caster->GetPowerForCombat(power);
+        uint128 maxPower = caster->GetMaxPowerForCombat128(power);
+        uint128 currentPower = caster->GetPowerForCombat128(power);
         uint32 clientPower = ScalePowerToClient(currentPower, maxPower, clientMaxPower);
 
         if (power == POWER_MANA && maxPower > clientMaxPower && clientPower >= clientMaxPower && clientMaxPower > 1)
@@ -2376,14 +2355,14 @@ void Spell::SearchChainTargets(std::list<WorldObject*>& targets, uint32 chainTar
         // get unit with highest hp deficit in dist
         if (isChainHeal)
         {
-            uint64 maxHPDeficit = 0;
+            uint128 maxHPDeficit = 0;
             for (std::list<WorldObject*>::iterator itr = tempTargets.begin(); itr != tempTargets.end(); ++itr)
             {
                 if (Unit* unit = (*itr)->ToUnit())
                 {
-                    uint64 const maxHealth = unit->GetMaxHealthForCombat();
-                    uint64 const curHealth = unit->GetHealthForCombat();
-                    uint64 deficit = maxHealth > curHealth ? maxHealth - curHealth : 0;
+                    uint128 const maxHealth = unit->GetMaxHealthForCombat128();
+                    uint128 const curHealth = unit->GetHealthForCombat128();
+                    uint128 deficit = maxHealth > curHealth ? maxHealth - curHealth : 0;
                     if (deficit > maxHPDeficit && target->IsWithinDist(unit, jumpRadius) && target->IsWithinLOSInMap(unit, VMAP::ModelIgnoreFlags::M2))
                     {
                         foundItr = itr;
@@ -2821,7 +2800,7 @@ void Spell::DoAllEffectOnTarget(TargetInfo* target)
             spellHitTarget = m_caster;
             unitTarget = m_caster;
             if (m_caster->IsCreature())
-                m_caster->ToCreature()->LowerPlayerDamageReq(target->damage);
+                m_caster->ToCreature()->LowerPlayerDamageReq(Acore::Number::ToUInt64Saturated(target->damage));
         }
     }
 
@@ -2908,7 +2887,7 @@ void Spell::DoAllEffectOnTarget(TargetInfo* target)
     if (m_healing > 0)
     {
         bool crit = target->crit;
-        uint64 addhealth = static_cast<uint64>(m_healing);
+        uint64 addhealth = Acore::Number::ToUInt64Saturated(m_healing);
 
         if (crit)
         {
@@ -5535,7 +5514,7 @@ void Spell::TakePower()
     if (PowerType == POWER_MANA && m_powerCost > 0)
     {
         if (Player* player = m_caster->ToPlayer())
-            if (player->HasExtendedPowerForCombat(POWER_MANA) || player->GetExtendedMaxPower(POWER_MANA) > ToClientSpellPowerMax(player->GetMaxPower(POWER_MANA)))
+            if (player->HasExtendedPowerForCombat(POWER_MANA) || player->GetExtendedMaxPower128(POWER_MANA) > ToClientSpellPowerMax(player->GetMaxPower(POWER_MANA)))
                 player->SyncClientPowerFromExtended(POWER_MANA, true, true);
 
         m_caster->SetLastManaUse(GameTime::GetGameTimeMS().count());
@@ -7318,7 +7297,7 @@ SpellCastResult Spell::CheckPower()
     // health as power used - need check health amount
     if (m_spellInfo->PowerType == POWER_HEALTH)
     {
-        if (m_caster->GetHealthForCombat() <= static_cast<uint64>(m_powerCost > 0 ? m_powerCost : 0))
+        if (m_caster->GetHealthForCombat128() <= static_cast<uint128>(m_powerCost > 0 ? m_powerCost : 0))
             return SPELL_FAILED_CASTER_AURASTATE;
         return SPELL_CAST_OK;
     }
@@ -7339,7 +7318,7 @@ SpellCastResult Spell::CheckPower()
 
     // Check power amount
     Powers PowerType = Powers(m_spellInfo->PowerType);
-    if (m_powerCost > 0 && m_caster->GetPowerForCombat(PowerType) < static_cast<uint64>(m_powerCost))
+    if (m_powerCost > 0 && m_caster->GetPowerForCombat128(PowerType) < static_cast<uint128>(m_powerCost))
         return SPELL_FAILED_NO_POWER;
     else
         return SPELL_CAST_OK;
@@ -8519,14 +8498,14 @@ void Spell::DoAllEffectOnLaunchTarget(TargetInfo& targetInfo, float* multiplier)
 
             if (m_applyMultiplierMask & (1 << i))
             {
-                long double scaledDamage = static_cast<long double>(m_damage) * static_cast<long double>(m_damageMultipliers[i]);
-                m_damage = ToUInt64Saturated(scaledDamage);
-                long double scaledHealing = static_cast<long double>(m_healing) * static_cast<long double>(m_damageMultipliers[i]);
-                m_healing = ToUInt64Saturated(scaledHealing);
+                long double scaledDamage = static_cast<long double>(Acore::Number::ToLongDouble(m_damage)) * static_cast<long double>(m_damageMultipliers[i]);
+                m_damage = ToUInt128Damage(scaledDamage);
+                long double scaledHealing = static_cast<long double>(Acore::Number::ToLongDouble(m_healing)) * static_cast<long double>(m_damageMultipliers[i]);
+                m_healing = ToUInt128Damage(scaledHealing);
                 m_damageMultipliers[i] *= multiplier[i];
             }
-            targetInfo.damage = AddUInt64Saturated(targetInfo.damage, m_damage);
-            targetInfo.healing = AddUInt64Saturated(targetInfo.healing, m_healing);
+            targetInfo.damage = AddUInt128Damage(targetInfo.damage, m_damage);
+            targetInfo.healing = AddUInt128Damage(targetInfo.healing, m_healing);
         }
     }
 

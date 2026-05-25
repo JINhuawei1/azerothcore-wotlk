@@ -2,14 +2,17 @@
 #define ITEM_ATTRIBUTES_DB_HELPER_H
 
 #include "DatabaseEnv.h"
+#include "Define.h"
 #include "Item.h"
 #include "Player.h"
+#include "StringConvert.h"
 #include <vector>
 #include <string>
 #include <mutex>
 #include <unordered_map>
 #include <sstream>
 #include <memory>  // 【智能指针修复】添加 unique_ptr 支持
+#include <type_traits>
 
 // 物品属性数据库辅助类
 class ItemAttributesDBHelper
@@ -21,14 +24,14 @@ public:
         uint64 itemGuid;
         uint32 itemId;
         std::vector<uint32> baseAttributeIds;      // 基础属性ID列表（替换官方属性）
-        std::vector<int32> baseAttributeValues;    // 基础属性值列表
+        std::vector<int128> baseAttributeValues;   // 基础属性值列表
         std::vector<uint32> additionalAttributeIds; // 追加属性ID列表（额外添加）
-        std::vector<int32> additionalAttributeValues; // 追加属性值列表
+        std::vector<int128> additionalAttributeValues; // 追加属性值列表
         
         // 辅助方法：将属性转换为紧凑字符串格式 "id value,id value,..."
-        static std::string ToCompactString(const std::vector<uint32>& ids, const std::vector<int32>& values);
+        static std::string ToCompactString(const std::vector<uint32>& ids, const std::vector<int128>& values);
         // 辅助方法：从紧凑字符串解析属性 "id value,id value,..."
-        static void FromCompactString(const std::string& str, std::vector<uint32>& ids, std::vector<int32>& values);
+        static void FromCompactString(const std::string& str, std::vector<uint32>& ids, std::vector<int128>& values);
     };
 
     // 【智能指针修复】读取物品的所有属性（返回智能指针，自动管理内存）
@@ -38,19 +41,19 @@ public:
     static bool SaveItemAttributes(const ItemAttributeData& data);
 
     // 保存基础属性（替换官方属性）
-    static bool SaveBaseAttributes(uint64 itemGuid, uint32 itemId, const std::vector<uint32>& attributeIds, const std::vector<int32>& attributeValues);
+    static bool SaveBaseAttributes(uint64 itemGuid, uint32 itemId, const std::vector<uint32>& attributeIds, const std::vector<int128>& attributeValues);
 
     // 保存追加属性（额外添加）
-    static bool SaveAdditionalAttributes(uint64 itemGuid, uint32 itemId, const std::vector<uint32>& attributeIds, const std::vector<int32>& attributeValues);
+    static bool SaveAdditionalAttributes(uint64 itemGuid, uint32 itemId, const std::vector<uint32>& attributeIds, const std::vector<int128>& attributeValues);
 
     // 添加单个属性到物品
-    static bool AddAttributeToItem(uint64 itemGuid, uint32 itemId, uint32 attributeId, int32 attributeValue);
+    static bool AddAttributeToItem(uint64 itemGuid, uint32 itemId, uint32 attributeId, int128 attributeValue);
     
     // 添加单个基础属性
-    static bool AddBaseAttributeToItem(uint64 itemGuid, uint32 itemId, uint32 attributeId, int32 attributeValue);
+    static bool AddBaseAttributeToItem(uint64 itemGuid, uint32 itemId, uint32 attributeId, int128 attributeValue);
     
     // 添加单个追加属性
-    static bool AddAdditionalAttributeToItem(uint64 itemGuid, uint32 itemId, uint32 attributeId, int32 attributeValue);
+    static bool AddAdditionalAttributeToItem(uint64 itemGuid, uint32 itemId, uint32 attributeId, int128 attributeValue);
 
     // 从物品移除单个属性
     static bool RemoveAttributeFromItem(uint64 itemGuid, uint32 attributeId);
@@ -85,7 +88,7 @@ private:
         {
             if (i > 0)
                 result += ",";
-            result += std::to_string(vec[i]);
+            result += Acore::ToString(vec[i]);
         }
         return result;
     }
@@ -104,8 +107,11 @@ private:
             {
                 if constexpr (std::is_same_v<T, uint32>)
                     result.push_back(static_cast<uint32>(std::stoul(token)));
-                else if constexpr (std::is_same_v<T, int32>)
-                    result.push_back(std::stoi(token));
+                else if constexpr (std::is_same_v<T, int128>)
+                {
+                    if (Optional<int128> value = Acore::StringTo<int128>(token))
+                        result.push_back(*value);
+                }
             }
         }
         

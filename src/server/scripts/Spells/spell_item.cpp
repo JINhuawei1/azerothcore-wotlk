@@ -1040,7 +1040,7 @@ class spell_item_blood_draining_enchant : public AuraScript
             return;
 
         uint64 targetHealth = target->GetHealthForCombat();
-        uint64 remainingHealth = targetHealth > damageInfo->GetDamage() ? targetHealth - damageInfo->GetDamage() : 0;
+        uint64 remainingHealth = targetHealth > damageInfo->GetDamage() ? Acore::Number::ToUInt64Saturated(targetHealth - damageInfo->GetDamage()) : 0;
         if (remainingHealth >= target->CountPctFromMaxHealth(35))
         {
             return;
@@ -3691,8 +3691,8 @@ class spell_item_wraith_scythe_drain_life : public SpellScript
         Unit* caster = GetCaster();
         if (target && caster)
         {
-            int64 damage = SpellScriptCombat::ToInt64Saturated(static_cast<long double>(GetHitDamage()) + SpellScriptCombat::GetSpellDamageBonus(caster, SPELL_SCHOOL_MASK_ALL));
-            SetHitDamage(damage);
+            uint128 damage = AddUInt128Damage(GetHitDamage128(), Acore::Number::ToUInt128Saturated(SpellScriptCombat::GetSpellDamageBonus(caster, SPELL_SCHOOL_MASK_ALL)));
+            SetHitDamage128(damage);
         }
     }
 

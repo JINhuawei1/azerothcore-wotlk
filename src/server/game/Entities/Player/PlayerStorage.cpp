@@ -5555,22 +5555,22 @@ bool Player::LoadFromDB(ObjectGuid playerGuid, CharacterDatabaseQueryHolder cons
     UpdateAllStats();
 
     // restore remembered power/health values (but not more max values)
-    uint64 savedHealth = fields[55].Get<uint64>();
-    uint64 maxHealth = GetMaxHealthForCombat();
-    if (maxHealth && savedHealth > maxHealth)
+    uint128 savedHealth = fields[55].GetUInt128();
+    uint128 maxHealth = GetMaxHealthForCombat128();
+    if (maxHealth != 0 && savedHealth > maxHealth)
         savedHealth = maxHealth;
 
-    SetHealthForCombat(savedHealth);
+    SetHealthForCombat128(savedHealth);
 
     for (uint8 i = 0; i < MAX_POWERS; ++i)
     {
         Powers power = Powers(i);
-        uint64 savedPower = fields[56 + i].Get<uint64>();
-        uint64 maxPower = GetMaxPowerForCombat(power);
-        if (maxPower && savedPower > maxPower)
+        uint128 savedPower = fields[56 + i].GetUInt128();
+        uint128 maxPower = GetMaxPowerForCombat128(power);
+        if (maxPower != 0 && savedPower > maxPower)
             savedPower = maxPower;
 
-        SetPowerForCombat(power, savedPower);
+        SetPowerForCombat128(power, savedPower);
     }
 
 
@@ -7896,30 +7896,27 @@ void Player::_SaveStats(CharacterDatabaseTransaction trans)
     stmt->SetData(0, GetGUID().GetCounter());
     trans->Append(stmt);
 
-    auto toUInt64Stat = [](double value) -> uint64
+    auto toUInt128Stat = [](double value) -> uint128
     {
         if (value <= 0.0)
             return 0;
 
-        if (value > static_cast<double>(std::numeric_limits<uint64>::max()))
-            return std::numeric_limits<uint64>::max();
-
-        return static_cast<uint64>(value);
+        return Acore::Number::ToUInt128Saturated(static_cast<long double>(value));
     };
 
     uint8 index = 0;
 
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHAR_STATS);
     stmt->SetData(index++, GetGUID().GetCounter());
-    stmt->SetData(index++, GetExtendedMaxHealth());
+    stmt->SetData(index++, GetExtendedMaxHealth128());
 
     for (uint8 i = 0; i < MAX_POWERS; ++i)
-        stmt->SetData(index++, GetExtendedMaxPower(Powers(i)));
+        stmt->SetData(index++, GetExtendedMaxPower128(Powers(i)));
 
     for (uint8 i = 0; i < MAX_STATS; ++i)
-        stmt->SetData(index++, GetExtendedStat(Stats(i)));
+        stmt->SetData(index++, GetExtendedStat128(Stats(i)));
 
-    stmt->SetData(index++, GetExtendedArmor());
+    stmt->SetData(index++, GetExtendedArmor128());
     for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
         stmt->SetData(index++, GetResistance(SpellSchools(i)));
 
@@ -7929,9 +7926,9 @@ void Player::_SaveStats(CharacterDatabaseTransaction trans)
     stmt->SetData(index++, GetFloatValue(PLAYER_CRIT_PERCENTAGE));
     stmt->SetData(index++, GetFloatValue(PLAYER_RANGED_CRIT_PERCENTAGE));
     stmt->SetData(index++, GetFloatValue(PLAYER_SPELL_CRIT_PERCENTAGE1));
-    stmt->SetData(index++, toUInt64Stat(GetExtendedTotalAttackPowerValue(BASE_ATTACK)));
-    stmt->SetData(index++, toUInt64Stat(GetExtendedTotalAttackPowerValue(RANGED_ATTACK)));
-    stmt->SetData(index++, GetBaseSpellPowerBonus());
+    stmt->SetData(index++, toUInt128Stat(GetExtendedTotalAttackPowerValue(BASE_ATTACK)));
+    stmt->SetData(index++, toUInt128Stat(GetExtendedTotalAttackPowerValue(RANGED_ATTACK)));
+    stmt->SetData(index++, GetBaseSpellPowerBonus128());
     stmt->SetData(index++, GetExtendedCombatRating(CR_CRIT_TAKEN_SPELL));
 
     trans->Append(stmt);

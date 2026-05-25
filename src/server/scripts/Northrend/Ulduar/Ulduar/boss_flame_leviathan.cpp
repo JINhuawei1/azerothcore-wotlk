@@ -1908,7 +1908,7 @@ class spell_shield_generator_aura : public AuraScript
 
     void Absorb(AuraEffect* /*aurEff*/, DamageInfo& dmgInfo, uint32& absorbAmount)
     {
-        absorbAmount = CalculatePct(dmgInfo.GetDamage(), _absorbPct);
+        absorbAmount = ToUInt32Damage(CalculatePct(dmgInfo.GetDamage(), _absorbPct));
     }
 
     void Register() override

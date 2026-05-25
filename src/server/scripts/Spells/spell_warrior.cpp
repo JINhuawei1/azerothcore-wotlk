@@ -266,7 +266,7 @@ class spell_warr_deep_wounds : public SpellScript
         if (Unit* target = GetHitUnit())
         {
             // include target dependant auras
-            damage = target->MeleeDamageBonusTaken(caster, damage, BASE_ATTACK, GetSpellInfo());
+            damage = Acore::Number::ToUInt64Saturated(target->MeleeDamageBonusTaken(caster, damage, BASE_ATTACK, GetSpellInfo()));
             // apply percent damage mods
             damage = SpellScriptCombat::CalculatePctUInt64(damage, 16.0L * static_cast<long double>(GetSpellInfo()->GetRank()) / 6.0L);
             target->CastDelayedSpellWithPeriodicAmount(caster, SPELL_WARRIOR_DEEP_WOUNDS_RANK_PERIODIC, SPELL_AURA_PERIODIC_DAMAGE, SpellScriptCombat::ToClientSpellValue(static_cast<long double>(damage)), EFFECT_0);
@@ -450,7 +450,7 @@ class spell_warr_concussion_blow : public SpellScript
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
-        SetHitDamage(SpellScriptCombat::ToInt64Saturated(SpellScriptCombat::PercentOf(SpellScriptCombat::GetAttackPower(GetCaster(), BASE_ATTACK), static_cast<long double>(GetEffectValue()))));
+        SetHitDamage128(Acore::Number::ToUInt128Saturated(SpellScriptCombat::PercentOf(SpellScriptCombat::GetAttackPower(GetCaster(), BASE_ATTACK), static_cast<long double>(GetEffectValue()))));
     }
 
     void Register() override
@@ -471,14 +471,14 @@ class spell_warr_bloodthirst : public SpellScript
 
     void HandleDamage(SpellEffIndex effIndex)
     {
-        uint64 damage = SpellScriptCombat::ToUInt64Saturated(SpellScriptCombat::PercentOf(static_cast<long double>(GetEffectValue()), SpellScriptCombat::GetAttackPower(GetCaster(), BASE_ATTACK)));
+        uint128 damage = Acore::Number::ToUInt128Saturated(SpellScriptCombat::PercentOf(static_cast<long double>(GetEffectValue()), SpellScriptCombat::GetAttackPower(GetCaster(), BASE_ATTACK)));
 
         if (Unit* target = GetHitUnit())
         {
             damage = GetCaster()->SpellDamageBonusDone(target, GetSpellInfo(), damage, SPELL_DIRECT_DAMAGE, effIndex);
             damage = target->SpellDamageBonusTaken(GetCaster(), GetSpellInfo(), damage, SPELL_DIRECT_DAMAGE);
         }
-        SetHitDamage(damage > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(damage));
+        SetHitDamage128(damage);
     }
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
@@ -966,8 +966,8 @@ class spell_warr_heroic_strike : public SpellScript
         }
         if (bonusDamage)
         {
-            int64 damage = SpellScriptCombat::AddPctInt64Saturated(GetHitDamage(), 35); // "Causes ${0.35*$m1} additional damage against Dazed targets."
-            SetHitDamage(damage);
+            uint128 damage = GetHitDamage128();
+            SetHitDamage128(AddUInt128Damage(damage, Acore::Number::CalculatePct(damage, 35))); // "Causes ${0.35*$m1} additional damage against Dazed targets."
         }
     }
 

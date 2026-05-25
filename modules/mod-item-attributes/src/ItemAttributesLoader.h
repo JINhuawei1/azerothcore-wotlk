@@ -17,8 +17,8 @@ struct ItemAttributeTemplate
     uint32 group;               // 属性组，用于分类属性
     uint32 attributeType;       // 属性类型，决定属性的效果
     uint32 chance;              // 随机生成时的获取几率，1-100
-    int32 minPercent;           // 属性值的最小百分比
-    int32 maxPercent;           // 属性值的最大百分比
+    int128 minPercent;          // 属性值的最小百分比
+    int128 maxPercent;          // 属性值的最大百分比
     uint32 calcType;            // 0=常规值 1=乘以物品等级 2=固定值
     uint32 skillGroup;          // 用于技能相关属性
     uint32 qualityRequirement;  // 物品最低品质要求，0=全部
@@ -66,19 +66,19 @@ public:
     std::vector<ItemAttributeTemplate const*> GetAllItemAttributeTemplates() const;
 
     // 物品属性应用和移除
-    ItemAttributeResult ApplyAttributeToItem(Item* item, uint32 attributeId, Player* player = nullptr, AttributeCategory category = AttributeCategory::ADDITIONAL, int32 minValue = 0, int32 maxValue = 0);
+    ItemAttributeResult ApplyAttributeToItem(Item* item, uint32 attributeId, Player* player = nullptr, AttributeCategory category = AttributeCategory::ADDITIONAL, int128 minValue = 0, int128 maxValue = 0);
     ItemAttributeResult RemoveAttributeFromItem(Item* item, uint32 attributeId);
 
     // 物品属性检查
     bool HasAttribute(Item* item, uint32 attributeId) const;
     bool HasAttributeByType(Item* item, uint32 attributeType) const;  // 根据属性类型检查
-    bool GetItemAttributesWithValues(Item* item, std::vector<uint32>& attributes, std::vector<int32>& values, uint32* itemId = nullptr) const;
+    bool GetItemAttributesWithValues(Item* item, std::vector<uint32>& attributes, std::vector<int128>& values, uint32* itemId = nullptr) const;
     std::vector<uint32> GetItemAttributes(Item* item) const;
-    std::vector<int32> GetItemAttributeValues(Item* item) const;
+    std::vector<int128> GetItemAttributeValues(Item* item) const;
 
     // 物品属性计算
-    int32 CalculateAttributeValue(Item* item, ItemAttributeTemplate const* attributeTemplate) const;
-    int32 CalculateAttributeValueWithRange(Item* item, ItemAttributeTemplate const* attributeTemplate, int32 minValue, int32 maxValue) const;
+    int128 CalculateAttributeValue(Item* item, ItemAttributeTemplate const* attributeTemplate) const;
+    int128 CalculateAttributeValueWithRange(Item* item, ItemAttributeTemplate const* attributeTemplate, int128 minValue, int128 maxValue) const;
 
     // 【审计修复】移除未实现的 SaveItemAttributeValues 声明
     // 属性值保存已通过 ItemAttributesDBHelper 实现

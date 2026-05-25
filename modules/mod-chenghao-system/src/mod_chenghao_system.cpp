@@ -136,7 +136,8 @@ public:
         _playerTitles[playerGuid].clear();
 
         QueryResult result = CharacterDatabase.Query(
-            "SELECT `称号ID`, `称号等级`, `光环技能id` FROM `_玩家称号系统` WHERE `玩家GUID` = {}",
+            "SELECT `称号ID`, `称号等级`, `光环技能id` FROM `_玩家称号系统` WHERE `玩家GUID` = {} "
+            "ORDER BY `称号等级` DESC, `称号ID` ASC LIMIT 1",
             playerGuid);
 
         if (!result)
@@ -228,11 +229,22 @@ public:
         if (!player)
             return false;
 
+        ChenghaoSystemEntry const* entry = GetEntryById(titleId);
+        if (!entry)
+            return false;
+
         auto playerIt = _playerTitles.find(player->GetGUID().GetCounter());
         if (playerIt == _playerTitles.end())
             return false;
 
-        return playerIt->second.find(titleId) != playerIt->second.end();
+        for (auto const& [storedTitleId, state] : playerIt->second)
+        {
+            (void)storedTitleId;
+            if (state.titleLevel >= entry->titleLevel)
+                return true;
+        }
+
+        return false;
     }
 
     bool HasUnlockedTitleLevel(Player* player, uint32 titleLevel) const
@@ -247,7 +259,7 @@ public:
         for (auto const& [titleId, state] : playerIt->second)
         {
             (void)titleId;
-            if (state.titleLevel == titleLevel)
+            if (state.titleLevel >= titleLevel)
                 return true;
         }
 
@@ -353,7 +365,7 @@ public:
 
         uint32 playerGuid = player->GetGUID().GetCounter();
         auto& playerTitles = _playerTitles[playerGuid];
-        if (playerTitles.find(titleId) != playerTitles.end())
+        if (IsPlayerUnlocked(player, titleId))
         {
             if (failureMessage)
                 *failureMessage = "该称号已经激活";
@@ -367,14 +379,16 @@ public:
         state.titleLevel = entry->titleLevel;
         state.auraSpellId = entry->auraSpellId;
 
-        CharacterDatabase.Execute(
-            "REPLACE INTO `_玩家称号系统` (`玩家GUID`, `称号ID`, `称号等级`, `光环技能id`) "
-            "VALUES ({}, {}, {}, {})",
+        CharacterDatabase.DirectExecute(
+            "INSERT INTO `_玩家称号系统` (`玩家GUID`, `称号ID`, `称号等级`, `光环技能id`) "
+            "VALUES ({}, {}, {}, {}) "
+            "ON DUPLICATE KEY UPDATE `称号ID` = VALUES(`称号ID`), `称号等级` = VALUES(`称号等级`), `光环技能id` = VALUES(`光环技能id`)",
             playerGuid,
             titleId,
             state.titleLevel,
             state.auraSpellId);
 
+        playerTitles.clear();
         playerTitles[titleId] = state;
 
         ReapplyPlayerAuras(player);

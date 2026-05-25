@@ -79,7 +79,7 @@ struct AscensionSlotData
 struct AppliedStatEffect
 {
     uint32 statType;
-    int64 statValue;
+    int128 statValue;
 };
 
 // 玩家飞升状态
@@ -181,8 +181,8 @@ private:
     void RemoveAscensionItemSets(Player* player);
     bool ApplyAscensionItemSet(Player* player, uint32 itemSetId, uint32 itemCount);
     void RemoveAscensionItemSet(Player* player, uint32 itemSetId, uint32 itemCount);
-    void ApplyEnchantStatMod(Player* player, uint32 statType, int64 amount, bool apply);
-    void RemoveStatEffect(Player* player, uint32 statType, int64 statValue);
+    void ApplyEnchantStatMod(Player* player, uint32 statType, int128 const& amount, bool apply);
+    void RemoveStatEffect(Player* player, uint32 statType, int128 statValue);
     void UpdatePlayerStats(Player* player);
 
     std::map<uint8, AscensionSlotControl> _slotControls;

@@ -40,8 +40,8 @@ struct PromotionConfig
     bool        debugLog        = false;
 
     uint32      weaponEntry     = 997001;
-    int32       baseAttrValue   = 1999;
-    int32       perDayAttrValue = 1000;
+    int128      baseAttrValue   = 1999;
+    int128      perDayAttrValue = 1000;
 
     uint32      groupId         = 9001;
     uint32      requireId       = 0;
@@ -76,7 +76,7 @@ public:
     bool IssueCodes(uint32 targetGuid, std::string const& targetName,
                     uint32 count, std::vector<std::string>& outCodes, std::string& errMsg);
 
-    int32 CalcTotalAttr(uint32 days) const;
+    int128 CalcTotalAttr(uint32 days) const;
 
     uint32 GetWeaponLevelForDays(uint32 days) const;
     uint32 GetWeaponEntryForLevel(uint32 level) const;

@@ -14,6 +14,7 @@
 #include "Opcodes.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "StringConvert.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSessionMgr.h"
@@ -60,8 +61,8 @@ void PromotionRewardMgr::LoadConfig()
 
     Field* f = r->Fetch();
     _cfg.weaponEntry     = f[0].Get<uint32>();
-    _cfg.baseAttrValue   = f[1].Get<int32>();
-    _cfg.perDayAttrValue = f[2].Get<int32>();
+    _cfg.baseAttrValue   = f[1].Get<int128>();
+    _cfg.perDayAttrValue = f[2].Get<int128>();
     _cfg.groupId         = f[3].Get<uint32>();
     _cfg.requireId       = f[4].Get<uint32>();
     _cfg.rewardId        = f[5].Get<uint32>();
@@ -188,12 +189,12 @@ bool PromotionRewardMgr::IssueCodes(uint32 targetGuid, std::string const& target
     return true;
 }
 
-int32 PromotionRewardMgr::CalcTotalAttr(uint32 days) const
+int128 PromotionRewardMgr::CalcTotalAttr(uint32 days) const
 {
     uint32 level = GetWeaponLevelForDays(days);
     if (level == 0)
         return 0;
-    return _cfg.baseAttrValue + int32(level - 1) * _cfg.perDayAttrValue;
+    return _cfg.baseAttrValue + (static_cast<int128>(level - 1) * _cfg.perDayAttrValue);
 }
 
 uint32 PromotionRewardMgr::GetWeaponLevelForDays(uint32 days) const
@@ -510,33 +511,33 @@ void PromotionRewardMgr::SendInfoToClient(Player* player)
     if (PromotionPlayerData* d = GetPlayerData(player->GetGUID().GetCounter()))
         days = d->days;
 
-    int32 attr   = CalcTotalAttr(days);
+    int128 attr  = CalcTotalAttr(days);
     bool  hold   = IsWeaponHeld(player);
     uint32 currentLevel = GetWeaponLevelForDays(days);
     uint32 nextLevel = days >= PROMO_WEAPON_MAX_LEVEL ? PROMO_WEAPON_MAX_LEVEL : days + 1;
     uint32 currentWeapon = GetWeaponEntryForLevel(currentLevel);
     uint32 nextWeapon = GetNextWeaponEntry(days);
-    int32 currentMinDmg = currentLevel == 0 ? 0 : CalcTotalAttr(currentLevel);
-    int32 currentMaxDmg = currentLevel == 0 ? 0 : currentMinDmg + _cfg.perDayAttrValue;
-    int32 nextAttr = CalcTotalAttr(nextLevel);
-    int32 nextMinDmg = nextAttr;
-    int32 nextMaxDmg = nextAttr + _cfg.perDayAttrValue;
+    int128 currentMinDmg = currentLevel == 0 ? 0 : CalcTotalAttr(currentLevel);
+    int128 currentMaxDmg = currentLevel == 0 ? 0 : currentMinDmg + _cfg.perDayAttrValue;
+    int128 nextAttr = CalcTotalAttr(nextLevel);
+    int128 nextMinDmg = nextAttr;
+    int128 nextMaxDmg = nextAttr + _cfg.perDayAttrValue;
 
     std::ostringstream o;
     o << "INFO:" << days
-      << '|' << attr
+      << '|' << Acore::ToString(attr)
       << '|' << currentWeapon
-      << '|' << _cfg.baseAttrValue
-      << '|' << _cfg.perDayAttrValue
+      << '|' << Acore::ToString(_cfg.baseAttrValue)
+      << '|' << Acore::ToString(_cfg.perDayAttrValue)
       << '|' << (hold ? 1 : 0)
       << '|' << nextWeapon
       << '|' << currentLevel
       << '|' << nextLevel
-      << '|' << nextAttr
-      << '|' << currentMinDmg
-      << '|' << currentMaxDmg
-      << '|' << nextMinDmg
-      << '|' << nextMaxDmg;
+      << '|' << Acore::ToString(nextAttr)
+      << '|' << Acore::ToString(currentMinDmg)
+      << '|' << Acore::ToString(currentMaxDmg)
+      << '|' << Acore::ToString(nextMinDmg)
+      << '|' << Acore::ToString(nextMaxDmg);
     SendAddonMsg(player, o.str());
 }
 

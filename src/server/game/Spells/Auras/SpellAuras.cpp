@@ -69,6 +69,18 @@ namespace
         return static_cast<int32>(value);
     }
 
+    int32 CalculatePctInt32Saturated(uint128 const& base, float pct)
+    {
+        if (base == 0 || pct <= 0.0f)
+            return 0;
+
+        long double value = Acore::Number::ToLongDouble(base) * static_cast<long double>(pct) / 100.0L;
+        if (value >= static_cast<long double>(std::numeric_limits<int32>::max()))
+            return std::numeric_limits<int32>::max();
+
+        return static_cast<int32>(value);
+    }
+
     uint64 CalculatePctUInt64Saturated(uint64 base, float pct)
     {
         if (!base || pct <= 0.0f)
@@ -98,8 +110,8 @@ namespace
 
         caster->SetLastDamagedTargetGuid(target->GetGUID());
 
-        rawDamage = caster->SpellDamageBonusDone(target, spellInfo, rawDamage, SPELL_DIRECT_DAMAGE, EFFECT_0);
-        rawDamage = target->SpellDamageBonusTaken(caster, spellInfo, rawDamage, SPELL_DIRECT_DAMAGE);
+        rawDamage = Acore::Number::ToUInt64Saturated(caster->SpellDamageBonusDone(target, spellInfo, rawDamage, SPELL_DIRECT_DAMAGE, EFFECT_0));
+        rawDamage = Acore::Number::ToUInt64Saturated(target->SpellDamageBonusTaken(caster, spellInfo, rawDamage, SPELL_DIRECT_DAMAGE));
 
         SpellNonMeleeDamage damageInfo(caster, target, spellInfo, spellInfo->GetSchoolMask());
         caster->CalculateSpellDamageTaken(&damageInfo, rawDamage, spellInfo);
@@ -904,7 +916,7 @@ void Aura::Update(uint32 diff, Unit* caster)
                     Powers powertype = Powers(m_spellInfo->PowerType);
                     if (powertype == POWER_HEALTH)
                     {
-                        if (caster->GetHealthForCombat() > static_cast<uint64>(ManaPerSecond))
+                        if (caster->GetHealthForCombat128() > static_cast<uint128>(ManaPerSecond))
                             caster->ModifyHealth(-ManaPerSecond);
                         else
                         {
@@ -914,7 +926,7 @@ void Aura::Update(uint32 diff, Unit* caster)
                     }
                     else
                     {
-                        if (caster->GetPowerForCombat(powertype) >= static_cast<uint64>(ManaPerSecond))
+                        if (caster->GetPowerForCombat128(powertype) >= static_cast<uint128>(ManaPerSecond))
                             caster->ModifyPower64(powertype, -ManaPerSecond);
                         else
                         {
@@ -1570,7 +1582,7 @@ void Aura::HandleAuraSpecificMods(AuraApplication const* aurApp, Unit* caster, b
                     if (AuraEffect const* aurEff = caster->GetDummyAuraEffect(SPELLFAMILY_PRIEST, 3790, 1))
                     {
                         uint64 damage = GetEffect(0)->GetAmountForCombat();
-                        damage = target->SpellDamageBonusTaken(caster, GetSpellInfo(), damage, DOT);
+                        damage = Acore::Number::ToUInt64Saturated(target->SpellDamageBonusTaken(caster, GetSpellInfo(), damage, DOT));
                         uint32 totalTicks = std::max<int32>(GetEffect(0)->GetTotalTicks(), 1);
                         uint64 totalDamage = damage > std::numeric_limits<uint64>::max() / totalTicks ? std::numeric_limits<uint64>::max() : damage * totalTicks;
                         uint64 improvedDamage = CalculatePctUInt64Saturated(totalDamage, static_cast<float>(aurEff->GetAmount()));
@@ -1838,7 +1850,7 @@ void Aura::HandleAuraSpecificMods(AuraApplication const* aurApp, Unit* caster, b
                             else if (aurEff->GetId() == 47537)
                                 multiplier += 0.5f;
 
-                            int32 basepoints0 = CalculatePctInt32Saturated(caster->GetMaxPowerForCombat(POWER_MANA), multiplier);
+                            int32 basepoints0 = CalculatePctInt32Saturated(caster->GetMaxPowerForCombat128(POWER_MANA), multiplier);
                             caster->CastCustomSpell(caster, 47755, &basepoints0, nullptr, nullptr, true);
                         }
                         // effect on aura target
@@ -1852,7 +1864,7 @@ void Aura::HandleAuraSpecificMods(AuraApplication const* aurApp, Unit* caster, b
                             {
                                 case POWER_MANA:
                                     {
-                                        int32 basepoints0 = CalculatePctInt32Saturated(target->GetMaxPowerForCombat(POWER_MANA), 2.0f);
+                                        int32 basepoints0 = CalculatePctInt32Saturated(target->GetMaxPowerForCombat128(POWER_MANA), 2.0f);
                                         caster->CastCustomSpell(target, 63654, &basepoints0, nullptr, nullptr, true);
                                         break;
                                     }

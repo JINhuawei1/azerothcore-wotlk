@@ -633,7 +633,7 @@ class spell_oculus_temporal_rift_aura : public AuraScript
             return;
         }
 
-        int32 amount = aurEff->GetAmount() + damageInfo->GetDamage();
+        int32 amount = aurEff->GetAmount() + Acore::Number::ToInt32Saturated(Acore::Number::ToInt128Saturated(damageInfo->GetDamage()));
 
         uint8 num = amount / 15000;
         if (amount >= 15000)

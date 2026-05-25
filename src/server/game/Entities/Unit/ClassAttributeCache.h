@@ -16,23 +16,23 @@ constexpr uint8 CLASS_ATTR_MAX_CLASSES = 12;
 struct ClassAttributeData
 {
     // 属性上限
-    uint64 力量上限 = 0;
-    uint64 敏捷上限 = 0;
-    uint64 耐力上限 = 0;
-    uint64 智力上限 = 0;
-    uint64 精神上限 = 0;
+    uint128 力量上限 = 0;
+    uint128 敏捷上限 = 0;
+    uint128 耐力上限 = 0;
+    uint128 智力上限 = 0;
+    uint128 精神上限 = 0;
 
     // 生命/法力
-    uint64 血量上限 = 0;
-    uint64 法力上限 = 0;
+    uint128 血量上限 = 0;
+    uint128 法力上限 = 0;
 
     // 护甲
-    uint64 护甲上限 = 0;
+    uint128 护甲上限 = 0;
 
     // 伤害上限
-    float 主手伤害上限 = 0.0f;
-    float 副手伤害上限 = 0.0f;
-    float 远程伤害上限 = 0.0f;
+    uint128 主手伤害上限 = 0;
+    uint128 副手伤害上限 = 0;
+    uint128 远程伤害上限 = 0;
 
     // 转换率
     float 耐力转生命转换率 = 0.0f;  // 百分比值，0表示未配置
@@ -42,9 +42,9 @@ struct ClassAttributeData
 
     // 攻强
     float 攻强倍率 = 0.0f;
-    uint32 攻强上限 = 0;
+    uint128 攻强上限 = 0;
     float 远程攻强倍率 = 0.0f;
-    uint32 远程攻强上限 = 0;
+    uint128 远程攻强上限 = 0;
 
     // 法强/治疗
     float 法强倍率 = 0.0f;
