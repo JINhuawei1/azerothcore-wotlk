@@ -465,10 +465,10 @@ bool TalentSoulMgr::CanUpgradeSpell(Player* player, uint32 spellId, std::string&
         return false;
     }
 
-    // 检查职业限制
-    if (config->classType != 0 && config->classType != player->getClass())
+    // 检查职业限制：跨职业已学会的技能允许继续强化
+    if (config->classType != 0 && config->classType != player->getClass() && !player->HasSpell(spellId))
     {
-        errorMsg = "该技能不适用于你的职业";
+        errorMsg = "该技能不适用于你的职业，且你尚未学会该技能";
         return false;
     }
 
@@ -607,7 +607,7 @@ bool TalentSoulMgr::UpgradePlayerSpellAll(Player* player, uint32 spellId, Talent
     if (!config)
         return false;
 
-    if (config->classType != 0 && config->classType != player->getClass())
+    if (config->classType != 0 && config->classType != player->getClass() && !player->HasSpell(spellId))
         return false;
 
     uint32 maxLevel = GetTalentSoulMaxLevel(*config, upgradeType);

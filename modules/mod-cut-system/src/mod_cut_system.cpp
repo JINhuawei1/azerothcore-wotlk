@@ -666,20 +666,15 @@ void SendCutSystemListToPlayer(Player* player)
     if (!player)
         return;
 
-    std::vector<CutEntry> entries = CutSystemMgr::Instance()->GetEntries();
-    std::sort(entries.begin(), entries.end(), [](CutEntry const& left, CutEntry const& right)
-    {
-        if (left.cutLevel != right.cutLevel)
-            return left.cutLevel < right.cutLevel;
-
-        return left.id < right.id;
-    });
+    uint32 playerCutLevel = CutSystemMgr::Instance()->GetPlayerCutLevel(player->GetGUID().GetCounter());
+    CutEntry const* currentEntry = CutSystemMgr::Instance()->GetMatchedEntry(playerCutLevel);
+    CutEntry const* nextEntry = CutSystemMgr::Instance()->GetEntryByCutLevel(playerCutLevel + 1);
 
     std::ostringstream payload;
     payload << "CT_LIST:";
 
     bool first = true;
-    for (CutEntry const& entry : entries)
+    auto appendEntry = [&](CutEntry const& entry)
     {
         if (!first)
             payload << '~';
@@ -692,7 +687,13 @@ void SendCutSystemListToPlayer(Player* player)
                 << FormatCutDamageValue(entry) << '^'
                 << entry.chance << '^'
                 << SanitizeAddonText(entry.requirementText);
-    }
+    };
+
+    if (currentEntry)
+        appendEntry(*currentEntry);
+
+    if (nextEntry)
+        appendEntry(*nextEntry);
 
     SendCutSystemPayload(player, payload.str());
 }
@@ -704,13 +705,13 @@ void SendCutSystemStateToPlayer(Player* player)
 
     uint32 playerCutLevel = CutSystemMgr::Instance()->GetPlayerCutLevel(player->GetGUID().GetCounter());
     CutEntry const* currentEntry = CutSystemMgr::Instance()->GetMatchedEntry(playerCutLevel);
-    std::vector<CutEntry> const& entries = CutSystemMgr::Instance()->GetEntries();
+    CutEntry const* nextEntry = CutSystemMgr::Instance()->GetEntryByCutLevel(playerCutLevel + 1);
 
     std::ostringstream payload;
     payload << "CT_STATE:" << playerCutLevel << '|' << (currentEntry ? currentEntry->id : 0) << '|';
 
     bool first = true;
-    for (CutEntry const& entry : entries)
+    auto appendState = [&](CutEntry const& entry)
     {
         if (!first)
             payload << '~';
@@ -724,7 +725,13 @@ void SendCutSystemStateToPlayer(Player* player)
                 << (reached ? 1 : 0) << '^'
                 << (current ? 1 : 0) << '^'
                 << (eligible ? 1 : 0);
-    }
+    };
+
+    if (currentEntry)
+        appendState(*currentEntry);
+
+    if (nextEntry)
+        appendState(*nextEntry);
 
     SendCutSystemPayload(player, payload.str());
 }

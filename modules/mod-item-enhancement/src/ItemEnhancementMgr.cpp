@@ -501,10 +501,8 @@ void ItemEnhancementMgr::DeleteAllEnhancementRecordsByPlayer(uint32 playerGuid)
 {
     // 删除指定玩家的所有强化记录
     std::string sql = "DELETE FROM 物品强化_记录 WHERE owner_guid = " + std::to_string(playerGuid);
-    LOG_INFO("server.loading", "强化系统: 执行SQL删除玩家 {} 的强化记录: {}", playerGuid, sql);
     // 【修复】同步执行删除操作
     CharacterDatabase.DirectExecute(sql);
-    LOG_INFO("server.loading", "强化系统: 已删除玩家 {} 的所有强化记录", playerGuid);
 
     // 清理内存缓存
     ClearPlayerRecordCache(playerGuid);

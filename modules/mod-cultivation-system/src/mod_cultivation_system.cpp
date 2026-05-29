@@ -31,6 +31,7 @@
 #include "ModuleManager.h"
 #include "RequirementInterface.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <unordered_map>
@@ -117,6 +118,9 @@ int128 CountPctFromMaxHealthForCultivation(Unit* unit, int32 pct)
 static constexpr const char* CULTIVATION_ADDON_PREFIX = "CULT_SYS";
 static constexpr size_t CULTIVATION_MAX_ADDON_PAYLOAD = 220;
 static constexpr uint64 CULTIVATION_CLIENT_VISIBLE_HEALTH_LIMIT = 2147483520ULL;
+static constexpr uint8 CULTIVATION_DEFERRED_UPDATE_EVENT_GROUP = 41;
+
+void SendCultivationState(Player* player);
 
 static uint32 ToCultivationClientHealth(uint64 value)
 {
@@ -160,6 +164,7 @@ struct PlayerCultivationData
     uint32 level = 0;
     uint32 tribCooldown = 0;
     uint32 tribPassedLevel = 0;
+    float statBonus = 0.0f;
 };
 
 // ============================================
@@ -214,6 +219,7 @@ public:
     {
         uint32 oldMSTime = getMSTime();
         _realmConfigs.clear();
+        _statBonusByLevel.fill(0.0f);
 
         QueryResult result = WorldDatabase.Query(
             "SELECT `境界等级`, `境界名称`, `大境界`, `小境界`, `属性加成百分比`, "
@@ -243,6 +249,19 @@ public:
             _realmConfigs[config.level] = config;
             ++count;
         } while (result->NextRow());
+
+        float totalBonus = 0.0f;
+        for (uint32 level = 1; level < _statBonusByLevel.size(); ++level)
+        {
+            auto cfgItr = _realmConfigs.find(level);
+            if (cfgItr != _realmConfigs.end())
+                totalBonus += cfgItr->second.statBonus;
+
+            _statBonusByLevel[level] = totalBonus;
+        }
+
+        for (auto& pair : _playerData)
+            pair.second.statBonus = GetStatBonusForLevel(pair.second.level);
     }
 
     // 加载技能配置
@@ -296,6 +315,7 @@ public:
         _playerData[guid].level = fields[0].Get<uint32>();
         _playerData[guid].tribCooldown = fields[1].Get<uint32>();
         _playerData[guid].tribPassedLevel = fields[2].Get<uint32>();
+        _playerData[guid].statBonus = GetStatBonusForLevel(_playerData[guid].level);
 
         LOG_DEBUG("module", "修仙系统: 加载玩家 {} 数据，修仙等级: {}",
             player->GetName(), _playerData[guid].level);
@@ -317,6 +337,14 @@ public:
             guid, itr->second.level, itr->second.tribCooldown, itr->second.tribPassedLevel);
     }
 
+    float GetStatBonusForLevel(uint32 level) const
+    {
+        if (level >= _statBonusByLevel.size())
+            level = static_cast<uint32>(_statBonusByLevel.size() - 1);
+
+        return _statBonusByLevel[level];
+    }
+
     // 获取玩家属性加成百分比（累计）
     float GetPlayerStatBonus(uint32 guid) const
     {
@@ -324,14 +352,30 @@ public:
         if (itr == _playerData.end() || itr->second.level == 0)
             return 0.0f;
 
-        float total = 0.0f;
-        for (uint32 i = 1; i <= itr->second.level; ++i)
+        return itr->second.statBonus;
+    }
+
+    void ScheduleDeferredPlayerRefresh(Player* player, bool learnSkills, bool sendState)
+    {
+        if (!player)
+            return;
+
+        ObjectGuid playerGuid = player->GetGUID();
+        player->m_Events.CancelEventGroup(CULTIVATION_DEFERRED_UPDATE_EVENT_GROUP);
+        player->m_Events.AddEventAtOffset([playerGuid, learnSkills, sendState]()
         {
-            auto cfgItr = _realmConfigs.find(i);
-            if (cfgItr != _realmConfigs.end())
-                total += cfgItr->second.statBonus;
-        }
-        return total;
+            Player* owner = ObjectAccessor::FindPlayer(playerGuid);
+            if (!owner)
+                return;
+
+            owner->UpdateAllStats();
+
+            if (learnSkills)
+                CultivationMgr::instance()->LearnAvailableSkills(owner);
+
+            if (sendState)
+                SendCultivationState(owner);
+        }, 100ms, CULTIVATION_DEFERRED_UPDATE_EVENT_GROUP);
     }
 
     // 获取玩家修仙等级
@@ -391,14 +435,15 @@ public:
             return false;
 
         itr->second.level = 1;
+        itr->second.statBonus = GetStatBonusForLevel(itr->second.level);
         SavePlayerData(player);
-        player->UpdateAllStats();
+        ScheduleDeferredPlayerRefresh(player, true, true);
 
         return true;
     }
 
     // 尝试升级
-    bool TryUpgrade(Player* player)
+    bool TryUpgrade(Player* player, bool notifyChat = true, bool sendState = true)
     {
         if (!player)
             return false;
@@ -465,18 +510,17 @@ public:
         itr->second.level = nextLevel;
         if (breakthroughUpgrade)
             itr->second.tribPassedLevel = 0;
+        itr->second.statBonus = GetStatBonusForLevel(nextLevel);
         SavePlayerData(player);
-        player->UpdateAllStats();
-        player->UpdateAllRatings();
+        ScheduleDeferredPlayerRefresh(player, true, sendState);
 
-        // 发送通知
-        float totalBonus = GetPlayerStatBonus(guid);
-        ChatHandler(player->GetSession()).PSendSysMessage(
-            "|cff00ff00[修仙系统]|r 修炼成功！当前境界: |cffffd700{}|r，全属性加成: |cff00ffff{:.1f}%|r",
-            nextCfgItr->second.name, totalBonus);
-
-        // 检查是否解锁了新技能
-        LearnAvailableSkills(player);
+        if (notifyChat)
+        {
+            float totalBonus = GetPlayerStatBonus(guid);
+            ChatHandler(player->GetSession()).PSendSysMessage(
+                "|cff00ff00[修仙系统]|r 修炼成功！当前境界: |cffffd700{}|r，全属性加成: |cff00ffff{:.1f}%|r",
+                nextCfgItr->second.name, totalBonus);
+        }
 
         return true;
     }
@@ -648,12 +692,9 @@ public:
         }
 
         itr->second.level = level;
+        itr->second.statBonus = GetStatBonusForLevel(level);
         SavePlayerData(player);
-        player->UpdateAllStats();
-        player->UpdateAllRatings();
-
-        if (level > 0)
-            LearnAvailableSkills(player);
+        ScheduleDeferredPlayerRefresh(player, level > 0, true);
 
         return true;
     }
@@ -676,6 +717,7 @@ private:
     ~CultivationMgr() = default;
 
     std::unordered_map<uint32, CultivationRealmConfig> _realmConfigs;
+    std::array<float, 101> _statBonusByLevel = {};
     std::vector<CultivationSkillConfig> _skillConfigs;
     std::unordered_map<uint32, PlayerCultivationData> _playerData;
     std::unordered_map<uint32, uint32> _tribBosses; // bossGuid → playerGuid
@@ -858,17 +900,12 @@ void SendCultivationAllData(Player* player)
 #define CULT_SPELL_YUFENG       371001
 #define CULT_SPELL_LINGREN      371002
 #define CULT_SPELL_JINDAN       371003
-#define CULT_SPELL_YUANYING     371004
 #define CULT_SPELL_TIANLEI      371005
 #define CULT_SPELL_SHUNYING     371006
 #define CULT_SPELL_WANJIAN      371007
 #define CULT_SPELL_TUNTIAN      371008
 #define CULT_SPELL_JIUTIAN      371009
 #define CULT_SPELL_XIANSHEN     371010
-
-// 元婴出窍 - 分身GUID映射（前向声明，供PlayerScript使用）
-#define CULTIVATION_MIRROR_IMAGE_ENTRY 31216
-static std::unordered_map<uint32, ObjectGuid> _mirrorImageGuids;
 
 // ============================================
 // WorldScript - 延迟加载
@@ -955,7 +992,6 @@ public:
         uint32 level = sCultivationMgr->GetPlayerLevel(guid);
 
         player->UpdateAllStats();
-        player->UpdateAllRatings();
 
         if (level > 0)
         {
@@ -971,23 +1007,13 @@ public:
         }
     }
 
-    // 登出时保存 + 清理分身
+    // 登出时保存
     void OnPlayerLogout(Player* player) override
     {
         if (!player || !sConfigMgr->GetOption("Cultivation.Enable", true))
             return;
 
-        // 清理元婴分身
         uint32 guid = player->GetGUID().GetCounter();
-        auto itr = _mirrorImageGuids.find(guid);
-        if (itr != _mirrorImageGuids.end())
-        {
-            Creature* mirror = ObjectAccessor::GetCreature(*player, itr->second);
-            if (mirror && mirror->IsAlive())
-                mirror->DespawnOrUnsummon();
-            _mirrorImageGuids.erase(itr);
-        }
-
         sCultivationMgr->SavePlayerData(player);
         sCultivationMgr->OnPlayerLogout(guid);
     }
@@ -1038,7 +1064,6 @@ public:
 
         if (command == "REQ_STATE")
         {
-            sCultivationMgr->LoadPlayerData(player);
             SendCultivationState(player);
             return;
         }
@@ -1052,9 +1077,8 @@ public:
         if (command == "UPG")
         {
             uint32 guid = player->GetGUID().GetCounter();
-            uint32 oldLevel = sCultivationMgr->GetPlayerLevel(guid);
 
-            bool success = sCultivationMgr->TryUpgrade(player);
+            bool success = sCultivationMgr->TryUpgrade(player, false, false);
 
             if (success)
             {
@@ -1669,106 +1693,6 @@ class spell_cultivation_jindanbao : public SpellScript
 };
 
 // ============================================
-// 371004 元婴出窍 - 召唤分身
-// 60%属性的永久分身，同时只能1个
-// ============================================
-
-class spell_cultivation_yuanying : public SpellScript
-{
-    PrepareSpellScript(spell_cultivation_yuanying);
-
-    SpellCastResult CheckCast()
-    {
-        Unit* caster = GetCaster();
-        if (!caster || !caster->ToPlayer())
-            return SPELL_FAILED_BAD_TARGETS;
-
-        uint32 guid = caster->GetGUID().GetCounter();
-        auto itr = _mirrorImageGuids.find(guid);
-        if (itr != _mirrorImageGuids.end())
-        {
-            Creature* oldMirror = ObjectAccessor::GetCreature(*caster, itr->second);
-            if (oldMirror && oldMirror->IsAlive())
-                oldMirror->DespawnOrUnsummon();
-            _mirrorImageGuids.erase(itr);
-        }
-
-        return SPELL_CAST_OK;
-    }
-
-    void HandleAfterCast()
-    {
-        Unit* caster = GetCaster();
-        if (!caster)
-            return;
-
-        Player* player = caster->ToPlayer();
-        if (!player)
-            return;
-
-        float x, y, z, o;
-        player->GetPosition(x, y, z, o);
-        x += 3.0f * cos(o);
-        y += 3.0f * sin(o);
-
-        if (Creature* mirror = player->SummonCreature(CULTIVATION_MIRROR_IMAGE_ENTRY, x, y, z, o,
-            TEMPSUMMON_DEAD_DESPAWN, 0))
-        {
-            mirror->SetOwnerGUID(player->GetGUID());
-            mirror->SetCreatorGUID(player->GetGUID());
-            mirror->SetFaction(player->GetFaction());
-            mirror->SetLevel(player->GetLevel());
-            mirror->SetDisplayId(player->GetDisplayId());
-            mirror->SetNativeDisplayId(player->GetDisplayId());
-            mirror->SetObjectScale(player->GetObjectScale());
-            mirror->SetReactState(REACT_AGGRESSIVE);
-
-            float healthPct = 0.6f;
-            uint128 playerHP = player->GetMaxHealthForCombat128();
-            uint128 mirrorHP = Acore::Number::ToUInt128Saturated(Acore::Number::ToLongDouble(playerHP) * static_cast<long double>(healthPct));
-            uint32 clientMirrorHP = ToCultivationClientHealth(mirrorHP);
-            mirror->SetMaxHealth(clientMirrorHP);
-            if (mirrorHP > clientMirrorHP)
-            {
-                mirror->SetExtendedMaxHealth(mirrorHP);
-                mirror->SetExtendedHealth(mirrorHP);
-                mirror->SyncClientHealthFromExtended();
-            }
-            else
-                mirror->SetHealth(clientMirrorHP);
-
-            double ap = player->GetExtendedTotalAttackPowerValue(BASE_ATTACK) * static_cast<double>(healthPct);
-            float minDmg = static_cast<float>(std::min<double>(ap / 14.0 * 2.0, std::numeric_limits<float>::max()));
-            float maxDmg = minDmg * 1.2f;
-            mirror->SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, minDmg);
-            mirror->SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, maxDmg);
-            mirror->UpdateDamagePhysical(BASE_ATTACK);
-
-            if (Unit* playerTarget = player->GetSelectedUnit())
-            {
-                if (playerTarget->IsHostileTo(player))
-                {
-                    mirror->AI()->AttackStart(playerTarget);
-                    mirror->Attack(playerTarget, true);
-                    mirror->GetMotionMaster()->MoveChase(playerTarget);
-                }
-            }
-
-            _mirrorImageGuids[player->GetGUID().GetCounter()] = mirror->GetGUID();
-
-            ChatHandler(player->GetSession()).PSendSysMessage(
-                "|cff00ff00[修仙系统]|r 元婴出窍！分身已召唤。");
-        }
-    }
-
-    void Register() override
-    {
-        OnCheckCast += SpellCheckCastFn(spell_cultivation_yuanying::CheckCast);
-        AfterCast += SpellCastFn(spell_cultivation_yuanying::HandleAfterCast);
-    }
-};
-
-// ============================================
 // 371005 天雷诀 - 15码AOE + 眩晕1.5秒
 // 法强×250%
 // ============================================
@@ -2054,10 +1978,6 @@ public:
             int32 newDuration = std::min(currentDuration + 3 * IN_MILLISECONDS, maxDuration);
             xianshenAura->SetDuration(newDuration);
             xianshenAura->SetMaxDuration(std::max(xianshenAura->GetMaxDuration(), newDuration));
-
-            ChatHandler(player->GetSession()).PSendSysMessage(
-                "|cffffd700[仙神降世]|r 击杀敌人！持续时间延长3秒（剩余: {}秒）",
-                newDuration / IN_MILLISECONDS);
         }
     }
 };
@@ -2075,7 +1995,6 @@ void AddSC_mod_cultivation_system()
     // 仙术技能脚本
     RegisterSpellScript(spell_cultivation_lingren);       // 371002 灵刃术
     RegisterSpellScript(spell_cultivation_jindanbao);      // 371003 金丹爆
-    RegisterSpellScript(spell_cultivation_yuanying);       // 371004 元婴出窍
     RegisterSpellScript(spell_cultivation_tianlei);        // 371005 天雷诀
     RegisterSpellScript(spell_cultivation_shunying);       // 371006 瞬影步
     RegisterSpellScript(spell_cultivation_wanjian_aura);   // 371007 万剑归宗

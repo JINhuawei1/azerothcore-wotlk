@@ -1143,7 +1143,6 @@ void ItemRecycleScript::DeletePlayerRecycleSettings(uint32 playerGuid)
         // 从数据库中删除玩家设置
         CharacterDatabase.Execute("DELETE FROM `物品_回收玩家配置` WHERE `玩家GUID` = {}", playerGuid);
 
-        LOG_INFO("server.loading", "物品回收: 已删除玩家 {} 的所有回收配置数据", playerGuid);
     }
     catch (std::exception& e)
     {
@@ -1253,7 +1252,6 @@ void ItemRecyclePlayerScript::OnPlayerDelete(ObjectGuid guid, uint32 accountId)
     // 删除该角色的所有回收配置数据
     ItemRecycleScript::DeletePlayerRecycleSettings(playerGuid);
 
-    LOG_INFO("server.loading", "物品回收: 角色删除事件 - 已清理玩家 {} (账户 {}) 的回收配置数据", playerGuid, accountId);
 }
 
 // ItemRecycle_Worldscript 类的实现

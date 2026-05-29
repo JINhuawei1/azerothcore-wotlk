@@ -77,6 +77,23 @@ static uint32 GetUpgradeMaxLevel(TalentSoulData const* config, TalentSoulUpgrade
     }
 }
 
+static char const* GetUpgradeFailReason(std::string const& errorMsg)
+{
+    if (errorMsg.find("尚未学会") != std::string::npos)
+        return "SPELL_NOT_LEARNED";
+
+    if (errorMsg.find("天赋点不足") != std::string::npos)
+        return "NOT_ENOUGH_POINTS";
+
+    if (errorMsg.find("职业") != std::string::npos)
+        return "WRONG_CLASS";
+
+    if (errorMsg.find("没有配置") != std::string::npos)
+        return "CONFIG_NOT_FOUND";
+
+    return "SYSTEM_ERROR";
+}
+
 class TalentSoulCommandScript : public CommandScript
 {
 public:
@@ -824,7 +841,7 @@ private:
         {
             // 发送失败响应
             std::ostringstream failResponse;
-            failResponse << "TALENTSOUL_UPGRADE_FAIL:" << spellId << ":" << upgradeType << ":NOT_ENOUGH_POINTS";
+            failResponse << "TALENTSOUL_UPGRADE_FAIL:" << spellId << ":" << upgradeType << ":" << GetUpgradeFailReason(errorMsg);
             SendAddonMessage(player, failResponse.str());
             return;
         }
@@ -894,6 +911,15 @@ private:
         {
             std::ostringstream failResponse;
             failResponse << "TALENTSOUL_UPGRADE_FAIL:" << spellId << ":" << upgradeType << ":CONFIG_NOT_FOUND";
+            SendAddonMessage(player, failResponse.str());
+            return;
+        }
+
+        std::string errorMsg;
+        if (!sTalentSoulMgr->CanUpgradeSpell(player, spellId, errorMsg))
+        {
+            std::ostringstream failResponse;
+            failResponse << "TALENTSOUL_UPGRADE_FAIL:" << spellId << ":" << upgradeType << ":" << GetUpgradeFailReason(errorMsg);
             SendAddonMessage(player, failResponse.str());
             return;
         }

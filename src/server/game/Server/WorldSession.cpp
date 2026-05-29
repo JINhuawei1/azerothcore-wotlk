@@ -1221,7 +1221,7 @@ void WorldSession::ReadAddonsInfo(ByteBuffer& data)
                 addonInfo >> enabled >> crc >> unk1;
 
                 LOG_DEBUG("network", "ADDON: Name: {}, Enabled: 0x{:x}, CRC: 0x{:x}, Unknown2: 0x{:x}", addonName, enabled, crc, unk1);
-                if (enabled && addonName == "LargeDamageText")
+                if (enabled && (addonName == "LargeDamageText" || addonName == "DamageDisplayUI"))
                     _hasLargeDamageTextAddon = true;
 
                 AddonInfo addon(addonName, enabled, crc, 2, true);
@@ -1268,7 +1268,7 @@ void WorldSession::ReadAddonsInfo(ByteBuffer& data)
 
 bool WorldSession::HasEnabledAddon(std::string const& addonName) const
 {
-    if (addonName == "LargeDamageText")
+    if (addonName == "LargeDamageText" || addonName == "DamageDisplayUI")
         return _hasLargeDamageTextAddon;
 
     for (AddonInfo const& addon : m_addonsList)

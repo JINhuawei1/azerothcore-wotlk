@@ -193,6 +193,43 @@ public:
         return _entries;
     }
 
+    std::vector<ChenghaoSystemEntry> GetCurrentAndNextEntries(Player* player) const
+    {
+        std::vector<ChenghaoSystemEntry> result;
+        if (!player)
+            return result;
+
+        uint32 currentTitleId = GetHighestUnlockedTitleId(player);
+        uint32 currentLevel = 0;
+
+        if (ChenghaoSystemEntry const* currentEntry = currentTitleId ? GetEntryById(currentTitleId) : nullptr)
+        {
+            result.push_back(*currentEntry);
+            currentLevel = currentEntry->titleLevel;
+        }
+        else if (ChenghaoSystemPlayerState const* highestState = GetHighestUnlockedState(player))
+        {
+            currentLevel = highestState->titleLevel;
+        }
+
+        uint32 const nextLevel = currentLevel + 1;
+        for (ChenghaoSystemEntry const& entry : _entries)
+        {
+            if (entry.titleLevel < nextLevel)
+                continue;
+
+            if (entry.titleLevel > nextLevel)
+                break;
+
+            if (entry.id != currentTitleId)
+                result.push_back(entry);
+
+            break;
+        }
+
+        return result;
+    }
+
     uint32 GetHighestUnlockedTitleId(Player* player) const
     {
         if (!player)
@@ -528,13 +565,7 @@ void SendChengHaoListToPlayer(Player* player)
     if (!player)
         return;
 
-    std::vector<ChenghaoSystemEntry> entries = ChenghaoSystemMgr::Instance()->GetEntries();
-    std::sort(entries.begin(), entries.end(), [](ChenghaoSystemEntry const& left, ChenghaoSystemEntry const& right)
-    {
-        if (left.titleLevel != right.titleLevel)
-            return left.titleLevel < right.titleLevel;
-        return left.id < right.id;
-    });
+    std::vector<ChenghaoSystemEntry> entries = ChenghaoSystemMgr::Instance()->GetCurrentAndNextEntries(player);
 
     std::ostringstream payload;
     payload << "CH_LIST:";
@@ -561,7 +592,7 @@ void SendChengHaoStateToPlayer(Player* player)
     if (!player)
         return;
 
-    std::vector<ChenghaoSystemEntry> const& entries = ChenghaoSystemMgr::Instance()->GetEntries();
+    std::vector<ChenghaoSystemEntry> entries = ChenghaoSystemMgr::Instance()->GetCurrentAndNextEntries(player);
     uint32 currentTitleId = ChenghaoSystemMgr::Instance()->GetHighestUnlockedTitleId(player);
 
     std::ostringstream payload;
@@ -739,7 +770,7 @@ public:
             std::ostringstream message;
             message << "本次激活 " << count << " 个称号";
             SendChengHaoActionResult(player, "ACT_ALL", true, 0, message.str());
-            SendChengHaoStateToPlayer(player);
+            SendChengHaoAllDataToPlayer(player);
             return;
         }
 
@@ -767,14 +798,14 @@ public:
             if (ChenghaoSystemMgr::Instance()->IsPlayerUnlocked(player, titleId))
             {
                 SendChengHaoActionResult(player, "ACTIVATE", false, titleId, "该称号已经激活");
-                SendChengHaoStateToPlayer(player);
+                SendChengHaoAllDataToPlayer(player);
                 return;
             }
 
             std::string failureMessage;
             bool success = ChenghaoSystemMgr::Instance()->UnlockTitle(player, titleId, true, &failureMessage);
             SendChengHaoActionResult(player, "ACTIVATE", success, titleId, success ? "激活成功" : (failureMessage.empty() ? "激活失败" : failureMessage));
-            SendChengHaoStateToPlayer(player);
+            SendChengHaoAllDataToPlayer(player);
             return;
         }
     }

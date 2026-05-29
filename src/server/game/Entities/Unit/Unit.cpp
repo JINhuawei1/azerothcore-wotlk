@@ -641,7 +641,7 @@ namespace
             return;
 
         Player* player = attacker->GetCharmerOrOwnerPlayerOrPlayerItself();
-        if (!player || !player->GetSession())
+        if (!player || !player->GetSession() || !player->GetSession()->HasEnabledAddon("LargeDamageText"))
             return;
 
         uint32 spellId = spellInfo ? spellInfo->Id : 0;
@@ -658,6 +658,9 @@ namespace
 
     void SendPlayerAttributePanelDamage(Unit* attacker, Unit* victim, uint128 const& damage, DamageEffectType damageType, SpellSchoolMask schoolMask, SpellInfo const* spellInfo, CleanDamage const* cleanDamage)
     {
+        if (!cleanDamage || damageType != DIRECT_DAMAGE)
+            return;
+
         SendPlayerAttributePanelDamagePayload(attacker, victim, damage, cleanDamage && cleanDamage->hitOutCome == MELEE_HIT_CRIT, schoolMask, spellInfo, damageType);
     }
 

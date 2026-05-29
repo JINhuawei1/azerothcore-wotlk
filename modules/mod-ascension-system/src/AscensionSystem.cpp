@@ -862,7 +862,6 @@ void AscensionManager::DeletePlayerData(uint32 playerGuid)
     // 删除飞升系统数据
     CharacterDatabase.Execute("DELETE FROM `_飞升系统_数据` WHERE `玩家GUID` = {}", playerGuid);
 
-    LOG_INFO("module", "飞升系统: 删除玩家 {} 的所有飞升数据", playerGuid);
 }
 
 void AscensionManager::SaveAscensionItems(Player* player)

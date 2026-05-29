@@ -3485,13 +3485,6 @@ public:
             return false;
         }
 
-        if (GetPlayerRunState(player->GetGUID().GetCounter()))
-        {
-            if (failureReason)
-                *failureReason = "active_run_locked";
-            return false;
-        }
-
         EnsurePlayerData(player);
         LoadPlayerCollections(player);
 
@@ -3644,7 +3637,6 @@ public:
 
         uint32 guid = player->GetGUID().GetCounter();
         PlayerAbyssProcState& procState = const_cast<AbyssCultivationMgr*>(this)->GetOrCreatePlayerProcState(guid);
-        PlayerAbyssRunState const* runState = GetPlayerRunState(guid);
         PlayerAbyssData const* playerData = GetPlayerData(guid);
 
         float bestScale = 0.0f;
@@ -3658,16 +3650,7 @@ public:
                 bestScale = std::max(bestScale, ClampRelicScale(scale));
         };
 
-        if (runState)
-        {
-            considerRelicGroup(runState->runMainRelic, 1.0f);
-            considerRelicGroup(runState->runSubRelic1, GetConfiguredSubRelicScale(runState->runSubRelic1));
-            considerRelicGroup(runState->runSubRelic2, GetConfiguredSubRelicScale(runState->runSubRelic2));
-            considerRelicGroup(runState->runSubRelic3, GetConfiguredSubRelicScale(runState->runSubRelic3));
-            considerRelicGroup(runState->runSubRelic4, GetConfiguredSubRelicScale(runState->runSubRelic4));
-            considerRelicGroup(runState->runSubRelic5, GetConfiguredSubRelicScale(runState->runSubRelic5));
-        }
-        else if (playerData)
+        if (playerData)
         {
             considerRelicGroup(playerData->mainRelic, 1.0f);
             considerRelicGroup(playerData->subRelic1, GetConfiguredSubRelicScale(playerData->subRelic1));
@@ -3675,10 +3658,6 @@ public:
             considerRelicGroup(playerData->subRelic3, GetConfiguredSubRelicScale(playerData->subRelic3));
             considerRelicGroup(playerData->subRelic4, GetConfiguredSubRelicScale(playerData->subRelic4));
             considerRelicGroup(playerData->subRelic5, GetConfiguredSubRelicScale(playerData->subRelic5));
-        }
-
-        if (playerData)
-        {
             considerRelicGroup(playerData->phaseArtifact, 1.0f);
             considerRelicGroup(playerData->ultimateArtifact, 1.0f);
         }
@@ -3901,7 +3880,6 @@ public:
             return 0.0f;
 
         uint32 guid = player->GetGUID().GetCounter();
-        PlayerAbyssRunState const* runState = GetPlayerRunState(guid);
         PlayerAbyssData const* playerData = GetPlayerData(guid);
 
         float bestScale = 0.0f;
@@ -3913,16 +3891,7 @@ public:
             bestScale = std::max(bestScale, GetRelicSlotScale(*relic, slot));
         };
 
-        if (runState)
-        {
-            considerSlot(runState->runMainRelic, ABYSS_RELIC_SLOT_MAIN);
-            considerSlot(runState->runSubRelic1, ABYSS_RELIC_SLOT_SUB_1);
-            considerSlot(runState->runSubRelic2, ABYSS_RELIC_SLOT_SUB_2);
-            considerSlot(runState->runSubRelic3, ABYSS_RELIC_SLOT_SUB_3);
-            considerSlot(runState->runSubRelic4, ABYSS_RELIC_SLOT_SUB_4);
-            considerSlot(runState->runSubRelic5, ABYSS_RELIC_SLOT_SUB_5);
-        }
-        else if (playerData)
+        if (playerData)
         {
             considerSlot(playerData->mainRelic, ABYSS_RELIC_SLOT_MAIN);
             considerSlot(playerData->subRelic1, ABYSS_RELIC_SLOT_SUB_1);
@@ -3930,10 +3899,6 @@ public:
             considerSlot(playerData->subRelic3, ABYSS_RELIC_SLOT_SUB_3);
             considerSlot(playerData->subRelic4, ABYSS_RELIC_SLOT_SUB_4);
             considerSlot(playerData->subRelic5, ABYSS_RELIC_SLOT_SUB_5);
-        }
-
-        if (playerData)
-        {
             considerSlot(playerData->phaseArtifact, ABYSS_RELIC_SLOT_PHASE);
             considerSlot(playerData->ultimateArtifact, ABYSS_RELIC_SLOT_ULTIMATE);
         }
@@ -5872,7 +5837,6 @@ public:
         if (playerData)
         {
             if (playerData->phaseArtifact == ABYSS_PHASE_ARTIFACT_ICE_TIMEBOX_ITEM &&
-                runState && runState->modeType >= 3 &&
                 now > procState.lastPhaseArtifactTime + 20)
             {
                 if (CastManagedRelicSpell(player, 89177))
@@ -5949,7 +5913,6 @@ public:
         _suspendedRunStates[guid] = itr->second;
         DeletePlayerRunState(guid);
         ClearPlayerProcState(guid);
-        RefreshPlayerRuntimeStats(player);
         return true;
     }
 
@@ -5994,7 +5957,6 @@ public:
                 _playerRunStates[guid] = suspendedState;
                 _suspendedRunStates.erase(suspendedItr);
                 SavePlayerRunState(player);
-                RefreshPlayerRuntimeStats(player);
 
                 if (suspendedState.pendingAbyssModeType != 0)
                     ScheduleDelayedModeBossSummon(player, *chapter, _playerRunStates[guid], suspendedState.pendingAbyssModeType);
@@ -6105,22 +6067,9 @@ private:
         }
     }
 
-    float GetRelicModeScale(Player* player) const
+    float GetRelicModeScale(Player* /*player*/) const
     {
-        if (!player)
-            return 1.0f;
-
-        PlayerAbyssRunState const* runState = GetPlayerRunState(player->GetGUID().GetCounter());
-        if (!runState)
-            return 1.0f;
-
-        switch (runState->modeType)
-        {
-            case 2: return 1.10f;
-            case 3: return 1.25f;
-            case 4: return 1.40f;
-            default: return 1.0f;
-        }
+        return 1.0f;
     }
 
     int128 GetRelicAttributeContribution(AbyssRelicConfig const& relic, uint8 slot, RelicRuntimeAttribute attribute, float modeScale) const
@@ -6210,47 +6159,9 @@ private:
         return bonus;
     }
 
-    float GetPlayerRuntimeRunBonusPct(Player* player) const
+    float GetPlayerRuntimeRunBonusPct(Player* /*player*/) const
     {
-        if (!player)
-            return 0.0f;
-
-        PlayerAbyssRunState const* runState = GetPlayerRunState(player->GetGUID().GetCounter());
-        if (!runState)
-            return 0.0f;
-
-        float bonus = 0.0f;
-        switch (runState->modeType)
-        {
-            case 2:
-                bonus += 6.0f;
-                break;
-            case 3:
-                bonus += 12.0f;
-                break;
-            case 4:
-                bonus += 18.0f;
-                break;
-            default:
-                break;
-        }
-
-        bonus += std::min<float>(runState->corruptionTier * 1.0f, 25.0f);
-
-        if (runState->runMainRelic != 0)
-            bonus += 3.0f;
-        if (runState->runSubRelic1 != 0)
-            bonus += 3.0f * GetConfiguredSubRelicScale(runState->runSubRelic1);
-        if (runState->runSubRelic2 != 0)
-            bonus += 3.0f * GetConfiguredSubRelicScale(runState->runSubRelic2);
-        if (runState->runSubRelic3 != 0)
-            bonus += 3.0f * GetConfiguredSubRelicScale(runState->runSubRelic3);
-        if (runState->runSubRelic4 != 0)
-            bonus += 3.0f * GetConfiguredSubRelicScale(runState->runSubRelic4);
-        if (runState->runSubRelic5 != 0)
-            bonus += 3.0f * GetConfiguredSubRelicScale(runState->runSubRelic5);
-
-        return bonus;
+        return 0.0f;
     }
 
 public:
@@ -7864,7 +7775,6 @@ public:
 
         NormalizePlayerRunState(state, &playerItr->second);
         SavePlayerRunState(player);
-        RefreshPlayerRuntimeStats(player);
         return true;
     }
 
@@ -7881,7 +7791,6 @@ public:
         DeletePlayerRunState(guid);
         ClearPlayerSuspendedRunState(guid);
         ClearPlayerProcState(guid);
-        RefreshPlayerRuntimeStats(player);
         return true;
     }
 

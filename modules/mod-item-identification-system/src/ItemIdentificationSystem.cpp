@@ -4322,8 +4322,6 @@ public:
         if (!trans)
             return;
 
-        LOG_INFO("module.itemidentification", "[数据清理] 角色删除触发批量清理: 玩家GUID={}", guid);
-
         // 先获取该玩家所有物品的GUID列表（用于清理内存缓存和关联表）
         QueryResult itemsResult = CharacterDatabase.Query(
             "SELECT `物品GUID` FROM `物品_鉴定记录` WHERE `玩家GUID` = {}", guid);
@@ -4401,8 +4399,6 @@ public:
             sItemIdentificationSystem->ClearIdentifiedCache(itemGuid);
         }
 
-        LOG_INFO("module.itemidentification", "[数据清理] 角色删除批量清理完成: 玩家GUID={}, 清理物品数={}",
-                 guid, itemGuids.size());
     }
 
 private:
