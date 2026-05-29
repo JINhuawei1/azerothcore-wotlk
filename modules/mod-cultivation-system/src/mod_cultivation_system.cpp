@@ -1533,6 +1533,24 @@ static void GetHostileUnitsInRange(Unit* caster, std::list<Unit*>& targets, floa
     Acore::AnyUnfriendlyUnitInObjectRangeCheck check(caster, caster, range);
     Acore::UnitListSearcher<Acore::AnyUnfriendlyUnitInObjectRangeCheck> searcher(caster, targets, check);
     Cell::VisitAllObjects(caster, searcher, range);
+
+    // 目标过滤，匹配“玩家能主动攻击的对象”语义：
+    //  - 玩家本身或玩家的宠物/随从：用引擎完整校验 IsValidAttackTarget，
+    //    正确处理 PvP 开关、阵营、决斗、好友等（未开 PvP 的敌对玩家、友方玩家会被排除）。
+    //  - 纯 NPC/生物：只排除“友好单位”（友善 NPC、友方守卫等），敌对与中立目标
+    //    （含训练假人、中立黄名怪、中立的 boss）均可攻击。
+    //    不能直接用 IsValidAttackTarget，因为它会把中立单位判为不可攻击，
+    //    导致木桩、部分 boss 打不到；改用 IsFriendlyTo 取反更符合需求。
+    targets.remove_if([caster](Unit* target)
+    {
+        if (!target)
+            return true;
+
+        if (target->GetCharmerOrOwnerPlayerOrPlayerItself())
+            return !caster->IsValidAttackTarget(target);
+
+        return caster->IsFriendlyTo(target);
+    });
 }
 
 // 工具函数：获取玩家攻击力或法强中较高者
