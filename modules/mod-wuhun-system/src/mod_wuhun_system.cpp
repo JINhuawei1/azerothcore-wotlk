@@ -1850,7 +1850,7 @@ public:
         }
 
         uint32 nextLevel = itr->second + 1;
-        uint128 cost = SaturatingMultiplyUInt128(skill->upgradeCost, nextLevel);
+        uint128 cost = skill->upgradeCost;
         if (data->soulPower < cost)
         {
             SendResult(player, "UPGRADE_SKILL", false, "魂力不足，无法升级技能");

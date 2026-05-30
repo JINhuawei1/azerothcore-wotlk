@@ -1915,8 +1915,8 @@ class spell_cultivation_jiutian_aura : public AuraScript
 };
 
 // ============================================
-// 371010 仙神降世 - 变身30秒
-// 全属性+100%、免控、每秒回血5%、击杀续时
+// 371010 仙神降世
+// 全属性+100%、免控、每秒回血5%
 // ============================================
 
 class spell_cultivation_xianshen_aura : public AuraScript
@@ -1973,33 +1973,6 @@ class spell_cultivation_xianshen_aura : public AuraScript
     }
 };
 
-// 仙神降世 - 击杀续时
-class CultivationXianshenKillScript : public PlayerScript
-{
-public:
-    CultivationXianshenKillScript() : PlayerScript("CultivationXianshenKillScript") { }
-
-    void OnPlayerCreatureKill(Player* player, Creature* /*creature*/) override
-    {
-        if (!player)
-            return;
-
-        Aura* xianshenAura = player->GetAura(CULT_SPELL_XIANSHEN);
-        if (!xianshenAura)
-            return;
-
-        int32 currentDuration = xianshenAura->GetDuration();
-        int32 maxDuration = 60 * IN_MILLISECONDS;
-
-        if (currentDuration < maxDuration)
-        {
-            int32 newDuration = std::min(currentDuration + 3 * IN_MILLISECONDS, maxDuration);
-            xianshenAura->SetDuration(newDuration);
-            xianshenAura->SetMaxDuration(std::max(xianshenAura->GetMaxDuration(), newDuration));
-        }
-    }
-};
-
 // ============================================
 // 注册脚本
 // ============================================
@@ -2019,5 +1992,4 @@ void AddSC_mod_cultivation_system()
     RegisterSpellScript(spell_cultivation_tuntian);        // 371008 吞天噬地
     RegisterSpellScript(spell_cultivation_jiutian_aura);   // 371009 九天神雷
     RegisterSpellScript(spell_cultivation_xianshen_aura);  // 371010 仙神降世
-    new CultivationXianshenKillScript();                   // 仙神降世击杀续时
 }
