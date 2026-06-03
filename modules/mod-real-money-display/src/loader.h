@@ -1,0 +1,6 @@
+#ifndef REAL_MONEY_DISPLAY_LOADER_H
+#define REAL_MONEY_DISPLAY_LOADER_H
+
+void AddRealMoneyDisplayScripts();
+
+#endif // REAL_MONEY_DISPLAY_LOADER_H

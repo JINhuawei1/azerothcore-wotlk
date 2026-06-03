@@ -116,7 +116,7 @@ public:
     void DamageTaken(Unit* done_by, uint32& damage, DamageEffectType damagetype, SpellSchoolMask damageSchoolMask) override;
 
     // Called when the creature receives heal
-    void HealReceived(Unit* doneBy, uint32& addhealth) override;
+    void HealReceived(Unit* doneBy, uint128& addhealth) override;
 
     // Called at World update tick
     void UpdateAI(uint32 diff) override;

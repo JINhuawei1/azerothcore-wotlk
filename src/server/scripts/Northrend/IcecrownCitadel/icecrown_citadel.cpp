@@ -952,7 +952,7 @@ public:
                     }
                     else
                     {
-                        Unit::DealHeal(me, me, me->CountPctFromMaxHealth(3));
+                        Unit::DealHeal(me, me, me->CountPctFromMaxHealth128(3));
                         _events.ScheduleEvent(EVENT_HEALTH_CHECK, 1s);
                     }
                     break;
@@ -2323,8 +2323,8 @@ class spell_stinky_precious_decimate : public SpellScript
     {
         if (GetHitUnit()->GetHealthPct() > float(GetEffectValue()))
         {
-            uint32 newHealth = GetHitUnit()->GetMaxHealth() * uint32(GetEffectValue()) / 100;
-            GetHitUnit()->SetHealth(newHealth);
+            uint128 newHealth = GetHitUnit()->CountPctFromMaxHealth128(GetEffectValue());
+            GetHitUnit()->SetHealthForCombat128(newHealth);
         }
     }
 

@@ -65,7 +65,7 @@ protected:
 
 public:
     // Called when a unit deals healing to another unit
-    virtual void OnHeal(Unit* /*healer*/, Unit* /*reciever*/, int64& /*gain*/) { }
+    virtual void OnHeal(Unit* /*healer*/, Unit* /*reciever*/, uint128& /*gain*/) { }
 
     // Called when a unit deals damage to another unit
     virtual void OnDamage(Unit* /*attacker*/, Unit* /*victim*/, uint128& /*damage*/) { }
@@ -81,7 +81,7 @@ public:
     virtual void ModifySpellDamageTaken(Unit* /*target*/, Unit* /*attacker*/, uint128& /*damage*/, SpellInfo const* /*spellInfo*/) { }
 
     // Called when Heal is Recieved
-    virtual void ModifyHealReceived(Unit* /*target*/, Unit* /*healer*/, uint64& /*heal*/, SpellInfo const* /*spellInfo*/) { }
+    virtual void ModifyHealReceived(Unit* /*target*/, Unit* /*healer*/, uint128& /*heal*/, SpellInfo const* /*spellInfo*/) { }
 
     //Called when Damage is Dealt
     virtual uint128 DealDamage(Unit* /*AttackerUnit*/, Unit* /*pVictim*/, uint128 damage, DamageEffectType /*damagetype*/) { return damage; }

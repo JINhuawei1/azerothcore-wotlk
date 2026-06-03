@@ -5064,7 +5064,7 @@ bool Player::LoadFromDB(ObjectGuid playerGuid, CharacterDatabaseQueryHolder cons
     m_achievementMgr->LoadFromDB(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACHIEVEMENTS), holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_CRITERIA_PROGRESS), holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_OFFLINE_ACHIEVEMENTS_UPDATES));
 
 
-    SetMoney(fields[8].Get<uint64>());
+    SetMoney(static_cast<int128>(fields[8].Get<uint128>()));
 
     SetByteValue(PLAYER_BYTES, 0, fields[9].Get<uint8>());
     SetByteValue(PLAYER_BYTES, 1, fields[10].Get<uint8>());

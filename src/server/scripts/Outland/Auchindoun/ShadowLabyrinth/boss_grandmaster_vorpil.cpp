@@ -17,6 +17,7 @@
 
 #include "CreatureScript.h"
 #include "ScriptedCreature.h"
+#include "Unit.h"
 #include "shadow_labyrinth.h"
 
 enum Text
@@ -227,7 +228,7 @@ struct npc_voidtraveler : public ScriptedAI
                                 {
                                     DoCastAOE(SPELL_SHADOW_NOVA, true);
                                     me->CastSpell(vorpil, SPELL_EMPOWERING_SHADOWS, true, nullptr, nullptr, vorpil->GetGUID());
-                                    vorpil->ModifyHealth(int32(vorpil->CountPctFromMaxHealth(4)));
+                                    Unit::DealHeal(vorpil, vorpil, vorpil->CountPctFromMaxHealth128(4));
                                 }
                             }
 

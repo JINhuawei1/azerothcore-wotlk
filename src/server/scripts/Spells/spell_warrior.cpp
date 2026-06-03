@@ -405,21 +405,21 @@ class spell_warr_execute : public SpellScript
         if (Unit* target = GetHitUnit())
         {
             SpellInfo const* spellInfo = GetSpellInfo();
-            uint64 currentRage = caster->GetPowerForCombat(POWER_RAGE);
-            int64 powerCost = spellInfo->CalcPowerCost(caster, SpellSchoolMask(spellInfo->SchoolMask));
-            int32 maxRageSpend = powerCost >= 300 ? 0 : static_cast<int32>(300 - powerCost);
-            uint64 rageUsed = std::min<uint64>(static_cast<uint64>(maxRageSpend), currentRage);
-            uint64 newRage = currentRage - rageUsed;
+            uint128 currentRage = caster->GetPowerForCombat128(POWER_RAGE);
+            int128 powerCost = spellInfo->CalcPowerCost(caster, SpellSchoolMask(spellInfo->SchoolMask));
+            uint128 maxRageSpend = powerCost >= 300 ? 0 : Acore::Number::ToUInt128Saturated(300 - powerCost);
+            uint128 rageUsed = std::min<uint128>(maxRageSpend, currentRage);
+            uint128 newRage = currentRage - rageUsed;
 
             // Sudden Death rage save
             if (AuraEffect* aurEff = caster->GetAuraEffect(SPELL_AURA_PROC_TRIGGER_SPELL, SPELLFAMILY_GENERIC, WARRIOR_ICON_ID_SUDDEN_DEATH, EFFECT_0))
             {
                 int32 ragesave = aurEff->GetSpellInfo()->Effects[EFFECT_1].CalcValue() * 10;
                 if (ragesave > 0)
-                    newRage = std::max<uint64>(newRage, static_cast<uint64>(ragesave));
+                    newRage = std::max<uint128>(newRage, static_cast<uint128>(ragesave));
             }
 
-            caster->SetPowerForCombat(POWER_RAGE, newRage);
+            caster->SetPowerForCombat128(POWER_RAGE, newRage);
             // Glyph of Execution bonus
             if (AuraEffect* aurEff = caster->GetAuraEffect(SPELL_WARRIOR_GLYPH_OF_EXECUTION, EFFECT_0))
             {

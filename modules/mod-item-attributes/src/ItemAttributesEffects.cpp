@@ -15,9 +15,9 @@ float ToStatFloat(int128 const& value)
     return Acore::Number::ToFloat(value);
 }
 
-int64 ToRatingValue(int128 const& value)
+int128 ToRatingValue(int128 const& value)
 {
-    return Acore::Number::ToInt64Saturated(value);
+    return value;
 }
 
 int32 ToLegacyInt32(int128 const& value)

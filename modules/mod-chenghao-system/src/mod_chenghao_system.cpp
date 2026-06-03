@@ -15,15 +15,15 @@
 #include "DatabaseEnv.h"
 #include "Player.h"
 #include "ScriptMgr.h"
-#include "SpellMgr.h"
 #include "World.h"
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 namespace
@@ -49,15 +49,62 @@ struct ChenghaoSystemEntry
     uint32 id = 0;
     uint32 titleLevel = 0;
     uint32 requirementTemplateId = 0;
-    uint32 auraSpellId = 0;
+    uint64 attributeValue1 = 0;
+    uint32 attributeValue2 = 0;
     std::string description;
 };
 
 struct ChenghaoSystemPlayerState
 {
     uint32 titleLevel = 0;
-    uint32 auraSpellId = 0;
+    uint64 attributeValue1 = 0;
+    uint32 attributeValue2 = 0;
 };
+
+uint64 ParseUnsigned64Value(std::string const& text)
+{
+    uint64 value = 0;
+    bool hasDigit = false;
+    bool saturated = false;
+    uint64 const maxValue = std::numeric_limits<uint64>::max();
+
+    for (char ch : text)
+    {
+        unsigned char uch = static_cast<unsigned char>(ch);
+        if (std::isspace(uch))
+            continue;
+
+        if (ch == '-')
+            return 0;
+
+        if (ch == '.')
+            break;
+
+        if (!std::isdigit(uch))
+            break;
+
+        hasDigit = true;
+        uint8 digit = static_cast<uint8>(ch - '0');
+        if (!saturated)
+        {
+            if (value > (maxValue - digit) / 10)
+            {
+                value = maxValue;
+                saturated = true;
+            }
+            else
+                value = value * 10 + digit;
+        }
+    }
+
+    return hasDigit ? value : 0;
+}
+
+uint32 ParseUnsigned32Value(std::string const& text)
+{
+    uint64 value = ParseUnsigned64Value(text);
+    return value > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(value);
+}
 
 class ChenghaoSystemMgr
 {
@@ -81,9 +128,8 @@ public:
     void Initialize()
     {
         _entries.clear();
-        _managedAuraIds.clear();
 
-        QueryResult result = WorldDatabase.Query("SELECT id, 称号等级, 需求系统id, 激活光环技能id, 称号描述 FROM _称号系统");
+        QueryResult result = WorldDatabase.Query("SELECT id, 称号等级, 需求系统id, 属性值1, 属性值2, 称号描述 FROM _称号系统");
         if (!result)
         {
             LOG_WARN("server.loading", "自定义UI称号系统未加载到任何数据，请检查表 _称号系统。");
@@ -97,24 +143,18 @@ public:
             entry.id = fields[0].Get<uint32>();
             entry.titleLevel = fields[1].Get<uint32>();
             entry.requirementTemplateId = fields[2].Get<uint32>();
-            entry.auraSpellId = fields[3].Get<uint32>();
-            entry.description = fields[4].Get<std::string>();
+            entry.attributeValue1 = ParseUnsigned64Value(fields[3].Get<std::string>());
+            entry.attributeValue2 = ParseUnsigned32Value(fields[4].Get<std::string>());
+            entry.description = fields[5].Get<std::string>();
 
-            if (!entry.id || !entry.titleLevel || !entry.auraSpellId)
+            if (!entry.id || !entry.titleLevel)
             {
-                LOG_ERROR("sql.sql", "自定义UI称号系统存在非法数据: id={}, 称号等级={}, 需求系统id={}, 激活光环技能id={}",
-                    entry.id, entry.titleLevel, entry.requirementTemplateId, entry.auraSpellId);
-                continue;
-            }
-
-            if (!sSpellMgr->GetSpellInfo(entry.auraSpellId))
-            {
-                LOG_ERROR("sql.sql", "自定义UI称号系统 id={} 的光环技能 {} 不存在。", entry.id, entry.auraSpellId);
+                LOG_ERROR("sql.sql", "自定义UI称号系统存在非法数据: id={}, 称号等级={}, 需求系统id={}, 属性值1={}, 属性值2={}",
+                    entry.id, entry.titleLevel, entry.requirementTemplateId, entry.attributeValue1, entry.attributeValue2);
                 continue;
             }
 
             _entries.push_back(entry);
-            _managedAuraIds.insert(entry.auraSpellId);
         }
         while (result->NextRow());
 
@@ -136,7 +176,7 @@ public:
         _playerTitles[playerGuid].clear();
 
         QueryResult result = CharacterDatabase.Query(
-            "SELECT `称号ID`, `称号等级`, `光环技能id` FROM `_玩家称号系统` WHERE `玩家GUID` = {} "
+            "SELECT `称号ID`, `称号等级`, `属性值1`, `属性值2` FROM `_玩家称号系统` WHERE `玩家GUID` = {} "
             "ORDER BY `称号等级` DESC, `称号ID` ASC LIMIT 1",
             playerGuid);
 
@@ -149,43 +189,15 @@ public:
             uint32 titleId = fields[0].Get<uint32>();
             ChenghaoSystemPlayerState state;
             state.titleLevel = fields[1].Get<uint32>();
-            state.auraSpellId = fields[2].Get<uint32>();
+            state.attributeValue1 = ParseUnsigned64Value(fields[2].Get<std::string>());
+            state.attributeValue2 = ParseUnsigned32Value(fields[3].Get<std::string>());
 
-            if (!titleId || !state.auraSpellId || !sSpellMgr->GetSpellInfo(state.auraSpellId))
+            if (!titleId || !state.titleLevel)
                 continue;
 
             _playerTitles[playerGuid][titleId] = state;
         }
         while (result->NextRow());
-    }
-
-    void RemoveConfiguredAuras(Player* player) const
-    {
-        if (!player)
-            return;
-
-        for (uint32 auraId : _managedAuraIds)
-        {
-            player->RemoveAura(auraId);
-        }
-    }
-
-    void ReapplyPlayerAuras(Player* player) const
-    {
-        if (!player)
-            return;
-
-        RemoveConfiguredAuras(player);
-
-        ChenghaoSystemPlayerState const* highestState = GetHighestUnlockedState(player);
-        if (!highestState)
-            return;
-
-        if (!highestState->auraSpellId || !sSpellMgr->GetSpellInfo(highestState->auraSpellId))
-            return;
-
-        if (!player->HasAura(highestState->auraSpellId))
-            player->AddAura(highestState->auraSpellId, player);
     }
 
     std::vector<ChenghaoSystemEntry> const& GetEntries() const
@@ -259,6 +271,38 @@ public:
     {
         uint32 titleId = GetHighestUnlockedTitleId(player);
         return titleId ? GetEntryById(titleId) : nullptr;
+    }
+
+    uint32 GetHighestUnlockedTitleLevel(Player* player) const
+    {
+        if (ChenghaoSystemPlayerState const* state = GetHighestUnlockedState(player))
+            return state->titleLevel;
+
+        return 0;
+    }
+
+    uint64 GetHealthBonus(Player* player) const
+    {
+        if (ChenghaoSystemPlayerState const* state = GetHighestUnlockedState(player))
+            return state->attributeValue1;
+
+        return 0;
+    }
+
+    uint32 GetDamageReductionPct(Player* player) const
+    {
+        if (ChenghaoSystemPlayerState const* state = GetHighestUnlockedState(player))
+            return state->attributeValue2;
+
+        return 0;
+    }
+
+    void RefreshPlayerBonuses(Player* player) const
+    {
+        if (!player)
+            return;
+
+        player->UpdateAllStats();
     }
 
     bool IsPlayerUnlocked(Player* player, uint32 titleId) const
@@ -414,29 +458,33 @@ public:
 
         ChenghaoSystemPlayerState state;
         state.titleLevel = entry->titleLevel;
-        state.auraSpellId = entry->auraSpellId;
+        state.attributeValue1 = entry->attributeValue1;
+        state.attributeValue2 = entry->attributeValue2;
 
         CharacterDatabase.DirectExecute(
-            "INSERT INTO `_玩家称号系统` (`玩家GUID`, `称号ID`, `称号等级`, `光环技能id`) "
-            "VALUES ({}, {}, {}, {}) "
-            "ON DUPLICATE KEY UPDATE `称号ID` = VALUES(`称号ID`), `称号等级` = VALUES(`称号等级`), `光环技能id` = VALUES(`光环技能id`)",
+            "INSERT INTO `_玩家称号系统` (`玩家GUID`, `称号ID`, `称号等级`, `属性值1`, `属性值2`) "
+            "VALUES ({}, {}, {}, {}, {}) "
+            "ON DUPLICATE KEY UPDATE `称号ID` = VALUES(`称号ID`), `称号等级` = VALUES(`称号等级`), "
+            "`属性值1` = VALUES(`属性值1`), `属性值2` = VALUES(`属性值2`)",
             playerGuid,
             titleId,
             state.titleLevel,
-            state.auraSpellId);
+            state.attributeValue1,
+            state.attributeValue2);
 
         playerTitles.clear();
         playerTitles[titleId] = state;
 
-        ReapplyPlayerAuras(player);
+        RefreshPlayerBonuses(player);
 
         if (showMessages && ShouldNotifyPlayer())
         {
             ChatHandler(player->GetSession()).PSendSysMessage(
-                "称号系统：已激活称号 [id:{}] 等级:{} 光环:{} 描述:{}",
+                "称号系统：已激活称号 [id:{}] 等级:{} 生命加成:{} 减伤:{}% 描述:{}",
                 titleId,
                 state.titleLevel,
-                state.auraSpellId,
+                GetHealthBonus(player),
+                GetDamageReductionPct(player),
                 entry->description.empty() ? "无" : entry->description.c_str());
         }
 
@@ -468,10 +516,11 @@ public:
 
             if (ChenghaoSystemEntry const* highestEntry = GetHighestUnlockedEntry(player))
             {
-                handler.PSendSysMessage("称号系统：当前生效称号 [id:{}] 等级:{} 光环:{} 描述:{}",
+                handler.PSendSysMessage("称号系统：当前生效称号 [id:{}] 等级:{} 生命加成:{} 减伤:{}% 描述:{}",
                     highestEntry->id,
                     highestEntry->titleLevel,
-                    highestEntry->auraSpellId,
+                    GetHealthBonus(player),
+                    GetDamageReductionPct(player),
                     highestEntry->description.empty() ? "无" : highestEntry->description.c_str());
             }
             else
@@ -520,7 +569,6 @@ private:
     }
 
     std::vector<ChenghaoSystemEntry> _entries;
-    std::unordered_set<uint32> _managedAuraIds;
     std::unordered_map<uint32, std::unordered_map<uint32, ChenghaoSystemPlayerState>> _playerTitles;
 };
 
@@ -580,7 +628,8 @@ void SendChengHaoListToPlayer(Player* player)
         payload << entry.id << '^'
                 << entry.titleLevel << '^'
                 << entry.requirementTemplateId << '^'
-                << entry.auraSpellId << '^'
+                << entry.attributeValue1 << '^'
+                << entry.attributeValue2 << '^'
                 << SanitizeAddonText(entry.description);
     }
 
@@ -693,7 +742,8 @@ public:
         PLAYERHOOK_ON_LOGIN,
         PLAYERHOOK_ON_LOGOUT,
         PLAYERHOOK_ON_DELETE,
-        PLAYERHOOK_ON_CHAT_WITH_RECEIVER
+        PLAYERHOOK_ON_CHAT_WITH_RECEIVER,
+        PLAYERHOOK_ON_AFTER_UPDATE_MAX_HEALTH
     }) { }
 
     void OnPlayerLogin(Player* player) override
@@ -703,13 +753,12 @@ public:
 
         if (!ChenghaoSystemMgr::Instance()->IsEnabled())
         {
-            ChenghaoSystemMgr::Instance()->RemoveConfiguredAuras(player);
             ChenghaoSystemMgr::Instance()->UnloadPlayerData(player->GetGUID().GetCounter());
             return;
         }
 
         ChenghaoSystemMgr::Instance()->LoadPlayerData(player);
-        ChenghaoSystemMgr::Instance()->ReapplyPlayerAuras(player);
+        ChenghaoSystemMgr::Instance()->RefreshPlayerBonuses(player);
     }
 
     void OnPlayerLogout(Player* player) override
@@ -809,6 +858,44 @@ public:
             return;
         }
     }
+
+    void OnPlayerAfterUpdateMaxHealth(Player* player, float& value) override
+    {
+        if (!player || !ChenghaoSystemMgr::Instance()->IsEnabled())
+            return;
+
+        uint64 const bonus = ChenghaoSystemMgr::Instance()->GetHealthBonus(player);
+        if (bonus)
+            value += static_cast<float>(bonus);
+    }
+};
+
+class ChenghaoSystemUnitScript : public UnitScript
+{
+public:
+    ChenghaoSystemUnitScript() : UnitScript("ChenghaoSystemUnitScript", true, { UNITHOOK_ON_DAMAGE }) { }
+
+    void OnDamage(Unit* /*attacker*/, Unit* victim, uint128& damage) override
+    {
+        if (!victim || damage == 0 || !ChenghaoSystemMgr::Instance()->IsEnabled())
+            return;
+
+        Player* player = victim->ToPlayer();
+        if (!player)
+            return;
+
+        uint32 const reductionPct = ChenghaoSystemMgr::Instance()->GetDamageReductionPct(player);
+        if (!reductionPct)
+            return;
+
+        if (reductionPct >= 100)
+        {
+            damage = 0;
+            return;
+        }
+
+        damage = damage * static_cast<uint128>(100 - reductionPct) / 100;
+    }
 };
 
 class ChenghaoSystemCommandScript : public CommandScript
@@ -843,7 +930,7 @@ public:
         if (Player* player = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr)
         {
             ChenghaoSystemMgr::Instance()->LoadPlayerData(player);
-            ChenghaoSystemMgr::Instance()->ReapplyPlayerAuras(player);
+            ChenghaoSystemMgr::Instance()->RefreshPlayerBonuses(player);
         }
 
         handler->SendSysMessage("称号系统数据已重新加载。");
@@ -909,14 +996,15 @@ public:
             return false;
 
         ChenghaoSystemMgr::Instance()->LoadPlayerData(player);
-        ChenghaoSystemMgr::Instance()->ReapplyPlayerAuras(player);
+        ChenghaoSystemMgr::Instance()->RefreshPlayerBonuses(player);
 
         if (ChenghaoSystemEntry const* highestEntry = ChenghaoSystemMgr::Instance()->GetHighestUnlockedEntry(player))
         {
-            handler->PSendSysMessage("称号系统已刷新。当前生效称号 [id:{}] 等级:{} 光环:{} 描述:{}",
+            handler->PSendSysMessage("称号系统已刷新。当前生效称号 [id:{}] 等级:{} 生命加成:{} 减伤:{}% 描述:{}",
                 highestEntry->id,
                 highestEntry->titleLevel,
-                highestEntry->auraSpellId,
+                ChenghaoSystemMgr::Instance()->GetHealthBonus(player),
+                ChenghaoSystemMgr::Instance()->GetDamageReductionPct(player),
                 highestEntry->description.empty() ? "无" : highestEntry->description.c_str());
         }
         else
@@ -951,11 +1039,12 @@ public:
             else if (ChenghaoSystemMgr::Instance()->IsPlayerUnlocked(player, entry.id))
                 status = "已激活";
 
-            handler->PSendSysMessage("[id:{}] 等级:{} 需求系统:{} 光环:{} 状态:{} 描述:{}",
+            handler->PSendSysMessage("[id:{}] 等级:{} 需求系统:{} 生命加成:{} 减伤:{}% 状态:{} 描述:{}",
                 entry.id,
                 entry.titleLevel,
                 entry.requirementTemplateId,
-                entry.auraSpellId,
+                entry.attributeValue1,
+                entry.attributeValue2,
                 status,
                 entry.description.empty() ? "无" : entry.description.c_str());
         }
@@ -969,5 +1058,6 @@ void AddSC_mod_chenghao_system()
 {
     new ChenghaoSystemWorldScript();
     new ChenghaoSystemPlayerScript();
+    new ChenghaoSystemUnitScript();
     new ChenghaoSystemCommandScript();
 }

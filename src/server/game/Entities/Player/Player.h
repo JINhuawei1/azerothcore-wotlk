@@ -40,6 +40,7 @@
 #include "SpellInfo.h"
 #include "TradeData.h"
 #include "Unit.h"
+#include "Util.h"
 #include "WorldSession.h"
 #include <string>
 #include <vector>
@@ -1631,17 +1632,33 @@ public:
     void setWeaponChangeTimer(uint32 time) {m_weaponChangeTimer = time;}
 
     // 金币系统 - 使用 m_money 存储实际金额，客户端显示截断到 uint32 最大值
-    [[nodiscard]] uint64 GetMoney() const { return m_money; }
-    bool ModifyMoney(int64 amount, bool sendError = true);
-    [[nodiscard]] bool HasEnoughMoney(uint64 amount) const { return (GetMoney() >= amount); }
-
-    void SetMoney(uint64 value)
+    [[nodiscard]] int128 const& GetMoney() const { return m_money; }
+    [[nodiscard]] uint64 GetMoneyAsUInt64Saturated() const
     {
-        m_money = value;
+        return m_money <= 0 ? 0 : Acore::Number::ToUInt64Saturated(static_cast<uint128>(m_money));
+    }
+
+    [[nodiscard]] uint32 GetMoneyForClient() const
+    {
+        return m_money <= 0 ? 0 : Acore::Number::ToUInt32Saturated(static_cast<uint128>(m_money));
+    }
+
+    bool ModifyMoney(int64 amount, bool sendError = true);
+    [[nodiscard]] bool HasEnoughMoney(int128 const& amount) const { return amount <= 0 || GetMoney() >= amount; }
+
+    void SetMoney(int128 const& value)
+    {
+        if (value <= 0)
+            m_money = 0;
+        else
+        {
+            int128 const maxMoney = Acore::Number::GetDecimal65SignedMax();
+            m_money = value > maxMoney ? maxMoney : value;
+        }
+
         // 客户端只支持 uint32，超出部分截断显示
-        uint32 displayMoney = (value > 0xFFFFFFFF) ? 0xFFFFFFFF : static_cast<uint32>(value);
-        SetUInt32Value(PLAYER_FIELD_COINAGE, displayMoney);
-        MoneyChanged(value);
+        SetUInt32Value(PLAYER_FIELD_COINAGE, GetMoneyForClient());
+        MoneyChanged(GetMoneyAsUInt64Saturated());
         UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_GOLD_VALUE_OWNED);
     }
 
@@ -1835,7 +1852,7 @@ public:
     void SetLastPotionId(uint32 item_id) { m_lastPotionId = item_id; }
     void UpdatePotionCooldown(Spell* spell = nullptr);
 
-    void setResurrectRequestData(ObjectGuid guid, uint32 mapId, float X, float Y, float Z, uint64 health, uint64 mana)
+    void setResurrectRequestData(ObjectGuid guid, uint32 mapId, float X, float Y, float Z, uint128 const& health, uint128 const& mana)
     {
         m_resurrectGUID = guid;
         m_resurrectMap = mapId;
@@ -2876,7 +2893,7 @@ protected:
     uint32 m_charmAISpells[NUM_CAI_SPELLS];
 
     uint32 m_AreaID;
-    uint64 m_money;  // 扩展金币存储，支持40万金上限
+    int128 m_money;  // 扩展金币存储，支持 int128 真实余额
     uint32 m_regenTimerCount;
     uint32 m_itemRegenTimerCount;
     uint32 m_foodEmoteTimerCount;

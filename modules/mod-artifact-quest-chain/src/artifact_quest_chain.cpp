@@ -192,9 +192,21 @@ uint128 ScaleBasisPointValue(uint128 const& value, int32 scale)
     return Acore::Number::ToUInt128Saturated(scaled);
 }
 
-int64 ToPositiveHealthChange(uint128 const& value)
+uint128 ApplyArtifactHealthGain(Unit* unit, uint128 const& value)
 {
-    return Acore::Number::ToInt64Saturated(Acore::Number::ToInt128Saturated(value));
+    if (!unit || value == 0)
+        return 0;
+
+    uint128 currentHealth = unit->GetHealthForCombat128();
+    uint128 maxHealth = unit->GetMaxHealthForCombat128();
+    if (currentHealth >= maxHealth)
+        return 0;
+
+    uint128 gain = std::min<uint128>(value, maxHealth - currentHealth);
+    if (gain)
+        unit->SetHealthForCombat128(currentHealth + gain);
+
+    return gain;
 }
 
 void ApplyTimeLock(Player* caster, Unit* target, uint32 durationSeconds)
@@ -263,7 +275,7 @@ bool ApplyArtifactEffect(Player* player, Unit* victim, SpellInfo const* spellInf
     {
         uint128 const heal = ScaleBasisPointValue(dealt, miscValue);
         if (heal > 0)
-            player->ModifyHealth(ToPositiveHealthChange(heal));
+            ApplyArtifactHealthGain(player, heal);
     }
 
     return true;

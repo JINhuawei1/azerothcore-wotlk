@@ -16,13 +16,13 @@ CREATE TABLE `_图鉴系统`  (
   `激活需求` int UNSIGNED NOT NULL DEFAULT 0,
   `激活后执行GM命令` varchar(2000) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '激活图鉴后执行GM命令',
   `属性生效模式` int UNSIGNED NOT NULL DEFAULT 1 COMMENT '0=固定全属性值,1=装备属性',
-  `固定全属性值` decimal(39,0) NOT NULL DEFAULT 0 COMMENT '仅在属性生效模式=0时生效；每激活一个图鉴，为力量/敏捷/耐力/智力/精神各增加该数值',
+  `固定全属性值` decimal(65,0) NOT NULL DEFAULT 0 COMMENT '仅在属性生效模式=0时生效；每激活一个图鉴，为力量/敏捷/耐力/智力/精神各增加该数值',
   PRIMARY KEY (`物品entry`) USING BTREE,
   KEY `idx_套装ID` (`套装ID`) USING BTREE
 ) ENGINE = MyISAM AUTO_INCREMENT = 1 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = 'Item System' ROW_FORMAT = DYNAMIC;
 
 ALTER TABLE `_图鉴系统`
-  MODIFY COLUMN `固定全属性值` decimal(39,0) NOT NULL DEFAULT 0 COMMENT '仅在属性生效模式=0时生效；每激活一个图鉴，为力量/敏捷/耐力/智力/精神各增加该数值';
+  MODIFY COLUMN `固定全属性值` decimal(65,0) NOT NULL DEFAULT 0 COMMENT '仅在属性生效模式=0时生效；每激活一个图鉴，为力量/敏捷/耐力/智力/精神各增加该数值';
 
 -- ----------------------------
 -- Records of _图鉴系统

@@ -29,7 +29,7 @@ CREATE TABLE `characters` (
   `gender` tinyint unsigned NOT NULL DEFAULT '0',
   `level` tinyint unsigned NOT NULL DEFAULT '0',
   `xp` int unsigned NOT NULL DEFAULT '0',
-  `money` bigint unsigned NOT NULL DEFAULT '0',
+  `money` decimal(65,0) unsigned NOT NULL DEFAULT '0',
   `skin` tinyint unsigned NOT NULL DEFAULT '0',
   `face` tinyint unsigned NOT NULL DEFAULT '0',
   `hairStyle` tinyint unsigned NOT NULL DEFAULT '0',

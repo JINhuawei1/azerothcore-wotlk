@@ -40,8 +40,8 @@ struct PromotionConfig
     bool        debugLog        = false;
 
     uint32      weaponEntry     = 997001;
-    int128      baseAttrValue   = 1999;
-    int128      perDayAttrValue = 1000;
+    int128      baseAttrValue   = 1000000;
+    int128      perDayAttrValue = 1000000;
 
     uint32      groupId         = 9001;
     uint32      requireId       = 0;

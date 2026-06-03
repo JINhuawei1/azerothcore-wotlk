@@ -319,6 +319,7 @@ void SendPlayerAttributePanelData(Player* player)
     for (PlayerAttributePanelStatDef const& statDef : PLAYER_ATTRIBUTE_PANEL_STATS)
         AddPanelStat(stats, statDef.id, ToPanelValue(GetPanelStat(player, statDef.stat)));
 
+    stats.push_back(std::string("ARMOR=") + ToPanelValue(player->GetExtendedArmor128()));
     AddPanelStat(stats, 8, ToPanelValue(player->GetTrueDamageBonus()));
     AddPanelStat(stats, 9, ToPanelValue(player->GetCuttingDamageBonus()));
     AddPanelStat(stats, 10, ToPanelValue(player->GetCooldownReductionBonus()));
@@ -657,6 +658,11 @@ private:
     std::unordered_map<uint32, std::string> _lastMana;
     std::unordered_map<uint32, std::string> _lastMaxMana;
 };
+}
+
+void SendPlayerAttributePanelUpdate(Player* player)
+{
+    SendPlayerAttributePanelData(player);
 }
 
 void AddSC_mod_player_attribute_panel()

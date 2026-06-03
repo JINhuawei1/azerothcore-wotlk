@@ -2133,7 +2133,7 @@ void ItemEnhancementMgr::ApplyStatModifier(Player* player, uint32 statType, int1
         return;
 
     float statModValue = Acore::Number::ToFloat(value);
-    int64 legacyValue = Acore::Number::ToInt64Saturated(value);
+    int128 legacyValue = value;
 
     // 详细调试信息
     // ChatHandler(player->GetSession()).PSendSysMessage("DEBUG: {} 属性 {} (类型{}) 值:{}",
@@ -2285,7 +2285,7 @@ void ItemEnhancementMgr::ApplyStatModifierBatch(Player* player, uint32 statType,
         return;
 
     float statModValue = Acore::Number::ToFloat(value);
-    int64 legacyValue = Acore::Number::ToInt64Saturated(value);
+    int128 legacyValue = value;
 
     // 批量版本：只设置属性值，不调用任何Update函数
     switch (statType)

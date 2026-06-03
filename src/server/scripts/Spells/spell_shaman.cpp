@@ -24,6 +24,7 @@
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
 #include "Unit.h"
+#include "Util.h"
 #include <limits>
 
 namespace
@@ -34,6 +35,18 @@ namespace
             return 0;
 
         long double value = static_cast<long double>(base) * static_cast<long double>(pct) / 100.0L;
+        if (value >= static_cast<long double>(std::numeric_limits<int32>::max()))
+            return std::numeric_limits<int32>::max();
+
+        return static_cast<int32>(value);
+    }
+
+    int32 CalculatePctInt32Saturated(uint128 const& base, int32 pct)
+    {
+        if (base == 0 || pct <= 0)
+            return 0;
+
+        long double value = base.convert_to<long double>() * static_cast<long double>(pct) / 100.0L;
         if (value >= static_cast<long double>(std::numeric_limits<int32>::max()))
             return std::numeric_limits<int32>::max();
 
@@ -152,7 +165,7 @@ class spell_sha_t10_restoration_4p_bonus : public AuraScript
             return;
         }
 
-        int32 amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(static_cast<long double>(healInfo->GetHeal()), aurEff->GetAmount()) / static_cast<long double>(triggeredSpell->GetMaxTicks()));
+        int32 amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(Acore::Number::ToLongDouble(healInfo->GetHeal()), aurEff->GetAmount()) / static_cast<long double>(triggeredSpell->GetMaxTicks()));
         eventInfo.GetProcTarget()->CastDelayedSpellWithPeriodicAmount(GetTarget(), triggered_spell_id, SPELL_AURA_PERIODIC_HEAL, amount, EFFECT_0);
     }
 
@@ -265,15 +278,15 @@ class spell_sha_feral_spirit_scaling : public AuraScript
             {
                 if (aurEff->GetMiscValue() == STAT_STAMINA)
                 {
-                    uint64 actStat = GetUnitOwner()->GetHealthForCombat();
+                    uint128 actStat = GetUnitOwner()->GetHealthForCombat128();
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetHealthForCombat(std::min<uint64>(GetUnitOwner()->GetMaxHealthForCombat(), actStat));
+                    GetUnitOwner()->SetHealthForCombat128(std::min<uint128>(GetUnitOwner()->GetMaxHealthForCombat128(), actStat));
                 }
                 else
                 {
-                    uint64 actStat = GetUnitOwner()->GetPowerForCombat(POWER_MANA);
+                    uint128 actStat = GetUnitOwner()->GetPowerForCombat128(POWER_MANA);
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetPowerForCombat(POWER_MANA, std::min<uint64>(GetUnitOwner()->GetMaxPowerForCombat(POWER_MANA), actStat));
+                    GetUnitOwner()->SetPowerForCombat128(POWER_MANA, std::min<uint128>(GetUnitOwner()->GetMaxPowerForCombat128(POWER_MANA), actStat));
                 }
             }
         }
@@ -500,7 +513,7 @@ class spell_sha_chain_heal : public SpellScript
         }
         // Riptide increases the Chain Heal effect by 25%
         if (riptide)
-            SetHitHeal(SpellScriptCombat::ToInt64Saturated(static_cast<long double>(GetHitHeal()) * 1.25L));
+            SetHitHeal128(Acore::Number::ToUInt128Saturated(Acore::Number::ToLongDouble(GetHitHeal128()) * 1.25L));
     }
 
     void Register() override
@@ -550,7 +563,8 @@ class spell_sha_earth_shield : public AuraScript
         if (Unit* caster = GetCaster())
         {
             int32 baseAmount = amount;
-            amount = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(caster->SpellHealingBonusDone(GetUnitOwner(), GetSpellInfo(), static_cast<uint64>(std::max(amount, 0)), HEAL, aurEff->GetEffIndex())));
+            uint128 amountForCombat = caster->SpellHealingBonusDone(GetUnitOwner(), GetSpellInfo(), std::max(amount, 0), HEAL, aurEff->GetEffIndex());
+            amount = SpellScriptCombat::ToClientSpellValue(Acore::Number::ToLongDouble(amountForCombat));
             // xinef: taken should be calculated at every heal
             //amount = GetUnitOwner()->SpellHealingBonusTaken(caster, GetSpellInfo(), amount, HEAL);
 
@@ -812,7 +826,10 @@ class spell_sha_healing_stream_totem : public SpellScript
                 if (Unit* owner = caster->GetOwner())
                 {
                     if (triggeringSpell)
-                        damage = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(owner->SpellHealingBonusDone(target, triggeringSpell, static_cast<uint64>(damage), HEAL, effIndex)));
+                    {
+                        uint128 damageForCombat = owner->SpellHealingBonusDone(target, triggeringSpell, static_cast<uint64>(damage), HEAL, effIndex);
+                        damage = SpellScriptCombat::ToClientSpellValue(Acore::Number::ToLongDouble(damageForCombat));
+                    }
 
                     // Restorative Totems
                     if (AuraEffect* dummy = owner->GetAuraEffect(SPELL_AURA_DUMMY, SPELLFAMILY_SHAMAN, SHAMAN_ICON_ID_RESTORATIVE_TOTEMS, 1))
@@ -822,7 +839,8 @@ class spell_sha_healing_stream_totem : public SpellScript
                     if (AuraEffect const* aurEff = owner->GetAuraEffect(SPELL_SHAMAN_GLYPH_OF_HEALING_STREAM_TOTEM, EFFECT_0))
                         damage = SpellScriptCombat::AddPctClientSpellValue(damage, aurEff->GetAmount());
 
-                    damage = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(target->SpellHealingBonusTaken(owner, triggeringSpell, static_cast<uint64>(damage), HEAL)));
+                    uint128 takenHealForCombat = target->SpellHealingBonusTaken(owner, triggeringSpell, static_cast<uint64>(damage), HEAL);
+                    damage = SpellScriptCombat::ToClientSpellValue(Acore::Number::ToLongDouble(takenHealForCombat));
                 }
                 caster->CastCustomSpell(target, SPELL_SHAMAN_TOTEM_HEALING_STREAM_HEAL, &damage, 0, 0, true, 0, 0, GetOriginalCaster()->GetGUID());
             }
@@ -926,8 +944,8 @@ class spell_sha_item_mana_surge : public AuraScript
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
     {
         PreventDefaultAction();
-        int64 mana = eventInfo.GetSpellInfo()->CalcPowerCost(GetTarget(), eventInfo.GetSchoolMask());
-        int32 damage = mana > 0 ? CalculatePctInt32Saturated(static_cast<uint64>(mana), 35) : 0;
+        int128 mana = eventInfo.GetSpellInfo()->CalcPowerCost(GetTarget(), eventInfo.GetSchoolMask());
+        int32 damage = mana > 0 ? CalculatePctInt32Saturated(Acore::Number::ToUInt128Saturated(mana), 35) : 0;
 
         GetTarget()->CastCustomSpell(SPELL_SHAMAN_ITEM_MANA_SURGE, SPELLVALUE_BASE_POINT0, damage, GetTarget(), true, nullptr, aurEff);
     }
@@ -1042,7 +1060,7 @@ class spell_sha_mana_tide_totem : public SpellScript
                         if (AuraEffect* dummy = owner->GetAuraEffect(SPELL_SHAMAN_GLYPH_OF_MANA_TIDE, 0))
                             effValue += dummy->GetAmount();
                     // Regenerate 6% of Total Mana Every 3 secs
-                    int32 effBasePoints0 = CalculatePctInt32Saturated(unitTarget->GetMaxPowerForCombat(POWER_MANA), effValue);
+                    int32 effBasePoints0 = CalculatePctInt32Saturated(unitTarget->GetMaxPowerForCombat128(POWER_MANA), effValue);
                     caster->CastCustomSpell(unitTarget, SPELL_SHAMAN_MANA_TIDE_TOTEM, &effBasePoints0, nullptr, nullptr, true, nullptr, nullptr, GetOriginalCaster()->GetGUID());
                 }
             }

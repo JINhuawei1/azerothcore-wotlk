@@ -760,7 +760,7 @@ bool Creature::UpdateEntry(uint32 Entry, const CreatureData* data, bool changele
 
     uint128 previousHealth = GetHealthForCombat128();
     uint128 previousMaxHealth = GetMaxHealthForCombat128();
-    uint64 previousPlayerDamageReq = _playerDamageReq;
+    uint128 previousPlayerDamageReq = _playerDamageReq;
 
     SelectLevel(changelevel);
     if (previousHealth > 0)
@@ -771,8 +771,8 @@ bool Creature::UpdateEntry(uint32 Entry, const CreatureData* data, bool changele
 
         if (previousMaxHealth != 0 && previousMaxHealth > currentMaxHealth)
         {
-            long double scaledReq = (static_cast<long double>(previousPlayerDamageReq) * Acore::Number::ToLongDouble(currentMaxHealth)) / Acore::Number::ToLongDouble(previousMaxHealth);
-            _playerDamageReq = scaledReq > static_cast<long double>(std::numeric_limits<uint64>::max()) ? std::numeric_limits<uint64>::max() : static_cast<uint64>(scaledReq);
+            long double scaledReq = (Acore::Number::ToLongDouble(previousPlayerDamageReq) * Acore::Number::ToLongDouble(currentMaxHealth)) / Acore::Number::ToLongDouble(previousMaxHealth);
+            _playerDamageReq = Acore::Number::ToUInt128Saturated(scaledReq);
         }
         else
         {
@@ -4042,7 +4042,7 @@ bool Creature::IsDamageEnoughForLootingAndReward() const
     return m_creatureInfo->HasFlagsExtra(CREATURE_FLAG_EXTRA_NO_PLAYER_DAMAGE_REQ) || (_playerDamageReq == 0 && _damagedByPlayer);
 }
 
-void Creature::LowerPlayerDamageReq(uint64 unDamage, bool damagedByPlayer /*= true*/)
+void Creature::LowerPlayerDamageReq(uint128 const& unDamage, bool damagedByPlayer /*= true*/)
 {
     if (_playerDamageReq)
         _playerDamageReq > unDamage ? _playerDamageReq -= unDamage : _playerDamageReq = 0;
@@ -4055,11 +4055,11 @@ void Creature::LowerPlayerDamageReq(uint64 unDamage, bool damagedByPlayer /*= tr
 
 void Creature::ResetPlayerDamageReq()
 {
-    _playerDamageReq = Acore::Number::ToUInt64Saturated(GetHealthForCombat128() / 2);
+    _playerDamageReq = GetHealthForCombat128() / 2;
     _damagedByPlayer = false;
 }
 
-uint64 Creature::GetPlayerDamageReq() const
+uint128 const& Creature::GetPlayerDamageReq() const
 {
     return _playerDamageReq;
 }
@@ -4076,8 +4076,8 @@ bool Creature::CanCastSpell(uint32 spellID) const
 
     if (spellInfo)
     {
-        int64 powerCost = spellInfo->CalcPowerCost(this, spellInfo->GetSchoolMask());
-        if (powerCost > 0 && currentPower < static_cast<uint128>(powerCost))
+        int128 powerCost = spellInfo->CalcPowerCost(this, spellInfo->GetSchoolMask());
+        if (powerCost > 0 && currentPower < Acore::Number::ToUInt128Saturated(powerCost))
             return false;
     }
 

@@ -40,6 +40,18 @@ namespace
 
         return static_cast<int32>(value);
     }
+
+    int32 CalculatePctInt32Saturated(uint128 const& base, int32 pct)
+    {
+        if (base == 0 || pct <= 0)
+            return 0;
+
+        long double value = base.convert_to<long double>() * static_cast<long double>(pct) / 100.0L;
+        if (value >= static_cast<long double>(std::numeric_limits<int32>::max()))
+            return std::numeric_limits<int32>::max();
+
+        return static_cast<int32>(value);
+    }
 }
 
 /*
@@ -375,15 +387,15 @@ class spell_warl_generic_scaling : public AuraScript
             {
                 if (aurEff->GetMiscValue() == STAT_STAMINA)
                 {
-                    uint64 actStat = GetUnitOwner()->GetHealthForCombat();
+                    uint128 actStat = GetUnitOwner()->GetHealthForCombat128();
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetHealthForCombat(std::min<uint64>(GetUnitOwner()->GetMaxHealthForCombat(), actStat));
+                    GetUnitOwner()->SetHealthForCombat128(std::min<uint128>(GetUnitOwner()->GetMaxHealthForCombat128(), actStat));
                 }
                 else
                 {
-                    uint64 actStat = GetUnitOwner()->GetPowerForCombat(POWER_MANA);
+                    uint128 actStat = GetUnitOwner()->GetPowerForCombat128(POWER_MANA);
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetPowerForCombat(POWER_MANA, std::min<uint64>(GetUnitOwner()->GetMaxPowerForCombat(POWER_MANA), actStat));
+                    GetUnitOwner()->SetPowerForCombat128(POWER_MANA, std::min<uint128>(GetUnitOwner()->GetMaxPowerForCombat128(POWER_MANA), actStat));
                 }
             }
         }
@@ -1329,7 +1341,7 @@ class spell_warl_drain_soul : public AuraScript
             // Improved Drain Soul.
             if (Aura const* impDrainSoul = caster->GetAuraOfRankedSpell(SPELL_WARLOCK_IMPROVED_DRAIN_SOUL_R1, caster->GetGUID()))
             {
-                int32 amount = CalculatePctInt32Saturated(caster->GetMaxPowerForCombat(POWER_MANA), impDrainSoul->GetSpellInfo()->Effects[EFFECT_2].CalcValue());
+                int32 amount = CalculatePctInt32Saturated(caster->GetMaxPowerForCombat128(POWER_MANA), impDrainSoul->GetSpellInfo()->Effects[EFFECT_2].CalcValue());
                 caster->CastCustomSpell(SPELL_WARLOCK_IMPROVED_DRAIN_SOUL_PROC, SPELLVALUE_BASE_POINT0, amount, caster, true, nullptr, aurEff, caster->GetGUID());
             }
         }

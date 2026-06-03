@@ -26,6 +26,7 @@
 #include "SocialMgr.h"
 #include "Spell.h"
 #include "SpellMgr.h"
+#include "Util.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
@@ -52,6 +53,11 @@ namespace
             return false;
 
         return player->ModifyMoney(static_cast<int64>(amount));
+    }
+
+    bool CanAddMoney64(Player* player, uint64 amount)
+    {
+        return !amount || player->GetMoney() <= Acore::Number::GetDecimal65SignedMax() - static_cast<int128>(amount);
     }
 }
 
@@ -315,14 +321,14 @@ void WorldSession::HandleAcceptTradeOpcode(WorldPacket& /*recvPacket*/)
         return;
     }
 
-    if (his_trade->GetMoney() && _player->GetMoney() > uint64(MAX_MONEY_AMOUNT) - his_trade->GetMoney())
+    if (!CanAddMoney64(_player, his_trade->GetMoney()))
     {
         _player->SendEquipError(EQUIP_ERR_TOO_MUCH_GOLD, nullptr, nullptr);
         my_trade->SetAccepted(false, true);
         return;
     }
 
-    if (my_trade->GetMoney() && trader->GetMoney() > uint64(MAX_MONEY_AMOUNT) - my_trade->GetMoney())
+    if (!CanAddMoney64(trader, my_trade->GetMoney()))
     {
         trader->SendEquipError(EQUIP_ERR_TOO_MUCH_GOLD, nullptr, nullptr);
         his_trade->SetAccepted(false, true);

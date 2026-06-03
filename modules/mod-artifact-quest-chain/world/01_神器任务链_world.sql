@@ -12,7 +12,7 @@ CREATE TEMPORARY TABLE `_tmp_artifact_chain_defs` (
   `rank_id` tinyint unsigned NOT NULL,
   `weapon_entry` int unsigned NOT NULL,
   `weapon_name` varchar(64) NOT NULL,
-  `stat_value` decimal(39,0) NOT NULL,
+  `stat_value` decimal(65,0) NOT NULL,
   `material_entry` int unsigned NOT NULL,
   `material_name` varchar(64) NOT NULL,
   `quest_id` int unsigned NOT NULL,

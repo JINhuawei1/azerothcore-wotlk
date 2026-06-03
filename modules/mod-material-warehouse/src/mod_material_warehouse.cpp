@@ -11,9 +11,11 @@
 #include "Item.h"
 #include "ItemTemplate.h"
 #include "Log.h"
+#include "MaterialWarehouseSystem.h"
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "SharedDefines.h"
 #include "StringConvert.h"
 #include "Util.h"
 #include "WorldPacket.h"
@@ -30,6 +32,7 @@ namespace
 char constexpr MATERIAL_WAREHOUSE_ADDON_PREFIX[] = "MATWH";
 size_t constexpr MATERIAL_WAREHOUSE_MAX_ADDON_PAYLOAD = 230;
 uint32 constexpr MATERIAL_WAREHOUSE_AUTO_STORE_BATCH_SIZE = 500;
+uint32 constexpr MATERIAL_WAREHOUSE_PAGE_SIZE = 200;
 
 struct MaterialWarehouseType
 {
@@ -85,6 +88,27 @@ std::string GetItemIconPath(uint32 itemId)
         return BuildAddonIconPath(displayInfo->inventoryIcon);
 
     return "Interface\\Icons\\INV_Misc_QuestionMark";
+}
+
+std::string BuildPlainItemText(ItemTemplate const* itemTemplate, uint32 itemId)
+{
+    if (!itemTemplate)
+        return "[" + std::to_string(itemId) + "]";
+
+    return "[" + itemTemplate->Name1 + "]";
+}
+
+std::string BuildItemChatLink(ItemTemplate const* itemTemplate, uint32 itemId)
+{
+    if (!itemTemplate)
+        return BuildPlainItemText(itemTemplate, itemId);
+
+    std::ostringstream link;
+    uint32 quality = std::min<uint32>(itemTemplate->Quality, MAX_ITEM_QUALITY - 1);
+    link << "|c" << std::hex << ItemQualityColors[quality] << std::dec
+         << "|Hitem:" << itemTemplate->ItemId << ":0:0:0:0:0:0:0:0:0|h[" << itemTemplate->Name1 << "]|h|r";
+
+    return link.str();
 }
 
 bool TryParseUInt32(std::string const& text, uint32& value)
@@ -175,6 +199,38 @@ public:
 
     bool IsEnabled() const { return _enabled; }
 
+    uint32 GetStoredCount(Player* player, uint32 itemId)
+    {
+        if (!player || !_enabled || !itemId)
+            return 0;
+
+        MaterialWarehouseStoredItem* state = GetStoredState(player->GetGUID().GetCounter(), itemId);
+        if (!state)
+            return 0;
+
+        return Acore::Number::ToUInt32Saturated(state->count);
+    }
+
+    uint32 ConsumeStoredCount(Player* player, uint32 itemId, uint32 count)
+    {
+        if (!player || !_enabled || !itemId || !count)
+            return 0;
+
+        uint32 playerGuid = player->GetGUID().GetCounter();
+        MaterialWarehouseStoredItem* state = GetStoredState(playerGuid, itemId);
+        if (!state || state->count == 0)
+            return 0;
+
+        uint128 amount = std::min<uint128>(uint128(count), state->count);
+        uint32 amount32 = Acore::Number::ToUInt32Saturated(amount);
+        if (!amount32)
+            return 0;
+
+        SubtractStoredCount(playerGuid, itemId, amount);
+        SendWarehouse(player);
+        return amount32;
+    }
+
     bool IsItemAllowed(uint32 itemId, std::string* reason = nullptr) const
     {
         ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(itemId);
@@ -203,7 +259,7 @@ public:
         }
 
         if (reason)
-            *reason = "该物品类型未在 world._材料仓库 中启用";
+            *reason = "无法存储该类型的装备或者材料";
         return false;
     }
 
@@ -243,6 +299,7 @@ public:
         uint32 playerGuid = player->GetGUID().GetCounter();
         _players.erase(playerGuid);
         _pendingAutoStore.erase(playerGuid);
+        _playerPages.erase(playerGuid);
     }
 
     void DeletePlayer(ObjectGuid guid)
@@ -250,6 +307,7 @@ public:
         uint32 playerGuid = guid.GetCounter();
         _players.erase(playerGuid);
         _pendingAutoStore.erase(playerGuid);
+        _playerPages.erase(playerGuid);
         CharacterDatabase.Execute("DELETE FROM `_材料仓库玩家` WHERE `玩家GUID` = {}", playerGuid);
     }
 
@@ -273,7 +331,7 @@ public:
             "INSERT INTO `_材料仓库玩家` (`玩家GUID`, `物品ID`, `数量`, `自动存储`) "
             "VALUES ({}, {}, {}, 1) "
             "ON DUPLICATE KEY UPDATE `自动存储` = 1",
-            playerGuid, itemId, Acore::ToString(state.count));
+            playerGuid, itemId, Acore::Number::ToDecimal65String(state.count));
 
         uint128 deposited = 0;
         if (_depositExistingOnAdd)
@@ -382,7 +440,12 @@ public:
 
         if (notify)
         {
-            SendResult(player, "DEPOSIT", true, "已存入仓库");
+            ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(itemId);
+            std::ostringstream addonMessage;
+            addonMessage << BuildPlainItemText(itemTemplate, itemId) << "x" << destroyCount << " 存储成功";
+            std::ostringstream chatMessage;
+            chatMessage << BuildItemChatLink(itemTemplate, itemId) << "x" << destroyCount << " 存储成功";
+            SendResult(player, "DEPOSIT", true, addonMessage.str(), chatMessage.str());
             SendWarehouse(player);
         }
 
@@ -470,7 +533,12 @@ public:
         }
 
         SubtractStoredCount(playerGuid, itemId, amount);
-        SendResult(player, "WITHDRAW", true, "已取出物品");
+        ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(itemId);
+        std::ostringstream addonMessage;
+        addonMessage << BuildPlainItemText(itemTemplate, itemId) << "x" << amount32 << " 取出成功";
+        std::ostringstream chatMessage;
+        chatMessage << BuildItemChatLink(itemTemplate, itemId) << "x" << amount32 << " 取出成功";
+        SendResult(player, "WITHDRAW", true, addonMessage.str(), chatMessage.str());
         SendWarehouse(player);
         return true;
     }
@@ -507,21 +575,18 @@ public:
     void SendOpen(Player* player)
     {
         SendPayload(player, "OPEN");
-        SendWarehouse(player);
     }
 
-    void SendWarehouse(Player* player)
+    void SendWarehouse(Player* player, uint32 requestedPage = 0)
     {
         if (!player)
             return;
 
         uint32 playerGuid = player->GetGUID().GetCounter();
-        SendPayload(player, "BEGIN");
-
+        std::vector<uint32> itemIds;
         auto playerItr = _players.find(playerGuid);
         if (playerItr != _players.end())
         {
-            std::vector<uint32> itemIds;
             itemIds.reserve(playerItr->second.size());
             for (auto const& [itemId, state] : playerItr->second)
             {
@@ -530,9 +595,31 @@ public:
             }
 
             std::sort(itemIds.begin(), itemIds.end());
+        }
 
-            for (uint32 itemId : itemIds)
+        uint32 totalItems = static_cast<uint32>(itemIds.size());
+        uint32 totalPages = std::max<uint32>(1, (totalItems + MATERIAL_WAREHOUSE_PAGE_SIZE - 1) / MATERIAL_WAREHOUSE_PAGE_SIZE);
+        uint32 page = requestedPage;
+        if (!page)
+        {
+            auto pageItr = _playerPages.find(playerGuid);
+            page = pageItr != _playerPages.end() ? pageItr->second : 1;
+        }
+
+        page = std::max<uint32>(1, std::min<uint32>(page, totalPages));
+        _playerPages[playerGuid] = page;
+
+        std::ostringstream begin;
+        begin << "BEGIN:" << page << '^' << totalPages << '^' << totalItems << '^' << MATERIAL_WAREHOUSE_PAGE_SIZE;
+        SendPayload(player, begin.str());
+
+        if (playerItr != _players.end() && totalItems > 0)
+        {
+            uint32 offset = (page - 1) * MATERIAL_WAREHOUSE_PAGE_SIZE;
+            uint32 end = std::min<uint32>(offset + MATERIAL_WAREHOUSE_PAGE_SIZE, totalItems);
+            for (uint32 i = offset; i < end; ++i)
             {
+                uint32 itemId = itemIds[i];
                 MaterialWarehouseStoredItem const& state = playerItr->second[itemId];
                 ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(itemId);
                 if (!itemTemplate)
@@ -556,12 +643,17 @@ public:
 
     void SendResult(Player* player, std::string const& action, bool success, std::string const& message)
     {
+        SendResult(player, action, success, message, message);
+    }
+
+    void SendResult(Player* player, std::string const& action, bool success, std::string const& addonMessage, std::string const& chatMessage)
+    {
         std::ostringstream payload;
-        payload << "RESULT:" << action << '^' << (success ? 1 : 0) << '^' << SanitizeAddonField(message);
+        payload << "RESULT:" << action << '^' << (success ? 1 : 0) << '^' << SanitizeAddonField(addonMessage);
         SendPayload(player, payload.str());
 
         if (player && player->GetSession())
-            ChatHandler(player->GetSession()).PSendSysMessage("材料仓库：{}", message);
+            ChatHandler(player->GetSession()).PSendSysMessage("材料仓库：{}", chatMessage);
     }
 
     void HandleAddonCommand(Player* player, std::string const& command)
@@ -571,9 +663,15 @@ public:
 
         LOG_INFO("server.loading", "材料仓库: 收到Addon指令 player={} command={}", player->GetName(), command);
 
-        if (command == "OPEN" || command == "REQ")
+        if (command == "OPEN")
         {
             SendOpen(player);
+            return;
+        }
+
+        if (command == "REQ")
+        {
+            SendWarehouse(player);
             return;
         }
 
@@ -599,6 +697,14 @@ public:
         std::vector<std::string> parts = Split(command, ':');
         if (parts.empty())
             return;
+
+        if ((parts[0] == "REQ" || parts[0] == "PAGE" || parts[0] == "列表" || parts[0] == "刷新") && parts.size() >= 2)
+        {
+            uint32 page = 0;
+            if (TryParseUInt32(parts[1], page))
+                SendWarehouse(player, page);
+            return;
+        }
 
         uint32 itemId = 0;
         uint128 count = 0;
@@ -665,7 +771,7 @@ private:
         CharacterDatabase.Execute(
             "INSERT INTO `_材料仓库玩家` (`玩家GUID`, `物品ID`, `数量`, `自动存储`) "
             "VALUES ({}, {}, {}, 1) ON DUPLICATE KEY UPDATE `自动存储` = `自动存储`",
-            playerGuid, itemId, Acore::ToString(state.count));
+            playerGuid, itemId, Acore::Number::ToDecimal65String(state.count));
     }
 
     void AddStoredCount(uint32 playerGuid, uint32 itemId, uint128 const& count)
@@ -677,7 +783,7 @@ private:
             "INSERT INTO `_材料仓库玩家` (`玩家GUID`, `物品ID`, `数量`, `自动存储`) "
             "VALUES ({}, {}, {}, {}) "
             "ON DUPLICATE KEY UPDATE `数量` = VALUES(`数量`), `自动存储` = VALUES(`自动存储`)",
-            playerGuid, itemId, Acore::ToString(state.count), state.autoStore ? 1 : 0);
+            playerGuid, itemId, Acore::Number::ToDecimal65String(state.count), state.autoStore ? 1 : 0);
     }
 
     void ProcessPendingAutoStore(Player* player, uint32 budget)
@@ -753,7 +859,7 @@ private:
         CharacterDatabase.Execute(
             "UPDATE `_材料仓库玩家` SET `数量` = {} "
             "WHERE `玩家GUID` = {} AND `物品ID` = {}",
-            Acore::ToString(state->count), playerGuid, itemId);
+            Acore::Number::ToDecimal65String(state->count), playerGuid, itemId);
     }
 
     void SendPayload(Player* player, std::string const& payload)
@@ -791,6 +897,7 @@ private:
     std::vector<MaterialWarehouseType> _allowedTypes;
     std::unordered_map<uint32, std::unordered_map<uint32, MaterialWarehouseStoredItem>> _players;
     std::unordered_map<uint32, std::unordered_map<uint32, uint128>> _pendingAutoStore;
+    std::unordered_map<uint32, uint32> _playerPages;
     std::unordered_set<uint32> _withdrawGuard;
 };
 
@@ -1028,13 +1135,17 @@ private:
         return true;
     }
 
-    static bool HandleListCommand(ChatHandler* handler, char const* /*args*/)
+    static bool HandleListCommand(ChatHandler* handler, char const* args)
     {
         Player* player = GetPlayer(handler);
         if (!player)
             return false;
 
-        sMaterialWarehouseMgr->SendWarehouse(player);
+        uint32 page = 0;
+        std::istringstream stream(args ? args : "");
+        stream >> page;
+
+        sMaterialWarehouseMgr->SendWarehouse(player, page);
         return true;
     }
 
@@ -1053,4 +1164,14 @@ void AddSC_mod_material_warehouse()
     new MaterialWarehouseWorldScript();
     new MaterialWarehousePlayerScript();
     new MaterialWarehouseCommandScript();
+}
+
+uint32 MaterialWarehouseGetItemCount(Player* player, uint32 itemId)
+{
+    return sMaterialWarehouseMgr->GetStoredCount(player, itemId);
+}
+
+uint32 MaterialWarehouseConsumeItemCount(Player* player, uint32 itemId, uint32 count)
+{
+    return sMaterialWarehouseMgr->ConsumeStoredCount(player, itemId, count);
 }

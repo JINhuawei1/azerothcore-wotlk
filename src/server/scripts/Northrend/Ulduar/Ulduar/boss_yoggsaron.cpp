@@ -1162,8 +1162,8 @@ public:
             }
             else if (param == ACTION_YOGG_SARON_START_P3)
             {
-                me->SetHealth(me->GetMaxHealth() * 0.3f);
-                me->LowerPlayerDamageReq(me->GetMaxHealth() * 0.7f);
+                me->SetHealthForCombat128(me->GetMaxHealthForCombat128() * 3 / 10);
+                me->LowerPlayerDamageReq(me->GetMaxHealthForCombat128() * 7 / 10);
 
                 me->RemoveAura(SPELL_SHADOW_BARRIER);
 

@@ -24,6 +24,7 @@
 #include "Types.h"
 #include "Util.h"
 #include <charconv>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -165,7 +166,7 @@ namespace Acore::Impl::StringConvertImpl
                     return std::nullopt;
             }
 
-            boost::multiprecision::cpp_int const maxValue = (boost::multiprecision::cpp_int(1) << 128) - 1;
+            boost::multiprecision::cpp_int const maxValue = (boost::multiprecision::cpp_int(1) << std::numeric_limits<uint128>::digits) - 1;
             Optional<boost::multiprecision::cpp_int> value = StringToUnsignedMagnitude(str, base, maxValue);
             if (!value)
                 return std::nullopt;
@@ -197,8 +198,8 @@ namespace Acore::Impl::StringConvertImpl
             }
 
             boost::multiprecision::cpp_int const maxMagnitude = negative
-                ? (boost::multiprecision::cpp_int(1) << 127)
-                : ((boost::multiprecision::cpp_int(1) << 127) - 1);
+                ? (boost::multiprecision::cpp_int(1) << std::numeric_limits<int128>::digits)
+                : ((boost::multiprecision::cpp_int(1) << std::numeric_limits<int128>::digits) - 1);
 
             Optional<boost::multiprecision::cpp_int> magnitude = StringToUnsignedMagnitude(str, base, maxMagnitude);
             if (!magnitude)

@@ -128,6 +128,23 @@ float ToFloatForStatModifier(int128 const& value)
     return converted;
 }
 
+uint128 ApplyPlayerHealthGain(Player* player, uint128 const& amount)
+{
+    if (!player || amount == 0)
+        return 0;
+
+    uint128 currentHealth = player->GetHealthForCombat128();
+    uint128 maxHealth = player->GetMaxHealthForCombat128();
+    if (currentHealth >= maxHealth)
+        return 0;
+
+    uint128 gain = amount > maxHealth - currentHealth ? maxHealth - currentHealth : amount;
+    if (gain)
+        player->SetHealthForCombat128(currentHealth + gain);
+
+    return gain;
+}
+
 uint32 ToUInt32ForDBC(uint64 value)
 {
     return value > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(value);
@@ -2090,10 +2107,10 @@ void Player::RegenerateAll()
         if (IsAlive())
         {
             if (m_baseHealthRegen)
-                ModifyHealth(static_cast<int64>(m_baseHealthRegen));
+                ApplyPlayerHealthGain(this, static_cast<uint128>(m_baseHealthRegen));
 
             if (m_baseManaRegen && GetMaxPowerForCombat128(POWER_MANA) != 0)
-                ModifyPower64(POWER_MANA, static_cast<int64>(m_baseManaRegen));
+                ModifyPower128(POWER_MANA, Acore::Number::ToInt128Saturated(static_cast<long double>(m_baseManaRegen)));
         }
 
         m_itemRegenTimerCount -= 3000;
@@ -2359,8 +2376,7 @@ void Player::RegenerateHealth()
     if (addvalue < 0)
         addvalue = 0;
 
-    int64 healthGain = addvalue > static_cast<long double>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(addvalue);
-    ModifyHealth(healthGain);
+    ApplyPlayerHealthGain(this, Acore::Number::ToUInt128Saturated(addvalue));
 }
 
 void Player::ResetAllPowers()
@@ -10742,7 +10758,7 @@ bool Player::ActivateTaxiPathTo(std::vector<uint32> const& nodes, Creature* npc 
         return false;
     }
 
-    uint64 money = GetMoney();
+    int128 money = GetMoney();
 
     if (npc)
     {
@@ -11954,18 +11970,7 @@ bool Player::ModifyMoney(int64 amount, bool /*sendError*/ /*= true*/)
         return true;
 
     sScriptMgr->OnPlayerMoneyChanged(this, amount);
-
-    if (amount < 0)
-    {
-        uint64 reduction = amount == std::numeric_limits<int64>::min() ? static_cast<uint64>(std::numeric_limits<int64>::max()) + 1 : static_cast<uint64>(-amount);
-        SetMoney(GetMoney() > reduction ? GetMoney() - reduction : 0);
-    }
-    else
-    {
-        uint64 add = static_cast<uint64>(amount);
-        uint64 money = GetMoney();
-        SetMoney(add > std::numeric_limits<uint64>::max() - money ? std::numeric_limits<uint64>::max() : money + add);
-    }
+    SetMoney(GetMoney() + static_cast<int128>(amount));
 
     return true;
 }
@@ -16166,7 +16171,7 @@ void Player::RefundItem(Item* item)
     if (moneyRefund)
     {
         if (moneyRefund > static_cast<uint64>(std::numeric_limits<int64>::max()))
-            SetMoney(moneyRefund > std::numeric_limits<uint64>::max() - GetMoney() ? std::numeric_limits<uint64>::max() : GetMoney() + moneyRefund);
+            SetMoney(GetMoney() + static_cast<int128>(moneyRefund));
         else
             ModifyMoney(static_cast<int64>(moneyRefund)); // Saved in SaveInventoryAndGoldToDB
     }

@@ -800,7 +800,7 @@ void TalentSoulMgr::ApplyCooldownReduction(Player* player, uint32 spellId, int32
     }
 }
 
-void TalentSoulMgr::ApplyCostReduction(Player* player, uint32 spellId, int64& cost) const
+void TalentSoulMgr::ApplyCostReduction(Player* player, uint32 spellId, int128& cost) const
 {
     if (!player || cost <= 0)
         return;
@@ -808,8 +808,7 @@ void TalentSoulMgr::ApplyCostReduction(Player* player, uint32 spellId, int64& co
     float reductionPercent = GetPlayerCostReduction(player->GetGUID().GetCounter(), spellId);
     if (reductionPercent > 0)
     {
-        int64 originalCost = cost;
-        int64 reducedAmount = static_cast<int64>(static_cast<long double>(cost) * static_cast<long double>(reductionPercent) / 100.0L);
+        int128 reducedAmount = Acore::Number::ToInt128Saturated(Acore::Number::ToLongDouble(cost) * static_cast<long double>(reductionPercent) / 100.0L);
         cost -= reducedAmount;
 
         if (cost < 0)

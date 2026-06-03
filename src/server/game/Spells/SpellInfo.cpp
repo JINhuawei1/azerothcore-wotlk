@@ -32,55 +32,35 @@
 
 namespace
 {
-    int64 ToInt64Saturated(long double value)
+    int128 ToPowerCostSaturated(long double value)
     {
-        if (value >= static_cast<long double>(std::numeric_limits<int64>::max()))
-            return std::numeric_limits<int64>::max();
-
-        if (value <= static_cast<long double>(std::numeric_limits<int64>::min()))
-            return std::numeric_limits<int64>::min();
-
-        return static_cast<int64>(value);
+        return Acore::Number::ToInt128Saturated(value);
     }
 
-    int64 ToInt64Saturated(uint128 const& value)
-    {
-        return value > static_cast<uint128>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(value);
-    }
-
-    int64 CalculatePctInt64Saturated(uint64 base, float pct)
-    {
-        if (!base || pct <= 0.0f)
-            return 0;
-
-        long double value = static_cast<long double>(base) * static_cast<long double>(pct) / 100.0L;
-        return ToInt64Saturated(value);
-    }
-
-    int64 CalculatePctInt64Saturated(uint128 const& base, float pct)
+    int128 CalculatePctPowerCost(uint128 const& base, float pct)
     {
         if (base == 0 || pct <= 0.0f)
             return 0;
 
-        return ToInt64Saturated(Acore::Number::CalculatePct(base, pct));
+        return Acore::Number::ToInt128Saturated(Acore::Number::CalculatePct(base, pct));
     }
 
-    void AddPowerCostPct(int64& powerCost, uint64 base, float pct)
+    void AddPowerCostPct(int128& powerCost, uint128 const& base, float pct)
     {
-        int64 pctCost = CalculatePctInt64Saturated(base, pct);
-        if (pctCost > 0 && powerCost > std::numeric_limits<int64>::max() - pctCost)
-            powerCost = std::numeric_limits<int64>::max();
-        else
-            powerCost += pctCost;
+        powerCost += CalculatePctPowerCost(base, pct);
     }
 
-    void AddPowerCostPct(int64& powerCost, uint128 const& base, float pct)
+    void ApplySpellCostMod(Player* modOwner, uint32 spellId, int128& powerCost, Spell* spell)
     {
-        int64 pctCost = CalculatePctInt64Saturated(base, pct);
-        if (pctCost > 0 && powerCost > std::numeric_limits<int64>::max() - pctCost)
-            powerCost = std::numeric_limits<int64>::max();
-        else
-            powerCost += pctCost;
+        if (!modOwner)
+            return;
+
+        long double modValue = Acore::Number::ToLongDouble(powerCost);
+        modOwner->ApplySpellMod(spellId, SPELLMOD_COST, modValue, spell);
+        powerCost = Acore::Number::ToInt128Saturated(modValue);
+
+        if (powerCost < 0)
+            powerCost = 0;
     }
 }
 
@@ -2480,23 +2460,23 @@ uint32 SpellInfo::GetRecoveryTime() const
     return RecoveryTime > CategoryRecoveryTime ? RecoveryTime : CategoryRecoveryTime;
 }
 
-int64 SpellInfo::CalcPowerCost(Unit const* caster, SpellSchoolMask schoolMask, Spell* spell) const
+int128 SpellInfo::CalcPowerCost(Unit const* caster, SpellSchoolMask schoolMask, Spell* spell) const
 {
     // Spell drain all exist power on cast (Only paladin lay of Hands)
     if (AttributesEx & SPELL_ATTR1_USE_ALL_MANA)
     {
         // If power type - health drain all
         if (PowerType == POWER_HEALTH)
-            return ToInt64Saturated(caster->GetHealthForCombat128());
+            return Acore::Number::ToInt128Saturated(caster->GetHealthForCombat128());
         // Else drain all power
         if (PowerType < MAX_POWERS)
-            return ToInt64Saturated(caster->GetPowerForCombat128(Powers(PowerType)));
+            return Acore::Number::ToInt128Saturated(caster->GetPowerForCombat128(Powers(PowerType)));
         LOG_ERROR("spells", "SpellInfo::CalcPowerCost: Unknown power type '{}' in spell {}", PowerType, Id);
         return 0;
     }
 
     // Base powerCost
-    int64 powerCost = ManaCost;
+    int128 powerCost = ManaCost;
     // PCT cost from total amount
     if (ManaCostPercentage)
     {
@@ -2547,8 +2527,7 @@ int64 SpellInfo::CalcPowerCost(Unit const* caster, SpellSchoolMask schoolMask, S
     }
 
     // Apply cost mod by spell
-    if (Player* modOwner = caster->GetSpellModOwner())
-        modOwner->ApplySpellMod(Id, SPELLMOD_COST, powerCost, spell);
+    ApplySpellCostMod(caster->GetSpellModOwner(), Id, powerCost, spell);
 
     if (!caster->IsControlledByPlayer())
     {
@@ -2557,12 +2536,12 @@ int64 SpellInfo::CalcPowerCost(Unit const* caster, SpellSchoolMask schoolMask, S
             GtNPCManaCostScalerEntry const* spellScaler = sGtNPCManaCostScalerStore.LookupEntry(SpellLevel - 1);
             GtNPCManaCostScalerEntry const* casterScaler = sGtNPCManaCostScalerStore.LookupEntry(caster->GetLevel() - 1);
             if (spellScaler && casterScaler)
-                powerCost = ToInt64Saturated(static_cast<long double>(powerCost) * static_cast<long double>(casterScaler->ratio / spellScaler->ratio));
+                powerCost = ToPowerCostSaturated(Acore::Number::ToLongDouble(powerCost) * static_cast<long double>(casterScaler->ratio / spellScaler->ratio));
         }
     }
 
     // PCT mod from user auras by school
-    powerCost = ToInt64Saturated(static_cast<long double>(powerCost) * (1.0L + static_cast<long double>(caster->GetFloatValue(static_cast<uint16>(UNIT_FIELD_POWER_COST_MULTIPLIER) + school))));
+    powerCost = ToPowerCostSaturated(Acore::Number::ToLongDouble(powerCost) * (1.0L + static_cast<long double>(caster->GetFloatValue(static_cast<uint16>(UNIT_FIELD_POWER_COST_MULTIPLIER) + school))));
     if (powerCost < 0)
         powerCost = 0;
     return powerCost;

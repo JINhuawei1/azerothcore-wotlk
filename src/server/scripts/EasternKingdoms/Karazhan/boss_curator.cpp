@@ -64,7 +64,7 @@ struct boss_curator : public BossAI
             DoCastSelf(SPELL_ARCANE_INFUSION, true);
             Talk(SAY_ENRAGE);
         });
-        me->SetPowerForCombat(POWER_MANA, me->GetMaxPowerForCombat(POWER_MANA));
+        me->SetPowerForCombat128(POWER_MANA, me->GetMaxPowerForCombat128(POWER_MANA));
     }
 
     void KilledUnit(Unit* victim) override
@@ -111,8 +111,8 @@ struct boss_curator : public BossAI
                     Talk(SAY_SUMMON);
                 }
                 DoCastSelf(RAND(SPELL_SUMMON_ASTRAL_FLARE1, SPELL_SUMMON_ASTRAL_FLARE2, SPELL_SUMMON_ASTRAL_FLARE3, SPELL_SUMMON_ASTRAL_FLARE4));
-                uint64 mana = me->GetMaxPowerForCombat(POWER_MANA) / 10;
-                me->ModifyPower64(POWER_MANA, -static_cast<int64>(mana));
+                uint128 mana = me->GetMaxPowerForCombat128(POWER_MANA) / 10;
+                me->ModifyPower128(POWER_MANA, -Acore::Number::ToInt128Saturated(mana));
                 if (me->GetPowerPct(POWER_MANA) < 10.0f)
                 {
                     Talk(SAY_EVOCATE);

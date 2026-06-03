@@ -108,7 +108,7 @@ typedef std::uint64_t uint64;
 typedef std::uint32_t uint32;
 typedef std::uint16_t uint16;
 typedef std::uint8_t uint8;
-typedef boost::multiprecision::int128_t int128;
-typedef boost::multiprecision::uint128_t uint128;
+typedef boost::multiprecision::int256_t int128;
+typedef boost::multiprecision::uint256_t uint128;
 
 #endif //ACORE_DEFINE_H

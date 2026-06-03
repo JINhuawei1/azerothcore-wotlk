@@ -93,6 +93,31 @@ uint64 ScaleUInt64(uint64 value, long double scale)
     return static_cast<uint64>(scaled);
 }
 
+uint128 ScaleUInt128(uint128 const& value, long double scale)
+{
+    if (value == 0 || scale <= 0.0L)
+        return 0;
+
+    return ToUInt128Damage(Acore::Number::ToLongDouble(value) * scale);
+}
+
+int128 ScaleInt128(int128 const& value, long double scale)
+{
+    if (value == 0 || scale == 0.0L)
+        return 0;
+
+    return Acore::Number::ToInt128Saturated(Acore::Number::ToLongDouble(value) * scale);
+}
+
+uint128 AddSignedToUInt128(uint128 const& value, int128 const& delta)
+{
+    if (delta >= 0)
+        return AddUInt128Damage(value, Acore::Number::ToUInt128Saturated(delta));
+
+    uint128 decrease = Acore::Number::ToUInt128Saturated(-delta);
+    return decrease >= value ? uint128(0) : value - decrease;
+}
+
 uint64 AddUInt64Saturated(uint64 left, uint64 right)
 {
     return left > std::numeric_limits<uint64>::max() - right ? std::numeric_limits<uint64>::max() : left + right;
@@ -104,6 +129,11 @@ uint64 AbsInt64ToUInt64(int64 value)
         return static_cast<uint64>(std::numeric_limits<int64>::max()) + 1;
 
     return value < 0 ? static_cast<uint64>(-value) : static_cast<uint64>(value);
+}
+
+uint128 AbsInt128ToUInt128(int128 const& value)
+{
+    return value < 0 ? Acore::Number::ToUInt128Saturated(-value) : Acore::Number::ToUInt128Saturated(value);
 }
 
 int64 ToPositiveInt64(uint64 value)
@@ -133,6 +163,11 @@ int64 ToInt64Damage(long double value)
 int64 ApplyPctInt64(int64 value, long double pct)
 {
     return ToInt64Damage(static_cast<long double>(value) * pct / 100.0L);
+}
+
+uint128 ApplyPctUInt128(uint128 const& value, long double pct)
+{
+    return ScaleUInt128(value, pct / 100.0L);
 }
 
 long double GetAttackPowerForWeaponEffect(Unit* caster, WeaponAttackType attType)
@@ -373,8 +408,8 @@ void Spell::EffectResurrectNew(SpellEffIndex effIndex)
     if (target->isResurrectRequested())       // already have one active request
         return;
 
-    uint64 health = damage > 0 ? static_cast<uint64>(damage) : 0;
-    uint64 mana = m_spellInfo->Effects[effIndex].MiscValue > 0 ? static_cast<uint64>(m_spellInfo->Effects[effIndex].MiscValue) : 0;
+    uint128 health = damage > 0 ? static_cast<uint128>(static_cast<uint64>(damage)) : 0;
+    uint128 mana = m_spellInfo->Effects[effIndex].MiscValue > 0 ? static_cast<uint128>(m_spellInfo->Effects[effIndex].MiscValue) : 0;
     ExecuteLogEffectResurrect(effIndex, target);
     target->setResurrectRequestData(m_caster->GetGUID(), m_caster->GetMapId(), m_caster->GetPositionX(), m_caster->GetPositionY(), m_caster->GetPositionZ(), health, mana);
     SendResurrectRequest(target);
@@ -762,13 +797,14 @@ void Spell::EffectSchoolDMG(SpellEffIndex effIndex)
             if (damage < 0)
                 damage = 0;
 
-            uint128 bonusDamage = m_originalCaster->SpellDamageBonusDone(unitTarget, m_spellInfo, static_cast<uint64>(damage), SPELL_DIRECT_DAMAGE, effIndex);
+            uint128 effectDamage = damage > 0 ? static_cast<uint128>(static_cast<uint64>(damage)) : uint128(0);
+            uint128 bonusDamage = m_originalCaster->SpellDamageBonusDone(unitTarget, m_spellInfo, effectDamage, SPELL_DIRECT_DAMAGE, effIndex);
             bonusDamage = unitTarget->SpellDamageBonusTaken(m_originalCaster, m_spellInfo, bonusDamage, SPELL_DIRECT_DAMAGE);
             m_damage = AddUInt128Damage(m_damage, bonusDamage);
         }
         else if (damage > 0)
         {
-            m_damage = AddUInt128Damage(m_damage, static_cast<uint64>(damage));
+            m_damage = AddUInt128Damage(m_damage, static_cast<uint128>(static_cast<uint64>(damage)));
         }
     }
 }
@@ -1479,20 +1515,20 @@ void Spell::EffectPowerDrain(SpellEffIndex effIndex)
         return;
 
     // add spell damage bonus
-    damage = static_cast<int64>(Acore::Number::ToUInt64Saturated(std::min<uint128>(m_caster->SpellDamageBonusDone(unitTarget, m_spellInfo, static_cast<uint64>(damage), SPELL_DIRECT_DAMAGE, effIndex), static_cast<uint128>(std::numeric_limits<int64>::max()))));
-    damage = static_cast<int64>(Acore::Number::ToUInt64Saturated(std::min<uint128>(unitTarget->SpellDamageBonusTaken(m_caster, m_spellInfo, static_cast<uint64>(damage), SPELL_DIRECT_DAMAGE), static_cast<uint128>(std::numeric_limits<int64>::max()))));
+    uint128 power = damage > 0 ? static_cast<uint128>(static_cast<uint64>(damage)) : uint128(0);
+    power = m_caster->SpellDamageBonusDone(unitTarget, m_spellInfo, power, SPELL_DIRECT_DAMAGE, effIndex);
+    power = unitTarget->SpellDamageBonusTaken(m_caster, m_spellInfo, power, SPELL_DIRECT_DAMAGE);
 
-    uint64 power = static_cast<uint64>(damage);
     // resilience reduce mana draining effect at spell crit damage reduction (added in 2.4)
     if (PowerType == POWER_MANA)
     {
-        int32 resiliencePower = power > static_cast<uint64>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(power);
+        int32 resiliencePower = power > static_cast<uint128>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(power);
         int32 reduction = unitTarget->GetSpellCritDamageReduction(resiliencePower);
         if (reduction > 0)
-            power -= std::min<uint64>(power, static_cast<uint64>(reduction));
+            power -= std::min<uint128>(power, static_cast<uint128>(reduction));
     }
 
-    uint64 newDamage = AbsInt64ToUInt64(unitTarget->ModifyPower64(PowerType, -ToPositiveInt64(power)));
+    uint128 newDamage = AbsInt128ToUInt128(unitTarget->ModifyPower128(PowerType, -Acore::Number::ToInt128Saturated(power)));
 
     float gainMultiplier = 0.0f;
 
@@ -1501,11 +1537,11 @@ void Spell::EffectPowerDrain(SpellEffIndex effIndex)
     {
         gainMultiplier = m_spellInfo->Effects[effIndex].CalcValueMultiplier(m_originalCaster, this);
 
-        uint64 gain = ScaleUInt64(newDamage, static_cast<long double>(gainMultiplier));
+        uint128 gain = ScaleUInt128(newDamage, static_cast<long double>(gainMultiplier));
 
         m_caster->EnergizeBySpell(m_caster, m_spellInfo->Id, gain, PowerType);
     }
-    ExecuteLogEffectTakeTargetPower(effIndex, unitTarget, PowerType, newDamage, gainMultiplier);
+    ExecuteLogEffectTakeTargetPower(effIndex, unitTarget, PowerType, Acore::Number::ToUInt64Saturated(newDamage), gainMultiplier);
 }
 
 void Spell::EffectSendEvent(SpellEffIndex effIndex)
@@ -1562,37 +1598,38 @@ void Spell::EffectPowerBurn(SpellEffIndex effIndex)
     if (!unitTarget || !unitTarget->IsAlive() || !unitTarget->HasActivePowerType(PowerType) || damage < 0)
         return;
 
+    uint128 power = damage > 0 ? static_cast<uint128>(static_cast<uint64>(damage)) : uint128(0);
+
     // burn x% of target's mana, up to maximum of 2x% of caster's mana (Mana Burn)
     if (m_spellInfo->Id == 8129)
     {
         int64 doubledPct = damage > (std::numeric_limits<int64>::max() / 2) ? std::numeric_limits<int64>::max() : damage * 2;
         uint128 maxDamage = Acore::Number::CalculatePct(m_caster->GetMaxPowerForCombat128(PowerType), doubledPct);
         uint128 targetDamage = Acore::Number::CalculatePct(unitTarget->GetMaxPowerForCombat128(PowerType), damage);
-        damage = ToPositiveInt64(targetDamage > maxDamage ? maxDamage : targetDamage);
+        power = targetDamage > maxDamage ? maxDamage : targetDamage;
 
         // Remove fear
         unitTarget->RemoveAurasByType(SPELL_AURA_MOD_FEAR);
     }
 
-    uint64 power = static_cast<uint64>(damage);
     // resilience reduce mana draining effect at spell crit damage reduction (added in 2.4)
     if (PowerType == POWER_MANA)
     {
-        int32 resiliencePower = power > static_cast<uint64>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(power);
+        int32 resiliencePower = power > static_cast<uint128>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(power);
         int32 reduction = unitTarget->GetSpellCritDamageReduction(resiliencePower);
         if (reduction > 0)
-            power -= std::min<uint64>(power, static_cast<uint64>(reduction));
+            power -= std::min<uint128>(power, static_cast<uint128>(reduction));
     }
 
-    uint64 newDamage = AbsInt64ToUInt64(unitTarget->ModifyPower64(PowerType, -ToPositiveInt64(power)));
+    uint128 newDamage = AbsInt128ToUInt128(unitTarget->ModifyPower128(PowerType, -Acore::Number::ToInt128Saturated(power)));
 
     // NO - Not a typo - EffectPowerBurn uses effect value multiplier - not effect damage multiplier
     float dmgMultiplier = m_spellInfo->Effects[effIndex].CalcValueMultiplier(m_originalCaster, this);
 
     // add log data before multiplication (need power amount, not damage)
-    ExecuteLogEffectTakeTargetPower(effIndex, unitTarget, PowerType, newDamage, 0.0f);
+    ExecuteLogEffectTakeTargetPower(effIndex, unitTarget, PowerType, Acore::Number::ToUInt64Saturated(newDamage), 0.0f);
 
-    uint64 scaledDamage = ScaleUInt64(newDamage, static_cast<long double>(dmgMultiplier));
+    uint128 scaledDamage = ScaleUInt128(newDamage, static_cast<long double>(dmgMultiplier));
     m_damage = AddUInt128Damage(m_damage, scaledDamage);
 }
 
@@ -1610,7 +1647,7 @@ void Spell::EffectHeal(SpellEffIndex effIndex)
         if (!caster)
             return;
 
-        uint64 addhealth = static_cast<uint64>(damage);
+        uint128 addhealth = damage > 0 ? static_cast<uint128>(static_cast<uint64>(damage)) : uint128(0);
 
         // Vessel of the Naaru (Vial of the Sunwell trinket)
         if (m_spellInfo->Id == 45064)
@@ -1623,7 +1660,7 @@ void Spell::EffectHeal(SpellEffIndex effIndex)
                 m_caster->RemoveAurasDueToSpell(45062);
             }
 
-            addhealth = AddUInt64Saturated(addhealth, damageAmount > 0 ? static_cast<uint64>(damageAmount) : 0);
+            addhealth = AddUInt128Damage(addhealth, damageAmount > 0 ? static_cast<uint128>(damageAmount) : 0);
         }
         // Swiftmend - consumes Regrowth or Rejuvenation
         else if (m_spellInfo->TargetAuraState == AURA_STATE_SWIFTMEND && unitTarget->HasAuraState(AURA_STATE_SWIFTMEND, m_spellInfo, m_caster))
@@ -1656,7 +1693,7 @@ void Spell::EffectHeal(SpellEffIndex effIndex)
                 return;
             }
 
-            uint64 tickheal = targetAura->GetAmount() > 0 ? static_cast<uint64>(targetAura->GetAmount()) : 0;
+            uint128 tickheal = targetAura->GetAmount() > 0 ? static_cast<uint128>(targetAura->GetAmount()) : 0;
             if (Unit* auraCaster = targetAura->GetCaster())
                 tickheal = unitTarget->SpellHealingBonusTaken(auraCaster, targetAura->GetSpellInfo(), tickheal, DOT);
 
@@ -1671,7 +1708,7 @@ void Spell::EffectHeal(SpellEffIndex effIndex)
             else // if (targetAura->GetSpellInfo()->SpellFamilyFlags[0] & 0x40)
                 tickcount = 6;
 
-            addhealth = AddUInt64Saturated(addhealth, ScaleUInt64(tickheal, static_cast<long double>(tickcount)));
+            addhealth = AddUInt128Damage(addhealth, ScaleUInt128(tickheal, static_cast<long double>(tickcount)));
 
             // Glyph of Swiftmend
             if (!caster->HasAura(54824))
@@ -1683,7 +1720,7 @@ void Spell::EffectHeal(SpellEffIndex effIndex)
         // Death Pact - return pct of max health to caster
         else if (m_spellInfo->SpellFamilyName == SPELLFAMILY_DEATHKNIGHT && m_spellInfo->SpellFamilyFlags[0] & 0x00080000)
         {
-            addhealth = caster->SpellHealingBonusDone(unitTarget, m_spellInfo, caster->CountPctFromMaxHealth(damage), HEAL, effIndex);
+            addhealth = caster->SpellHealingBonusDone(unitTarget, m_spellInfo, caster->CountPctFromMaxHealth128(damage), HEAL, effIndex);
             addhealth = unitTarget->SpellHealingBonusTaken(caster, m_spellInfo, addhealth, HEAL);
         }
         else if (m_spellInfo->Id != 33778) // not lifebloom
@@ -1720,7 +1757,7 @@ void Spell::EffectHealPct(SpellEffIndex effIndex)
     if (!m_originalCaster)
         return;
 
-    uint64 heal = m_originalCaster->SpellHealingBonusDone(unitTarget, m_spellInfo, unitTarget->CountPctFromMaxHealth(damage), HEAL, effIndex);
+    uint128 heal = m_originalCaster->SpellHealingBonusDone(unitTarget, m_spellInfo, unitTarget->CountPctFromMaxHealth128(damage), HEAL, effIndex);
     heal = unitTarget->SpellHealingBonusTaken(m_originalCaster, m_spellInfo, heal, HEAL);
 
     m_healing = AddUInt128Damage(m_healing, heal);
@@ -1738,9 +1775,10 @@ void Spell::EffectHealMechanical(SpellEffIndex effIndex)
     if (!m_originalCaster)
         return;
 
-    uint64 heal = m_originalCaster->SpellHealingBonusDone(unitTarget, m_spellInfo, static_cast<uint64>(damage), HEAL, effIndex);
+    uint128 healAmount = damage > 0 ? static_cast<uint128>(static_cast<uint64>(damage)) : uint128(0);
+    uint128 heal = m_originalCaster->SpellHealingBonusDone(unitTarget, m_spellInfo, healAmount, HEAL, effIndex);
 
-    uint64 takenHeal = unitTarget->SpellHealingBonusTaken(m_originalCaster, m_spellInfo, heal, HEAL);
+    uint128 takenHeal = unitTarget->SpellHealingBonusTaken(m_originalCaster, m_spellInfo, heal, HEAL);
     m_healing = AddUInt128Damage(m_healing, takenHeal);
 }
 
@@ -1752,7 +1790,8 @@ void Spell::EffectHealthLeech(SpellEffIndex  effIndex)
     if (!unitTarget || !unitTarget->IsAlive() || damage < 0)
         return;
 
-    uint128 leechDamage = m_caster->SpellDamageBonusDone(unitTarget, m_spellInfo, static_cast<uint64>(damage), SPELL_DIRECT_DAMAGE, effIndex);
+    uint128 effectDamage = damage > 0 ? static_cast<uint128>(static_cast<uint64>(damage)) : uint128(0);
+    uint128 leechDamage = m_caster->SpellDamageBonusDone(unitTarget, m_spellInfo, effectDamage, SPELL_DIRECT_DAMAGE, effIndex);
     leechDamage = unitTarget->SpellDamageBonusTaken(m_caster, m_spellInfo, leechDamage, SPELL_DIRECT_DAMAGE);
 
     LOG_DEBUG("spells.aura", "HealthLeech :{}", leechDamage);
@@ -2032,6 +2071,8 @@ void Spell::EffectEnergize(SpellEffIndex effIndex)
     if (unitTarget->GetMaxPowerForCombat128(power) == 0)
         return;
 
+    int128 energizeAmount = damage;
+
     // Some level depends spells
     int level_multiplier = 0;
     int level_diff = 0;
@@ -2054,18 +2095,16 @@ void Spell::EffectEnergize(SpellEffIndex effIndex)
         case 68082:                                         // Glyph of Seal of Command
             {
                 uint128 createMana = unitTarget->GetCreateManaForCombat128();
-                uint64 energizeAmount = CalculatePctUInt64(createMana, damage);
-                damage = ToPositiveInt64(energizeAmount);
+                energizeAmount = Acore::Number::ToInt128Saturated(Acore::Number::CalculatePct(createMana, damage));
             }
             break;
         case 48542:                                         // Revitalize
-            damage = ToPositiveInt64(CalculatePctUInt64(unitTarget->GetMaxPowerForCombat128(power), damage));
+            energizeAmount = Acore::Number::ToInt128Saturated(Acore::Number::CalculatePct(unitTarget->GetMaxPowerForCombat128(power), damage));
             break;
         case 71132:                                         // Glyph of Shadow Word: Pain
             {
                 uint128 createMana = unitTarget->GetCreateManaForCombat128();
-                uint64 energizeAmount = CalculatePctUInt64(createMana, 1);  // set 1 as value, missing in dbc
-                damage = ToPositiveInt64(energizeAmount);
+                energizeAmount = Acore::Number::ToInt128Saturated(Acore::Number::CalculatePct(createMana, 1));  // set 1 as value, missing in dbc
             }
             break;
         default:
@@ -2073,12 +2112,12 @@ void Spell::EffectEnergize(SpellEffIndex effIndex)
     }
 
     if (level_diff > 0)
-        damage -= level_multiplier * level_diff;
+        energizeAmount -= level_multiplier * level_diff;
 
-    if (damage < 0)
+    if (energizeAmount < 0)
         return;
 
-    m_caster->EnergizeBySpell(unitTarget, m_spellInfo->Id, static_cast<uint64>(damage), power);
+    m_caster->EnergizeBySpell(unitTarget, m_spellInfo->Id, Acore::Number::ToUInt128Saturated(energizeAmount), power);
 
     // Mad Alchemist's Potion
     if (m_spellInfo->Id == 45051)
@@ -2145,7 +2184,7 @@ void Spell::EffectEnergizePct(SpellEffIndex effIndex)
     if (maxPower == 0)
         return;
 
-    uint64 gain = CalculatePctUInt64(maxPower, damage);
+    uint128 gain = Acore::Number::CalculatePct(maxPower, damage);
     m_caster->EnergizeBySpell(unitTarget, m_spellInfo->Id, gain, power);
 }
 
@@ -3477,7 +3516,7 @@ void Spell::EffectWeaponDmg(SpellEffIndex effIndex)
 
     // some spell specific modifiers
     float totalDamagePercentMod  = 100.0f;                  // applied to final bonus+weapon damage
-    int64 spell_bonus = 0;                                  // bonus specific for spell
+    int128 spell_bonus = 0;                                 // bonus specific for spell
     bool normalized = false;
 
     switch (m_spellInfo->SpellFamilyName)
@@ -3562,8 +3601,8 @@ void Spell::EffectWeaponDmg(SpellEffIndex effIndex)
                 switch (m_spellInfo->Id)
                 {
                     case 20467: // Seal of Command Unleashed
-                        spell_bonus += ToInt64Damage(0.08L * GetAttackPowerForWeaponEffect(m_caster, BASE_ATTACK));
-                        spell_bonus += ToInt64Damage(0.13L * GetSpellDamageBonusForWeaponEffect(m_caster, m_spellInfo->GetSchoolMask()));
+                        spell_bonus += Acore::Number::ToInt128Saturated(0.08L * GetAttackPowerForWeaponEffect(m_caster, BASE_ATTACK));
+                        spell_bonus += Acore::Number::ToInt128Saturated(0.13L * GetSpellDamageBonusForWeaponEffect(m_caster, m_spellInfo->GetSchoolMask()));
                         break;
                     case 42463: // Seals of the Pure for Seal of Vengeance/Corruption
                     case 53739:
@@ -3609,7 +3648,7 @@ void Spell::EffectWeaponDmg(SpellEffIndex effIndex)
                 // Kill Shot
                 if (m_spellInfo->SpellFamilyFlags[1] & 0x800000)
                 {
-                    spell_bonus += ToInt64Damage(GetAttackPowerForWeaponEffect(m_caster, RANGED_ATTACK) * 0.4L);
+                    spell_bonus += Acore::Number::ToInt128Saturated(GetAttackPowerForWeaponEffect(m_caster, RANGED_ATTACK) * 0.4L);
                 }
                 break;
             }
@@ -3669,9 +3708,9 @@ void Spell::EffectWeaponDmg(SpellEffIndex effIndex)
                 // Blood-Caked Strike - Blood-Caked Blade
                 if (m_spellInfo->SpellIconID == 1736)
                 {
-                    int64 weaponDamage = ToPositiveInt64(m_caster->CalculateDamage(m_attackType, false, true));
-                    weaponDamage = ApplyPctInt64(weaponDamage, std::min(uint32(3), unitTarget->GetDiseasesByCaster(m_caster->GetGUID())) * 12.5L);
-                    spell_bonus = weaponDamage;
+                    uint128 weaponDamage = m_caster->CalculateDamage(m_attackType, false, true);
+                    weaponDamage = ApplyPctUInt128(weaponDamage, std::min(uint32(3), unitTarget->GetDiseasesByCaster(m_caster->GetGUID())) * 12.5L);
+                    spell_bonus = Acore::Number::ToInt128Saturated(weaponDamage);
                     break;
                 }
                 // Heart Strike
@@ -3688,7 +3727,7 @@ void Spell::EffectWeaponDmg(SpellEffIndex effIndex)
                 // Rune Strike
                 if (m_spellInfo->SpellFamilyFlags[1] & 0x20000000)
                 {
-                    spell_bonus += ToInt64Damage(0.15L * GetAttackPowerForWeaponEffect(m_caster, BASE_ATTACK));
+                    spell_bonus += Acore::Number::ToInt128Saturated(0.15L * GetAttackPowerForWeaponEffect(m_caster, BASE_ATTACK));
                 }
 
                 break;
@@ -3696,7 +3735,7 @@ void Spell::EffectWeaponDmg(SpellEffIndex effIndex)
     }
 
     float weaponDamagePercentMod = 100.0f;
-    int64 fixed_bonus = 0;
+    int128 fixed_bonus = 0;
 
     for (int j = 0; j < MAX_SPELL_EFFECTS; ++j)
     {
@@ -3739,25 +3778,25 @@ void Spell::EffectWeaponDmg(SpellEffIndex effIndex)
         if (m_spellSchoolMask & SPELL_SCHOOL_MASK_NORMAL)
         {
             float weapon_total_pct = m_caster->GetModifierValue(unitMod, TOTAL_PCT);
-            fixed_bonus = ToInt64Damage(static_cast<long double>(fixed_bonus) * static_cast<long double>(weapon_total_pct));
-            spell_bonus = ToInt64Damage(static_cast<long double>(spell_bonus) * static_cast<long double>(weapon_total_pct));
+            fixed_bonus = ScaleInt128(fixed_bonus, static_cast<long double>(weapon_total_pct));
+            spell_bonus = ScaleInt128(spell_bonus, static_cast<long double>(weapon_total_pct));
         }
     }
 
-    int64 weaponDamage = 0;
+    uint128 weaponDamage = 0;
     // Dancing Rune Weapon
     if (m_caster->GetEntry() == 27893)
     {
         if (Unit* owner = m_caster->GetOwner())
-            weaponDamage = ToPositiveInt64(owner->CalculateDamage(m_attackType, normalized, true));
+            weaponDamage = owner->CalculateDamage(m_attackType, normalized, true);
     }
     else if (m_spellInfo->Id == 5019) // Wands
     {
-        weaponDamage = ToPositiveInt64(m_caster->CalculateDamage(m_attackType, true, false));
+        weaponDamage = m_caster->CalculateDamage(m_attackType, true, false);
     }
     else
     {
-        weaponDamage = ToPositiveInt64(m_caster->CalculateDamage(m_attackType, normalized, true));
+        weaponDamage = m_caster->CalculateDamage(m_attackType, normalized, true);
     }
 
     // Sequence is important
@@ -3770,20 +3809,21 @@ void Spell::EffectWeaponDmg(SpellEffIndex effIndex)
             case SPELL_EFFECT_WEAPON_DAMAGE:
             case SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL:
             case SPELL_EFFECT_NORMALIZED_WEAPON_DMG:
-                weaponDamage += fixed_bonus;
+                weaponDamage = AddSignedToUInt128(weaponDamage, fixed_bonus);
                 break;
             case SPELL_EFFECT_WEAPON_PERCENT_DAMAGE:
-                weaponDamage = ApplyPctInt64(weaponDamage, weaponDamagePercentMod);
+                weaponDamage = ApplyPctUInt128(weaponDamage, weaponDamagePercentMod);
+                break;
             default:
                 break;                                      // not weapon damage effect, just skip
         }
     }
 
-    weaponDamage += spell_bonus;
-    weaponDamage = ApplyPctInt64(weaponDamage, totalDamagePercentMod);
+    weaponDamage = AddSignedToUInt128(weaponDamage, spell_bonus);
+    weaponDamage = ApplyPctUInt128(weaponDamage, totalDamagePercentMod);
 
     // prevent negative damage
-    uint128 eff_damage = weaponDamage > 0 ? static_cast<uint64>(weaponDamage) : 0;
+    uint128 eff_damage = weaponDamage;
 
     // Add melee damage bonuses (also check for negative)
     eff_damage = m_caster->MeleeDamageBonusDone(unitTarget, eff_damage, m_attackType, m_spellInfo, m_spellSchoolMask);
@@ -3832,15 +3872,15 @@ void Spell::EffectHealMaxHealth(SpellEffIndex /*effIndex*/)
         return;
     }
 
-    uint64 addhealth = 0;
+    uint128 addhealth = 0;
 
     // damage == 0 - heal for caster max health
     if (damage == 0)
-        addhealth = Acore::Number::ToUInt64Saturated(m_caster->GetMaxHealthForCombat128());
+        addhealth = m_caster->GetMaxHealthForCombat128();
     else
     {
         uint128 missingHealth = unitTarget->GetMaxHealthForCombat128() > unitTarget->GetHealthForCombat128() ? unitTarget->GetMaxHealthForCombat128() - unitTarget->GetHealthForCombat128() : 0;
-        addhealth = Acore::Number::ToUInt64Saturated(missingHealth);
+        addhealth = missingHealth;
     }
 
     m_healing = AddUInt128Damage(m_healing, addhealth);
@@ -4806,8 +4846,8 @@ void Spell::EffectResurrect(SpellEffIndex effIndex)
     if (target->isResurrectRequested())       // already have one active request
         return;
 
-    uint64 health = Acore::Number::ToUInt64Saturated(target->CountPctFromMaxHealth128(damage));
-    uint64 mana = CalculatePctUInt64(target->GetMaxPowerForCombat128(POWER_MANA), damage);
+    uint128 health = target->CountPctFromMaxHealth128(damage);
+    uint128 mana = Acore::Number::CalculatePct(target->GetMaxPowerForCombat128(POWER_MANA), damage);
 
     ExecuteLogEffectResurrect(effIndex, target);
 
@@ -5005,21 +5045,21 @@ void Spell::EffectSelfResurrect(SpellEffIndex effIndex)
     if (!m_caster->IsInWorld())
         return;
 
-    uint64 health = 0;
-    uint64 mana = 0;
+    uint128 health = 0;
+    uint128 mana = 0;
 
     // flat case
     if (damage < 0)
     {
-        health = static_cast<uint64>(-static_cast<int64>(damage));
-        mana = m_spellInfo->Effects[effIndex].MiscValue;
+        health = static_cast<uint128>(static_cast<uint64>(-static_cast<int64>(damage)));
+        mana = m_spellInfo->Effects[effIndex].MiscValue > 0 ? static_cast<uint128>(m_spellInfo->Effects[effIndex].MiscValue) : 0;
     }
     // percent case
     else
     {
-        health = Acore::Number::ToUInt64Saturated(m_caster->CountPctFromMaxHealth128(damage));
+        health = m_caster->CountPctFromMaxHealth128(damage);
         if (m_caster->GetMaxPowerForCombat128(POWER_MANA) > 0)
-            mana = CalculatePctUInt64(m_caster->GetMaxPowerForCombat128(POWER_MANA), damage);
+            mana = Acore::Number::CalculatePct(m_caster->GetMaxPowerForCombat128(POWER_MANA), damage);
     }
 
     Player* player = m_caster->ToPlayer();
@@ -6384,8 +6424,8 @@ void Spell::EffectCastButtons(SpellEffIndex effIndex)
         if (!spellInfo->HasAttribute(SPELL_ATTR7_CAN_BE_MULTI_CAST))
             continue;
 
-        int64 cost = spellInfo->CalcPowerCost(m_caster, spellInfo->GetSchoolMask(), this);
-        if (cost > 0 && m_caster->GetPowerForCombat128(POWER_MANA) < static_cast<uint128>(cost))
+        int128 cost = spellInfo->CalcPowerCost(m_caster, spellInfo->GetSchoolMask(), this);
+        if (cost > 0 && m_caster->GetPowerForCombat128(POWER_MANA) < Acore::Number::ToUInt128Saturated(cost))
             continue;
 
         TriggerCastFlags triggerFlags = TriggerCastFlags(TRIGGERED_IGNORE_GCD | TRIGGERED_IGNORE_CAST_IN_PROGRESS | TRIGGERED_CAST_DIRECTLY);

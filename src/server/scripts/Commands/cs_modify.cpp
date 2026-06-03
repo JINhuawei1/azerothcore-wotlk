@@ -610,27 +610,28 @@ public:
         }
 
         int64 moneyToAdd = *moneyToAddO;
-        uint64 targetMoney = target->GetMoney();
+        int128 targetMoney = target->GetMoney();
 
         if (moneyToAdd < 0)
         {
             uint64 reduction = moneyToAdd == std::numeric_limits<int64>::min() ? static_cast<uint64>(std::numeric_limits<int64>::max()) + 1 : static_cast<uint64>(-moneyToAdd);
+            int128 newMoney = targetMoney > reduction ? targetMoney - reduction : 0;
 
-            LOG_DEBUG("chat.system", handler->GetAcoreString(LANG_CURRENT_MONEY), targetMoney, moneyToAdd, targetMoney > reduction ? targetMoney - reduction : 0);
+            LOG_DEBUG("chat.system", handler->GetAcoreString(LANG_CURRENT_MONEY), Acore::ToString(targetMoney), moneyToAdd, Acore::ToString(newMoney));
             if (targetMoney <= reduction)
             {
                 handler->PSendSysMessage(LANG_YOU_TAKE_ALL_MONEY, handler->GetNameLink(target));
                 if (handler->needReportToTarget(target))
                     ChatHandler(target->GetSession()).PSendSysMessage(LANG_YOURS_ALL_MONEY_GONE, handler->GetNameLink());
 
-                target->SetMoney(0);
+                target->ModifyMoney(moneyToAdd);
             }
             else
             {
                 handler->PSendSysMessage(LANG_YOU_TAKE_MONEY, reduction, handler->GetNameLink(target));
                 if (handler->needReportToTarget(target))
                     ChatHandler(target->GetSession()).PSendSysMessage(LANG_YOURS_MONEY_TAKEN, handler->GetNameLink(), reduction);
-                target->SetMoney(targetMoney - reduction);
+                target->ModifyMoney(moneyToAdd);
             }
         }
         else
@@ -639,11 +640,10 @@ public:
             if (handler->needReportToTarget(target))
                 ChatHandler(target->GetSession()).PSendSysMessage(LANG_YOURS_MONEY_GIVEN, handler->GetNameLink(), moneyToAdd);
 
-            uint64 add = static_cast<uint64>(moneyToAdd);
-            target->SetMoney(add > uint64(MAX_MONEY_AMOUNT) - targetMoney ? uint64(MAX_MONEY_AMOUNT) : targetMoney + add);
+            target->ModifyMoney(moneyToAdd);
         }
 
-        LOG_DEBUG("chat.system", handler->GetAcoreString(LANG_NEW_MONEY), targetMoney, moneyToAdd, target->GetMoney());
+        LOG_DEBUG("chat.system", handler->GetAcoreString(LANG_NEW_MONEY), Acore::ToString(targetMoney), moneyToAdd, Acore::ToString(target->GetMoney()));
 
         return true;
     }

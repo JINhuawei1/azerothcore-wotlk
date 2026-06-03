@@ -521,7 +521,12 @@ class spell_dk_rune_of_the_fallen_crusader : public SpellScript
         std::list<TargetInfo>* targetsInfo = GetSpell()->GetUniqueTargetInfo();
         for (std::list<TargetInfo>::iterator ihit = targetsInfo->begin(); ihit != targetsInfo->end(); ++ihit)
             if (ihit->targetGUID == GetCaster()->GetGUID())
-                ihit->crit = roll_chance_f(GetCaster()->GetFloatValue(PLAYER_CRIT_PERCENTAGE));
+            {
+                if (Player* caster = GetCaster()->ToPlayer())
+                    ihit->crit = roll_chance_f(caster->GetFloatValue(PLAYER_CRIT_PERCENTAGE));
+                else
+                    ihit->crit = roll_chance_f(GetCaster()->GetUnitCriticalChance(BASE_ATTACK, GetCaster()));
+            }
     }
 
     void Register() override
@@ -837,15 +842,15 @@ class spell_dk_pet_scaling : public AuraScript
             {
                 if (aurEff->GetMiscValue() == STAT_STAMINA)
                 {
-                    uint64 actStat = GetUnitOwner()->GetHealthForCombat();
+                    uint128 actStat = GetUnitOwner()->GetHealthForCombat128();
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetHealthForCombat(std::min<uint64>(GetUnitOwner()->GetMaxHealthForCombat(), actStat));
+                    GetUnitOwner()->SetHealthForCombat128(std::min<uint128>(GetUnitOwner()->GetMaxHealthForCombat128(), actStat));
                 }
                 else
                 {
-                    uint64 actStat = GetUnitOwner()->GetPowerForCombat(POWER_MANA);
+                    uint128 actStat = GetUnitOwner()->GetPowerForCombat128(POWER_MANA);
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetPowerForCombat(POWER_MANA, std::min<uint64>(GetUnitOwner()->GetMaxPowerForCombat(POWER_MANA), actStat));
+                    GetUnitOwner()->SetPowerForCombat128(POWER_MANA, std::min<uint128>(GetUnitOwner()->GetMaxPowerForCombat128(POWER_MANA), actStat));
                 }
             }
         }
@@ -2196,14 +2201,14 @@ class spell_dk_will_of_the_necropolis : public AuraScript
         uint8 rank = GetSpellInfo()->GetRank();
         SpellInfo const* talentProto = sSpellMgr->AssertSpellInfo(sSpellMgr->GetSpellWithRank(SPELL_DK_WILL_OF_THE_NECROPOLIS_TALENT_R1, rank));
 
-        uint64 targetHealth = GetTarget()->GetHealthForCombat();
-        uint64 remainingHp = targetHealth > dmgInfo.GetDamage() ? Acore::Number::ToUInt64Saturated(targetHealth - dmgInfo.GetDamage()) : 0;
-        uint64 minHp = GetTarget()->CountPctFromMaxHealth(talentProto->Effects[EFFECT_0].CalcValue(GetCaster()));
+        uint128 targetHealth = GetTarget()->GetHealthForCombat128();
+        uint128 remainingHp = targetHealth > dmgInfo.GetDamage() ? targetHealth - dmgInfo.GetDamage() : uint128(0);
+        uint128 minHp = GetTarget()->CountPctFromMaxHealth128(talentProto->Effects[EFFECT_0].CalcValue(GetCaster()));
 
         // Damage that would take you below [effect0] health or taken while you are at [effect0]
         if (remainingHp < minHp)
         {
-            dmgInfo.AbsorbDamage(SpellScriptCombat::CalculatePctUInt64(Acore::Number::ToUInt64Saturated(dmgInfo.GetDamage()), absorbPct));
+            dmgInfo.AbsorbDamage(Acore::Number::CalculatePct(dmgInfo.GetDamage(), absorbPct));
             absorbAmount = 0;
         }
     }

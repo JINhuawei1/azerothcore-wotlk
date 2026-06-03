@@ -19,8 +19,7 @@ namespace
             return;
         }
 
-        uint64 currentMoney = player->GetMoney();
-        player->SetMoney(amount > uint64(MAX_MONEY_AMOUNT) - currentMoney ? uint64(MAX_MONEY_AMOUNT) : currentMoney + amount);
+        player->SetMoney(player->GetMoney() + static_cast<int128>(amount));
     }
 
     void SendRecycleAddonMessage(Player* player, std::string const& payload)

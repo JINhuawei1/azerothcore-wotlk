@@ -336,7 +336,7 @@ namespace
 
         int128 val = value;
         float statModValue = Acore::Number::ToFloat(val);
-        int64 legacyVal64 = ToInt64Saturated(val);
+        int128 legacyVal64 = val;
         int32 legacyVal = ToInt32ForLegacyStatPath(value);
         switch (statType)
         {

@@ -127,12 +127,12 @@ CREATE TABLE `_深渊装备模板` (
   `基础装等` smallint unsigned NOT NULL DEFAULT 0 COMMENT '基础装等',
   `护甲类型` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '0无 1布 2皮 3锁 4板',
   `伤害类型` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '0通用 1物理 2法系 3坦克 4治疗',
-  `主属性预算最小值` decimal(39,0) unsigned NOT NULL DEFAULT 0 COMMENT '主属性预算最小值',
-  `主属性预算最大值` decimal(39,0) unsigned NOT NULL DEFAULT 0 COMMENT '主属性预算最大值',
-  `次属性预算最小值` decimal(39,0) unsigned NOT NULL DEFAULT 0 COMMENT '次属性预算最小值',
-  `次属性预算最大值` decimal(39,0) unsigned NOT NULL DEFAULT 0 COMMENT '次属性预算最大值',
-  `特效预算最小值` decimal(39,0) unsigned NOT NULL DEFAULT 0 COMMENT '特效预算最小值',
-  `特效预算最大值` decimal(39,0) unsigned NOT NULL DEFAULT 0 COMMENT '特效预算最大值',
+  `主属性预算最小值` decimal(65,0) unsigned NOT NULL DEFAULT 0 COMMENT '主属性预算最小值',
+  `主属性预算最大值` decimal(65,0) unsigned NOT NULL DEFAULT 0 COMMENT '主属性预算最大值',
+  `次属性预算最小值` decimal(65,0) unsigned NOT NULL DEFAULT 0 COMMENT '次属性预算最小值',
+  `次属性预算最大值` decimal(65,0) unsigned NOT NULL DEFAULT 0 COMMENT '次属性预算最大值',
+  `特效预算最小值` decimal(65,0) unsigned NOT NULL DEFAULT 0 COMMENT '特效预算最小值',
+  `特效预算最大值` decimal(65,0) unsigned NOT NULL DEFAULT 0 COMMENT '特效预算最大值',
   `固定词缀组` varchar(64) NOT NULL DEFAULT '' COMMENT '固定词缀组',
   `固定特效ID` int unsigned NOT NULL DEFAULT 0 COMMENT '固定特效ID',
   `是否来自秘藏首领` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '是否来自秘藏首领',
@@ -147,12 +147,12 @@ CREATE TABLE `_深渊装备模板` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='深渊装备主模板';
 
 ALTER TABLE `_深渊装备模板`
-  MODIFY COLUMN `主属性预算最小值` decimal(39,0) unsigned NOT NULL DEFAULT 0 COMMENT '主属性预算最小值',
-  MODIFY COLUMN `主属性预算最大值` decimal(39,0) unsigned NOT NULL DEFAULT 0 COMMENT '主属性预算最大值',
-  MODIFY COLUMN `次属性预算最小值` decimal(39,0) unsigned NOT NULL DEFAULT 0 COMMENT '次属性预算最小值',
-  MODIFY COLUMN `次属性预算最大值` decimal(39,0) unsigned NOT NULL DEFAULT 0 COMMENT '次属性预算最大值',
-  MODIFY COLUMN `特效预算最小值` decimal(39,0) unsigned NOT NULL DEFAULT 0 COMMENT '特效预算最小值',
-  MODIFY COLUMN `特效预算最大值` decimal(39,0) unsigned NOT NULL DEFAULT 0 COMMENT '特效预算最大值';
+  MODIFY COLUMN `主属性预算最小值` decimal(65,0) unsigned NOT NULL DEFAULT 0 COMMENT '主属性预算最小值',
+  MODIFY COLUMN `主属性预算最大值` decimal(65,0) unsigned NOT NULL DEFAULT 0 COMMENT '主属性预算最大值',
+  MODIFY COLUMN `次属性预算最小值` decimal(65,0) unsigned NOT NULL DEFAULT 0 COMMENT '次属性预算最小值',
+  MODIFY COLUMN `次属性预算最大值` decimal(65,0) unsigned NOT NULL DEFAULT 0 COMMENT '次属性预算最大值',
+  MODIFY COLUMN `特效预算最小值` decimal(65,0) unsigned NOT NULL DEFAULT 0 COMMENT '特效预算最小值',
+  MODIFY COLUMN `特效预算最大值` decimal(65,0) unsigned NOT NULL DEFAULT 0 COMMENT '特效预算最大值';
 
 DROP TABLE IF EXISTS `_深渊词缀模板`;
 CREATE TABLE `_深渊词缀模板` (

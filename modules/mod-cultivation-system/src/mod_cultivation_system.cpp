@@ -112,6 +112,23 @@ int128 CountPctFromMaxHealthForCultivation(Unit* unit, int32 pct)
 
     return Acore::Number::ToInt128Saturated(unit->CountPctFromMaxHealth128(pct));
 }
+
+uint128 ApplyHealthGainForCultivation(Unit* unit, int128 const& amount)
+{
+    if (!unit || amount <= 0)
+        return 0;
+
+    uint128 currentHealth = unit->GetHealthForCombat128();
+    uint128 maxHealth = unit->GetMaxHealthForCombat128();
+    if (currentHealth >= maxHealth)
+        return 0;
+
+    uint128 gain = std::min<uint128>(Acore::Number::ToUInt128Saturated(amount), maxHealth - currentHealth);
+    if (gain)
+        unit->SetHealthForCombat128(currentHealth + gain);
+
+    return gain;
+}
 }
 
 // Addon消息通信常量
@@ -1528,28 +1545,29 @@ public:
 // 辅助函数：搜索范围内可攻击敌人
 // ============================================
 
+static bool IsCultivationValidHostileTarget(Unit* caster, Unit* target)
+{
+    if (!caster || !target || target == caster || !target->IsAlive() || !target->IsInWorld())
+        return false;
+
+    if (!caster->IsInMap(target) || !caster->InSamePhase(target))
+        return false;
+
+    if (!caster->IsHostileTo(target))
+        return false;
+
+    return caster->IsValidAttackTarget(target);
+}
+
 static void GetHostileUnitsInRange(Unit* caster, std::list<Unit*>& targets, float range)
 {
     Acore::AnyUnfriendlyUnitInObjectRangeCheck check(caster, caster, range);
     Acore::UnitListSearcher<Acore::AnyUnfriendlyUnitInObjectRangeCheck> searcher(caster, targets, check);
     Cell::VisitAllObjects(caster, searcher, range);
 
-    // 目标过滤，匹配“玩家能主动攻击的对象”语义：
-    //  - 玩家本身或玩家的宠物/随从：用引擎完整校验 IsValidAttackTarget，
-    //    正确处理 PvP 开关、阵营、决斗、好友等（未开 PvP 的敌对玩家、友方玩家会被排除）。
-    //  - 纯 NPC/生物：只排除“友好单位”（友善 NPC、友方守卫等），敌对与中立目标
-    //    （含训练假人、中立黄名怪、中立的 boss）均可攻击。
-    //    不能直接用 IsValidAttackTarget，因为它会把中立单位判为不可攻击，
-    //    导致木桩、部分 boss 打不到；改用 IsFriendlyTo 取反更符合需求。
     targets.remove_if([caster](Unit* target)
     {
-        if (!target)
-            return true;
-
-        if (target->GetCharmerOrOwnerPlayerOrPlayerItself())
-            return !caster->IsValidAttackTarget(target);
-
-        return caster->IsFriendlyTo(target);
+        return !IsCultivationValidHostileTarget(caster, target);
     });
 }
 
@@ -1862,7 +1880,7 @@ class spell_cultivation_tuntian : public SpellScript
         int128 healAmount = _totalDamage / 5;
         if (healAmount > 0)
         {
-            caster->ModifyHealth(Acore::Number::ToInt64Saturated(healAmount));
+            ApplyHealthGainForCultivation(caster, healAmount);
 
             if (Player* player = caster->ToPlayer())
             {
@@ -1932,7 +1950,7 @@ class spell_cultivation_xianshen_aura : public AuraScript
         // 每秒回复5%最大生命值
         int128 healAmount = CountPctFromMaxHealthForCultivation(target, 5);
         if (healAmount > 0)
-            target->ModifyHealth(Acore::Number::ToInt64Saturated(healAmount));
+            ApplyHealthGainForCultivation(target, healAmount);
     }
 
     void OnApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)

@@ -107,14 +107,14 @@ SELECT
   '0' AS `物品属性_模板`,
   r.`attr_min_count` AS `基础属性最小数量`,
   r.`attr_max_count` AS `基础属性最大数量`,
-  r.`pct_min` AS `基础最小属性值`,
-  r.`pct_max` AS `基础最大属性值`,
+  CEIL(r.`pct_min` * (1.20 + ((g.`group_id` - 1) / 50.0))) AS `基础最小属性值`,
+  CEIL(r.`pct_max` * (1.20 + ((g.`group_id` - 1) / 50.0))) AS `基础最大属性值`,
   1 AS `基础属性允许重复`,
   '2' AS `物品属性_模板_组`,
   r.`attr_min_count` AS `追加属性最小数量`,
   r.`attr_max_count` AS `追加属性最大数量`,
-  r.`pct_min` AS `追加属性最小值`,
-  r.`pct_max` AS `追加属性最大值`,
+  CEIL(r.`pct_min` * (1.50 + ((g.`group_id` - 1) / 40.0))) AS `追加属性最小值`,
+  CEIL(r.`pct_max` * (1.50 + ((g.`group_id` - 1) / 40.0))) AS `追加属性最大值`,
   1 AS `追加属性允许重复`,
   CASE WHEN r.`rank_id` >= 17 THEN '1' ELSE '' END AS `物品技能_模板_组`,
   CASE WHEN r.`rank_id` >= 17 THEN 1 ELSE 0 END AS `追加技能最小数量`,
@@ -138,14 +138,15 @@ SELECT
   '' AS `物品名字颜色_多个逗号隔开`,
   '' AS `物品底部描述`
 FROM (
-  SELECT ones.`n` + tens.`n` * 10 + hundreds.`n` * 100 + 1 AS `group_id`
+  SELECT ones.`n` + tens.`n` * 10 + hundreds.`n` * 100 + thousands.`n` * 1000 + 1 AS `group_id`
   FROM
     (SELECT 0 AS `n` UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) ones
     CROSS JOIN (SELECT 0 AS `n` UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) tens
     CROSS JOIN (SELECT 0 AS `n` UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) hundreds
+    CROSS JOIN (SELECT 0 AS `n` UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4) thousands
 ) g
 CROSS JOIN `temp_item_ident_rank` r
-WHERE g.`group_id` BETWEEN 1 AND 1000
+WHERE g.`group_id` BETWEEN 1 AND 5000
 ORDER BY g.`group_id`, r.`rank_id`;
 
 DROP TEMPORARY TABLE IF EXISTS `temp_item_ident_rank`;

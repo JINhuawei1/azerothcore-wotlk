@@ -19,6 +19,7 @@
 #include "Player.h"
 #include "ScriptedCreature.h"
 #include "SpellInfo.h"
+#include "Unit.h"
 #include "violet_hold.h"
 
 #define ACTION_WATER_ELEMENT_HIT            1
@@ -108,7 +109,7 @@ public:
                 case ACTION_WATER_ELEMENT_HIT:
                     if (pInstance)
                         pInstance->SetData(DATA_ACHIEV, 0);
-                    me->ModifyHealth(int32(me->CountPctFromMaxHealth(1)));
+                    Unit::DealHeal(me, me, me->CountPctFromMaxHealth128(1));
                     if (bIsExploded)
                         DoExplodeCompleted();
                     break;

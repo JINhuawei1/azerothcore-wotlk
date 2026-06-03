@@ -369,13 +369,13 @@ public:
     virtual void DamageTaken(Unit* /*attacker*/, uint32& /*damage*/, DamageEffectType /*damagetype*/, SpellSchoolMask /*damageSchoolMask*/) {}
 
     /// @brief Called when the creature receives heal
-    virtual void HealReceived(Unit* /*done_by*/, uint32& /*addhealth*/) {}
+    virtual void HealReceived(Unit* /*done_by*/, uint128& /*addhealth*/) {}
 
     /// @brief Called when the creature power updates
     virtual void OnPowerUpdate(Powers /*power*/, int32 /*updateVal*/, int32 /*gain*/, uint32 /*currPower*/) {}
 
     /// @brief Called when the unit heals
-    virtual void HealDone(Unit* /*done_to*/, uint32& /*addhealth*/) {}
+    virtual void HealDone(Unit* /*done_to*/, uint128& /*addhealth*/) {}
 
     /// @brief Called during damage calculations
     virtual void OnCalculateMeleeDamageReceived(uint32& /*damage*/, Unit* /*attacker*/) {}

@@ -23,6 +23,7 @@
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
+#include <limits>
 
 enum Says
 {
@@ -725,8 +726,9 @@ class spell_illidari_council_circle_of_healing : public SpellScript
 
         Creature* target = instance->GetCreature(DATA_ILLIDARI_COUNCIL);
 
-        int32 heal = GetHitHeal();
-        target->CastCustomSpell(target, SPELL_SHARED_RULE_HEAL, &heal, &heal, &heal, true, nullptr, nullptr, target->GetGUID());
+        uint128 heal = GetHitHeal128();
+        int32 healBp = heal > static_cast<uint128>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(heal);
+        target->CastCustomSpell(target, SPELL_SHARED_RULE_HEAL, &healBp, &healBp, &healBp, true, nullptr, nullptr, target->GetGUID());
     }
 
     void Register() override

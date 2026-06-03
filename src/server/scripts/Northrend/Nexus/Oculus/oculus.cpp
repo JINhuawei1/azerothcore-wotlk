@@ -27,7 +27,9 @@
 #include "SpellInfo.h"
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
+#include "Util.h"
 #include "Vehicle.h"
+#include <limits>
 #include <unordered_map>
 
 enum Drakes
@@ -673,10 +675,14 @@ class spell_oculus_dream_funnel_aura : public AuraScript
 {
     PrepareAuraScript(spell_oculus_dream_funnel_aura);
 
-    void HandleEffectCalcAmount(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
+    void HandleEffectCalcAmount(AuraEffect const* aurEff, int32& amount, bool& canBeRecalculated)
     {
         if (Unit* caster = GetCaster())
-            amount = int32(caster->CountPctFromMaxHealth(5));
+        {
+            uint128 combatAmount = caster->CountPctFromMaxHealth128(5);
+            aurEff->SetScriptAmountForCombat(combatAmount);
+            amount = combatAmount > static_cast<uint128>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(combatAmount);
+        }
 
         canBeRecalculated = false;
     }

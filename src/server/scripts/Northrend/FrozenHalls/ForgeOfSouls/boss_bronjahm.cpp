@@ -276,8 +276,9 @@ class spell_bronjahm_magic_bane : public SpellScript
         if (Unit* caster = GetCaster())
         {
             const int32 maxDamage = caster->GetMap()->GetSpawnMode() == 1 ? 15000 : 10000;
-            uint64 manaBonus = GetHitUnit()->GetMaxPowerForCombat(POWER_MANA) / 2;
-            int32 newDamage = manaBonus >= static_cast<uint64>(maxDamage) ? maxDamage : std::min<int32>(maxDamage, GetHitDamage() + static_cast<int32>(manaBonus));
+            uint128 manaBonus = GetHitUnit()->GetMaxPowerForCombat128(POWER_MANA) / 2;
+            int32 bonus = manaBonus >= static_cast<uint128>(maxDamage) ? maxDamage : Acore::Number::ToInt32Saturated(Acore::Number::ToInt128Saturated(manaBonus));
+            int32 newDamage = std::min<int32>(maxDamage, GetHitDamage() + bonus);
 
             SetHitDamage(newDamage);
         }

@@ -442,7 +442,7 @@ public:
     void SetHitHeal(int64 heal);
     uint128 GetHitHeal128();
     void SetHitHeal128(uint128 const& heal);
-    void PreventHitHeal() { SetHitHeal(0); }
+    void PreventHitHeal() { SetHitHeal128(0); }
     Spell* GetSpell() { return m_spell; }
     // returns current spell hit target aura
     Aura* GetHitAura();

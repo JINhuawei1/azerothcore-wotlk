@@ -438,7 +438,7 @@ namespace
     void GetClientHealLogValues(HealInfo const& healInfo, uint32& clientHeal, uint32& clientOverheal)
     {
         clientHeal = ToClientDamage(healInfo.GetHeal());
-        uint64 rawOverheal = healInfo.GetHeal() > healInfo.GetEffectiveHeal() ? healInfo.GetHeal() - healInfo.GetEffectiveHeal() : 0;
+        uint128 rawOverheal = healInfo.GetHeal() > healInfo.GetEffectiveHeal() ? healInfo.GetHeal() - healInfo.GetEffectiveHeal() : 0;
         clientOverheal = ToClientDamage(rawOverheal);
 
         Unit const* target = healInfo.GetTarget();
@@ -450,7 +450,7 @@ namespace
         if (maxHealth == 0 || !clientMaxHealth)
             return;
 
-        uint64 effectiveHeal = healInfo.GetEffectiveHeal();
+        uint128 effectiveHeal = healInfo.GetEffectiveHeal();
         uint128 afterHealth = target->GetHealthForCombat128();
         uint128 beforeHealth = afterHealth > effectiveHeal ? afterHealth - effectiveHeal : 0;
 
@@ -464,7 +464,7 @@ namespace
         clientOverheal = clientHeal > clientEffectiveHeal ? clientHeal - clientEffectiveHeal : 0;
     }
 
-    uint32 GetClientEnergizeLogValue(Unit const* target, Powers power, uint64 requestedPower, uint64 effectiveGain)
+    uint32 GetClientEnergizeLogValue(Unit const* target, Powers power, uint128 const& requestedPower, uint128 const& effectiveGain)
     {
         if (!target || power < POWER_MANA || power >= MAX_POWERS)
             return ToClientPowerValue(effectiveGain ? effectiveGain : requestedPower);
@@ -540,6 +540,17 @@ namespace
             return std::numeric_limits<int32>::max();
 
         if (value < std::numeric_limits<int32>::min())
+            return std::numeric_limits<int32>::min();
+
+        return static_cast<int32>(value);
+    }
+
+    int32 ToInt32SignedDelta(int128 const& value)
+    {
+        if (value > static_cast<int128>(std::numeric_limits<int32>::max()))
+            return std::numeric_limits<int32>::max();
+
+        if (value < static_cast<int128>(std::numeric_limits<int32>::min()))
             return std::numeric_limits<int32>::min();
 
         return static_cast<int32>(value);
@@ -1668,7 +1679,7 @@ uint128 Unit::DealDamage(Unit* attacker, Unit* victim, uint128 const& damageIn, 
 
         if (!attacker || attacker->IsControlledByPlayer() || attacker->IsCreatedByPlayer())
         {
-            uint64 unDamage = Acore::Number::ToUInt64Saturated(std::min<uint128>(victim->GetHealthForCombat128(), damage));
+            uint128 unDamage = std::min<uint128>(victim->GetHealthForCombat128(), damage);
             bool damagedByPlayer = unDamage && attacker && (attacker->IsPlayer() || attacker->m_movedByPlayer != nullptr);
             victim->ToCreature()->LowerPlayerDamageReq(unDamage, damagedByPlayer);
         }
@@ -3241,7 +3252,7 @@ void Unit::CalcHealAbsorb(HealInfo& healInfo)
     if (!healInfo.GetHeal())
         return;
 
-    int64 const healing = healInfo.GetHeal() > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(healInfo.GetHeal());
+    int64 const healing = healInfo.GetHeal() > static_cast<uint128>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(healInfo.GetHeal());
     int64 absorbAmount = 0;
 
     // Need remove expired auras after
@@ -3296,7 +3307,7 @@ void Unit::CalcHealAbsorb(HealInfo& healInfo)
     }
 
     if (absorbAmount > 0)
-        healInfo.AbsorbHeal(absorbAmount);
+        healInfo.AbsorbHeal(static_cast<uint128>(absorbAmount));
 }
 
 void Unit::AttackerStateUpdate(Unit* victim, WeaponAttackType attType /*= BASE_ATTACK*/, bool extra /*= false*/, bool ignoreCasting /*= false*/)
@@ -8340,8 +8351,8 @@ bool Unit::HandleDummyAuraProc(Unit* victim, uint32 damage, AuraEffect* triggere
                     case 28719:
                         {
                             // mana back
-                            int64 powerCost = spellProc->GetPowerCost();
-                            basepoints0 = powerCost > 0 ? ToInt32Damage(CalculatePct(static_cast<uint64>(powerCost), 30)) : 0;
+                            int128 const& powerCost = spellProc->GetPowerCost128();
+                            basepoints0 = powerCost > 0 ? ToInt32Damage(Acore::Number::CalculatePct(Acore::Number::ToUInt128Saturated(powerCost), 30)) : 0;
                             target = this;
                             triggered_spell_id = 28742;
                             break;
@@ -8539,14 +8550,14 @@ bool Unit::HandleDummyAuraProc(Unit* victim, uint32 damage, AuraEffect* triggere
                                     return false;
                                 if (AuraEffect const* pEff = victim->GetAuraEffect(SPELL_AURA_PERIODIC_DUMMY, SPELLFAMILY_HUNTER, 0x0, 0x80000000, 0x0, GetGUID()))
                                 {
-                                    int64 powerCost = pEff->GetSpellInfo()->CalcPowerCost(this, SpellSchoolMask(pEff->GetSpellInfo()->SchoolMask));
-                                    basepoints0 = powerCost > 0 ? ToInt32Damage(CalculatePct(static_cast<uint64>(powerCost), 40) / 3) : 0;
+                                    int128 powerCost = pEff->GetSpellInfo()->CalcPowerCost(this, SpellSchoolMask(pEff->GetSpellInfo()->SchoolMask));
+                                    basepoints0 = powerCost > 0 ? ToInt32Damage(Acore::Number::CalculatePct(Acore::Number::ToUInt128Saturated(powerCost), 40) / 3) : 0;
                                 }
                             }
                             else
                             {
-                                int64 powerCost = procSpell->CalcPowerCost(this, SpellSchoolMask(procSpell->SchoolMask));
-                                basepoints0 = powerCost > 0 ? ToInt32Damage(CalculatePct(static_cast<uint64>(powerCost), 40)) : 0;
+                                int128 powerCost = procSpell->CalcPowerCost(this, SpellSchoolMask(procSpell->SchoolMask));
+                                basepoints0 = powerCost > 0 ? ToInt32Damage(Acore::Number::CalculatePct(Acore::Number::ToUInt128Saturated(powerCost), 40)) : 0;
                             }
 
                             if (spell)
@@ -8800,12 +8811,12 @@ bool Unit::HandleDummyAuraProc(Unit* victim, uint32 damage, AuraEffect* triggere
                                 return false;
                             }
 
-                            uint64 effectiveHeal = healInfo->GetEffectiveHeal();
+                            uint128 effectiveHeal = healInfo->GetEffectiveHeal();
                             if (effectiveHeal)
                             {
                                 // heal amount
-                                uint64 triggeredHeal = CalculatePct(effectiveHeal, triggerAmount);
-                                basepoints0 = ToClientStatValue(static_cast<long double>(triggeredHeal));
+                                uint128 triggeredHeal = Acore::Number::CalculatePct(effectiveHeal, triggerAmount);
+                                basepoints0 = ToClientStatValue(Acore::Number::ToLongDouble(triggeredHeal));
                                 target = this;
 
                                 if (basepoints0)
@@ -9666,8 +9677,8 @@ bool Unit::HandleAuraProc(Unit* victim, uint32 damage, Aura* triggeredByAura, Sp
                 // Swift Hand of Justice
                 case 59906:
                     {
-                        uint64 healAmount = CountPctFromMaxHealth(dummySpell->Effects[EFFECT_0].CalcValue());
-                        int32 bp0 = healAmount > static_cast<uint64>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(healAmount);
+                        uint128 healAmount = CountPctFromMaxHealth128(dummySpell->Effects[EFFECT_0].CalcValue());
+                        int32 bp0 = ToInt32Damage(healAmount);
                         CastCustomSpell(this, 59913, &bp0, nullptr, nullptr, true);
                         *handled = true;
                         break;
@@ -11851,19 +11862,20 @@ void Unit::SetCharm(Unit* charm, bool apply)
     }
 }
 
-uint64 Unit::DealHeal(Unit* healer, Unit* victim, uint64 addhealth)
+uint128 Unit::DealHeal(Unit* healer, Unit* victim, uint128 const& addhealth)
 {
-    uint64 gain = 0;
+    uint128 gain = 0;
 
     if (healer)
     {
-        uint32 aiHeal = ToUInt32Damage(addhealth);
+        uint128 receivedAiHeal = addhealth;
+        uint128 doneAiHeal = addhealth;
 
         if (victim->IsAIEnabled)
-            victim->GetAI()->HealReceived(healer, aiHeal);
+            victim->GetAI()->HealReceived(healer, receivedAiHeal);
 
         if (healer->IsAIEnabled)
-            healer->GetAI()->HealDone(victim, aiHeal);
+            healer->GetAI()->HealDone(victim, doneAiHeal);
     }
 
     if (addhealth)
@@ -11871,16 +11883,13 @@ uint64 Unit::DealHeal(Unit* healer, Unit* victim, uint64 addhealth)
         uint128 currentHealth = victim->GetHealthForCombat128();
         uint128 maxHealth = victim->GetMaxHealthForCombat128();
         uint128 headroom = currentHealth < maxHealth ? maxHealth - currentHealth : 0;
-        uint128 gain128 = static_cast<uint128>(addhealth) > headroom ? headroom : addhealth;
-        gain = Acore::Number::ToUInt64Saturated(gain128);
+        gain = addhealth > headroom ? headroom : addhealth;
         if (gain)
-            victim->SetHealthForCombat128(currentHealth + gain128);
+            victim->SetHealthForCombat128(currentHealth + gain);
     }
 
     // Hook for OnHeal Event
-    int64 scriptGain = gain > static_cast<uint64>(std::numeric_limits<int64>::max())
-        ? std::numeric_limits<int64>::max()
-        : static_cast<int64>(gain);
+    uint128 scriptGain = gain;
     sScriptMgr->OnHeal(healer, victim, scriptGain);
 
     Unit* unit = healer;
@@ -12159,23 +12168,23 @@ void Unit::SendHealSpellLog(HealInfo const& healInfo, bool critical)
     SendMessageToSet(&data, true);
 }
 
-uint64 Unit::HealBySpell(HealInfo& healInfo, bool critical)
+uint128 Unit::HealBySpell(HealInfo& healInfo, bool critical)
 {
-    uint64 scriptHeal = healInfo.GetHeal();
+    uint128 scriptHeal = healInfo.GetHeal();
     sScriptMgr->ModifyHealReceived(healInfo.GetTarget(), this, scriptHeal, healInfo.GetSpellInfo());
     healInfo.SetHeal(scriptHeal);
 
     // calculate heal absorb and reduce healing
     CalcHealAbsorb(healInfo);
 
-    uint64 gain = Unit::DealHeal(healInfo.GetHealer(), healInfo.GetTarget(), healInfo.GetHeal());
+    uint128 gain = Unit::DealHeal(healInfo.GetHealer(), healInfo.GetTarget(), healInfo.GetHeal());
     healInfo.SetEffectiveHeal(gain);
 
     SendHealSpellLog(healInfo, critical);
     return gain;
 }
 
-void Unit::SendEnergizeSpellLog(Unit* victim, uint32 spellID, uint64 damage, Powers powerType, uint64 effectiveGain)
+void Unit::SendEnergizeSpellLog(Unit* victim, uint32 spellID, uint128 const& damage, Powers powerType, uint128 const& effectiveGain)
 {
     if (UsesExtendedPowerClientMirror(victim, powerType))
     {
@@ -12192,18 +12201,17 @@ void Unit::SendEnergizeSpellLog(Unit* victim, uint32 spellID, uint64 damage, Pow
     SendMessageToSet(&data, true);
 }
 
-void Unit::EnergizeBySpell(Unit* victim, uint32 spellID, uint64 damage, Powers powerType)
+void Unit::EnergizeBySpell(Unit* victim, uint32 spellID, uint128 const& damage, Powers powerType)
 {
-    int64 powerDelta = damage > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(damage);
-    int64 gainedPower = victim->ModifyPower64(powerType, powerDelta, false);
+    int128 gainedPower = victim->ModifyPower128(powerType, Acore::Number::ToInt128Saturated(damage), false);
 
     if (powerType != POWER_HAPPINESS && gainedPower)
     {
         SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellID);
-        victim->getHostileRefMgr().threatAssist(this, float(gainedPower) * 0.5f, spellInfo);
+        victim->getHostileRefMgr().threatAssist(this, Acore::Number::ToFloat(Acore::Number::ToUInt128Saturated(gainedPower)) * 0.5f, spellInfo);
     }
 
-    SendEnergizeSpellLog(victim, spellID, damage, powerType, gainedPower > 0 ? static_cast<uint64>(gainedPower) : 0);
+    SendEnergizeSpellLog(victim, spellID, damage, powerType, gainedPower > 0 ? Acore::Number::ToUInt128Saturated(gainedPower) : uint128(0));
 }
 
 float Unit::SpellPctDamageModsDone(Unit* victim, SpellInfo const* spellProto, DamageEffectType damagetype)
@@ -13269,19 +13277,19 @@ uint128 Unit::SpellCriticalDamageBonus(Unit const* caster, SpellInfo const* spel
     return ToUInt128Damage(crit_bonus);
 }
 
-uint64 Unit::SpellCriticalHealingBonus(Unit const* caster, SpellInfo const* spellProto, uint64 damage, Unit const* victim)
+uint128 Unit::SpellCriticalHealingBonus(Unit const* caster, SpellInfo const* spellProto, uint128 const& damage, Unit const* victim)
 {
     // Calculate critical bonus
-    int64 crit_bonus;
+    long double crit_bonus;
     switch (spellProto->DmgClass)
     {
         case SPELL_DAMAGE_CLASS_MELEE:                      // for melee based spells is 100%
         case SPELL_DAMAGE_CLASS_RANGED:
             /// @todo: write here full calculation for melee/ranged spells
-            crit_bonus = damage;
+            crit_bonus = Acore::Number::ToLongDouble(damage);
             break;
         default:
-            crit_bonus = damage / 2;                        // for spells is 50%
+            crit_bonus = Acore::Number::ToLongDouble(damage) / 2.0L;                        // for spells is 50%
             break;
     }
 
@@ -13290,37 +13298,30 @@ uint64 Unit::SpellCriticalHealingBonus(Unit const* caster, SpellInfo const* spel
         if (victim)
         {
             uint32 creatureTypeMask = victim->GetCreatureTypeMask();
-            crit_bonus = static_cast<int64>(static_cast<long double>(crit_bonus) * static_cast<long double>(caster->GetTotalAuraMultiplierByMiscMask(SPELL_AURA_MOD_CRIT_PERCENT_VERSUS, creatureTypeMask)));
+            crit_bonus *= static_cast<long double>(caster->GetTotalAuraMultiplierByMiscMask(SPELL_AURA_MOD_CRIT_PERCENT_VERSUS, creatureTypeMask));
         }
 
         // adds additional damage to critBonus (from talents)
         // xinef: used for death knight death coil
         if (Player* modOwner = caster->GetSpellModOwner())
         {
-            int32 critBonusForSpellMod = static_cast<int32>(std::clamp<int64>(crit_bonus, std::numeric_limits<int32>::min(), std::numeric_limits<int32>::max()));
+            long double critBonusForSpellMod = crit_bonus;
             modOwner->ApplySpellMod(spellProto->Id, SPELLMOD_CRIT_DAMAGE_BONUS, critBonusForSpellMod);
             crit_bonus = critBonusForSpellMod;
         }
     }
 
+    uint128 result = damage;
     if (crit_bonus > 0)
-    {
-        uint64 totalDamage = static_cast<uint64>(damage) + static_cast<uint64>(crit_bonus);
-        damage = totalDamage;
-    }
+        result = AddUInt128Damage(result, ToUInt128Damage(crit_bonus));
 
     if (caster)
     {
-        long double scaledDamage = static_cast<long double>(damage) * static_cast<long double>(caster->GetTotalAuraMultiplier(SPELL_AURA_MOD_CRITICAL_HEALING_AMOUNT));
-        if (scaledDamage < 0.0L || std::isnan(static_cast<double>(scaledDamage)))
-            damage = 0;
-        else if (scaledDamage > static_cast<long double>(std::numeric_limits<uint64>::max()))
-            damage = std::numeric_limits<uint64>::max();
-        else
-            damage = static_cast<uint64>(scaledDamage);
+        long double scaledDamage = Acore::Number::ToLongDouble(result) * static_cast<long double>(caster->GetTotalAuraMultiplier(SPELL_AURA_MOD_CRITICAL_HEALING_AMOUNT));
+        result = ToUInt128Damage(scaledDamage);
     }
 
-    return damage;
+    return result;
 }
 
 float Unit::SpellPctHealingModsDone(Unit* victim, SpellInfo const* spellProto, DamageEffectType damagetype)
@@ -13415,7 +13416,7 @@ float Unit::SpellPctHealingModsDone(Unit* victim, SpellInfo const* spellProto, D
     return DoneTotalMod;
 }
 
-uint64 Unit::SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, uint64 healamount, DamageEffectType damagetype, uint8 effIndex, float TotalMod, uint32 stack)
+uint128 Unit::SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, uint128 const& healamount, DamageEffectType damagetype, uint8 effIndex, float TotalMod, uint32 stack)
 {
     // For totems get healing bonus from owner (statue isn't totem in fact)
     if (IsCreature() && IsTotem())
@@ -13528,25 +13529,20 @@ uint64 Unit::SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, ui
     }
 
     // use float as more appropriate for negative values and percent applying
-    long double heal = (static_cast<long double>(healamount) + DoneTotal) * static_cast<long double>(DoneTotalMod);
+    long double heal = (Acore::Number::ToLongDouble(healamount) + DoneTotal) * static_cast<long double>(DoneTotalMod);
     // apply spellmod to Done amount
 
     if (Player* modOwner = GetSpellModOwner())
     {
-        float spellModHeal = heal > static_cast<long double>(std::numeric_limits<float>::max()) ? std::numeric_limits<float>::max() : static_cast<float>(heal);
+        long double spellModHeal = heal;
         modOwner->ApplySpellMod(spellProto->Id, damagetype == DOT ? SPELLMOD_DOT : SPELLMOD_DAMAGE, spellModHeal);
         heal = spellModHeal;
     }
 
-    if (heal <= 0.0L || std::isnan(static_cast<double>(heal)))
-        return 0;
-    if (heal >= static_cast<long double>(std::numeric_limits<uint64>::max()))
-        return std::numeric_limits<uint64>::max();
-
-    return static_cast<uint64>(heal);
+    return ToUInt128Damage(heal);
 }
 
-uint64 Unit::SpellHealingBonusTaken(Unit* caster, SpellInfo const* spellProto, uint64 healamount, DamageEffectType damagetype, uint32 stack)
+uint128 Unit::SpellHealingBonusTaken(Unit* caster, SpellInfo const* spellProto, uint128 const& healamount, DamageEffectType damagetype, uint32 stack)
 {
     float TakenTotalMod = 1.0f;
     float minval = 0.0f;
@@ -13621,12 +13617,8 @@ uint64 Unit::SpellHealingBonusTaken(Unit* caster, SpellInfo const* spellProto, u
         // No bonus healing for SPELL_DAMAGE_CLASS_NONE class spells by default
         if (spellProto->DmgClass == SPELL_DAMAGE_CLASS_NONE)
         {
-            long double rawHeal = static_cast<long double>(healamount) * static_cast<long double>(TakenTotalMod);
-            if (rawHeal <= 0.0L || std::isnan(static_cast<double>(rawHeal)))
-                return 0;
-            if (rawHeal >= static_cast<long double>(std::numeric_limits<uint64>::max()))
-                return std::numeric_limits<uint64>::max();
-            return static_cast<uint64>(rawHeal);
+            long double rawHeal = Acore::Number::ToLongDouble(healamount) * static_cast<long double>(TakenTotalMod);
+            return ToUInt128Damage(rawHeal);
         }
     }
 
@@ -13677,14 +13669,9 @@ uint64 Unit::SpellHealingBonusTaken(Unit* caster, SpellInfo const* spellProto, u
         TakenTotalMod = 1.0f;
     }
 
-    long double heal = (static_cast<long double>(healamount) + static_cast<long double>(TakenTotal)) * static_cast<long double>(TakenTotalMod);
+    long double heal = (Acore::Number::ToLongDouble(healamount) + static_cast<long double>(TakenTotal)) * static_cast<long double>(TakenTotalMod);
 
-    if (heal <= 0.0L || std::isnan(static_cast<double>(heal)))
-        return 0;
-    if (heal >= static_cast<long double>(std::numeric_limits<uint64>::max()))
-        return std::numeric_limits<uint64>::max();
-
-    return static_cast<uint64>(heal);
+    return ToUInt128Damage(heal);
 }
 
 int32 Unit::SpellBaseHealingBonusDone(SpellSchoolMask schoolMask)
@@ -15304,6 +15291,11 @@ int32 Unit::ModifyPower(Powers power, int32 dVal, bool withPowerUpdate /*= true*
 
 int64 Unit::ModifyPower64(Powers power, int64 dVal, bool withPowerUpdate /*= true*/)
 {
+    return Acore::Number::ToInt64Saturated(ModifyPower128(power, dVal, withPowerUpdate));
+}
+
+int128 Unit::ModifyPower128(Powers power, int128 const& dVal, bool withPowerUpdate /*= true*/)
+{
     if (dVal == 0)
         return 0;
 
@@ -15312,25 +15304,26 @@ int64 Unit::ModifyPower64(Powers power, int64 dVal, bool withPowerUpdate /*= tru
 
     uint128 curPower = GetPowerForCombat128(power);
     uint128 maxPower = GetMaxPowerForCombat128(power);
-    int64 gain = 0;
+    int128 gain = 0;
 
     if (dVal > 0)
     {
         uint128 headroom = curPower < maxPower ? maxPower - curPower : 0;
-        uint128 applied = static_cast<uint64>(dVal) > headroom ? headroom : static_cast<uint64>(dVal);
+        uint128 requested = Acore::Number::ToUInt128Saturated(dVal);
+        uint128 applied = requested > headroom ? headroom : requested;
         if (applied == 0)
             return 0;
 
         SetPowerForCombat128(power, curPower + applied, withPowerUpdate);
-        gain = applied > static_cast<uint128>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(applied);
+        gain = Acore::Number::ToInt128Saturated(applied);
     }
     else
     {
-        uint128 reduction = dVal == std::numeric_limits<int64>::min() ? static_cast<uint128>(std::numeric_limits<int64>::max()) + 1 : static_cast<uint64>(-dVal);
+        uint128 reduction = Acore::Number::ToUInt128Saturated(-dVal);
         if (reduction >= curPower)
         {
             SetPowerForCombat128(power, 0, withPowerUpdate);
-            gain = curPower > static_cast<uint128>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::min() : -static_cast<int64>(curPower);
+            gain = -Acore::Number::ToInt128Saturated(curPower);
         }
         else
         {
@@ -15356,10 +15349,9 @@ int32 Unit::ModifyPowerPct(Powers power, float pct, bool apply)
 
     amount *= apply ? (100.0L + static_cast<long double>(pct)) / 100.0L : 100.0L / (100.0L + static_cast<long double>(pct));
 
-    int64 diff = amount > static_cast<long double>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(amount);
-    uint128 maxPower = GetMaxPowerForCombat128(power);
-    int64 currentMax = maxPower > static_cast<uint128>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(maxPower);
-    return ToInt32SignedDelta(ModifyPower64(power, diff - currentMax));
+    int128 diff = Acore::Number::ToInt128Saturated(amount);
+    int128 currentMax = Acore::Number::ToInt128Saturated(GetMaxPowerForCombat128(power));
+    return ToInt32SignedDelta(ModifyPower128(power, diff - currentMax));
 }
 
 bool Unit::IsAlwaysVisibleFor(WorldObject const* seer) const
@@ -16370,7 +16362,7 @@ uint32 Unit::GetCreatureType() const
 ########                         ########
 #######################################*/
 
-bool Unit::HandleStatModifier(UnitMods unitMod, UnitModifierType modifierType, float amount, bool apply)
+bool Unit::HandleStatModifier(UnitMods unitMod, UnitModifierType modifierType, double amount, bool apply)
 {
     if (unitMod >= UNIT_MOD_END || modifierType >= MODIFIER_TYPE_END)
     {
@@ -16382,7 +16374,7 @@ bool Unit::HandleStatModifier(UnitMods unitMod, UnitModifierType modifierType, f
     {
         case BASE_VALUE:
         case TOTAL_VALUE:
-            m_auraModifiersGroup[unitMod][modifierType] += apply ? double(amount) : -double(amount);
+            m_auraModifiersGroup[unitMod][modifierType] += apply ? amount : -amount;
             break;
         case BASE_PCT:
         case TOTAL_PCT:
@@ -16390,7 +16382,7 @@ bool Unit::HandleStatModifier(UnitMods unitMod, UnitModifierType modifierType, f
             // 百分比修正走 float 精度即可(pct 不会出现 1e12 级累加)；
             // 但底层存储是 double,需要临时拷贝进出。
             float tmp = float(m_auraModifiersGroup[unitMod][modifierType]);
-            ApplyPercentModFloatVar(tmp, amount, apply);
+            ApplyPercentModFloatVar(tmp, static_cast<float>(amount), apply);
             m_auraModifiersGroup[unitMod][modifierType] = double(tmp);
             break;
         }

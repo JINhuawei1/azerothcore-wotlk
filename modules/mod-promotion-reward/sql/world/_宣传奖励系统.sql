@@ -8,8 +8,8 @@ CREATE TABLE `_宣传奖励系统` (
   `id`           int UNSIGNED NOT NULL DEFAULT 1 COMMENT '配置ID,固定为1。表中无此行 = 模块禁用',
   `注释`         varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL,
   `武器entry`    int UNSIGNED NOT NULL DEFAULT 997001 COMMENT '宣传神器首级 item_template entry。实际持有判定支持 997001-998000',
-  `初始全属性值` decimal(39,0) NOT NULL DEFAULT 1999 COMMENT '宣传1天时的全属性数值',
-  `每日增量`     decimal(39,0) NOT NULL DEFAULT 1000 COMMENT '每多1天宣传增加的全属性',
+  `初始全属性值` decimal(65,0) NOT NULL DEFAULT 1000000 COMMENT '宣传1天时的全属性数值',
+  `每日增量`     decimal(65,0) NOT NULL DEFAULT 1000000 COMMENT '每多1天宣传增加的全属性',
   `对接奖励组`   int UNSIGNED NOT NULL DEFAULT 9001 COMMENT '生成兑换码时写入 _奖励_兑换码.组 (mod-redemption-code 用于同组限领)',
   `对接需求ID`   int UNSIGNED NOT NULL DEFAULT 0 COMMENT '生成兑换码时写入 _奖励_兑换码.需求 (mod-requirement-template ID,0=无需求)',
   `对接奖励ID`   int UNSIGNED NOT NULL DEFAULT 0 COMMENT '生成宣传CDK时写入 _奖励_兑换码.奖励。宣传模块兑换时会按玩家天数映射到 _模板_奖励 100-1099',
@@ -18,15 +18,15 @@ CREATE TABLE `_宣传奖励系统` (
 ) ENGINE = MyISAM CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '宣传奖励系统配置' ROW_FORMAT = DYNAMIC;
 
 ALTER TABLE `_宣传奖励系统`
-  MODIFY COLUMN `初始全属性值` decimal(39,0) NOT NULL DEFAULT 1999 COMMENT '宣传1天时的全属性数值',
-  MODIFY COLUMN `每日增量` decimal(39,0) NOT NULL DEFAULT 1000 COMMENT '每多1天宣传增加的全属性';
+  MODIFY COLUMN `初始全属性值` decimal(65,0) NOT NULL DEFAULT 1000000 COMMENT '宣传1天时的全属性数值',
+  MODIFY COLUMN `每日增量` decimal(65,0) NOT NULL DEFAULT 1000000 COMMENT '每多1天宣传增加的全属性';
 
 INSERT INTO `_宣传奖励系统`
   (`id`, `注释`, `武器entry`, `初始全属性值`, `每日增量`,
    `对接奖励组`, `对接需求ID`, `对接奖励ID`, `领取公告`)
 VALUES
-  (1, '默认配置:通用宣传CDK,兑换时升级宣传神器997001-998000,奖励显示ID=100-1099',
-      997001, 1999, 1000, 9001, 0, 100, 27);
+  (1, '默认配置:宣传神器997001-998000,每级全属性+1000000,奖励ID=100-1099',
+      997001, 1000000, 1000000, 9001, 0, 100, 27);
 
 -- ============================================================
 -- 提示: 宣传CDK是通用码,不直接固定某一把武器。

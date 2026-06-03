@@ -24,6 +24,7 @@
 #include "SpellScriptCombatValue.h"
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
+#include "Util.h"
 /*
  * Scripts for spells with SPELLFAMILY_DRUID and SPELLFAMILY_GENERIC spells used by druid players.
  * Ordered alphabetically using scriptname.
@@ -588,13 +589,15 @@ class spell_dru_lifebloom : public AuraScript
 
         // final heal
         int32 stack = GetStackAmount();
+        uint128 healAmountForCombat = aurEff->GetAmount() > 0 ? static_cast<uint128>(aurEff->GetAmount()) : 0;
         int32 healAmount = aurEff->GetAmount();
         SpellInfo const* finalHeal = sSpellMgr->GetSpellInfo(SPELL_DRUID_LIFEBLOOM_FINAL_HEAL);
 
         if (Unit* caster = GetCaster())
         {
-            healAmount = caster->SpellHealingBonusDone(GetTarget(), finalHeal, healAmount, HEAL, aurEff->GetEffIndex(), 0.0f, stack);
-            healAmount = GetTarget()->SpellHealingBonusTaken(caster, finalHeal, healAmount, HEAL, stack);
+            healAmountForCombat = caster->SpellHealingBonusDone(GetTarget(), finalHeal, healAmountForCombat, HEAL, aurEff->GetEffIndex(), 0.0f, stack);
+            healAmountForCombat = GetTarget()->SpellHealingBonusTaken(caster, finalHeal, healAmountForCombat, HEAL, stack);
+            healAmount = SpellScriptCombat::ToClientSpellValue(Acore::Number::ToLongDouble(healAmountForCombat));
             // restore mana
             int32 returnmana = (GetSpellInfo()->ManaCostPercentage * caster->GetCreateMana() / 100) * stack / 2;
             caster->CastCustomSpell(caster, SPELL_DRUID_LIFEBLOOM_ENERGIZE, &returnmana, nullptr, nullptr, true, nullptr, aurEff, GetCasterGUID());
@@ -614,9 +617,9 @@ class spell_dru_lifebloom : public AuraScript
                 if (caster)
                 {
                     // healing with bonus
-                    uint64 healAmountForCombat = caster->SpellHealingBonusDone(target, finalHeal, static_cast<uint64>(std::max(healAmount, 0)), HEAL, EFFECT_1, 0.0f, dispelInfo->GetRemovedCharges());
+                    uint128 healAmountForCombat = caster->SpellHealingBonusDone(target, finalHeal, std::max(healAmount, 0), HEAL, EFFECT_1, 0.0f, dispelInfo->GetRemovedCharges());
                     healAmountForCombat = target->SpellHealingBonusTaken(caster, finalHeal, healAmountForCombat, HEAL, dispelInfo->GetRemovedCharges());
-                    healAmount = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(healAmountForCombat));
+                    healAmount = SpellScriptCombat::ToClientSpellValue(Acore::Number::ToLongDouble(healAmountForCombat));
 
                     // mana amount
                     int32 mana = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(static_cast<long double>(caster->GetCreateManaForCombat()), GetSpellInfo()->ManaCostPercentage) * dispelInfo->GetRemovedCharges() / 2.0L);
@@ -653,7 +656,7 @@ class spell_dru_living_seed : public AuraScript
             return;
         }
 
-        int32 amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(static_cast<long double>(eventInfo.GetHealInfo()->GetHeal()), aurEff->GetAmount()));
+        int32 amount = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(Acore::Number::ToLongDouble(eventInfo.GetHealInfo()->GetHeal()), aurEff->GetAmount()));
         GetTarget()->CastCustomSpell(SPELL_DRUID_LIVING_SEED_PROC, SPELLVALUE_BASE_POINT0, amount, eventInfo.GetProcTarget(), true, nullptr, aurEff);
     }
 

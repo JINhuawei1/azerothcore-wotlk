@@ -125,9 +125,9 @@ bool PetAI::_canMeleeAttack()
                             {
                                 SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellID);
                                 uint128 mana = me->GetPowerForCombat128(POWER_MANA);
-                                int64 powerCost = spellInfo->CalcPowerCost(me, spellInfo->GetSchoolMask());
+                                int128 powerCost = spellInfo->CalcPowerCost(me, spellInfo->GetSchoolMask());
 
-                                if (powerCost <= 0 || mana >= static_cast<uint128>(powerCost))
+                                if (powerCost <= 0 || mana >= Acore::Number::ToUInt128Saturated(powerCost))
                                 {
                                     combatRange = spellInfo->GetMaxRange();
                                     return true;

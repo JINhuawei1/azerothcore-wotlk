@@ -1434,8 +1434,8 @@ class spell_symbol_of_life_dummy : public SpellScript
                 target->RemoveAurasDueToSpell(SPELL_PERMANENT_FEIGN_DEATH);
                 target->ReplaceAllDynamicFlags(0);
                 target->ReplaceAllUnitFlags2(UNIT_FLAG2_NONE);
-                target->SetHealthForCombat(target->GetMaxHealthForCombat() / 2);
-                target->SetPowerForCombat(POWER_MANA, static_cast<uint64>(static_cast<long double>(target->GetMaxPowerForCombat(POWER_MANA)) * 0.75L));
+                target->SetHealthForCombat128(target->GetMaxHealthForCombat128() / 2);
+                target->SetPowerForCombat128(POWER_MANA, Acore::Number::ToUInt128Saturated(Acore::Number::ToLongDouble(target->GetMaxPowerForCombat128(POWER_MANA)) * 0.75L));
             }
         }
     }

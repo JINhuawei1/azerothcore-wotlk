@@ -6,10 +6,10 @@ CREATE TABLE IF NOT EXISTS `_武魂系统_模板` (
   `生物模板` int UNSIGNED NOT NULL DEFAULT 930001 COMMENT '召唤出的 creature_template.entry',
   `模型缩放` float NOT NULL DEFAULT 1,
   `默认模板` tinyint UNSIGNED NOT NULL DEFAULT 0 COMMENT '1=默认武魂模板',
-  `激活魂力消耗` decimal(39,0) UNSIGNED NOT NULL DEFAULT 1000 COMMENT '激活武魂分身所需魂力',
-  `进化魂力消耗` decimal(39,0) UNSIGNED NOT NULL DEFAULT 0 COMMENT '进化到该模板所需魂力，模板1为0',
-  `副本Boss魂力` decimal(39,0) UNSIGNED NOT NULL DEFAULT 1,
-  `世界Boss魂力` decimal(39,0) UNSIGNED NOT NULL DEFAULT 1,
+  `激活魂力消耗` decimal(65,0) UNSIGNED NOT NULL DEFAULT 1000 COMMENT '激活武魂分身所需魂力',
+  `进化魂力消耗` decimal(65,0) UNSIGNED NOT NULL DEFAULT 0 COMMENT '进化到该模板所需魂力，模板1为0',
+  `副本Boss魂力` decimal(65,0) UNSIGNED NOT NULL DEFAULT 1,
+  `世界Boss魂力` decimal(65,0) UNSIGNED NOT NULL DEFAULT 1,
   `魂环等级上限` int UNSIGNED NOT NULL DEFAULT 100,
   `最大继承百分比` int UNSIGNED NOT NULL DEFAULT 900 COMMENT '900=900%',
   `目标同步间隔毫秒` int UNSIGNED NOT NULL DEFAULT 250,
@@ -24,10 +24,10 @@ CREATE TABLE IF NOT EXISTS `_武魂系统_模板` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='武魂系统模板配置';
 
 ALTER TABLE `_武魂系统_模板`
-  MODIFY COLUMN `激活魂力消耗` decimal(39,0) UNSIGNED NOT NULL DEFAULT 1000 COMMENT '激活武魂分身所需魂力',
-  MODIFY COLUMN `进化魂力消耗` decimal(39,0) UNSIGNED NOT NULL DEFAULT 0 COMMENT '进化到该模板所需魂力，模板1为0',
-  MODIFY COLUMN `副本Boss魂力` decimal(39,0) UNSIGNED NOT NULL DEFAULT 1,
-  MODIFY COLUMN `世界Boss魂力` decimal(39,0) UNSIGNED NOT NULL DEFAULT 1;
+  MODIFY COLUMN `激活魂力消耗` decimal(65,0) UNSIGNED NOT NULL DEFAULT 1000 COMMENT '激活武魂分身所需魂力',
+  MODIFY COLUMN `进化魂力消耗` decimal(65,0) UNSIGNED NOT NULL DEFAULT 0 COMMENT '进化到该模板所需魂力，模板1为0',
+  MODIFY COLUMN `副本Boss魂力` decimal(65,0) UNSIGNED NOT NULL DEFAULT 1,
+  MODIFY COLUMN `世界Boss魂力` decimal(65,0) UNSIGNED NOT NULL DEFAULT 1;
 
 DELETE FROM `_武魂系统_模板` WHERE `模板ID` BETWEEN 1 AND 10;
 INSERT INTO `_武魂系统_模板`

@@ -176,9 +176,9 @@ struct WuhunEquipmentBonus
     double spellPower = 0.0;
     double minDamage = 0.0;
     double maxDamage = 0.0;
-    int64 meleeHasteRating = 0;
-    int64 rangedHasteRating = 0;
-    int64 spellHasteRating = 0;
+    int128 meleeHasteRating = 0;
+    int128 rangedHasteRating = 0;
+    int128 spellHasteRating = 0;
     uint32 itemCount = 0;
     uint32 enhancedItemCount = 0;
 };
@@ -858,7 +858,7 @@ public:
             "`魂环1等级`, `魂环2等级`, `魂环3等级`, `魂环4等级`, `魂环5等级`, "
             "`魂环6等级`, `魂环7等级`, `魂环8等级`, `魂环9等级`) "
             "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-            playerGuid, data->wuhunId, data->activated ? 1 : 0, data->summonRequested ? 1 : 0, Acore::ToString(data->soulPower),
+            playerGuid, data->wuhunId, data->activated ? 1 : 0, data->summonRequested ? 1 : 0, Acore::Number::ToDecimal65String(data->soulPower),
             data->ringLevels[0], data->ringLevels[1], data->ringLevels[2],
             data->ringLevels[3], data->ringLevels[4], data->ringLevels[5],
             data->ringLevels[6], data->ringLevels[7], data->ringLevels[8]);
@@ -1261,11 +1261,11 @@ public:
         avatar->UpdateDamagePhysical(OFF_ATTACK);
         avatar->UpdateDamagePhysical(RANGED_ATTACK);
 
-        auto calculateInheritedHasteBonus = [player, inheritPercent](CombatRating rating, int64 equipmentRating) -> float
+        auto calculateInheritedHasteBonus = [player, inheritPercent](CombatRating rating, int128 const& equipmentRating) -> float
         {
             long double hasteBonus = static_cast<long double>(player->GetRatingBonusValue(rating)) * static_cast<long double>(inheritPercent) / 100.0L;
             if (equipmentRating > 0)
-                hasteBonus += static_cast<long double>(equipmentRating) * static_cast<long double>(player->GetRatingMultiplier(rating));
+                hasteBonus += Acore::Number::ToLongDouble(equipmentRating) * static_cast<long double>(player->GetRatingMultiplier(rating));
 
             if (hasteBonus <= 0.0L || !std::isfinite(static_cast<double>(hasteBonus)))
                 return 0.0f;
@@ -1303,7 +1303,7 @@ public:
                 data->avatarRangedAttackPower,
                 data->avatarSpellPower,
                 player->GetRatingBonusValue(CR_HASTE_MELEE),
-                equipmentBonus.meleeHasteRating,
+                equipmentBonus.meleeHasteRating.convert_to<std::string>(),
                 meleeAttackTime,
                 rangedAttackTime);
         }
@@ -2250,7 +2250,7 @@ public:
             return;
 
         uint128 oldDamage = damage;
-        uint128 workingDamage = AddDamageSaturated(Acore::Number::ToUInt64Saturated(damage), powerBonus);
+        uint128 workingDamage = AddDamageSaturated(damage, powerBonus);
 
         if (bonusPct > 0.0f)
         {
@@ -3144,7 +3144,6 @@ private:
 
         int128 value = rawValue;
         uint128 unsignedValue = Acore::Number::ToUInt128Saturated(value);
-        int64 legacyValue = Acore::Number::ToInt64Saturated(value);
         double numericValue = Acore::Number::ToDouble(value);
 
         switch (statType)
@@ -3231,18 +3230,18 @@ private:
                 bonus.spellPower += numericValue * 0.5;
                 break;
             case ITEM_MOD_HASTE_MELEE_RATING:
-                bonus.meleeHasteRating = SaturatingAddInt64(bonus.meleeHasteRating, legacyValue);
+                bonus.meleeHasteRating = SaturatingAddInt128(bonus.meleeHasteRating, value);
                 break;
             case ITEM_MOD_HASTE_RANGED_RATING:
-                bonus.rangedHasteRating = SaturatingAddInt64(bonus.rangedHasteRating, legacyValue);
+                bonus.rangedHasteRating = SaturatingAddInt128(bonus.rangedHasteRating, value);
                 break;
             case ITEM_MOD_HASTE_SPELL_RATING:
-                bonus.spellHasteRating = SaturatingAddInt64(bonus.spellHasteRating, legacyValue);
+                bonus.spellHasteRating = SaturatingAddInt128(bonus.spellHasteRating, value);
                 break;
             case ITEM_MOD_HASTE_RATING:
-                bonus.meleeHasteRating = SaturatingAddInt64(bonus.meleeHasteRating, legacyValue);
-                bonus.rangedHasteRating = SaturatingAddInt64(bonus.rangedHasteRating, legacyValue);
-                bonus.spellHasteRating = SaturatingAddInt64(bonus.spellHasteRating, legacyValue);
+                bonus.meleeHasteRating = SaturatingAddInt128(bonus.meleeHasteRating, value);
+                bonus.rangedHasteRating = SaturatingAddInt128(bonus.rangedHasteRating, value);
+                bonus.spellHasteRating = SaturatingAddInt128(bonus.spellHasteRating, value);
                 break;
             case ITEM_MOD_MANA_REGENERATION:
                 bonus.mana = SaturatingAddUInt128(bonus.mana, SaturatingMultiplyUInt128(unsignedValue, 5));
@@ -3435,7 +3434,7 @@ public:
         if (!creature->hasLootRecipient())
             creature->SetLootRecipient(owner);
 
-        creature->LowerPlayerDamageReq(Acore::Number::ToUInt64Saturated(std::min<uint128>(victim->GetHealthForCombat128(), uint128(damage))), true);
+        creature->LowerPlayerDamageReq(std::min<uint128>(victim->GetHealthForCombat128(), uint128(damage)), true);
     }
 
     void KilledUnit(Unit* victim) override
@@ -3446,7 +3445,7 @@ public:
         Creature* creature = victim->ToCreature();
         if (Player* owner = ObjectAccessor::FindPlayer(me->GetOwnerGUID()))
             if (owner->IsInMap(creature) && creature->isTappedBy(owner))
-                sWuhunMgr->OnBossKilled(owner, creature);
+                sScriptMgr->OnPlayerCreatureKilledByPet(owner, creature);
     }
 
     void UpdateAI(uint32 diff) override
@@ -3612,20 +3611,6 @@ private:
 
         if (me->HasUnitMovementFlag(MOVEMENTFLAG_DISABLE_GRAVITY) != ownerFlying)
             changed = me->SetDisableGravity(ownerFlying) || changed;
-
-        uint32 desiredFlightMoveFlags = 0;
-        if (ownerFlying)
-            desiredFlightMoveFlags |= MOVEMENTFLAG_FLYING;
-
-        uint32 const currentFlightMoveFlags = me->GetUnitMovementFlags() &
-            MOVEMENTFLAG_FLYING;
-        if (currentFlightMoveFlags != desiredFlightMoveFlags)
-        {
-            me->RemoveUnitMovementFlag(MOVEMENTFLAG_FLYING | MOVEMENTFLAG_ASCENDING | MOVEMENTFLAG_DESCENDING);
-            if (desiredFlightMoveFlags)
-                me->AddUnitMovementFlag(desiredFlightMoveFlags);
-            changed = true;
-        }
 
         if (!ownerFlying && (changed || _hasFlightFollowDest || std::fabs(me->GetPositionZ() - owner->GetPositionZ()) > 3.0f))
         {

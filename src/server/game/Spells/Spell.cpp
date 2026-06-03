@@ -122,6 +122,15 @@ namespace
         return clientPower;
     }
 
+    float ToThreatValue(uint128 const& amount)
+    {
+        long double value = Acore::Number::ToLongDouble(amount);
+        if (value >= static_cast<long double>(std::numeric_limits<float>::max()))
+            return std::numeric_limits<float>::max();
+
+        return static_cast<float>(value);
+    }
+
     int32 ApplyPeriodicHasteToDuration(int32 duration, Unit const* caster, SpellInfo const* spellInfo)
     {
         if (duration <= 0 || !caster || !spellInfo)
@@ -2800,7 +2809,7 @@ void Spell::DoAllEffectOnTarget(TargetInfo* target)
             spellHitTarget = m_caster;
             unitTarget = m_caster;
             if (m_caster->IsCreature())
-                m_caster->ToCreature()->LowerPlayerDamageReq(Acore::Number::ToUInt64Saturated(target->damage));
+                m_caster->ToCreature()->LowerPlayerDamageReq(target->damage);
         }
     }
 
@@ -2887,7 +2896,7 @@ void Spell::DoAllEffectOnTarget(TargetInfo* target)
     if (m_healing > 0)
     {
         bool crit = target->crit;
-        uint64 addhealth = Acore::Number::ToUInt64Saturated(m_healing);
+        uint128 addhealth = m_healing;
 
         if (crit)
         {
@@ -2906,8 +2915,8 @@ void Spell::DoAllEffectOnTarget(TargetInfo* target)
             procEx |= PROC_EX_CRITICAL_HIT;
         }
 
-        uint64 gain = caster->HealBySpell(healInfo, crit);
-        unitTarget->getHostileRefMgr().threatAssist(caster, float(gain) * 0.5f, m_spellInfo);
+        uint128 gain = caster->HealBySpell(healInfo, crit);
+        unitTarget->getHostileRefMgr().threatAssist(caster, ToThreatValue(gain) * 0.5f, m_spellInfo);
         m_healing = gain;
 
         // Xinef: if heal acutally healed something, add no overheal flag
@@ -2965,8 +2974,8 @@ void Spell::DoAllEffectOnTarget(TargetInfo* target)
             float healMultiplier = m_spellInfo->Effects[effIndex].CalcValueMultiplier(m_originalCaster, this);
 
             // get max possible damage, don't count overkill for heal
-            int64 leechDamage = damageInfo.damage > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(damageInfo.damage);
-            uint64 healthGain = static_cast<uint64>(static_cast<long double>(-unitTarget->GetHealthGain(-leechDamage)) * static_cast<long double>(healMultiplier));
+            uint128 effectiveLeechDamage = std::min<uint128>(damageInfo.damage, unitTarget->GetHealthForCombat128());
+            uint128 healthGain = ToUInt128Damage(Acore::Number::ToLongDouble(effectiveLeechDamage) * static_cast<long double>(healMultiplier));
 
             if (m_caster->IsAlive())
             {
@@ -5477,7 +5486,11 @@ void Spell::TakePower()
                             hit = false;
                             //lower spell cost on fail (by talent aura)
                             if (Player* modOwner = m_caster->ToPlayer()->GetSpellModOwner())
-                                modOwner->ApplySpellMod(m_spellInfo->Id, SPELLMOD_SPELL_COST_REFUND_ON_FAIL, m_powerCost, this);
+                            {
+                                long double powerCost = Acore::Number::ToLongDouble(m_powerCost);
+                                modOwner->ApplySpellMod(m_spellInfo->Id, SPELLMOD_SPELL_COST_REFUND_ON_FAIL, powerCost, this);
+                                m_powerCost = Acore::Number::ToInt128Saturated(powerCost);
+                            }
                         }
                         break;
                     }
@@ -5495,7 +5508,9 @@ void Spell::TakePower()
     // health as power used
     if (PowerType == POWER_HEALTH)
     {
-        m_caster->ModifyHealth(-m_powerCost);
+        uint128 cost = Acore::Number::ToUInt128Saturated(m_powerCost);
+        uint128 currentHealth = m_caster->GetHealthForCombat128();
+        m_caster->SetHealthForCombat128(cost >= currentHealth ? 0 : currentHealth - cost);
         return;
     }
 
@@ -5506,9 +5521,12 @@ void Spell::TakePower()
     }
 
     if (hit)
-        m_caster->ModifyPower64(PowerType, -m_powerCost);
+        m_caster->ModifyPower128(PowerType, -m_powerCost);
     else
-        m_caster->ModifyPower64(PowerType, -urand64(0, m_powerCost / 4));
+    {
+        uint128 partialCost = Acore::Number::ToUInt128Saturated(m_powerCost) / 4;
+        m_caster->ModifyPower128(PowerType, -static_cast<int128>(urand64(0, Acore::Number::ToUInt64Saturated(partialCost))));
+    }
 
     // Set the five second timer
     if (PowerType == POWER_MANA && m_powerCost > 0)

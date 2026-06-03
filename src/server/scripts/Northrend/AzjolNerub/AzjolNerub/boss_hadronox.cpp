@@ -23,6 +23,7 @@
 #include "azjol_nerub.h"
 #include "SpellAuraEffects.h"
 #include "SpellScript.h"
+#include "Unit.h"
 
 enum Spells
 {
@@ -133,7 +134,7 @@ public:
             if (!me->IsAlive() || !victim->HasAura(SPELL_LEECH_POISON))
                 return;
 
-            me->ModifyHealth(int32(me->CountPctFromMaxHealth(10)));
+            Unit::DealHeal(me, me, me->CountPctFromMaxHealth128(10));
         }
 
         void JustDied(Unit* killer) override

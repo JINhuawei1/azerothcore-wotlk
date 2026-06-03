@@ -52,6 +52,18 @@ namespace
     constexpr uint64 ASCENSION_CLIENT_VISIBLE_HEALTH_LIMIT = 2000000000ULL;
     constexpr uint32 ASCENSION_TRUE_STRIKE_MIN_MS = 1800;
     constexpr uint32 ASCENSION_TRUE_STRIKE_MAX_MS = 2400;
+    constexpr char PLAYER_ATTRIBUTE_PANEL_ADDON_PREFIX[] = "PATTRPANEL";
+
+    void NotifyPlayerAttributePanelRefresh(Player* player)
+    {
+        if (!player || !player->GetSession())
+            return;
+
+        WorldPacket data;
+        std::string fullMessage = std::string(PLAYER_ATTRIBUTE_PANEL_ADDON_PREFIX) + "\tREFRESH";
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
+        player->SendDirectMessage(&data);
+    }
 
     int32 ClampAscensionInt64ToInt32(int64 value)
     {
@@ -1416,6 +1428,7 @@ bool AscensionManager::EquipItem(Player* player, uint8 slot, uint32 itemId, uint
 
     // 发送数据到客户端
     SendAscensionDataToClient(player);
+    NotifyPlayerAttributePanelRefresh(player);
 
     return true;
 }
@@ -1561,6 +1574,7 @@ bool AscensionManager::UnequipItem(Player* player, uint8 slot)
 
     // 发送数据到客户端
     SendAscensionDataToClient(player);
+    NotifyPlayerAttributePanelRefresh(player);
 
     return true;
 }
@@ -1653,6 +1667,7 @@ void AscensionManager::UnequipAllItems(Player* player)
 
     // 发送数据到客户端
     SendAscensionDataToClient(player);
+    NotifyPlayerAttributePanelRefresh(player);
 }
 
 void AscensionManager::ApplyAllEffects(Player* player)
@@ -1747,6 +1762,7 @@ void AscensionManager::RefreshEffects(Player* player)
 
     RemoveAllEffects(player);
     ApplyAllEffects(player);
+    NotifyPlayerAttributePanelRefresh(player);
 }
 
 void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot, bool apply, bool updateStats)
@@ -1814,7 +1830,7 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
         if (val != 0)
         {
             val = Acore::Number::ToInt128Saturated(Acore::Number::ToLongDouble(val) * static_cast<long double>(totalMultiplier));
-            int64 legacyVal = ToAscensionInt64Saturated(val);
+            int128 legacyVal = val;
             float statModValue = Acore::Number::ToFloat(val);
             uint32 statType = proto->ItemStat[i].ItemStatType;
 
@@ -2728,7 +2744,7 @@ void AscensionManager::ApplyEnchantStatMod(Player* player, uint32 statType, int1
         return;
 
     float statModValue = Acore::Number::ToFloat(amount);
-    int64 legacyAmount = ToAscensionInt64Saturated(amount);
+    int128 legacyAmount = amount;
     int32 legacyInt32 = ClampAscensionInt128ToInt32(amount);
 
     switch (statType)
@@ -2847,7 +2863,7 @@ void AscensionManager::RemoveStatEffect(Player* player, uint32 statType, int128 
     if (!player || statValue == 0)
         return;
 
-    int64 legacyValue = ToAscensionInt64Saturated(statValue);
+    int128 legacyValue = statValue;
     float statModValue = Acore::Number::ToFloat(statValue);
 
     // 处理标准物品属性类型
@@ -3769,7 +3785,7 @@ public:
             }
 
             // 扩展血量首领会把核心半血伤害需求抬得过高，这里只解除奖励判定门槛，掉落仍由 creature_template.lootid 正常生成。
-            me->LowerPlayerDamageReq(Acore::Number::ToUInt64Saturated(me->GetMaxHealthForCombat128()), true);
+            me->LowerPlayerDamageReq(me->GetMaxHealthForCombat128(), true);
 
             if (me->HasWeapon(OFF_ATTACK))
                 me->SetCanDualWield(true);
@@ -3856,7 +3872,7 @@ public:
                 damage = std::max<uint128>(comboDamage, healthDamage);
             }
 
-            Unit::DealDamage(me, victim, Acore::Number::ToUInt64Saturated(damage), nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW, nullptr, false);
+            Unit::DealDamage(me, victim, damage, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW, nullptr, false);
         }
 
         void JustDied(Unit* killer) override

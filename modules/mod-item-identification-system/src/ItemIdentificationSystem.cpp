@@ -676,17 +676,17 @@ bool ItemIdentificationSystem::CanIdentify(Player* player, Item* item, bool send
     DebugLog("物品类型检查通过 (类型: {}, 名称: {})", proto->Class, proto->Name1);
 
     // 检查玩家金币是否足够
-    uint64 playerMoney = player->GetMoney();
+    int128 playerMoney = player->GetMoney();
 
     if (playerMoney < _cost)
     {
         if (sendError)
             ChatHandler(player->GetSession()).SendNotification("你没有足够的金币进行鉴定");
-        DebugLog("CanIdentify检查失败: 金币不足 (拥有: {}, 需要: {})", playerMoney, _cost);
+        DebugLog("CanIdentify检查失败: 金币不足 (拥有: {}, 需要: {})", Acore::ToString(playerMoney), _cost);
         return false;
     }
 
-    DebugLog("物品可以鉴定: 物品ID={}, GUID={}, 玩家金币={}", item->GetEntry(), item->GetGUID().GetCounter(), playerMoney);
+    DebugLog("物品可以鉴定: 物品ID={}, GUID={}, 玩家金币={}", item->GetEntry(), item->GetGUID().GetCounter(), Acore::ToString(playerMoney));
     return true;
 }
 

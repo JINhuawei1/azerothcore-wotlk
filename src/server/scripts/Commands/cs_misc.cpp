@@ -43,6 +43,7 @@
 #include "Realm.h"
 #include "ScriptMgr.h"
 #include "SpellAuras.h"
+#include "StringConvert.h"
 #include "TargetedMovementGenerator.h"
 #include "Tokenize.h"
 #include "WeatherMgr.h"
@@ -1977,7 +1978,7 @@ public:
         uint32 totalPlayerTime          = 0;
         uint8 level                     = 0;
         std::string alive               = handler->GetAcoreString(LANG_ERROR);
-        uint64 money                    = 0;
+        int128 money                    = 0;
         uint32 xp                       = 0;
         uint32 xptotal                  = 0;
 
@@ -2041,7 +2042,7 @@ public:
             Field* fields      = charInfoResult->Fetch();
             totalPlayerTime    = fields[0].Get<uint32>();
             level              = fields[1].Get<uint8>();
-            money              = fields[2].Get<uint64>();
+            money              = static_cast<int128>(fields[2].Get<uint128>());
             accId              = fields[3].Get<uint32>();
             raceid             = fields[4].Get<uint8>();
             classid            = fields[5].Get<uint8>();
@@ -2297,9 +2298,9 @@ public:
 
         // However, as we usually just require a target here, we use target instead.
         // Output XIV. LANG_PINFO_CHR_MONEY
-        uint64 gold = money / GOLD;
-        uint64 silv = (money % GOLD) / SILVER;
-        uint64 copp = (money % GOLD) % SILVER;
+        std::string gold = Acore::ToString(money / GOLD);
+        std::string silv = Acore::ToString((money % GOLD) / SILVER);
+        std::string copp = Acore::ToString((money % GOLD) % SILVER);
         handler->PSendSysMessage(LANG_PINFO_CHR_MONEY, gold, silv, copp);
 
         // Position data

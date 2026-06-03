@@ -690,8 +690,8 @@ void SmartScript::ProcessAction(SmartScriptHolder& e, Unit* unit, uint32 var0, u
                     bool isRangedAttack = spellMaxRange > NOMINAL_MELEE_RANGE;
                     bool isTargetRooted = target->ToUnit()->HasUnitState(UNIT_STATE_ROOT);
                     // To prevent running back and forth when OOM, we must have more than 10% mana.
-                    int64 powerCost = spellInfo->CalcPowerCost(me, spellInfo->GetSchoolMask());
-                    bool canCastSpell = me->GetPowerPct(POWER_MANA) > 10.0f && (powerCost <= 0 || me->GetPowerForCombat128(POWER_MANA) >= static_cast<uint128>(powerCost)) && !me->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_SILENCED);
+                    int128 powerCost = spellInfo->CalcPowerCost(me, spellInfo->GetSchoolMask());
+                    bool canCastSpell = me->GetPowerPct(POWER_MANA) > 10.0f && (powerCost <= 0 || me->GetPowerForCombat128(POWER_MANA) >= Acore::Number::ToUInt128Saturated(powerCost)) && !me->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_SILENCED);
                     bool isSpellIgnoreLOS = spellInfo->HasAttribute(SPELL_ATTR2_IGNORE_LINE_OF_SIGHT);
 
                     // If target is rooted we move out of melee range before casting, but not further than spell max range.
@@ -2728,12 +2728,12 @@ void SmartScript::ProcessAction(SmartScriptHolder& e, Unit* unit, uint32 var0, u
                         bool _allowMove = false;
                         SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(e.action.castCustom.spell); // AssertSpellInfo?
                         uint128 mana = me->GetPowerForCombat128(POWER_MANA);
-                        int64 powerCost = spellInfo->CalcPowerCost(me, spellInfo->GetSchoolMask());
+                        int128 powerCost = spellInfo->CalcPowerCost(me, spellInfo->GetSchoolMask());
 
                         if (me->GetDistance(target->ToUnit()) > spellInfo->GetMaxRange(true) ||
                             me->GetDistance(target->ToUnit()) < spellInfo->GetMinRange(true) ||
                             !me->IsWithinLOSInMap(target->ToUnit()) ||
-                            (powerCost > 0 && mana < static_cast<uint128>(powerCost)))
+                            (powerCost > 0 && mana < Acore::Number::ToUInt128Saturated(powerCost)))
                             _allowMove = true;
 
                         CAST_AI(SmartAI, me->AI())->SetCombatMove(_allowMove);

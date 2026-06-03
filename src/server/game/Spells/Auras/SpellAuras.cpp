@@ -81,19 +81,15 @@ namespace
         return static_cast<int32>(value);
     }
 
-    uint64 CalculatePctUInt64Saturated(uint64 base, float pct)
+    uint128 CalculatePctUInt128(uint128 const& base, float pct)
     {
-        if (!base || pct <= 0.0f)
+        if (base == 0 || pct <= 0.0f)
             return 0;
 
-        long double value = static_cast<long double>(base) * static_cast<long double>(pct) / 100.0L;
-        if (value >= static_cast<long double>(std::numeric_limits<uint64>::max()))
-            return std::numeric_limits<uint64>::max();
-
-        return static_cast<uint64>(value);
+        return Acore::Number::CalculatePct(base, pct);
     }
 
-    void DealTriggeredDirectSpellDamage(Unit* caster, Unit* target, uint32 spellId, uint64 rawDamage, AuraEffect const* triggeredByAura)
+    void DealTriggeredDirectSpellDamage(Unit* caster, Unit* target, uint32 spellId, uint128 const& rawDamage, AuraEffect const* triggeredByAura)
     {
         if (!caster || !target || !target->IsAlive() || !rawDamage)
             return;
@@ -110,11 +106,11 @@ namespace
 
         caster->SetLastDamagedTargetGuid(target->GetGUID());
 
-        rawDamage = Acore::Number::ToUInt64Saturated(caster->SpellDamageBonusDone(target, spellInfo, rawDamage, SPELL_DIRECT_DAMAGE, EFFECT_0));
-        rawDamage = Acore::Number::ToUInt64Saturated(target->SpellDamageBonusTaken(caster, spellInfo, rawDamage, SPELL_DIRECT_DAMAGE));
+        uint128 finalDamage = caster->SpellDamageBonusDone(target, spellInfo, rawDamage, SPELL_DIRECT_DAMAGE, EFFECT_0);
+        finalDamage = target->SpellDamageBonusTaken(caster, spellInfo, finalDamage, SPELL_DIRECT_DAMAGE);
 
         SpellNonMeleeDamage damageInfo(caster, target, spellInfo, spellInfo->GetSchoolMask());
-        caster->CalculateSpellDamageTaken(&damageInfo, rawDamage, spellInfo);
+        caster->CalculateSpellDamageTaken(&damageInfo, finalDamage, spellInfo);
         caster->SendSpellNonMeleeDamageLog(&damageInfo);
         caster->DealSpellDamage(&damageInfo, true);
 
@@ -1564,10 +1560,10 @@ void Aura::HandleAuraSpecificMods(AuraApplication const* aurApp, Unit* caster, b
                     // Druid T8 Restoration 4P Bonus
                     if (caster->GetAuraEffectDummy(64760))
                     {
-                        uint32 damage = GetEffect(0)->GetAmount();
+                        uint128 damage = GetEffect(0)->GetAmountForCombat();
                         damage = target->SpellHealingBonusTaken(caster, GetSpellInfo(), damage, DOT);
 
-                        int32 basepoints0 = damage;
+                        int32 basepoints0 = CalculatePctInt32Saturated(damage, 100.0f);
                         caster->CastCustomSpell(target, 64801, &basepoints0, nullptr, nullptr, true, nullptr, GetEffect(0));
                     }
                 }
@@ -1581,15 +1577,15 @@ void Aura::HandleAuraSpecificMods(AuraApplication const* aurApp, Unit* caster, b
                     // Improved Devouring Plague
                     if (AuraEffect const* aurEff = caster->GetDummyAuraEffect(SPELLFAMILY_PRIEST, 3790, 1))
                     {
-                        uint64 damage = GetEffect(0)->GetAmountForCombat();
-                        damage = Acore::Number::ToUInt64Saturated(target->SpellDamageBonusTaken(caster, GetSpellInfo(), damage, DOT));
+                        uint128 damage = GetEffect(0)->GetAmountForCombat();
+                        damage = target->SpellDamageBonusTaken(caster, GetSpellInfo(), damage, DOT);
                         uint32 totalTicks = std::max<int32>(GetEffect(0)->GetTotalTicks(), 1);
-                        uint64 totalDamage = damage > std::numeric_limits<uint64>::max() / totalTicks ? std::numeric_limits<uint64>::max() : damage * totalTicks;
-                        uint64 improvedDamage = CalculatePctUInt64Saturated(totalDamage, static_cast<float>(aurEff->GetAmount()));
+                        uint128 totalDamage = damage > std::numeric_limits<uint128>::max() / totalTicks ? std::numeric_limits<uint128>::max() : damage * totalTicks;
+                        uint128 improvedDamage = CalculatePctUInt128(totalDamage, static_cast<float>(aurEff->GetAmount()));
                         int32 basepoints0 = CalculatePctInt32Saturated(totalDamage, static_cast<float>(aurEff->GetAmount()));
                         int32 heal = CalculatePctInt32Saturated(improvedDamage, 15.0f);
 
-                        if (improvedDamage > static_cast<uint64>(std::numeric_limits<int32>::max()))
+                        if (improvedDamage > static_cast<uint128>(std::numeric_limits<int32>::max()))
                             DealTriggeredDirectSpellDamage(caster, target, 63675, improvedDamage, GetEffect(0));
                         else
                             caster->CastCustomSpell(target, 63675, &basepoints0, nullptr, nullptr, true, nullptr, GetEffect(0));

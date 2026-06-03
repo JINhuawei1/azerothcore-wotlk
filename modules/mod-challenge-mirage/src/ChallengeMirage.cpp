@@ -10,6 +10,7 @@
 #include "Creature.h"
 #include "DatabaseEnv.h"
 #include "Log.h"
+#include "ObjectAccessor.h"
 #include "Opcodes.h"
 #include "Player.h"
 #include "ScriptMgr.h"
@@ -38,6 +39,35 @@ uint64 BuildCreatureSpawnKey(uint32 mapId, uint32 instanceId, uint32 spawnId, ui
         | (uint64(instanceId & 0xFFFF) << 32)
         | (uint64(spawnId & 0xFFFFFF) << 8)
         | uint64(index & 0xFF);
+}
+
+ObjectGuid GetCreatureLinkedPlayerGuid(Creature const* creature)
+{
+    if (!creature)
+        return ObjectGuid::Empty;
+
+    ObjectGuid guid = creature->GetCharmerOrOwnerGUID();
+    if (guid.IsPlayer())
+        return guid;
+
+    guid = creature->GetCreatorGUID();
+    if (guid.IsPlayer())
+        return guid;
+
+    if (creature->IsSummon())
+    {
+        guid = creature->GetSummonerGUID();
+        if (guid.IsPlayer())
+            return guid;
+    }
+
+    return ObjectGuid::Empty;
+}
+
+Player const* GetCreatureLinkedPlayer(Creature const* creature)
+{
+    ObjectGuid guid = GetCreatureLinkedPlayerGuid(creature);
+    return guid.IsPlayer() ? ObjectAccessor::FindPlayer(guid) : nullptr;
 }
 
 std::string SanitizeAddonField(std::string value)
@@ -390,6 +420,9 @@ uint32 ChallengeMirageMgr::GetCreatureLayer(Creature const* creature) const
     if (itr != _creatureLayers.end())
         return itr->second;
 
+    if (Player const* linkedPlayer = GetCreatureLinkedPlayer(creature))
+        return GetPlayerLayer(linkedPlayer);
+
     auto entryItr = _creatureEntryLayers.find(creature->GetEntry());
     return entryItr != _creatureEntryLayers.end() ? entryItr->second : _defaultLayer;
 }
@@ -398,6 +431,9 @@ bool ChallengeMirageMgr::IsCreatureVisibleForPlayer(Creature const* creature, Pl
 {
     if (!_enabled || !creature || !player)
         return true;
+
+    if (GetCreatureLinkedPlayer(creature))
+        return GetCreatureLayer(creature) == GetPlayerLayer(player);
 
     if (creature->IsPet() || creature->IsControlledByPlayer())
         return true;

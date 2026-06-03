@@ -19,7 +19,7 @@
 #include "ScriptMgr.h"
 #include "ScriptMgrMacros.h"
 
-void ScriptMgr::OnHeal(Unit* healer, Unit* reciever, int64& gain)
+void ScriptMgr::OnHeal(Unit* healer, Unit* reciever, uint128& gain)
 {
     CALL_ENABLED_HOOKS(UnitScript, UNITHOOK_ON_HEAL, script->OnHeal(healer, reciever, gain));
 }
@@ -44,7 +44,7 @@ void ScriptMgr::ModifySpellDamageTaken(Unit* target, Unit* attacker, uint128& da
     CALL_ENABLED_HOOKS(UnitScript, UNITHOOK_MODIFY_SPELL_DAMAGE_TAKEN, script->ModifySpellDamageTaken(target, attacker, damage, spellInfo));
 }
 
-void ScriptMgr::ModifyHealReceived(Unit* target, Unit* healer, uint64& heal, SpellInfo const* spellInfo)
+void ScriptMgr::ModifyHealReceived(Unit* target, Unit* healer, uint128& heal, SpellInfo const* spellInfo)
 {
     CALL_ENABLED_HOOKS(UnitScript, UNITHOOK_MODIFY_HEAL_RECEIVED, script->ModifyHealReceived(target, healer, heal, spellInfo));
 }

@@ -23,6 +23,7 @@
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
 #include "UnitAI.h"
+#include "Util.h"
 #include <algorithm>
 #include <limits>
 
@@ -291,7 +292,7 @@ class spell_pal_sacred_shield_base : public AuraScript
             if (caster && procSpell->SpellFamilyName == SPELLFAMILY_PALADIN &&
                     procSpell->SpellFamilyFlags.HasFlag(0x40000000) && caster->GetAuraEffect(SPELL_AURA_PROC_TRIGGER_SPELL, SPELLFAMILY_PALADIN, 3021, 0)) // need infusion of light
             {
-                int32 basepoints = ToSpellValueInt32(static_cast<long double>(healinfo->GetHeal()) / 12.0L);
+                int32 basepoints = ToSpellValueInt32(Acore::Number::ToLongDouble(healinfo->GetHeal()) / 12.0L);
                 // Item - Paladin T9 Holy 4P Bonus (Flash of Light)
                 if (AuraEffect const* aurEffect = caster->GetAuraEffect(67191, EFFECT_0))
                     basepoints = SpellScriptCombat::AddPctClientSpellValue(basepoints, aurEffect->GetAmount());
@@ -401,10 +402,10 @@ private:
         else if (remainingHealth < allowedHealth)
         {
             // Reduce damage that brings us under 35% (or full damage if we are already under 35%) by x%
-            uint64 damageToReduce = (victimHealth < allowedHealth)
-                                    ? Acore::Number::ToUInt64Saturated(dmgInfo.GetDamage())
-                                    : Acore::Number::ToUInt64Saturated(allowedHealth - remainingHealth);
-            uint64 amountToAbsorb = CalculatePct(damageToReduce, absorbPct);
+            uint128 damageToReduce = (victimHealth < allowedHealth)
+                                    ? dmgInfo.GetDamage()
+                                    : allowedHealth - remainingHealth;
+            uint128 amountToAbsorb = Acore::Number::CalculatePct(damageToReduce, absorbPct);
             dmgInfo.AbsorbDamage(amountToAbsorb);
             absorbAmount = 0;
         }

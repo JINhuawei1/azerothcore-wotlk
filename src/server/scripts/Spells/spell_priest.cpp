@@ -24,6 +24,7 @@
 #include "SpellScript.h"
 #include "SpellScriptLoader.h"
 #include "TemporarySummon.h"
+#include "Util.h"
 #include <limits>
 /*
  * Scripts for spells with SPELLFAMILY_PRIEST and SPELLFAMILY_GENERIC spells used by priest players.
@@ -202,7 +203,7 @@ class spell_pri_divine_aegis : public AuraScript
     {
         PreventDefaultAction();
 
-        int32 absorb = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(static_cast<long double>(eventInfo.GetHealInfo()->GetHeal()), aurEff->GetAmount()));
+        int32 absorb = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(Acore::Number::ToLongDouble(eventInfo.GetHealInfo()->GetHeal()), aurEff->GetAmount()));
 
         // Multiple effects stack, so let's try to find this aura.
         if (AuraEffect const* aegis = eventInfo.GetProcTarget()->GetAuraEffect(SPELL_PRIEST_DIVINE_AEGIS, EFFECT_0))
@@ -265,7 +266,7 @@ class spell_pri_glyph_of_prayer_of_healing : public AuraScript
         }
 
         SpellInfo const* triggeredSpellInfo = sSpellMgr->AssertSpellInfo(SPELL_PRIEST_GLYPH_OF_PRAYER_OF_HEALING_HEAL);
-        int32 heal = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(static_cast<long double>(healInfo->GetHeal()), aurEff->GetAmount()) / static_cast<long double>(triggeredSpellInfo->GetMaxTicks()));
+        int32 heal = SpellScriptCombat::ToClientSpellValue(SpellScriptCombat::PercentOf(Acore::Number::ToLongDouble(healInfo->GetHeal()), aurEff->GetAmount()) / static_cast<long double>(triggeredSpellInfo->GetMaxTicks()));
         GetTarget()->CastCustomSpell(SPELL_PRIEST_GLYPH_OF_PRAYER_OF_HEALING_HEAL, SPELLVALUE_BASE_POINT0, heal, eventInfo.GetProcTarget(), true, nullptr, aurEff);
     }
 
@@ -809,13 +810,13 @@ class spell_pri_renew : public AuraScript
             // Empowered Renew
             if (AuraEffect const* empoweredRenewAurEff = caster->GetDummyAuraEffect(SPELLFAMILY_PRIEST, PRIEST_ICON_ID_EMPOWERED_RENEW_TALENT, EFFECT_1))
             {
-                uint64 heal = GetEffect(EFFECT_0)->GetAmountForCombat();
+                uint128 heal = GetEffect(EFFECT_0)->GetAmountForCombat();
                 heal = GetTarget()->SpellHealingBonusTaken(caster, GetSpellInfo(), heal, DOT);
 
                 int32 basepoints0 = SpellScriptCombat::ToClientSpellValue(
                     static_cast<long double>(empoweredRenewAurEff->GetAmount()) *
                     static_cast<long double>(GetEffect(EFFECT_0)->GetTotalTicks()) *
-                    static_cast<long double>(heal) / 100.0L);
+                    Acore::Number::ToLongDouble(heal) / 100.0L);
                 caster->CastCustomSpell(GetTarget(), SPELL_PRIEST_EMPOWERED_RENEW, &basepoints0, nullptr, nullptr, true, nullptr, aurEff);
             }
         }

@@ -404,9 +404,9 @@ ORDER BY s.`基数`, l.`层`, p.`序号`;
 -- ============================================================
 
 ALTER TABLE `_属性调整_生物`
-  MODIFY COLUMN `物理攻击最小值` decimal(39,0) UNSIGNED NOT NULL DEFAULT 0,
-  MODIFY COLUMN `物理攻击最大值` decimal(39,0) UNSIGNED NOT NULL DEFAULT 0,
-  MODIFY COLUMN `真实伤害值` decimal(39,0) UNSIGNED NOT NULL DEFAULT 0;
+  MODIFY COLUMN `物理攻击最小值` decimal(65,0) UNSIGNED NOT NULL DEFAULT 0,
+  MODIFY COLUMN `物理攻击最大值` decimal(65,0) UNSIGNED NOT NULL DEFAULT 0,
+  MODIFY COLUMN `真实伤害值` decimal(65,0) UNSIGNED NOT NULL DEFAULT 0;
 
 DELETE FROM `_属性调整_生物`
 WHERE `生物id` BETWEEN 400101 AND 401000

@@ -1357,7 +1357,7 @@ public:
                         if (fireCount)
                             Unit::DealDamage(me, me, 3000 * fireCount, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_FIRE);
                         else // Heal
-                            me->ModifyHealth(2000);
+                            Unit::DealHeal(me, me, 2000);
 
                         events.ScheduleEvent(EVENT_CHECK_PATH_REGEN_HEALTH_BURN_DAMAGE, 4s);
                         break;

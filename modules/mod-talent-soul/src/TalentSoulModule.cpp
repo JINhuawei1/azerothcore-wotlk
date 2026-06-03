@@ -212,10 +212,10 @@ public:
             return;
 
         // 应用消耗减少
-        int64 currentCost = spell->GetPowerCost();
+        int128 currentCost = spell->GetPowerCost128();
         if (currentCost > 0)
         {
-            int64 newCost = currentCost;
+            int128 newCost = currentCost;
             sTalentSoulMgr->ApplyCostReduction(player, spellId, newCost);
 
             if (newCost != currentCost)
@@ -223,8 +223,8 @@ public:
                 spell->SetPowerCost(newCost);
 
                 LOG_DEBUG("module", "[天赋之魂-消耗] 玩家 {} 技能 {} 消耗 {} -> {} (-{:.1f}%)",
-                    player->GetName(), spellId, currentCost, newCost,
-                    ((float)(currentCost - newCost) / currentCost) * 100.0f);
+                    player->GetName(), spellId, currentCost.convert_to<std::string>(), newCost.convert_to<std::string>(),
+                    static_cast<double>(Acore::Number::ToLongDouble(currentCost - newCost) / Acore::Number::ToLongDouble(currentCost) * 100.0L));
             }
         }
     }

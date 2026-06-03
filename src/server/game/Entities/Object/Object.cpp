@@ -71,6 +71,33 @@ constexpr float VisibilityDistances[AsUnderlyingType(VisibilityDistanceType::Max
     VISIBILITY_DISTANCE_INFINITE
 };
 
+namespace
+{
+constexpr char WuhunAvatarScriptName[] = "npc_wuhun_avatar";
+
+bool IsPlayerUpdateFieldRange(uint16 index, uint8 fieldSize)
+{
+    return index >= PLAYER_DUEL_ARBITER && uint32(index) + fieldSize <= PLAYER_END;
+}
+
+Player const* GetWuhunAvatarOwnerForPlayerFieldProxy(Object const* object, uint16 index, uint8 fieldSize)
+{
+    if (!object || !IsPlayerUpdateFieldRange(index, fieldSize))
+        return nullptr;
+
+    // 武魂分身用 Creature 承载玩家镜像技能；玩家字段读取代理给主人，其他越界仍按原逻辑断言。
+    Creature const* creature = object->ToCreature();
+    if (!creature || creature->GetScriptName() != WuhunAvatarScriptName)
+        return nullptr;
+
+    ObjectGuid const ownerGuid = creature->GetOwnerGUID();
+    if (!ownerGuid.IsPlayer())
+        return nullptr;
+
+    return ObjectAccessor::FindPlayer(ownerGuid);
+}
+}
+
 Object::Object() : m_PackGUID(sizeof(uint64) + 1)
 {
     m_objectTypeId      = TYPEID_OBJECT;
@@ -301,7 +328,14 @@ void Object::DestroyForPlayer(Player* target, bool onDeath) const
 
 [[nodiscard]] int32 Object::GetInt32Value(uint16 index) const
 {
-    ASSERT(index < m_valuesCount || PrintIndexError(index, false));
+    if (index >= m_valuesCount)
+    {
+        if (Player const* owner = GetWuhunAvatarOwnerForPlayerFieldProxy(this, index, 1))
+            return owner->GetInt32Value(index);
+
+        ASSERT(PrintIndexError(index, false));
+        return 0;
+    }
 
     // 检查 m_uint32Values 是否已初始化
     if (!m_int32Values)
@@ -315,7 +349,14 @@ void Object::DestroyForPlayer(Player* target, bool onDeath) const
 
 [[nodiscard]] uint32 Object::GetUInt32Value(uint16 index) const
 {
-    ASSERT(index < m_valuesCount || PrintIndexError(index, false));
+    if (index >= m_valuesCount)
+    {
+        if (Player const* owner = GetWuhunAvatarOwnerForPlayerFieldProxy(this, index, 1))
+            return owner->GetUInt32Value(index);
+
+        ASSERT(PrintIndexError(index, false));
+        return 0;
+    }
 
     // 检查 m_uint32Values 是否已初始化
     if (!m_uint32Values)
@@ -329,7 +370,14 @@ void Object::DestroyForPlayer(Player* target, bool onDeath) const
 
 [[nodiscard]] uint64 Object::GetUInt64Value(uint16 index) const
 {
-    ASSERT(index + 1 < m_valuesCount || PrintIndexError(index, false));
+    if (uint32(index) + 1 >= m_valuesCount)
+    {
+        if (Player const* owner = GetWuhunAvatarOwnerForPlayerFieldProxy(this, index, 2))
+            return owner->GetUInt64Value(index);
+
+        ASSERT(PrintIndexError(index, false));
+        return 0;
+    }
 
     // 检查 m_uint32Values 是否已初始化
     if (!m_uint32Values)
@@ -343,7 +391,14 @@ void Object::DestroyForPlayer(Player* target, bool onDeath) const
 
 [[nodiscard]] float Object::GetFloatValue(uint16 index) const
 {
-    ASSERT(index < m_valuesCount || PrintIndexError(index, false));
+    if (index >= m_valuesCount)
+    {
+        if (Player const* owner = GetWuhunAvatarOwnerForPlayerFieldProxy(this, index, 1))
+            return owner->GetFloatValue(index);
+
+        ASSERT(PrintIndexError(index, false));
+        return 0.0f;
+    }
 
     // 检查 m_uint32Values 是否已初始化
     if (!m_floatValues)
@@ -357,7 +412,15 @@ void Object::DestroyForPlayer(Player* target, bool onDeath) const
 
 [[nodiscard]] uint8 Object::GetByteValue(uint16 index, uint8 offset) const
 {
-    ASSERT(index < m_valuesCount || PrintIndexError(index, false));
+    if (index >= m_valuesCount)
+    {
+        if (Player const* owner = GetWuhunAvatarOwnerForPlayerFieldProxy(this, index, 1))
+            return owner->GetByteValue(index, offset);
+
+        ASSERT(PrintIndexError(index, false));
+        return 0;
+    }
+
     ASSERT(offset < 4);
 
     // 检查 m_uint32Values 是否已初始化
@@ -372,7 +435,15 @@ void Object::DestroyForPlayer(Player* target, bool onDeath) const
 
 [[nodiscard]] uint16 Object::GetUInt16Value(uint16 index, uint8 offset) const
 {
-    ASSERT(index < m_valuesCount || PrintIndexError(index, false));
+    if (index >= m_valuesCount)
+    {
+        if (Player const* owner = GetWuhunAvatarOwnerForPlayerFieldProxy(this, index, 1))
+            return owner->GetUInt16Value(index, offset);
+
+        ASSERT(PrintIndexError(index, false));
+        return 0;
+    }
+
     ASSERT(offset < 2);
 
     // 检查 m_uint32Values 是否已初始化
@@ -387,7 +458,14 @@ void Object::DestroyForPlayer(Player* target, bool onDeath) const
 
 [[nodiscard]] ObjectGuid Object::GetGuidValue(uint16 index) const
 {
-    ASSERT(index + 1 < m_valuesCount || PrintIndexError(index, false));
+    if (uint32(index) + 1 >= m_valuesCount)
+    {
+        if (Player const* owner = GetWuhunAvatarOwnerForPlayerFieldProxy(this, index, 2))
+            return owner->GetGuidValue(index);
+
+        ASSERT(PrintIndexError(index, false));
+        return ObjectGuid::Empty;
+    }
 
     // 检查 m_uint32Values 是否已初始化，防止空指针解引用
     if (!m_uint32Values)
@@ -983,8 +1061,12 @@ void Object::ToggleFlag(uint16 index, uint32 flag)
 
 [[nodiscard]] bool Object::HasFlag(uint16 index, uint32 flag) const
 {
-    if (index >= m_valuesCount && !PrintIndexError(index, false))
+    if (index >= m_valuesCount)
     {
+        if (Player const* owner = GetWuhunAvatarOwnerForPlayerFieldProxy(this, index, 1))
+            return owner->HasFlag(index, flag);
+
+        PrintIndexError(index, false);
         return false;
     }
 
@@ -1043,7 +1125,15 @@ void Object::RemoveByteFlag(uint16 index, uint8 offset, uint8 oldFlag)
 
 [[nodiscard]] bool Object::HasByteFlag(uint16 index, uint8 offset, uint8 flag) const
 {
-    ASSERT(index < m_valuesCount || PrintIndexError(index, false));
+    if (index >= m_valuesCount)
+    {
+        if (Player const* owner = GetWuhunAvatarOwnerForPlayerFieldProxy(this, index, 1))
+            return owner->HasByteFlag(index, offset, flag);
+
+        ASSERT(PrintIndexError(index, false));
+        return false;
+    }
+
     ASSERT(offset < 4);
     return (((uint8*) &m_uint32Values[index])[offset] & flag) != 0;
 }
@@ -1076,7 +1166,15 @@ void Object::ToggleFlag64(uint16 index, uint64 flag)
 
 [[nodiscard]] bool Object::HasFlag64(uint16 index, uint64 flag) const
 {
-    ASSERT(index < m_valuesCount || PrintIndexError(index, false));
+    if (uint32(index) + 1 >= m_valuesCount)
+    {
+        if (Player const* owner = GetWuhunAvatarOwnerForPlayerFieldProxy(this, index, 2))
+            return owner->HasFlag64(index, flag);
+
+        ASSERT(PrintIndexError(index, false));
+        return false;
+    }
+
     return (GetUInt64Value(index) & flag) != 0;
 }
 

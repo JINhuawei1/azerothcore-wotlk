@@ -212,8 +212,8 @@ class spell_mage_burnout : public AuraScript
     {
         PreventDefaultAction();
 
-        int64 powerCost = eventInfo.GetSpellInfo()->CalcPowerCost(GetTarget(), eventInfo.GetSchoolMask());
-        int32 mana = powerCost > 0 ? ToInt32Saturated(static_cast<long double>(powerCost) * static_cast<long double>(aurEff->GetAmount()) / 100.0L) : 0;
+        int128 powerCost = eventInfo.GetSpellInfo()->CalcPowerCost(GetTarget(), eventInfo.GetSchoolMask());
+        int32 mana = powerCost > 0 ? ToInt32Saturated(Acore::Number::ToLongDouble(powerCost) * static_cast<long double>(aurEff->GetAmount()) / 100.0L) : 0;
 
         GetTarget()->CastCustomSpell(SPELL_MAGE_BURNOUT_TRIGGER, SPELLVALUE_BASE_POINT0, mana, GetTarget(), true, nullptr, aurEff);
     }
@@ -234,7 +234,8 @@ class spell_mage_burnout_trigger : public SpellScript
         PreventHitDefaultEffect(effIndex);
         if (Unit* target = GetHitUnit())
         {
-            int32 newDamage = SpellScriptCombat::ToPositiveInt32Saturated(static_cast<long double>(-target->ModifyPower64(POWER_MANA, -GetEffectValue())));
+            int128 drainedMana = -target->ModifyPower128(POWER_MANA, -Acore::Number::ToInt128Saturated(static_cast<long double>(GetEffectValue())));
+            int32 newDamage = SpellScriptCombat::ToPositiveInt32Saturated(Acore::Number::ToLongDouble(drainedMana));
             GetSpell()->ExecuteLogEffectTakeTargetPower(effIndex, target, POWER_MANA, newDamage, 0.0f);
         }
     }
@@ -321,15 +322,15 @@ class spell_mage_pet_scaling : public AuraScript
             {
                 if (aurEff->GetMiscValue() == STAT_STAMINA)
                 {
-                    uint64 actStat = GetUnitOwner()->GetHealthForCombat();
+                    uint128 actStat = GetUnitOwner()->GetHealthForCombat128();
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetHealthForCombat(std::min<uint64>(GetUnitOwner()->GetMaxHealthForCombat(), actStat));
+                    GetUnitOwner()->SetHealthForCombat128(std::min<uint128>(GetUnitOwner()->GetMaxHealthForCombat128(), actStat));
                 }
                 else
                 {
-                    uint64 actStat = GetUnitOwner()->GetPowerForCombat(POWER_MANA);
+                    uint128 actStat = GetUnitOwner()->GetPowerForCombat128(POWER_MANA);
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetPowerForCombat(POWER_MANA, std::min<uint64>(GetUnitOwner()->GetMaxPowerForCombat(POWER_MANA), actStat));
+                    GetUnitOwner()->SetPowerForCombat128(POWER_MANA, std::min<uint128>(GetUnitOwner()->GetMaxPowerForCombat128(POWER_MANA), actStat));
                 }
             }
         }
@@ -855,8 +856,8 @@ class spell_mage_master_of_elements : public AuraScript
 
         if (Unit* target = GetTarget())
         {
-            int64 powerCost = _spellInfo->CalcPowerCost(target, eventInfo.GetSchoolMask());
-            int32 mana = powerCost > 0 ? ToInt32Saturated((static_cast<long double>(powerCost) / static_cast<long double>(_ticksModifier)) * static_cast<long double>(aurEff->GetAmount()) / 100.0L) : 0;
+            int128 powerCost = _spellInfo->CalcPowerCost(target, eventInfo.GetSchoolMask());
+            int32 mana = powerCost > 0 ? ToInt32Saturated((Acore::Number::ToLongDouble(powerCost) / static_cast<long double>(_ticksModifier)) * static_cast<long double>(aurEff->GetAmount()) / 100.0L) : 0;
 
             if (mana > 0)
             {

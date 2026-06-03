@@ -120,6 +120,43 @@ inline T RoundToInterval(T& num, T floor, T ceil)
 
 namespace Acore::Number
 {
+    inline uint128 GetDecimal65UnsignedMax()
+    {
+        static uint128 const value = []()
+        {
+            uint128 maxValue = 0;
+            for (uint8 i = 0; i < 65; ++i)
+                maxValue = (maxValue * 10) + 9;
+            return maxValue;
+        }();
+
+        return value;
+    }
+
+    inline int128 GetDecimal65SignedMax()
+    {
+        return static_cast<int128>(GetDecimal65UnsignedMax());
+    }
+
+    inline std::string ToDecimal65String(int128 const& value)
+    {
+        int128 const maxValue = GetDecimal65SignedMax();
+        if (value > maxValue)
+            return maxValue.convert_to<std::string>();
+
+        int128 const minValue = -maxValue;
+        if (value < minValue)
+            return minValue.convert_to<std::string>();
+
+        return value.convert_to<std::string>();
+    }
+
+    inline std::string ToDecimal65String(uint128 const& value)
+    {
+        uint128 const maxValue = GetDecimal65UnsignedMax();
+        return (value > maxValue ? maxValue : value).convert_to<std::string>();
+    }
+
     inline long double ToLongDouble(uint128 const& value)
     {
         return value.convert_to<long double>();

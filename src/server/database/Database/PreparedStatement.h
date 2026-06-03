@@ -21,7 +21,10 @@
 #include "Define.h"
 #include "Duration.h"
 #include "SQLOperation.h"
+#include "Util.h"
 #include <future>
+#include <string>
+#include <string_view>
 #include <tuple>
 #include <variant>
 #include <vector>
@@ -92,15 +95,15 @@ public:
         SetValidData(index, value);
     }
 
-    // MySQL has no native signed/unsigned 128-bit integer binding; send these as decimal strings.
+    // MySQL has no native signed/unsigned 256-bit integer binding; send these as DECIMAL(65,0) strings.
     inline void SetData(const uint8 index, int128 const& value)
     {
-        SetValidData(index, value.convert_to<std::string>());
+        SetValidData(index, Acore::Number::ToDecimal65String(value));
     }
 
     inline void SetData(const uint8 index, uint128 const& value)
     {
-        SetValidData(index, value.convert_to<std::string>());
+        SetValidData(index, Acore::Number::ToDecimal65String(value));
     }
 
     // Set nullptr
