@@ -239,7 +239,7 @@ bool CanItemEquipInSlot(uint8 inventoryType, uint8 slot)
         case INVTYPE_CLOAK:           return slot == EQUIPMENT_SLOT_BACK;
         case INVTYPE_WEAPON:          return slot == EQUIPMENT_SLOT_MAINHAND || slot == EQUIPMENT_SLOT_OFFHAND;
         case INVTYPE_2HWEAPON:
-        case INVTYPE_WEAPONMAINHAND:  return slot == EQUIPMENT_SLOT_MAINHAND;
+        case INVTYPE_WEAPONMAINHAND:  return slot == EQUIPMENT_SLOT_MAINHAND || slot == EQUIPMENT_SLOT_OFFHAND;
         case INVTYPE_SHIELD:
         case INVTYPE_WEAPONOFFHAND:
         case INVTYPE_HOLDABLE:        return slot == EQUIPMENT_SLOT_OFFHAND;

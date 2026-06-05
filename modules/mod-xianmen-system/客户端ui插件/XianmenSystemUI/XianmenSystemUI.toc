@@ -1,0 +1,9 @@
+## Interface: 30300
+## Title: |cff66ffcc仙门系统|r
+## Notes: 仙门门派、技能解锁与门主技能界面
+## Author: AzerothCore
+## Version: 1.0.0
+## SavedVariables: XianmenSystemUIDB
+## OptionalDeps: PluginManagerClient
+
+XianmenSystemUI.lua

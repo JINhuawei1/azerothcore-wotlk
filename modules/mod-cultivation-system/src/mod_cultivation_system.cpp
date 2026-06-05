@@ -12,6 +12,7 @@
 #include "World.h"
 #include "Player.h"
 #include "Unit.h"
+#include "UnitAI.h"
 #include "Util.h"
 #include "Chat.h"
 #include "ChatCommand.h"
@@ -90,14 +91,6 @@ int128 AddPositiveInt128Saturated(int128 const& value, int128 const& add)
         return maxValue;
 
     return value + add;
-}
-
-uint64 ToCultivationUInt64Damage(int128 const& damage)
-{
-    if (damage <= 0)
-        return 0;
-
-    return Acore::Number::ToUInt64Saturated(Acore::Number::ToUInt128Saturated(damage));
 }
 
 std::string FormatCultivationInt128(int128 const& value)
@@ -1605,6 +1598,187 @@ static long double GetCultivationAttackPower(Unit* caster)
     return static_cast<long double>(caster->GetTotalAttackPowerValue(BASE_ATTACK));
 }
 
+static float ToCultivationThreat(uint128 const& damage)
+{
+    if (damage == 0)
+        return 0.0f;
+
+    long double threat = Acore::Number::ToLongDouble(damage);
+    if (!std::isfinite(threat) || threat <= 0.0L)
+        return 1.0f;
+
+    static constexpr long double MaxScriptThreat = 1000000000.0L;
+    if (threat > MaxScriptThreat)
+        threat = MaxScriptThreat;
+
+    return static_cast<float>(threat);
+}
+
+static void PrepareCultivationCreatureDamageCredit(Unit* attacker, Unit* victim, uint128 const& appliedDamage)
+{
+    Creature* creature = victim ? victim->ToCreature() : nullptr;
+    if (!creature || (victim->IsControlledByPlayer() && !victim->IsVehicle()))
+        return;
+
+    if (attacker && !creature->hasLootRecipient())
+        creature->SetLootRecipient(attacker);
+
+    if (!attacker || attacker->IsControlledByPlayer() || attacker->IsCreatedByPlayer())
+    {
+        bool damagedByPlayer = appliedDamage > 0 && attacker && attacker->GetCharmerOrOwnerPlayerOrPlayerItself();
+        creature->LowerPlayerDamageReq(appliedDamage, damagedByPlayer);
+    }
+}
+
+static void StartCultivationDamageCombat(Unit* attacker, Unit* victim, uint128 const& threatDamage, SpellSchoolMask schoolMask, SpellInfo const* spellInfo)
+{
+    if (!attacker || !victim || victim->IsPlayer() || threatDamage == 0)
+        return;
+
+    if (victim->CanHaveThreatList() && !victim->HasUnitState(UNIT_STATE_EVADE) && !victim->IsInCombatWith(attacker))
+        victim->CombatStart(attacker, spellInfo ? !(spellInfo->AttributesEx3 & SPELL_ATTR3_SUPPRESS_TARGET_PROCS) : true);
+
+    victim->AddThreat(attacker, ToCultivationThreat(threatDamage), schoolMask, spellInfo);
+}
+
+static uint128 ApplyCultivationExtendedDamage(Unit* attacker, Unit* victim, uint128 const& damage, CleanDamage const* cleanDamage, DamageEffectType damageType, SpellSchoolMask schoolMask, SpellInfo const* spellInfo, bool durabilityLoss)
+{
+    if (!victim || victim->isDead() || damage == 0)
+        return 0;
+
+    if (victim->IsPlayer() && victim->ToPlayer()->GetCommandStatus(CHEAT_GOD))
+        return 0;
+
+    uint128 healthBefore = victim->GetHealthForCombat128();
+    if (healthBefore == 0)
+        return 0;
+
+    uint128 initialCredit = std::min<uint128>(damage, healthBefore);
+    PrepareCultivationCreatureDamageCredit(attacker, victim, initialCredit);
+    StartCultivationDamageCombat(attacker, victim, damage, schoolMask, spellInfo);
+
+    uint128 resolvedDamage = damage;
+    sScriptMgr->OnDamage(attacker, victim, resolvedDamage);
+
+    if (resolvedDamage == 0)
+        return 0;
+
+    healthBefore = victim->GetHealthForCombat128();
+    if (healthBefore == 0)
+        return 0;
+
+    uint128 appliedDamage = std::min<uint128>(resolvedDamage, healthBefore);
+    if (appliedDamage == 0)
+        return 0;
+
+    if (resolvedDamage >= healthBefore)
+    {
+        Unit::Kill(attacker, victim, durabilityLoss, cleanDamage ? cleanDamage->attackType : BASE_ATTACK, spellInfo, nullptr);
+        return appliedDamage;
+    }
+
+    victim->SetHealthForCombat128(healthBefore - appliedDamage);
+
+    if (damageType == DIRECT_DAMAGE || damageType == SPELL_DIRECT_DAMAGE)
+        victim->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_DIRECT_DAMAGE, spellInfo ? spellInfo->Id : 0);
+
+    return appliedDamage;
+}
+
+static void DealCultivationDirectSpellDamage(Unit* caster, Unit* target, uint32 spellId, int128 const& damage, SpellSchoolMask schoolMask)
+{
+    if (!caster || !target || !target->IsAlive() || damage <= 0)
+        return;
+
+    uint128 rawDamage = Acore::Number::ToUInt128Saturated(damage);
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!spellInfo)
+    {
+        Unit::DealDamage(caster, target, rawDamage, nullptr, SPELL_DIRECT_DAMAGE, schoolMask);
+        return;
+    }
+
+    caster->SetLastDamagedTargetGuid(target->GetGUID());
+
+    SpellNonMeleeDamage damageInfo(caster, target, spellInfo, schoolMask);
+    damageInfo.damage = rawDamage;
+    Unit::DealDamageMods(damageInfo.target, damageInfo.damage, &damageInfo.absorb);
+    caster->SendSpellNonMeleeDamageLog(&damageInfo);
+    caster->DealSpellDamage(&damageInfo, true);
+}
+
+static void DealCultivationPeriodicAuraDamage(Unit* caster, Unit* target, AuraEffect const* aurEff, uint32 spellId, int128 const& damage, SpellSchoolMask schoolMask)
+{
+    if (!caster || !target || !target->IsAlive() || damage <= 0)
+        return;
+
+    uint128 rawDamage = Acore::Number::ToUInt128Saturated(damage);
+    uint128 healthBefore = target->GetHealthForCombat128();
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!spellInfo)
+    {
+        Unit::DealDamage(caster, target, rawDamage, nullptr, DOT, schoolMask);
+        return;
+    }
+
+    caster->SetLastDamagedTargetGuid(target->GetGUID());
+
+    CleanDamage cleanDamage(0, 0, BASE_ATTACK, MELEE_HIT_NORMAL);
+    uint128 tickDamage = rawDamage;
+
+    uint128 scriptDamage = tickDamage;
+    sScriptMgr->ModifyPeriodicDamageAurasTick(target, caster, scriptDamage, spellInfo);
+    if (scriptDamage != tickDamage)
+        tickDamage = scriptDamage;
+
+    if (target->GetAI() && tickDamage <= static_cast<uint128>(std::numeric_limits<uint32>::max()))
+    {
+        uint32 aiDamage = Acore::Number::ToUInt32Saturated(tickDamage);
+        uint32 originalAiDamage = aiDamage;
+        target->GetAI()->OnCalculatePeriodicTickReceived(aiDamage, caster);
+        if (aiDamage != originalAiDamage)
+            tickDamage = aiDamage;
+    }
+
+    uint8 effIndex = aurEff ? aurEff->GetEffIndex() : EFFECT_0;
+    if (Unit::IsDamageReducedByArmor(schoolMask, spellInfo, effIndex))
+    {
+        uint128 damageReducedArmor = Unit::CalcArmorReducedDamage(caster, target, tickDamage, spellInfo);
+        cleanDamage.mitigated_damage = AddUInt128Damage(cleanDamage.mitigated_damage, tickDamage > damageReducedArmor ? tickDamage - damageReducedArmor : uint128(0));
+        tickDamage = damageReducedArmor;
+    }
+
+    DamageInfo dmgInfo(caster, target, tickDamage, spellInfo, schoolMask, DOT, cleanDamage.mitigated_damage);
+    Unit::CalcAbsorbResist(dmgInfo);
+
+    uint128 absorb = dmgInfo.GetAbsorb();
+    uint128 resist = dmgInfo.GetResist();
+    tickDamage = dmgInfo.GetDamage();
+
+    uint128 originalTickDamage = tickDamage;
+    tickDamage = AddUInt128Damage(AddUInt128Damage(tickDamage, caster->GetCustomTrueDamageBonus()), caster->GetCustomCuttingDamageBonus());
+    if (tickDamage > originalTickDamage)
+    {
+        uint128 bonusDamage = tickDamage - originalTickDamage;
+        dmgInfo.ModifyDamage(bonusDamage > static_cast<uint128>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(Acore::Number::ToUInt64Saturated(bonusDamage)));
+    }
+
+    Unit::DealDamageMods(target, tickDamage, &absorb);
+
+    uint32 procAttacker = PROC_FLAG_DONE_PERIODIC;
+    uint32 procVictim = PROC_FLAG_TAKEN_PERIODIC;
+    uint32 procEx = PROC_EX_NORMAL_HIT | PROC_EX_INTERNAL_DOT;
+    if (absorb > 0)
+        procEx |= PROC_EX_ABSORB;
+    if (tickDamage)
+        procVictim |= PROC_FLAG_TAKEN_DAMAGE;
+
+    caster->SendSpellNonMeleeDamageLog(target, spellInfo, ToUInt32Damage(tickDamage), schoolMask, ToUInt32Damage(absorb), ToUInt32Damage(resist), false, 0, false);
+
+    ApplyCultivationExtendedDamage(caster, target, tickDamage, &cleanDamage, DOT, schoolMask, spellInfo, true);
+    Unit::ProcDamageAndSpell(caster, target, procAttacker, procVictim, procEx, tickDamage, BASE_ATTACK, spellInfo, nullptr, aurEff ? static_cast<int8>(aurEff->GetEffIndex()) : int8(-1), nullptr, &dmgInfo);
+}
+
 static void SetShunyingControlImmunity(Unit* unit, bool apply)
 {
     if (!unit)
@@ -1684,7 +1858,7 @@ class spell_cultivation_lingren : public SpellScript
             // 约±8度的角度容差，模拟直线穿透
             if (angleDiff < 0.15f)
             {
-                caster->DealDamage(caster, u, ToCultivationUInt64Damage(damage), nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_ARCANE);
+                DealCultivationDirectSpellDamage(caster, u, CULT_SPELL_LINGREN, damage, SPELL_SCHOOL_MASK_ARCANE);
             }
         }
     }
@@ -1802,7 +1976,7 @@ class spell_cultivation_wanjian_aura : public AuraScript
 {
     PrepareAuraScript(spell_cultivation_wanjian_aura);
 
-    void OnPeriodic(AuraEffect const* /*aurEff*/)
+    void OnPeriodic(AuraEffect const* aurEff)
     {
         Unit* caster = GetCaster();
         if (!caster)
@@ -1817,7 +1991,7 @@ class spell_cultivation_wanjian_aura : public AuraScript
         {
             if (u == caster)
                 continue;
-            caster->DealDamage(caster, u, ToCultivationUInt64Damage(damage), nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL);
+            DealCultivationPeriodicAuraDamage(caster, u, aurEff, CULT_SPELL_WANJIAN, damage, SPELL_SCHOOL_MASK_NORMAL);
         }
     }
 
@@ -1907,7 +2081,7 @@ class spell_cultivation_jiutian_aura : public AuraScript
 {
     PrepareAuraScript(spell_cultivation_jiutian_aura);
 
-    void OnPeriodic(AuraEffect const* /*aurEff*/)
+    void OnPeriodic(AuraEffect const* aurEff)
     {
         Unit* caster = GetCaster();
         if (!caster)
@@ -1922,7 +2096,7 @@ class spell_cultivation_jiutian_aura : public AuraScript
         {
             if (u == caster)
                 continue;
-            caster->DealDamage(caster, u, ToCultivationUInt64Damage(damage), nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE);
+            DealCultivationPeriodicAuraDamage(caster, u, aurEff, CULT_SPELL_JIUTIAN, damage, SPELL_SCHOOL_MASK_NATURE);
         }
     }
 

@@ -1,0 +1,24 @@
+###################################################################################################
+# 仙门系统
+###################################################################################################
+
+# 是否启用仙门系统
+XianmenSystem.Enable = 1
+
+# 登录时是否提示当前仙门信息
+XianmenSystem.AnnounceOnLogin = 1
+
+# 仙门修为等级上限
+XianmenSystem.MaxLevel = 100
+
+# 每多少级获得 1 个门派技能解锁名额
+XianmenSystem.SkillUnlockLevelStep = 10
+
+# 门主最多可选择的门派生效技能数量
+XianmenSystem.MaxActiveSkills = 5
+
+# 每日门主结算检查间隔，单位秒
+XianmenSystem.LeaderSettleCheckInterval = 60
+
+# 是否启用每日门主自动结算
+XianmenSystem.EnableDailyLeaderSettle = 1
