@@ -1838,7 +1838,7 @@ void SpellMgr::LoadSpellProcs()
     QueryResult result = WorldDatabase.Query("SELECT SpellId, SchoolMask, SpellFamilyName, SpellFamilyMask0, SpellFamilyMask1, SpellFamilyMask2, ProcFlags, SpellTypeMask, SpellPhaseMask, HitMask, AttributesMask, ProcsPerMinute, Chance, Cooldown, Charges FROM spell_proc");
     if (!result)
     {
-        LOG_WARN("server.loading", ">> Loaded 0 Spell Proc Conditions And Data. DB table `spell_proc` Is Empty.");
+        LOG_INFO("server.loading", ">> Loaded 0 Spell Proc Conditions And Data. DB table `spell_proc` Is Empty.");
         LOG_INFO("server.loading", " ");
         return;
     }

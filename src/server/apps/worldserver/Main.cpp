@@ -85,6 +85,11 @@ int m_ServiceStatus = -1;
 using namespace boost::program_options;
 namespace fs = std::filesystem;
 
+namespace
+{
+    uint32 DatabaseUpdateFlags = 0;
+}
+
 class FreezeDetector
 {
 public:
@@ -110,6 +115,7 @@ void SignalHandler(boost::system::error_code const& error, int signalNumber);
 void ClearOnlineAccounts();
 bool StartDB();
 void StopDB();
+void RegisterDatabaseConfigSource();
 bool LoadRealmInfo(Acore::Asio::IoContext& ioContext);
 AsyncAcceptor* StartRaSocketAcceptor(Acore::Asio::IoContext& ioContext);
 void ShutdownCLIThread(std::thread* cliThread);
@@ -260,7 +266,8 @@ int main(int argc, char** argv)
     // Set process priority according to configuration settings
     SetProcessPriority("server.worldserver", sConfigMgr->GetOption<int32>(CONFIG_PROCESSOR_AFFINITY, 0), sConfigMgr->GetOption<bool>(CONFIG_HIGH_PRIORITY, true));
 
-    // Loading modules configs before scripts
+    // Module settings are loaded from the world database table `通用配置` after DB startup.
+    sConfigMgr->SetLoadModulesConfigsFromFiles(false);
     sConfigMgr->LoadModulesConfigs();
 
     sScriptMgr->SetScriptLoader(AddScripts);
@@ -272,14 +279,20 @@ int main(int argc, char** argv)
         //sScriptReloadMgr->Unload();
     });
 
-    LOG_INFO("server.loading", "Initializing Scripts...");
-    sScriptMgr->Initialize();
-
     // Start the databases
     if (!StartDB())
         return 1;
 
     std::shared_ptr<void> dbHandle(nullptr, [](void*) { StopDB(); });
+
+    RegisterDatabaseConfigSource();
+    if (!sConfigMgr->LoadExternalConfigSource())
+        return 1;
+
+    LOG_INFO("server.loading", "Initializing Scripts...");
+    sScriptMgr->Initialize();
+
+    sScriptMgr->OnAfterDatabasesLoaded(DatabaseUpdateFlags);
 
     // set server offline (not connectable)
     LoginDatabase.DirectExecute("UPDATE realmlist SET flag = (flag & ~{}) | {} WHERE id = '{}'", REALM_FLAG_OFFLINE, REALM_FLAG_VERSION_MISMATCH, realm.Id.Realm);
@@ -479,9 +492,42 @@ bool StartDB()
 
     LOG_INFO("server.loading", "> Version DB world:     {}", sWorld->GetDBVersion());
 
-    sScriptMgr->OnAfterDatabasesLoaded(loader.GetUpdateFlags());
+    DatabaseUpdateFlags = loader.GetUpdateFlags();
 
     return true;
+}
+
+void RegisterDatabaseConfigSource()
+{
+    sConfigMgr->SetExternalConfigSource([](bool /*isReload*/)
+    {
+        std::vector<std::pair<std::string, std::string>> configs;
+
+        if (!WorldDatabase.Query("SHOW TABLES LIKE '通用配置'"))
+        {
+            throw ConfigException("World database table `通用配置` does not exist. Import `_通用配置.sql` before starting worldserver.");
+        }
+
+        QueryResult result = WorldDatabase.Query("SELECT `配置键`, `配置值` FROM `通用配置` WHERE `启用状态` = 1 AND `配置值` IS NOT NULL ORDER BY `模块ID` ASC, `配置ID` ASC");
+        if (!result)
+        {
+            LOG_WARN("server.loading", "> Config: Database table `通用配置` has no enabled config rows.");
+            return configs;
+        }
+
+        do
+        {
+            Field* fields = result->Fetch();
+            std::string key = fields[0].Get<std::string>();
+            std::string value = fields[1].Get<std::string>();
+            if (!key.empty())
+            {
+                configs.emplace_back(std::move(key), std::move(value));
+            }
+        } while (result->NextRow());
+
+        return configs;
+    });
 }
 
 void StopDB()

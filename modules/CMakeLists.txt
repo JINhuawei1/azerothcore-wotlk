@@ -331,22 +331,13 @@ message(STATUS "* Modules config list:
   |")
 
 foreach(ModuleName ${MODULE_LIST__})
-  GetPathToModuleConfig(${ModuleName} MODULE_CONFIG_PATH)
-
   set(MODULE_LIST ${MODULE_LIST}${ModuleName},)
 
-  file(GLOB MODULE_CONFIG_LIST RELATIVE
-    ${MODULE_CONFIG_PATH}
-    ${MODULE_CONFIG_PATH}/*.conf.dist)
-
   message(STATUS "  +- ${ModuleName}")
-
-  foreach(configFileName ${MODULE_CONFIG_LIST})
-    CopyModuleConfig("${MODULE_CONFIG_PATH}/${configFileName}")
-    set(CONFIG_LIST ${CONFIG_LIST}${configFileName},)
-    message(STATUS "  |  * ${configFileName}")
-  endforeach()
 endforeach()
+
+message(STATUS "  |")
+message(STATUS "  +- Module .conf.dist files are managed by the database config source and will not be copied")
 
 # Define modules list
 target_compile_options(modules

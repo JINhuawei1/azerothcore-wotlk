@@ -2345,7 +2345,7 @@ void ObjectMgr::LoadCreatureSparring()
 
     if (!result)
     {
-        LOG_WARN("server.loading", ">> Loaded 0 sparring data. DB table `creature_sparring` is empty.");
+        LOG_INFO("server.loading", ">> Loaded 0 sparring data. DB table `creature_sparring` is empty.");
         LOG_INFO("server.loading", " ");
         return;
     }
@@ -3531,7 +3531,7 @@ void ObjectMgr::LoadVehicleAccessories()
 
     if (!result)
     {
-        LOG_WARN("server.loading", ">> Loaded 0 Vehicle Accessories in {} ms", GetMSTimeDiffToNow(oldMSTime));
+        LOG_INFO("server.loading", ">> Loaded 0 Vehicle Accessories in {} ms", GetMSTimeDiffToNow(oldMSTime));
         LOG_INFO("server.loading", " ");
         return;
     }
@@ -4000,7 +4000,7 @@ void ObjectMgr::LoadPlayerInfo()
 
         if (!result)
         {
-            LOG_WARN("server.loading", ">> Loaded 0 player create spells. DB table `playercreateinfo_spell_custom` is empty.");
+            LOG_INFO("server.loading", ">> Loaded 0 player create spells. DB table `playercreateinfo_spell_custom` is empty.");
         }
         else
         {
@@ -8241,7 +8241,7 @@ void ObjectMgr::LoadReservedPlayerNamesDB()
 
     if (!result)
     {
-        LOG_WARN("server.loading", ">> Loaded 0 reserved names. DB table `reserved_name` is empty!");
+        LOG_INFO("server.loading", ">> Loaded 0 reserved names. DB table `reserved_name` is empty!");
         return;
     }
 
@@ -8344,7 +8344,7 @@ void ObjectMgr::LoadProfanityNamesFromDB()
 
     if (!result)
     {
-        LOG_WARN("server.loading", ">> Loaded 0 profanity names. DB table `profanity_name` is empty!");
+        LOG_INFO("server.loading", ">> Loaded 0 profanity names. DB table `profanity_name` is empty!");
         return;
     }
 
@@ -8698,7 +8698,7 @@ bool ObjectMgr::LoadModuleStrings()
     QueryResult result = WorldDatabase.Query("SELECT module, id, string FROM module_string");
     if (!result)
     {
-        LOG_WARN("server.loading", ">> Loaded 0 module strings. DB table `module_string` is empty.");
+        LOG_INFO("server.loading", ">> Loaded 0 module strings. DB table `module_string` is empty.");
         LOG_INFO("server.loading", " ");
         return false;
     }
@@ -8729,7 +8729,7 @@ bool ObjectMgr::LoadModuleStringsLocale()
     QueryResult result = WorldDatabase.Query("SELECT module, id, locale, string FROM module_string_locale");
     if (!result)
     {
-        LOG_WARN("server.loading", ">> Loaded 0 module strings locale. DB table `module_string_locale` is empty.");
+        LOG_INFO("server.loading", ">> Loaded 0 module strings locale. DB table `module_string_locale` is empty.");
         LOG_INFO("server.loading", " ");
         return false;
     }

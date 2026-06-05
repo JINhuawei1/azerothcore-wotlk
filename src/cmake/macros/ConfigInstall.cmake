@@ -77,6 +77,10 @@ endfunction()
 #
 
 function(CopyModuleConfig configDir)
+  if(NOT AC_COPY_MODULE_CONFIG_FILES)
+    return()
+  endif()
+
   set(postPath "configs/modules")
 
   if(WIN32)

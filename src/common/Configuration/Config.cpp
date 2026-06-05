@@ -335,9 +335,72 @@ bool ConfigMgr::Reload()
         return false;
     }
 
+    if (!LoadExternalConfigSource(true))
+    {
+        return false;
+    }
+
     OverrideWithEnvVariablesIfAny();
 
     return true;
+}
+
+bool ConfigMgr::LoadExternalConfigSource(bool isReload /*= false*/)
+{
+    ExternalConfigSource source;
+    {
+        std::lock_guard<std::mutex> lock(_configLock);
+        source = _externalConfigSource;
+    }
+
+    if (!source)
+    {
+        return true;
+    }
+
+    std::vector<std::pair<std::string, std::string>> options;
+    try
+    {
+        options = source(isReload);
+    }
+    catch (std::exception const& e)
+    {
+        LOG_ERROR("server.loading", "> Config: Failed to load external config source: {}", e.what());
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(_configLock);
+
+    for (auto const& [name, value] : options)
+    {
+        if (name.empty())
+            continue;
+
+        std::string normalizedValue = value;
+        normalizedValue.erase(std::remove(normalizedValue.begin(), normalizedValue.end(), '"'), normalizedValue.end());
+        AddKey(name, normalizedValue, "DATABASE", false, isReload);
+    }
+
+    LOG_INFO("server.loading", "> Config: Loaded {} external database config option(s).", options.size());
+    return true;
+}
+
+void ConfigMgr::SetExternalConfigSource(ExternalConfigSource source)
+{
+    std::lock_guard<std::mutex> lock(_configLock);
+    _externalConfigSource = std::move(source);
+}
+
+void ConfigMgr::SetLoadModulesConfigsFromFiles(bool enable)
+{
+    std::lock_guard<std::mutex> lock(_configLock);
+    _loadModulesConfigsFromFiles = enable;
+}
+
+bool ConfigMgr::ShouldLoadModulesConfigsFromFiles() const
+{
+    std::lock_guard<std::mutex> lock(_configLock);
+    return _loadModulesConfigsFromFiles;
 }
 
 // Check the _envVarCache if the env var is there
@@ -584,6 +647,18 @@ bool ConfigMgr::LoadAppConfigs(bool isReload /*= false*/)
 
 bool ConfigMgr::LoadModulesConfigs(bool isReload /*= false*/, bool isNeedPrintInfo /*= true*/)
 {
+    if (!ShouldLoadModulesConfigsFromFiles())
+    {
+        if (isNeedPrintInfo)
+        {
+            LOG_INFO("server.loading", " ");
+            LOG_INFO("server.loading", "Loading Modules Configuration from files disabled; using database config source.");
+            LOG_INFO("server.loading", " ");
+        }
+
+        return true;
+    }
+
     if (_additonalFiles.empty())
     {
         // Send successful load if no found files

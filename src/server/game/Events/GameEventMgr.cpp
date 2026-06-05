@@ -399,7 +399,7 @@ void GameEventMgr::LoadEventSaveData()
 
     if (!result)
     {
-        LOG_WARN("server.loading", ">> Loaded 0 Game Event Saves In Game Events. DB Table `game_event_save` Is Empty.");
+        LOG_INFO("server.loading", ">> Loaded 0 Game Event Saves In Game Events. DB Table `game_event_save` Is Empty.");
         LOG_INFO("server.loading", " ");
     }
     else
@@ -447,7 +447,7 @@ void GameEventMgr::LoadEventPrerequisiteData()
 
     if (!result)
     {
-        LOG_WARN("server.loading", ">> Loaded 0 Game Rvent Prerequisites in Game Events. DB Table `game_event_prerequisite` Is Empty.");
+        LOG_INFO("server.loading", ">> Loaded 0 Game Rvent Prerequisites in Game Events. DB Table `game_event_prerequisite` Is Empty.");
         LOG_INFO("server.loading", " ");
     }
     else
@@ -600,7 +600,7 @@ void GameEventMgr::LoadEventModelEquipmentChangeData()
 
     if (!result)
     {
-        LOG_WARN("server.loading", ">> Loaded 0 Model/Equipment Changes In Game Events. DB Table `game_event_model_equip` Is Empty.");
+        LOG_INFO("server.loading", ">> Loaded 0 Model/Equipment Changes In Game Events. DB Table `game_event_model_equip` Is Empty.");
         LOG_INFO("server.loading", " ");
     }
     else
@@ -745,7 +745,7 @@ void GameEventMgr::LoadEventQuestConditionData()
 
     if (!result)
     {
-        LOG_WARN("server.loading", ">> Loaded 0 quest event Conditions In Game Events. DB Table `game_event_quest_condition` Is Empty.");
+        LOG_INFO("server.loading", ">> Loaded 0 quest event Conditions In Game Events. DB Table `game_event_quest_condition` Is Empty.");
         LOG_INFO("server.loading", " ");
     }
     else
@@ -789,7 +789,7 @@ void GameEventMgr::LoadEventConditionData()
 
     if (!result)
     {
-        LOG_WARN("server.loading", ">> Loaded 0 Conditions In Game Events. DB table `game_event_condition` Is Empty.");
+        LOG_INFO("server.loading", ">> Loaded 0 Conditions In Game Events. DB table `game_event_condition` Is Empty.");
         LOG_INFO("server.loading", " ");
     }
     else
@@ -832,7 +832,7 @@ void GameEventMgr::LoadEventConditionSaveData()
 
     if (!result)
     {
-        LOG_WARN("server.loading", ">> Loaded 0 Condition Saves In Game Events. DB Table `game_event_condition_save` Is Empty.");
+        LOG_INFO("server.loading", ">> Loaded 0 Condition Saves In Game Events. DB Table `game_event_condition_save` Is Empty.");
         LOG_INFO("server.loading", " ");
     }
     else

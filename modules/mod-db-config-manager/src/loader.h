@@ -1,0 +1,6 @@
+#ifndef MODULE_DB_CONFIG_MANAGER_LOADER_H
+#define MODULE_DB_CONFIG_MANAGER_LOADER_H
+
+void AddDbConfigManagerScripts();
+
+#endif // MODULE_DB_CONFIG_MANAGER_LOADER_H

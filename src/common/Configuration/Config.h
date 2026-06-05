@@ -19,7 +19,10 @@
 #define CONFIG_H
 
 #include <stdexcept>
+#include <functional>
+#include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 class ConfigMgr
@@ -30,9 +33,15 @@ class ConfigMgr
     ~ConfigMgr() = default;
 
 public:
+    using ExternalConfigSource = std::function<std::vector<std::pair<std::string, std::string>>(bool isReload)>;
+
     bool LoadAppConfigs(bool isReload = false);
     bool LoadModulesConfigs(bool isReload = false, bool isNeedPrintInfo = true);
+    bool LoadExternalConfigSource(bool isReload = false);
     void Configure(std::string const& initFileName, std::vector<std::string> args, std::string_view modulesConfigList = {});
+    void SetExternalConfigSource(ExternalConfigSource source);
+    void SetLoadModulesConfigsFromFiles(bool enable);
+    [[nodiscard]] bool ShouldLoadModulesConfigsFromFiles() const;
 
     static ConfigMgr* instance();
 
@@ -61,6 +70,8 @@ private:
     T GetValueDefault(std::string const& name, T const& def, bool showLogs = true) const;
 
     bool dryRun = false;
+    bool _loadModulesConfigsFromFiles = true;
+    ExternalConfigSource _externalConfigSource;
 
     std::vector<std::string /*config variant*/> _moduleConfigFiles;
 };
