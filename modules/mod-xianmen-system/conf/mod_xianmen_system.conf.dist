@@ -17,6 +17,15 @@ XianmenSystem.SkillUnlockLevelStep = 10
 # 门主最多可选择的门派生效技能数量
 XianmenSystem.MaxActiveSkills = 5
 
+# 每日每个门派最多可发布的日常数量
+XianmenSystem.MaxDailyPublishes = 20
+
+# 修为升级需要的基础历史贡献
+XianmenSystem.UpgradeContributionBase = 100
+
+# 修为升级每级递增的历史贡献需求
+XianmenSystem.UpgradeContributionPerLevel = 10
+
 # 每日门主结算检查间隔，单位秒
 XianmenSystem.LeaderSettleCheckInterval = 60
 

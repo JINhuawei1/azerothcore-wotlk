@@ -13,7 +13,7 @@
 struct ItemUseRewardInfo
 {
     uint32 entry;                // 物品ID
-    uint32 rewardId;             // 奖励ID
+    uint32 rewardId;             // 奖励模板ID（对应 _模板_奖励.id）
     std::string gmCommand;       // GM命令
     std::string comment;         // 注释
     bool consumeItem;            // 是否消耗物品
@@ -37,7 +37,7 @@ public:
     static bool ExecuteGMCommand(Player* player, const std::string& command);
 
     // 处理奖励
-    static void ProcessReward(Player* player, uint32 rewardId);
+    static bool ProcessReward(Player* player, uint32 rewardId);
 
     // 获取所有配置的物品
     static std::map<uint32, ItemUseRewardInfo> const& GetAllItems() { return itemUseRewardStore; }

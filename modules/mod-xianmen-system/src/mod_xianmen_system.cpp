@@ -5,15 +5,22 @@
 #include "Chat.h"
 #include "CommandScript.h"
 #include "Config.h"
+#include "Creature.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
 #include "Log.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "SpellAuras.h"
+#include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "UnitScript.h"
+#include "Util.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <limits>
 #include <set>
 #include <sstream>
 #include <string>
@@ -26,6 +33,8 @@ namespace
 {
 static constexpr const char* XIANMEN_ADDON_PREFIX = "XIANMEN";
 static constexpr size_t XIANMEN_MAX_ADDON_PAYLOAD = 220;
+static constexpr int32 XIANMEN_SKILL_MARKER_BASE = 9200000;
+thread_local bool XianmenProcDamageGuard = false;
 
 struct XianmenFactionConfig
 {
@@ -91,6 +100,7 @@ struct XianmenPlayerData
     uint32 factionId = 0;
     uint32 level = 0;
     uint64 dailyContribution = 0;
+    uint64 historyContribution = 0;
     std::set<uint32> unlockedSkills;
 };
 
@@ -121,6 +131,14 @@ std::vector<uint32> ParseUIntList(std::string const& text)
         values.push_back(value);
 
     return values;
+}
+
+uint64 ParseUInt64(std::string const& text)
+{
+    uint64 value = 0;
+    std::istringstream stream(text);
+    stream >> value;
+    return value;
 }
 
 std::set<uint32> ParseUIntSet(std::string const& text)
@@ -182,6 +200,8 @@ public:
         _unlockLevelStep = std::max<uint32>(1, sConfigMgr->GetOption<uint32>("XianmenSystem.SkillUnlockLevelStep", 10));
         _maxActiveSkills = std::max<uint32>(1, sConfigMgr->GetOption<uint32>("XianmenSystem.MaxActiveSkills", 5));
         _maxDailyPublishes = std::max<uint32>(1, sConfigMgr->GetOption<uint32>("XianmenSystem.MaxDailyPublishes", 20));
+        _upgradeRequirementBase = std::max<uint64>(1ULL, sConfigMgr->GetOption<uint64>("XianmenSystem.UpgradeContributionBase", 100ULL));
+        _upgradeRequirementPerLevel = sConfigMgr->GetOption<uint64>("XianmenSystem.UpgradeContributionPerLevel", 10ULL);
         _settleCheckIntervalMs = std::max<uint32>(5, sConfigMgr->GetOption<uint32>("XianmenSystem.LeaderSettleCheckInterval", 60)) * IN_MILLISECONDS;
     }
 
@@ -406,13 +426,14 @@ public:
         XianmenPlayerData data;
 
         if (QueryResult result = CharacterDatabase.Query(
-            "SELECT `门派ID`, `修为等级`, `当日贡献`, `已解锁技能` FROM `_仙门_玩家` WHERE `角色GUID` = {}", guid))
+            "SELECT `门派ID`, `修为等级`, `当日贡献`, `历史贡献`, `已解锁技能` FROM `_仙门_玩家` WHERE `角色GUID` = {}", guid))
         {
             Field* fields = result->Fetch();
             data.factionId = fields[0].Get<uint32>();
             data.level = fields[1].Get<uint32>();
             data.dailyContribution = fields[2].Get<uint64>();
-            data.unlockedSkills = ParseUIntSet(fields[3].Get<std::string>());
+            data.historyContribution = ParseUInt64(fields[3].Get<std::string>());
+            data.unlockedSkills = ParseUIntSet(fields[4].Get<std::string>());
         }
 
         _playerData[guid] = data;
@@ -452,6 +473,22 @@ public:
     {
         auto itr = _skills.find(skillId);
         return itr == _skills.end() ? nullptr : &itr->second;
+    }
+
+    XianmenSkillConfig const* GetSkillByFactionOrder(uint32 factionId, uint32 order) const
+    {
+        auto byFaction = _skillsByFaction.find(factionId);
+        if (byFaction == _skillsByFaction.end())
+            return nullptr;
+
+        for (uint32 skillId : byFaction->second)
+        {
+            XianmenSkillConfig const* skill = GetSkill(skillId);
+            if (skill && skill->order == order)
+                return skill;
+        }
+
+        return nullptr;
     }
 
     XianmenDailyTemplateConfig const* GetDailyTemplate(uint32 templateId) const
@@ -579,6 +616,22 @@ public:
         return std::min<uint32>(10, data.level / _unlockLevelStep);
     }
 
+    uint32 GetMaxLevel() const
+    {
+        return _maxLevel;
+    }
+
+    uint64 GetNextUpgradeRequirement(uint32 currentLevel) const
+    {
+        if (currentLevel >= _maxLevel)
+            return 0;
+
+        uint64 level = std::max<uint32>(1, currentLevel);
+        uint64 linear = SaturatingMul(level, _upgradeRequirementBase);
+        uint64 growthSteps = SaturatingMul(level, level - 1) / 2;
+        return SaturatingAdd(linear, SaturatingMul(growthSteps, _upgradeRequirementPerLevel));
+    }
+
     bool IsLeader(uint32 factionId, uint32 guid) const
     {
         auto itr = _leaders.find(factionId);
@@ -596,6 +649,68 @@ public:
         static std::set<uint32> empty;
         auto itr = _activeSkills.find(factionId);
         return itr == _activeSkills.end() ? empty : itr->second;
+    }
+
+    std::vector<XianmenSkillConfig const*> GetEffectiveSkills(Player* player) const
+    {
+        std::vector<XianmenSkillConfig const*> result;
+        if (!player)
+            return result;
+
+        std::set<uint32> added;
+
+        for (auto const& pair : player->GetAppliedAuras())
+        {
+            AuraApplication const* app = pair.second;
+            Aura const* aura = app ? app->GetBase() : nullptr;
+            SpellInfo const* spellInfo = aura ? aura->GetSpellInfo() : nullptr;
+            if (!spellInfo)
+                continue;
+
+            SpellEffectInfo const& markerEffect = spellInfo->Effects[EFFECT_2];
+            if (markerEffect.Effect != SPELL_EFFECT_APPLY_AURA
+                || markerEffect.ApplyAuraName != SPELL_AURA_DUMMY
+                || markerEffect.BasePoints < XIANMEN_SKILL_MARKER_BASE)
+                continue;
+
+            uint32 marker = static_cast<uint32>(markerEffect.BasePoints - XIANMEN_SKILL_MARKER_BASE);
+            uint32 factionId = marker / 100;
+            uint32 order = marker % 100;
+            if (!factionId || !order)
+                continue;
+
+            if (XianmenSkillConfig const* skill = GetSkillByFactionOrder(factionId, order))
+            {
+                if (added.insert(skill->id).second)
+                    result.push_back(skill);
+            }
+        }
+
+        XianmenPlayerData const* data = GetPlayerData(player->GetGUID().GetCounter());
+        if (!data || !data->factionId)
+            return result;
+
+        std::set<uint32> const& activeSkills = GetActiveSkills(data->factionId);
+        for (uint32 skillId : activeSkills)
+        {
+            if (!data->unlockedSkills.count(skillId))
+                continue;
+
+            if (XianmenSkillConfig const* skill = GetSkill(skillId))
+                if (added.insert(skill->id).second)
+                    result.push_back(skill);
+        }
+
+        return result;
+    }
+
+    uint32 GetPlayerXianmenLevel(Player* player) const
+    {
+        if (!player)
+            return 0;
+
+        XianmenPlayerData const* data = GetPlayerData(player->GetGUID().GetCounter());
+        return data ? data->level : 0;
     }
 
     bool JoinFaction(Player* player, uint32 factionId, std::string& error)
@@ -789,13 +904,65 @@ public:
             return false;
         }
 
-        level = std::min<uint32>(_maxLevel, level);
+        level = std::max<uint32>(1, std::min<uint32>(_maxLevel, level));
         CharacterDatabase.Execute(
             "UPDATE `_仙门_玩家` SET `修为等级` = {}, `更新时间` = {} WHERE `角色GUID` = {}",
             level, GetNow(), guid);
 
         data->level = level;
+        RefreshPassiveAuras(player);
         return true;
+    }
+
+    bool UpgradePlayerLevel(Player* player, uint32 count, uint32& upgraded, std::string& error)
+    {
+        upgraded = 0;
+        if (!player)
+            return false;
+
+        uint32 guid = player->GetGUID().GetCounter();
+        LoadPlayerData(player);
+
+        XianmenPlayerData* data = GetMutablePlayerData(guid);
+        if (!data || !data->factionId)
+        {
+            error = "你尚未加入仙门。";
+            return false;
+        }
+
+        if (data->level >= _maxLevel)
+        {
+            error = "当前门派修为已满级。";
+            return false;
+        }
+
+        count = std::max<uint32>(1, std::min<uint32>(count, _maxLevel));
+        while (upgraded < count && data->level < _maxLevel)
+        {
+            uint64 required = GetNextUpgradeRequirement(data->level);
+            if (data->historyContribution < required)
+            {
+                if (!upgraded)
+                {
+                    std::ostringstream stream;
+                    stream << "历史贡献不足，下一等级需要累计历史贡献 " << required << "。";
+                    error = stream.str();
+                    return false;
+                }
+
+                break;
+            }
+
+            ++data->level;
+            ++upgraded;
+        }
+
+        CharacterDatabase.Execute(
+            "UPDATE `_仙门_玩家` SET `修为等级` = {}, `更新时间` = {} WHERE `角色GUID` = {}",
+            data->level, GetNow(), guid);
+
+        RefreshPassiveAuras(player);
+        return upgraded > 0;
     }
 
     bool AddContribution(Player* player, uint64 value, std::string& error)
@@ -818,6 +985,7 @@ public:
             value, value, GetNow(), guid);
 
         data->dailyContribution += value;
+        data->historyContribution = SaturatingAdd(data->historyContribution, value);
         return true;
     }
 
@@ -1115,6 +1283,27 @@ public:
 private:
     XianmenMgr() = default;
 
+    static uint64 SaturatingAdd(uint64 left, uint64 right)
+    {
+        uint64 maxValue = std::numeric_limits<uint64>::max();
+        if (maxValue - left < right)
+            return maxValue;
+
+        return left + right;
+    }
+
+    static uint64 SaturatingMul(uint64 left, uint64 right)
+    {
+        if (!left || !right)
+            return 0;
+
+        uint64 maxValue = std::numeric_limits<uint64>::max();
+        if (left > maxValue / right)
+            return maxValue;
+
+        return left * right;
+    }
+
     uint32 NormalizeRewardTier(uint32 tier) const
     {
         if (tier < 1)
@@ -1218,6 +1407,8 @@ private:
     uint32 _unlockLevelStep = 10;
     uint32 _maxActiveSkills = 5;
     uint32 _maxDailyPublishes = 20;
+    uint64 _upgradeRequirementBase = 100;
+    uint64 _upgradeRequirementPerLevel = 10;
     uint32 _settleCheckIntervalMs = 60 * IN_MILLISECONDS;
 
     std::unordered_map<uint32, XianmenFactionConfig> _factions;
@@ -1300,6 +1491,9 @@ void SendXianmenState(Player* player)
     uint32 factionId = data ? data->factionId : 0;
     uint32 level = data ? data->level : 0;
     uint64 dailyContribution = data ? data->dailyContribution : 0;
+    uint64 historyContribution = data ? data->historyContribution : 0;
+    uint32 maxLevel = sXianmenMgr->GetMaxLevel();
+    uint64 nextUpgradeRequirement = data ? sXianmenMgr->GetNextUpgradeRequirement(level) : 0;
     uint32 unlockSlots = data ? sXianmenMgr->GetUnlockedSlotCount(*data) : 0;
     uint32 leaderGuid = factionId ? sXianmenMgr->GetLeaderGuid(factionId) : 0;
     bool isLeader = factionId && sXianmenMgr->IsLeader(factionId, guid);
@@ -1318,7 +1512,10 @@ void SendXianmenState(Player* player)
             << factionId << '|'
             << EscapePayload(faction ? faction->name : "") << '|'
             << level << '|'
+            << maxLevel << '|'
             << dailyContribution << '|'
+            << historyContribution << '|'
+            << nextUpgradeRequirement << '|'
             << unlockSlots << '|'
             << leaderGuid << '|'
             << (isLeader ? 1 : 0) << '|'
@@ -1421,6 +1618,220 @@ void SendXianmenOpenUI(Player* player)
     SendXianmenAll(player);
 }
 
+uint32 GetXianmenSkillOrder(XianmenSkillConfig const& skill)
+{
+    return skill.order ? skill.order : (skill.id % 100);
+}
+
+float GetXianmenSkillValue(XianmenSkillConfig const& skill, uint32 level)
+{
+    return skill.baseValue + skill.growthPer10 * static_cast<float>(level / 10);
+}
+
+bool IsXianmenBossTarget(Unit* target)
+{
+    Creature* creature = target ? target->ToCreature() : nullptr;
+    if (!creature)
+        return false;
+
+    CreatureTemplate const* creatureTemplate = creature->GetCreatureTemplate();
+    return creature->IsDungeonBoss()
+        || creature->isWorldBoss()
+        || (creatureTemplate && creatureTemplate->rank == CREATURE_ELITE_WORLDBOSS);
+}
+
+uint128 ScaleXianmenPercent(uint128 const& value, float percent)
+{
+    if (value == 0 || percent <= 0.0f || std::isnan(percent))
+        return 0;
+
+    long double scaled = Acore::Number::ToLongDouble(value) * static_cast<long double>(percent) / 100.0L;
+    return Acore::Number::ToUInt128Saturated(scaled);
+}
+
+uint128 AddXianmenPercent(uint128 const& value, float percent)
+{
+    if (value == 0 || percent <= 0.0f)
+        return value;
+
+    return AddUInt128Damage(value, ScaleXianmenPercent(value, percent));
+}
+
+uint128 ToXianmenUInt128Positive(double value)
+{
+    if (value <= 0.0 || std::isnan(value))
+        return 0;
+
+    if (std::isinf(value))
+        return std::numeric_limits<uint128>::max();
+
+    return Acore::Number::ToUInt128Saturated(static_cast<long double>(value));
+}
+
+uint128 GetXianmenAttackPower(Player* player)
+{
+    if (!player)
+        return 0;
+
+    return ToXianmenUInt128Positive(player->GetExtendedTotalAttackPowerValue(BASE_ATTACK));
+}
+
+uint128 GetXianmenSpellPower(Player* player)
+{
+    if (!player)
+        return 0;
+
+    int128 const spellPower = player->GetExtendedSpellPowerBonus128();
+    return spellPower > 0 ? Acore::Number::ToUInt128Saturated(spellPower) : 0;
+}
+
+void ApplyXianmenHealthGain(Unit* unit, uint128 const& value)
+{
+    if (!unit || value == 0)
+        return;
+
+    uint128 currentHealth = unit->GetHealthForCombat128();
+    uint128 maxHealth = unit->GetMaxHealthForCombat128();
+    if (currentHealth >= maxHealth)
+        return;
+
+    unit->SetHealthForCombat128(currentHealth + std::min<uint128>(value, maxHealth - currentHealth));
+}
+
+bool RollXianmenProc(XianmenSkillConfig const& skill)
+{
+    std::string const& param = skill.triggerParam;
+    uint32 chance = 0;
+
+    if (param.find("30%") != std::string::npos)
+        chance = 30;
+    else if (param.find("25%") != std::string::npos)
+        chance = 25;
+    else if (param.find("20%") != std::string::npos)
+        chance = 20;
+    else if (param.find("PPM 4") != std::string::npos)
+        chance = 25;
+    else if (param.find("PPM 3") != std::string::npos)
+        chance = 20;
+    else if (param.find("PPM 2") != std::string::npos)
+        chance = 15;
+    else if (skill.type == 2 || skill.type == 3)
+        chance = 10;
+
+    return chance > 0 && roll_chance_i(chance);
+}
+
+void DealXianmenScriptDamage(Player* player, Unit* victim, uint128 const& damage, SpellSchoolMask schoolMask, SpellInfo const* spellInfo)
+{
+    if (!player || !victim || !spellInfo || damage == 0 || victim->isDead())
+        return;
+
+    bool const oldGuard = XianmenProcDamageGuard;
+    XianmenProcDamageGuard = true;
+
+    SpellNonMeleeDamage damageInfo(player, victim, spellInfo, schoolMask);
+    damageInfo.damage = damage;
+    Unit::DealDamageMods(damageInfo.target, damageInfo.damage, &damageInfo.absorb);
+    player->SendSpellNonMeleeDamageLog(&damageInfo);
+    CleanDamage cleanDamage(damageInfo.cleanDamage, damageInfo.absorb, BASE_ATTACK, MELEE_HIT_NORMAL);
+    Unit::DealDamage(player, victim, damageInfo.damage, &cleanDamage, SPELL_DIRECT_DAMAGE, schoolMask, spellInfo, true);
+
+    XianmenProcDamageGuard = oldGuard;
+}
+
+void TriggerXianmenOffensiveProcs(Player* player, Unit* victim, SpellInfo const* sourceSpellInfo, bool spellDamage)
+{
+    if (!player || !victim || victim->isDead())
+        return;
+
+    for (XianmenSkillConfig const* skill : sXianmenMgr->GetEffectiveSkills(player))
+    {
+        if (!skill || (skill->type != 2 && skill->type != 3) || !RollXianmenProc(*skill))
+            continue;
+
+        SpellInfo const* spellInfo = skill->spellId ? sSpellMgr->GetSpellInfo(skill->spellId) : sourceSpellInfo;
+        if (!spellInfo)
+            spellInfo = sourceSpellInfo;
+        if (!spellInfo)
+            continue;
+
+        uint32 const order = GetXianmenSkillOrder(*skill);
+        float const value = GetXianmenSkillValue(*skill, sXianmenMgr->GetPlayerXianmenLevel(player));
+        uint128 damage = 0;
+        SpellSchoolMask schoolMask = SPELL_SCHOOL_MASK_NORMAL;
+
+        if (skill->factionId == 1)
+        {
+            if (order == 5)
+                damage = ScaleXianmenPercent(GetXianmenAttackPower(player), value);
+            else if (order == 6)
+                damage = ScaleXianmenPercent(AddUInt128Damage(GetXianmenAttackPower(player), player->GetCuttingDamageBonus()), value);
+            else if (order == 7)
+                damage = ScaleXianmenPercent(GetXianmenAttackPower(player), value * 6.0f);
+        }
+        else if (skill->factionId == 3 && spellDamage)
+        {
+            schoolMask = order == 7 ? SPELL_SCHOOL_MASK_NATURE : order == 8 ? SPELL_SCHOOL_MASK_FROST : SPELL_SCHOOL_MASK_FIRE;
+            if (order == 5)
+                damage = ScaleXianmenPercent(GetXianmenSpellPower(player), value);
+            else if (order == 6)
+                damage = ScaleXianmenPercent(GetXianmenSpellPower(player), 50.0f + sXianmenMgr->GetPlayerXianmenLevel(player) / 2.0f);
+            else if (order == 7)
+                damage = ScaleXianmenPercent(GetXianmenSpellPower(player), value * 3.0f);
+            else if (order == 8)
+                damage = ScaleXianmenPercent(GetXianmenSpellPower(player), value);
+        }
+        else if (skill->factionId == 4)
+        {
+            if (order == 6)
+                damage = ScaleXianmenPercent(player->GetMaxHealthForCombat128(), value);
+        }
+        else if (skill->factionId == 5)
+        {
+            if (order == 8)
+                ApplyXianmenHealthGain(player, ScaleXianmenPercent(player->GetMaxHealthForCombat128(), 5.0f));
+            else if (order == 9)
+                damage = ScaleXianmenPercent(AddUInt128Damage(GetXianmenAttackPower(player), GetXianmenSpellPower(player)), 50.0f);
+        }
+
+        DealXianmenScriptDamage(player, victim, damage, schoolMask, spellInfo);
+    }
+}
+
+void TriggerXianmenDefensiveProcs(Player* player, Unit* attacker, uint128 const& incomingDamage, SpellInfo const* sourceSpellInfo)
+{
+    if (!player || !attacker || attacker->isDead())
+        return;
+
+    for (XianmenSkillConfig const* skill : sXianmenMgr->GetEffectiveSkills(player))
+    {
+        if (!skill || skill->type != 2 || !RollXianmenProc(*skill))
+            continue;
+
+        SpellInfo const* spellInfo = skill->spellId ? sSpellMgr->GetSpellInfo(skill->spellId) : sourceSpellInfo;
+        if (!spellInfo)
+            spellInfo = sourceSpellInfo;
+        if (!spellInfo)
+            continue;
+
+        uint32 const order = GetXianmenSkillOrder(*skill);
+        float const value = GetXianmenSkillValue(*skill, sXianmenMgr->GetPlayerXianmenLevel(player));
+        uint128 damage = 0;
+        SpellSchoolMask schoolMask = SPELL_SCHOOL_MASK_NORMAL;
+
+        if (skill->factionId == 1 && order == 8)
+            damage = ScaleXianmenPercent(GetXianmenAttackPower(player), value);
+        else if (skill->factionId == 4 && order == 5)
+            damage = ScaleXianmenPercent(incomingDamage, value);
+        else if (skill->factionId == 4 && order == 7)
+            damage = ScaleXianmenPercent(player->GetMaxHealthForCombat128(), value);
+        else if (skill->factionId == 2 && order == 8)
+            ApplyXianmenHealthGain(player, ScaleXianmenPercent(player->GetMaxHealthForCombat128(), 10.0f));
+
+        DealXianmenScriptDamage(player, attacker, damage, schoolMask, spellInfo);
+    }
+}
+
 class XianmenWorldScript : public WorldScript
 {
 public:
@@ -1516,6 +1927,7 @@ public:
         if (!player)
             return;
 
+        _regenTimers.erase(player->GetGUID().GetCounter());
         sXianmenMgr->UnloadPlayerData(player->GetGUID().GetCounter());
     }
 
@@ -1597,6 +2009,22 @@ public:
             return;
         }
 
+        uint32 upgradeCount = 0;
+        if (command == "UPGRADE" || sscanf(command.c_str(), "UPGRADE:%u", &upgradeCount) == 1)
+        {
+            std::string error;
+            uint32 upgraded = 0;
+            bool ok = sXianmenMgr->UpgradePlayerLevel(player, upgradeCount ? upgradeCount : 1, upgraded, error);
+
+            std::ostringstream message;
+            if (ok)
+                message << "修为已提升 " << upgraded << " 级";
+
+            SendXianmenResult(player, "UPGRADE", ok, ok ? message.str() : error);
+            SendXianmenAll(player);
+            return;
+        }
+
         uint32 unlockSkill = 0;
         if (sscanf(command.c_str(), "UNLOCK:%u", &unlockSkill) == 1)
         {
@@ -1631,6 +2059,327 @@ public:
             return;
         }
     }
+
+    void OnPlayerUpdate(Player* player, uint32 diff) override
+    {
+        if (!player || !sXianmenMgr->IsEnabled() || !player->IsInCombat())
+            return;
+
+        uint32 const guid = player->GetGUID().GetCounter();
+        uint32& timer = _regenTimers[guid];
+        timer += diff;
+        if (timer < 5 * IN_MILLISECONDS)
+            return;
+
+        timer = 0;
+
+        uint32 const level = sXianmenMgr->GetPlayerXianmenLevel(player);
+        for (XianmenSkillConfig const* skill : sXianmenMgr->GetEffectiveSkills(player))
+        {
+            if (!skill)
+                continue;
+
+            uint32 const order = GetXianmenSkillOrder(*skill);
+            if (skill->factionId == 2 && order == 7)
+                ApplyXianmenHealthGain(player, ScaleXianmenPercent(player->GetMaxHealthForCombat128(), 1.0f + 0.2f * static_cast<float>(level / 10)));
+            else if (skill->factionId == 4 && order == 2)
+                ApplyXianmenHealthGain(player, ScaleXianmenPercent(player->GetMaxHealthForCombat128(), 1.0f + 0.25f * static_cast<float>(level / 10)));
+        }
+    }
+
+    void OnPlayerAfterUpdateStat(Player* player, Stats stat, float& value) override
+    {
+        if (!player || !sXianmenMgr->IsEnabled())
+            return;
+
+        float bonusPct = 0.0f;
+        uint32 const level = sXianmenMgr->GetPlayerXianmenLevel(player);
+        for (XianmenSkillConfig const* skill : sXianmenMgr->GetEffectiveSkills(player))
+        {
+            if (!skill)
+                continue;
+
+            uint32 const order = GetXianmenSkillOrder(*skill);
+            float const amount = GetXianmenSkillValue(*skill, level);
+            if ((skill->factionId == 1 && order == 10)
+                || (skill->factionId == 2 && order == 9)
+                || (skill->factionId == 5 && order == 4))
+                bonusPct += amount;
+            else if (skill->factionId == 2 && order == 3)
+                bonusPct += 5.0f + level / 10.0f;
+            else if (skill->factionId == 4 && order == 1 && stat == STAT_STAMINA)
+                bonusPct += amount;
+        }
+
+        if (bonusPct > 0.0f)
+            value += value * bonusPct / 100.0f;
+    }
+
+    void OnPlayerAfterUpdateMaxHealth(Player* player, float& value) override
+    {
+        if (!player || !sXianmenMgr->IsEnabled())
+            return;
+
+        float bonusPct = 0.0f;
+        uint32 const level = sXianmenMgr->GetPlayerXianmenLevel(player);
+        for (XianmenSkillConfig const* skill : sXianmenMgr->GetEffectiveSkills(player))
+        {
+            if (!skill)
+                continue;
+
+            uint32 const order = GetXianmenSkillOrder(*skill);
+            float const amount = GetXianmenSkillValue(*skill, level);
+            if (skill->factionId == 2 && order == 9)
+                bonusPct += amount;
+            else if (skill->factionId == 4 && (order == 2 || order == 10))
+                bonusPct += amount;
+        }
+
+        if (bonusPct > 0.0f)
+            value += value * bonusPct / 100.0f;
+    }
+
+    void OnPlayerAfterUpdateMaxPower(Player* player, Powers& power, float& value) override
+    {
+        if (!player || !sXianmenMgr->IsEnabled() || power != POWER_MANA)
+            return;
+
+        float bonusPct = 0.0f;
+        uint32 const level = sXianmenMgr->GetPlayerXianmenLevel(player);
+        for (XianmenSkillConfig const* skill : sXianmenMgr->GetEffectiveSkills(player))
+            if (skill && skill->factionId == 3 && GetXianmenSkillOrder(*skill) == 3)
+                bonusPct += GetXianmenSkillValue(*skill, level);
+
+        if (bonusPct > 0.0f)
+            value += value * bonusPct / 100.0f;
+    }
+
+    void OnPlayerAfterUpdateAttackPowerAndDamage(Player* player, float& /*level*/, float& /*base_attPower*/, float& /*attPowerMod*/, float& attPowerMultiplier, bool ranged) override
+    {
+        if (!player || !sXianmenMgr->IsEnabled() || ranged)
+            return;
+
+        float bonusPct = 0.0f;
+        uint32 const xianmenLevel = sXianmenMgr->GetPlayerXianmenLevel(player);
+        for (XianmenSkillConfig const* skill : sXianmenMgr->GetEffectiveSkills(player))
+            if (skill && skill->factionId == 1 && GetXianmenSkillOrder(*skill) == 1)
+                bonusPct += GetXianmenSkillValue(*skill, xianmenLevel);
+
+        if (bonusPct > 0.0f)
+            attPowerMultiplier *= 1.0f + bonusPct / 100.0f;
+    }
+
+    void OnPlayerAfterUpdateArmor(Player* player, float& value) override
+    {
+        if (!player || !sXianmenMgr->IsEnabled())
+            return;
+
+        float bonusPct = 0.0f;
+        uint32 const level = sXianmenMgr->GetPlayerXianmenLevel(player);
+        for (XianmenSkillConfig const* skill : sXianmenMgr->GetEffectiveSkills(player))
+            if (skill && skill->factionId == 4 && GetXianmenSkillOrder(*skill) == 1)
+                bonusPct += 30.0f + 8.0f * static_cast<float>(level / 10);
+
+        if (bonusPct > 0.0f)
+            value += value * bonusPct / 100.0f;
+    }
+
+    void OnPlayerAfterUpdateCritPercentage(Player* player, WeaponAttackType /*attType*/, float& value) override
+    {
+        if (!player || !sXianmenMgr->IsEnabled())
+            return;
+
+        float bonus = 0.0f;
+        uint32 const level = sXianmenMgr->GetPlayerXianmenLevel(player);
+        for (XianmenSkillConfig const* skill : sXianmenMgr->GetEffectiveSkills(player))
+            if (skill && skill->factionId == 1 && (GetXianmenSkillOrder(*skill) == 1 || GetXianmenSkillOrder(*skill) == 10))
+                bonus += 5.0f + static_cast<float>(level / 10);
+
+        value += bonus;
+    }
+
+    void OnPlayerAfterUpdateSpellCritChance(Player* player, uint32 /*school*/, float& value) override
+    {
+        if (!player || !sXianmenMgr->IsEnabled())
+            return;
+
+        float bonus = 0.0f;
+        uint32 const level = sXianmenMgr->GetPlayerXianmenLevel(player);
+        for (XianmenSkillConfig const* skill : sXianmenMgr->GetEffectiveSkills(player))
+            if (skill && skill->factionId == 3 && GetXianmenSkillOrder(*skill) == 2)
+                bonus += GetXianmenSkillValue(*skill, level);
+
+        value += bonus;
+    }
+
+    void OnPlayerAfterUpdateHitChances(Player* player, float& meleeHit, float& rangedHit, float& spellHit) override
+    {
+        if (!player || !sXianmenMgr->IsEnabled())
+            return;
+
+        uint32 const level = sXianmenMgr->GetPlayerXianmenLevel(player);
+        for (XianmenSkillConfig const* skill : sXianmenMgr->GetEffectiveSkills(player))
+        {
+            if (!skill)
+                continue;
+
+            if (skill->factionId == 1 && GetXianmenSkillOrder(*skill) == 2)
+            {
+                float const bonus = 2.0f + static_cast<float>(level / 20);
+                meleeHit += bonus;
+                rangedHit += bonus;
+            }
+            else if (skill->factionId == 3 && GetXianmenSkillOrder(*skill) == 2)
+            {
+                spellHit += 2.0f + static_cast<float>(level / 20);
+            }
+        }
+    }
+
+    void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int128& healingBonus, int128 spellDamage[7]) override
+    {
+        if (!player || !sXianmenMgr->IsEnabled())
+            return;
+
+        float damagePct = 0.0f;
+        float healingPct = 0.0f;
+        uint32 const level = sXianmenMgr->GetPlayerXianmenLevel(player);
+        for (XianmenSkillConfig const* skill : sXianmenMgr->GetEffectiveSkills(player))
+        {
+            if (!skill)
+                continue;
+
+            uint32 const order = GetXianmenSkillOrder(*skill);
+            if (skill->factionId == 3 && (order == 1 || order == 10))
+                damagePct += GetXianmenSkillValue(*skill, level);
+            else if (skill->factionId == 2 && order == 7)
+                healingPct += 20.0f + static_cast<float>(level / 2);
+        }
+
+        if (damagePct > 0.0f)
+            for (uint8 school = 0; school < 7; ++school)
+                spellDamage[school] += Acore::Number::ToInt128Saturated(Acore::Number::ToLongDouble(spellDamage[school]) * damagePct / 100.0L);
+
+        if (healingPct > 0.0f)
+            healingBonus += Acore::Number::ToInt128Saturated(Acore::Number::ToLongDouble(healingBonus) * healingPct / 100.0L);
+    }
+
+    void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int128& amount) override
+    {
+        if (!player || !sXianmenMgr->IsEnabled())
+            return;
+
+        int128 bonus = 0;
+        uint32 const level = sXianmenMgr->GetPlayerXianmenLevel(player);
+        for (XianmenSkillConfig const* skill : sXianmenMgr->GetEffectiveSkills(player))
+        {
+            if (!skill)
+                continue;
+
+            uint32 const order = GetXianmenSkillOrder(*skill);
+            if (skill->factionId == 1 && order == 3 && (cr == CR_HASTE_MELEE || cr == CR_HASTE_RANGED))
+                bonus += static_cast<int32>(GetXianmenSkillValue(*skill, level) * 10.0f);
+            else if (skill->factionId == 3 && order == 1 && cr == CR_HASTE_SPELL)
+                bonus += static_cast<int32>((10.0f + 2.0f * static_cast<float>(level / 10)) * 10.0f);
+            else if (skill->factionId == 4 && order == 3 && (cr == CR_BLOCK || cr == CR_PARRY))
+                bonus += static_cast<int32>((10.0f + static_cast<float>(level / 10)) * 10.0f);
+        }
+
+        amount += bonus;
+    }
+
+private:
+    std::unordered_map<uint32, uint32> _regenTimers;
+};
+
+class XianmenUnitScript : public UnitScript
+{
+public:
+    XianmenUnitScript() : UnitScript("XianmenUnitScript", true, { UNITHOOK_MODIFY_MELEE_DAMAGE, UNITHOOK_MODIFY_SPELL_DAMAGE_TAKEN }) { }
+
+    void ModifyMeleeDamage(Unit* target, Unit* attacker, uint128& damage) override
+    {
+        if (!sXianmenMgr->IsEnabled() || damage == 0 || XianmenProcDamageGuard)
+            return;
+
+        if (Player* player = attacker ? attacker->GetCharmerOrOwnerPlayerOrPlayerItself() : nullptr)
+        {
+            uint32 const level = sXianmenMgr->GetPlayerXianmenLevel(player);
+            for (XianmenSkillConfig const* skill : sXianmenMgr->GetEffectiveSkills(player))
+            {
+                if (!skill)
+                    continue;
+
+                uint32 const order = GetXianmenSkillOrder(*skill);
+                if (skill->factionId == 1 && order == 9)
+                {
+                    damage = AddXianmenPercent(damage, GetXianmenSkillValue(*skill, level));
+                    if (IsXianmenBossTarget(target))
+                        damage = AddXianmenPercent(damage, 10.0f);
+                }
+                else if (skill->factionId == 4 && order == 4 && player)
+                {
+                    damage = AddUInt128Damage(damage, ScaleXianmenPercent(player->GetMaxHealthForCombat128(), 1.0f + static_cast<float>(level / 20)));
+                }
+                else if (skill->factionId == 5 && order == 5)
+                {
+                    damage = AddXianmenPercent(damage, GetXianmenSkillValue(*skill, level));
+                }
+            }
+
+            TriggerXianmenOffensiveProcs(player, target, nullptr, false);
+        }
+
+        if (Player* victimPlayer = target ? target->ToPlayer() : nullptr)
+        {
+            uint32 const level = sXianmenMgr->GetPlayerXianmenLevel(victimPlayer);
+            for (XianmenSkillConfig const* skill : sXianmenMgr->GetEffectiveSkills(victimPlayer))
+            {
+                if (!skill)
+                    continue;
+
+                uint32 const order = GetXianmenSkillOrder(*skill);
+                if (skill->factionId == 4 && (order == 1 || order == 8))
+                    damage -= std::min<uint128>(damage, ScaleXianmenPercent(damage, order == 1 ? 5.0f + static_cast<float>(level / 10) : 20.0f));
+            }
+
+            TriggerXianmenDefensiveProcs(victimPlayer, attacker, damage, nullptr);
+        }
+    }
+
+    void ModifySpellDamageTaken(Unit* target, Unit* attacker, uint128& damage, SpellInfo const* spellInfo) override
+    {
+        if (!sXianmenMgr->IsEnabled() || damage == 0 || XianmenProcDamageGuard)
+            return;
+
+        if (Player* player = attacker ? attacker->GetCharmerOrOwnerPlayerOrPlayerItself() : nullptr)
+        {
+            uint32 const level = sXianmenMgr->GetPlayerXianmenLevel(player);
+            for (XianmenSkillConfig const* skill : sXianmenMgr->GetEffectiveSkills(player))
+            {
+                if (!skill)
+                    continue;
+
+                uint32 const order = GetXianmenSkillOrder(*skill);
+                if (skill->factionId == 3 && (order == 4 || order == 10))
+                    damage = AddXianmenPercent(damage, GetXianmenSkillValue(*skill, level));
+            }
+
+            TriggerXianmenOffensiveProcs(player, target, spellInfo, true);
+        }
+
+        if (Player* victimPlayer = target ? target->ToPlayer() : nullptr)
+        {
+            uint32 const level = sXianmenMgr->GetPlayerXianmenLevel(victimPlayer);
+            for (XianmenSkillConfig const* skill : sXianmenMgr->GetEffectiveSkills(victimPlayer))
+            {
+                if (skill && skill->factionId == 4 && GetXianmenSkillOrder(*skill) == 1)
+                    damage -= std::min<uint128>(damage, ScaleXianmenPercent(damage, 5.0f + static_cast<float>(level / 10)));
+            }
+
+            TriggerXianmenDefensiveProcs(victimPlayer, attacker, damage, spellInfo);
+        }
+    }
 };
 
 class XianmenCommandScript : public CommandScript
@@ -1648,6 +2397,8 @@ public:
             { "加入",     HandleJoinCommand,            SEC_PLAYER,        Console::No },
             { "退出",     HandleLeaveCommand,           SEC_PLAYER,        Console::No },
             { "离开",     HandleLeaveCommand,           SEC_PLAYER,        Console::No },
+            { "升级",     HandleUpgradeCommand,         SEC_PLAYER,        Console::No },
+            { "提升修为", HandleUpgradeCommand,         SEC_PLAYER,        Console::No },
             { "技能",     HandleSkillsCommand,          SEC_PLAYER,        Console::No },
             { "技能列表", HandleSkillsCommand,          SEC_PLAYER,        Console::No },
             { "解锁",     HandleUnlockCommand,          SEC_PLAYER,        Console::No },
@@ -1706,6 +2457,7 @@ private:
         handler->SendSysMessage(".仙门 列表");
         handler->SendSysMessage(".仙门 加入 <门派ID>");
         handler->SendSysMessage(".仙门 信息");
+        handler->SendSysMessage(".仙门 升级 [次数]");
         handler->SendSysMessage(".仙门 技能");
         handler->SendSysMessage(".仙门 解锁 <技能ID>");
         handler->SendSysMessage(".仙门 日常");
@@ -1750,8 +2502,13 @@ private:
         XianmenFactionConfig const* faction = sXianmenMgr->GetFaction(data->factionId);
         handler->PSendSysMessage("|cff66ffcc[仙门系统]|r 门派: |cffffd700{}|r",
             faction ? faction->name : "未知");
-        handler->PSendSysMessage("  修为等级: {}/100", data->level);
+        handler->PSendSysMessage("  修为等级: {}/{}", data->level, sXianmenMgr->GetMaxLevel());
         handler->PSendSysMessage("  当日贡献: {}", data->dailyContribution);
+        handler->PSendSysMessage("  历史贡献: {}", data->historyContribution);
+        if (data->level < sXianmenMgr->GetMaxLevel())
+            handler->PSendSysMessage("  下一修为需要历史贡献: {}", sXianmenMgr->GetNextUpgradeRequirement(data->level));
+        else
+            handler->SendSysMessage("  下一修为需要历史贡献: 已满级");
         handler->PSendSysMessage("  技能解锁: {}/{}", static_cast<uint32>(data->unlockedSkills.size()), sXianmenMgr->GetUnlockedSlotCount(*data));
         handler->PSendSysMessage("  当前门主GUID: {}", sXianmenMgr->GetLeaderGuid(data->factionId));
         handler->PSendSysMessage("  你是否门主: {}", sXianmenMgr->IsLeader(data->factionId, player->GetGUID().GetCounter()) ? "是" : "否");
@@ -1803,6 +2560,31 @@ private:
         }
 
         handler->SendSysMessage("|cff66ffcc[仙门系统]|r 已退出当前仙门。");
+        return true;
+    }
+
+    static bool HandleUpgradeCommand(ChatHandler* handler, char const* args)
+    {
+        if (!CheckEnabled(handler))
+            return true;
+
+        Player* player = GetPlayer(handler);
+        if (!player)
+            return false;
+
+        std::vector<uint32> values = ParseUIntList(args);
+        uint32 count = values.empty() ? 1 : values[0];
+
+        std::string error;
+        uint32 upgraded = 0;
+        if (!sXianmenMgr->UpgradePlayerLevel(player, count, upgraded, error))
+        {
+            handler->PSendSysMessage("|cffff0000[仙门系统]|r {}", error);
+            return true;
+        }
+
+        handler->PSendSysMessage("|cff66ffcc[仙门系统]|r 修为已提升 {} 级，当前修为 {}/{}。",
+            upgraded, sXianmenMgr->GetPlayerXianmenLevel(player), sXianmenMgr->GetMaxLevel());
         return true;
     }
 
@@ -2139,5 +2921,6 @@ void AddSC_mod_xianmen_system()
 {
     new XianmenWorldScript();
     new XianmenPlayerScript();
+    new XianmenUnitScript();
     new XianmenCommandScript();
 }

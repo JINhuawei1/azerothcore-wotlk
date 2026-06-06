@@ -17,6 +17,10 @@ UI:SetScript("OnDragStart", UI.StartMoving)
 UI:SetScript("OnDragStop", UI.StopMovingOrSizing)
 UI:Hide()
 
+if UISpecialFrames then
+    table.insert(UISpecialFrames, UI:GetName())
+end
+
 UI:SetBackdrop({
     bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
     edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -32,7 +36,10 @@ local state = {
     factionId = 0,
     factionName = "",
     level = 0,
+    maxLevel = 100,
     contribution = 0,
+    historyContribution = 0,
+    nextUpgradeRequirement = 0,
     unlockSlots = 0,
     leaderGuid = 0,
     isLeader = false,
@@ -55,6 +62,14 @@ local factionDescriptions = {
     [3] = "符法流派，主打法术爆发，被动触发多重与连锁效果；核心属性为法术强度、急速、魔次。",
     [4] = "炼体流派，主打坦克、反伤与超高耐久；核心属性为耐力、护甲、超大生命。",
     [5] = "驭魂流派，主打武魂召唤，随门派修为提升多武魂与继承能力；核心玩法为召唤物强化、武魂继承。",
+}
+
+local factionDescriptionColors = {
+    [1] = "|cff66ccff",
+    [2] = "|cff88ff88",
+    [3] = "|cffff88ff",
+    [4] = "|cffffcc66",
+    [5] = "|cffc088ff",
 }
 
 local chunkBuffer = {
@@ -367,6 +382,11 @@ local function EnsureRows(count)
     for i = #rows + 1, count do
         local row = CreateFrame("Frame", nil, content)
         row:SetSize(692, 48)
+        row.icon = CreateFrame("Button", nil, row)
+        row.icon:SetSize(28, 28)
+        row.icon:SetPoint("LEFT", 10, 0)
+        row.icon:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+        row.icon:Hide()
         row.text = MakeText(row, 12, { r = 0.90, g = 0.92, b = 0.88 })
         row.text:SetPoint("LEFT", 10, 0)
         row.text:SetSize(560, 44)
@@ -379,9 +399,79 @@ end
 local function HideRows()
     for _, row in ipairs(rows) do
         row:Hide()
+        row.icon:Hide()
+        row.icon:SetScript("OnEnter", nil)
+        row.icon:SetScript("OnLeave", nil)
+        row.text:ClearAllPoints()
+        row.text:SetPoint("LEFT", 10, 0)
+        row.text:SetSize(560, 44)
         row.action:Show()
         row.action:SetScript("OnClick", nil)
     end
+end
+
+local function GetSkillIconTexture(skill)
+    if skill and skill.spellId and skill.spellId > 0 and GetSpellTexture then
+        local texture = GetSpellTexture(skill.spellId)
+        if texture then
+            return texture
+        end
+    end
+
+    return ICON_TEXTURE
+end
+
+local function ShowSkillTooltip(owner)
+    local skill = owner.skill
+    if not skill then
+        return
+    end
+
+    GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+    GameTooltip:ClearLines()
+
+    if not (skill.spellId and skill.spellId > 0 and GameTooltip.SetHyperlink) then
+        return
+    end
+
+    local shownSpell = pcall(GameTooltip.SetHyperlink, GameTooltip, "spell:" .. skill.spellId)
+
+    local firstLine = _G.GameTooltipTextLeft1 and _G.GameTooltipTextLeft1:GetText()
+    if shownSpell and firstLine and firstLine ~= "" then
+        GameTooltip:Show()
+    end
+end
+
+local function ConfigureSkillRow(row, skill, displayStatus, tooltipStatus)
+    row.icon:Show()
+    row.icon:EnableMouse(true)
+    row.icon:SetFrameLevel(row:GetFrameLevel() + 5)
+    row.icon.skill = skill
+    row.icon.skillStatus = tooltipStatus
+    row.icon:SetNormalTexture(GetSkillIconTexture(skill))
+    local texture = row.icon:GetNormalTexture()
+    if texture then
+        texture:SetAllPoints(row.icon)
+        texture:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+    end
+    row.icon:SetScript("OnEnter", ShowSkillTooltip)
+    row.icon:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+
+    row.text:ClearAllPoints()
+    row.text:SetPoint("LEFT", row.icon, "RIGHT", 8, 0)
+    row.text:SetSize(470, 28)
+    row.text:SetText(string.format("%s  %s", skill.name or "未知技能", displayStatus or ""))
+end
+
+local function FormatNumber(value)
+    value = tonumber(value) or 0
+    return tostring(math.floor(value))
+end
+
+local function ColorFactionDescription(factionId, desc)
+    return string.format("%s%s|r", factionDescriptionColors[factionId] or "|cffb8c7bf", desc or "")
 end
 
 local function StatusLine()
@@ -390,9 +480,10 @@ local function StatusLine()
     end
 
     local leader = state.isLeader and "是" or "否"
-    return string.format("门派：%s  修为：%d/100  贡献：%s  解锁：%d/%d  门主：%s",
-        state.factionName or "", state.level or 0, tostring(state.contribution or 0),
-        UI:UnlockedCount(), state.unlockSlots or 0, leader)
+    return string.format("门派：%s  修为：%d/%d  门主：%s\n当日贡献：%s  历史贡献：%s  解锁：%d/%d",
+        state.factionName or "", state.level or 0, state.maxLevel or 100, leader,
+        FormatNumber(state.contribution), FormatNumber(state.historyContribution),
+        UI:UnlockedCount(), state.unlockSlots or 0)
 end
 
 function UI:UnlockedCount()
@@ -418,9 +509,86 @@ local function ResetSelectedActive()
     end
 end
 
+local function ClearJoinedState()
+    state.factionId = 0
+    state.factionName = ""
+    state.level = 0
+    state.maxLevel = 100
+    state.contribution = 0
+    state.historyContribution = 0
+    state.nextUpgradeRequirement = 0
+    state.unlockSlots = 0
+    state.leaderGuid = 0
+    state.isLeader = false
+    state.unlocked = {}
+    state.active = {}
+    skills = {}
+    selectedActive = {}
+    currentTab = "factions"
+end
+
+local function GetCurrentFaction()
+    for _, faction in ipairs(factions) do
+        if faction.id == state.factionId then
+            return faction
+        end
+    end
+
+    if state.factionId and state.factionId > 0 then
+        return {
+            id = state.factionId,
+            name = state.factionName or "",
+            desc = factionDescriptions[state.factionId] or "",
+        }
+    end
+
+    return nil
+end
+
 function UI:RenderFactions()
-    EnsureRows(math.max(#factions, 1))
+    EnsureRows(math.max(#factions, 4))
     HideRows()
+
+    if state.factionId and state.factionId > 0 then
+        local faction = GetCurrentFaction()
+        local desc = faction and faction.desc ~= "" and faction.desc or (factionDescriptions[state.factionId] or "")
+        local factionName = state.factionName ~= "" and state.factionName or (faction and faction.name) or "未知门派"
+        local atMax = (state.level or 0) >= (state.maxLevel or 100)
+        local nextNeed = state.nextUpgradeRequirement or 0
+
+        rows[1]:SetPoint("TOPLEFT", 16, -10)
+        rows[1].text:SetText(string.format("%d. %s\n%s",
+            state.factionId, factionName, ColorFactionDescription(state.factionId, desc)))
+        rows[1].action:Hide()
+        rows[1]:Show()
+
+        rows[2]:SetPoint("TOPLEFT", 16, -68)
+        rows[2].text:SetText(string.format("修为等级：%d/%d\n历史贡献：%s",
+            state.level or 0, state.maxLevel or 100, FormatNumber(state.historyContribution)))
+        rows[2].action:SetText(atMax and "已满级" or "升级")
+        SetButtonEnabled(rows[2].action, not atMax)
+        rows[2].action:SetScript("OnClick", function()
+            Send("UPGRADE")
+        end)
+        rows[2]:Show()
+
+        rows[3]:SetPoint("TOPLEFT", 16, -126)
+        if atMax then
+            rows[3].text:SetText("下一修为：已满级\n完成门派日常仍可获得当日贡献，用于门主结算。")
+        else
+            rows[3].text:SetText(string.format("下一修为需要历史贡献：%s / %s\n完成门派日常可累计历史贡献，达到需求后点击升级。",
+                FormatNumber(state.historyContribution), FormatNumber(nextNeed)))
+        end
+        rows[3].action:Hide()
+        rows[3]:Show()
+
+        rows[4]:SetPoint("TOPLEFT", 16, -184)
+        rows[4].text:SetText(string.format("当日贡献：%s\n技能解锁名额：%d/%d（每 10 级获得 1 个）",
+            FormatNumber(state.contribution), UI:UnlockedCount(), state.unlockSlots or 0))
+        rows[4].action:Hide()
+        rows[4]:Show()
+        return
+    end
 
     if #factions == 0 then
         rows[1].text:SetText("暂无门派配置")
@@ -434,7 +602,7 @@ function UI:RenderFactions()
         local row = rows[i]
         row:SetPoint("TOPLEFT", 16, -8 - (i - 1) * 52)
         local desc = faction.desc ~= "" and faction.desc or (factionDescriptions[faction.id] or "")
-        row.text:SetText(string.format("%d. %s\n|cffb8c7bf%s|r", faction.id, faction.name, desc))
+        row.text:SetText(string.format("%d. %s\n%s", faction.id, faction.name, ColorFactionDescription(faction.id, desc)))
         row.action:SetText(state.factionId == faction.id and "已加入" or "加入")
         SetButtonEnabled(row.action, state.factionId == 0)
         row.action:SetScript("OnClick", function()
@@ -449,7 +617,7 @@ function UI:RenderSkills()
     HideRows()
 
     if state.factionId == 0 then
-        rows[1].text:SetText("尚未加入仙门")
+        rows[1].text:SetText("请先加入仙门才能看到对应门派的技能")
         rows[1].action:Hide()
         rows[1]:SetPoint("TOPLEFT", 16, -14)
         rows[1]:Show()
@@ -457,7 +625,7 @@ function UI:RenderSkills()
     end
 
     if #skills == 0 then
-        rows[1].text:SetText("暂无技能配置")
+        rows[1].text:SetText("请先加入仙门才能看到对应门派的技能")
         rows[1].action:Hide()
         rows[1]:SetPoint("TOPLEFT", 16, -14)
         rows[1]:Show()
@@ -469,8 +637,8 @@ function UI:RenderSkills()
         local unlocked = skill.unlocked == 1
         local active = skill.active == 1
         row:SetPoint("TOPLEFT", 16, -8 - (i - 1) * 36)
-        row.text:SetText(string.format("%d. %s  [%s%s]\n%s",
-            skill.id, skill.name, unlocked and "已解锁" or "未解锁", active and " / 生效" or "", skill.desc))
+        local status = string.format("|cffb8c7bf[%s%s]|r", unlocked and "已解锁" or "未解锁", active and " / 生效" or "")
+        ConfigureSkillRow(row, skill, status, string.format("%s%s", unlocked and "已解锁" or "未解锁", active and " / 门主生效" or ""))
         row.action:SetText(unlocked and "已解锁" or "解锁")
         SetButtonEnabled(row.action, not unlocked)
         row.action:SetScript("OnClick", function()
@@ -485,7 +653,7 @@ function UI:RenderLeader()
     HideRows()
 
     if state.factionId == 0 then
-        rows[1].text:SetText("尚未加入仙门")
+        rows[1].text:SetText("请先加入仙门才能看到对应门派的技能")
         rows[1].action:Hide()
         rows[1]:SetPoint("TOPLEFT", 16, -14)
         rows[1]:Show()
@@ -512,8 +680,8 @@ function UI:RenderLeader()
         local unlocked = skill.unlocked == 1
         local selected = selectedActive[skill.id] and true or false
         row:SetPoint("TOPLEFT", 16, -44 - (i - 1) * 34)
-        row.text:SetText(string.format("%d. %s  [%s%s]\n%s",
-            skill.id, skill.name, unlocked and "已解锁" or "未解锁", selected and " / 已选" or "", skill.desc))
+        local status = string.format("|cffb8c7bf[%s%s]|r", unlocked and "已解锁" or "未解锁", selected and " / 已选" or "")
+        ConfigureSkillRow(row, skill, status, string.format("%s%s", unlocked and "已解锁" or "未解锁", selected and " / 已选为生效技能" or ""))
         row.action:SetText(selected and "取消" or "选择")
         SetButtonEnabled(row.action, state.isLeader and unlocked)
         row.action:SetScript("OnClick", function()
@@ -534,6 +702,7 @@ end
 
 function UI:Render()
     statusText:SetText(StatusLine())
+    SetButtonEnabled(leave, state.factionId and state.factionId > 0)
     tabFactions:SetButtonState(currentTab == "factions" and "PUSHED" or "NORMAL")
     tabSkills:SetButtonState(currentTab == "skills" and "PUSHED" or "NORMAL")
     tabLeader:SetButtonState(currentTab == "leader" and "PUSHED" or "NORMAL")
@@ -567,8 +736,17 @@ local function ParseFactions(payload)
 end
 
 local function ParseState(payload)
-    local factionId, factionName, level, contribution, unlockSlots, leaderGuid, isLeader, unlocked, active =
-        string.match(payload or "", "^(%d+)|(.-)|(%d+)|(%d+)|(%d+)|(%d+)|(%d+)|(.*)|(.*)$")
+    local previousFactionId = state.factionId or 0
+    local factionId, factionName, level, maxLevel, contribution, historyContribution, nextUpgradeRequirement, unlockSlots, leaderGuid, isLeader, unlocked, active =
+        string.match(payload or "", "^(%d+)|(.-)|(%d+)|(%d+)|(%d+)|(%d+)|(%d+)|(%d+)|(%d+)|(%d+)|(.*)|(.*)$")
+
+    if not factionId then
+        factionId, factionName, level, contribution, unlockSlots, leaderGuid, isLeader, unlocked, active =
+            string.match(payload or "", "^(%d+)|(.-)|(%d+)|(%d+)|(%d+)|(%d+)|(%d+)|(.*)|(.*)$")
+        maxLevel = "100"
+        historyContribution = "0"
+        nextUpgradeRequirement = "0"
+    end
 
     if not factionId then
         return
@@ -577,12 +755,27 @@ local function ParseState(payload)
     state.factionId = tonumber(factionId) or 0
     state.factionName = factionName or ""
     state.level = tonumber(level) or 0
+    state.maxLevel = tonumber(maxLevel) or 100
     state.contribution = tonumber(contribution) or 0
+    state.historyContribution = tonumber(historyContribution) or 0
+    state.nextUpgradeRequirement = tonumber(nextUpgradeRequirement) or 0
     state.unlockSlots = tonumber(unlockSlots) or 0
     state.leaderGuid = tonumber(leaderGuid) or 0
     state.isLeader = tonumber(isLeader) == 1
     state.unlocked = ParseIdSet(unlocked)
     state.active = ParseIdSet(active)
+
+    if state.factionId == 0 then
+        state.factionName = ""
+        state.unlocked = {}
+        state.active = {}
+        skills = {}
+        selectedActive = {}
+        if previousFactionId > 0 then
+            currentTab = "factions"
+        end
+    end
+
     ResetSelectedActive()
 end
 
@@ -666,6 +859,11 @@ local function HandlePayload(message)
     payload = string.match(message, "^XM_RESULT:(.*)$")
     if payload then
         local action, ok, text = string.match(payload, "^(.-)%^(%d+)%^(.*)$")
+        if action == "LEAVE" and tonumber(ok) == 1 then
+            ClearJoinedState()
+            UI:Render()
+            Send("REQ_ALL")
+        end
         if text and text ~= "" then
             Print(text)
         end

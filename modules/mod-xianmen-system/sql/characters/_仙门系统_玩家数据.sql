@@ -15,6 +15,15 @@ CREATE TABLE IF NOT EXISTS `_仙门_玩家` (
   KEY `idx_仙门玩家_门派贡献` (`门派ID`, `当日贡献`)
 ) ENGINE = MyISAM CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '仙门玩家数据' ROW_FORMAT = DYNAMIC;
 
+SET @xianmen_add_history_contribution_column = IF(
+  (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '_仙门_玩家' AND COLUMN_NAME = '历史贡献') = 0,
+  'ALTER TABLE `_仙门_玩家` ADD COLUMN `历史贡献` decimal(39,0) NOT NULL DEFAULT 0 AFTER `当日贡献`',
+  'SELECT 1'
+);
+PREPARE xianmen_add_history_contribution_column_stmt FROM @xianmen_add_history_contribution_column;
+EXECUTE xianmen_add_history_contribution_column_stmt;
+DEALLOCATE PREPARE xianmen_add_history_contribution_column_stmt;
+
 CREATE TABLE IF NOT EXISTS `_仙门_门派状态` (
   `门派ID` tinyint UNSIGNED NOT NULL DEFAULT 0,
   `当前门主GUID` int UNSIGNED NOT NULL DEFAULT 0,

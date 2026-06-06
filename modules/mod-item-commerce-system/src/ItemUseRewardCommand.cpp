@@ -60,7 +60,7 @@ public:
 
         handler->PSendSysMessage("物品使用奖励列表：");
         handler->PSendSysMessage("----------------------------------------");
-        handler->PSendSysMessage("| 物品ID | 奖励ID | 消耗 | 描述");
+        handler->PSendSysMessage("| 物品ID | 奖励模板ID | 消耗 | 描述");
         handler->PSendSysMessage("----------------------------------------");
 
         for (auto const& pair : items)
@@ -91,7 +91,7 @@ public:
     {
         if (!*args)
         {
-            handler->PSendSysMessage("用法: .物品使用奖励 添加 <物品ID> <奖励ID> <GM命令> <是否消耗物品> <描述>");
+            handler->PSendSysMessage("用法: .物品使用奖励 添加 <物品ID> <奖励模板ID> <GM命令> <是否消耗物品> <描述>");
             handler->PSendSysMessage("例如: .物品使用奖励 添加 12345 1 \".add 25\" 1 测试物品");
             return true;
         }
@@ -124,7 +124,7 @@ public:
 
         if (!itemIdStr || !rewardIdStr)
         {
-            handler->PSendSysMessage("用法: .物品使用奖励 添加 <物品ID> <奖励ID> <GM命令> <是否消耗物品> <描述>");
+            handler->PSendSysMessage("用法: .物品使用奖励 添加 <物品ID> <奖励模板ID> <GM命令> <是否消耗物品> <描述>");
             return true;
         }
 
@@ -149,7 +149,7 @@ public:
         {
             handler->PSendSysMessage("成功添加物品使用奖励配置：");
             handler->PSendSysMessage("物品ID: {} ({})", itemId, itemTemplate->Name1.c_str());
-            handler->PSendSysMessage("奖励ID: {}", rewardId);
+            handler->PSendSysMessage("奖励模板ID: {}", rewardId);
 
             if (!gmCommand.empty())
                 handler->PSendSysMessage("GM命令: {}", gmCommand.c_str());
@@ -212,7 +212,7 @@ public:
         handler->PSendSysMessage("物品使用奖励模块命令：");
         handler->PSendSysMessage(".物品使用奖励 帮助 - 显示此帮助信息");
         handler->PSendSysMessage(".物品使用奖励 列表 - 列出所有配置的物品");
-        handler->PSendSysMessage(".物品使用奖励 添加 <物品ID> <奖励ID> <GM命令> <是否消耗物品> <描述> - 添加物品使用奖励配置");
+        handler->PSendSysMessage(".物品使用奖励 添加 <物品ID> <奖励模板ID> <GM命令> <是否消耗物品> <描述> - 添加物品使用奖励配置");
         handler->PSendSysMessage(".物品使用奖励 删除 <物品ID> - 删除物品使用奖励配置");
         handler->PSendSysMessage(".物品使用奖励 重载 - 重新加载配置和数据库数据");
         return true;

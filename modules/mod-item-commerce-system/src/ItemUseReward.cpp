@@ -8,8 +8,12 @@
 #include "Config.h"
 #include "Util.h"
 #include "Define.h"
+#include "GameTime.h"
+#include "ModuleManager.h"
+#include "RewardInterface.h"
 #include "StringFormat.h"
 #include "Logging/Log.h"
+#include <sstream>
 
 // 初始化静态变量
 bool ItemUseReward::enabled = false;
@@ -17,6 +21,50 @@ bool ItemUseReward::debugMode = false;
 bool ItemUseReward::allowGMCommands = false;
 bool ItemUseReward::consumeItemByDefault = true;
 std::map<uint32, ItemUseRewardInfo> ItemUseReward::itemUseRewardStore;
+
+namespace
+{
+bool TryExecuteXianmenContributionCommand(Player* player, std::string const& command, bool& result)
+{
+    std::istringstream stream(command);
+    std::string root;
+    std::string action;
+    uint64 amount = 0;
+    stream >> root >> action >> amount;
+
+    if (root != "仙门" && root != "xianmen")
+        return false;
+
+    if (action != "加贡献" && action != "增加贡献" && action != "addcontribution" && action != "add_contribution")
+        return false;
+
+    ChatHandler handler(player->GetSession());
+
+    if (!amount)
+    {
+        handler.SendSysMessage("用法: .仙门 加贡献 <数值>");
+        result = false;
+        return true;
+    }
+
+    uint32 const guid = player->GetGUID().GetCounter();
+    if (!CharacterDatabase.Query("SELECT 1 FROM `_仙门_玩家` WHERE `角色GUID` = {}", guid))
+    {
+        handler.SendSysMessage("|cffff0000[仙门系统]|r 你尚未加入仙门，无法获得宗门贡献。");
+        result = false;
+        return true;
+    }
+
+    uint32 const now = static_cast<uint32>(GameTime::GetGameTime().count());
+    CharacterDatabase.Execute(
+        "UPDATE `_仙门_玩家` SET `当日贡献` = `当日贡献` + {}, `历史贡献` = `历史贡献` + {}, `更新时间` = {} WHERE `角色GUID` = {}",
+        amount, amount, now, guid);
+
+    handler.PSendSysMessage("|cff66ffcc[仙门系统]|r 已增加当日贡献 {}。", amount);
+    result = true;
+    return true;
+}
+}
 
 ItemUseReward::ItemUseReward() : AllItemScript("ItemUseReward")
 {
@@ -106,12 +154,10 @@ bool ItemUseReward::CanItemUse(Player* player, Item* item, SpellCastTargets cons
 
     bool hasReward = false;
 
-    // 处理奖励ID
+    // 处理奖励模板ID
     if (info.rewardId > 0)
     {
-        // 处理奖励
-        ProcessReward(player, info.rewardId);
-        hasReward = true;
+        hasReward = ProcessReward(player, info.rewardId);
     }
 
     // 处理GM命令
@@ -147,24 +193,34 @@ bool ItemUseReward::CanItemUse(Player* player, Item* item, SpellCastTargets cons
     return true;
 }
 
-void ItemUseReward::ProcessReward(Player* player, uint32 rewardId)
+bool ItemUseReward::ProcessReward(Player* player, uint32 rewardId)
 {
     if (!player || rewardId == 0)
-        return;
+        return false;
 
     if (debugMode)
     {
-        LOG_INFO("module.itemusereward", "玩家 {} 获得奖励ID: {}",
+        LOG_INFO("module.itemusereward", "玩家 {} 获得奖励模板ID: {}",
             player->GetName(), rewardId);
     }
 
-    // 这里可以实现奖励逻辑，例如调用奖励系统的接口
-    // 目前只是简单通知玩家
-    ChatHandler handler(player->GetSession());
-    handler.PSendSysMessage("您获得了奖励 (ID: {})！", rewardId);
+    RewardInterface* rewardModule = sModuleManager->GetRewardModule();
+    if (!rewardModule)
+    {
+        LOG_INFO("server.loading", "[物品使用奖励] 奖励模板模块未注册，无法发放 _模板_奖励 id={}", rewardId);
+        ChatHandler(player->GetSession()).SendSysMessage("|cffff0000[物品使用奖励]|r 奖励模板模块未注册，无法发放奖励。");
+        return false;
+    }
 
-    // 如果有奖励系统，可以在这里调用
-    // 例如：sRewardMgr->GiveReward(player, rewardId);
+    bool const success = rewardModule->GiveReward(player, rewardId, true, true);
+    if (!success)
+    {
+        LOG_INFO("server.loading", "[物品使用奖励] 玩家 {} 发放 _模板_奖励 id={} 失败", player->GetName(), rewardId);
+        ChatHandler(player->GetSession()).PSendSysMessage("|cffff0000[物品使用奖励]|r 奖励模板 {} 发放失败。", rewardId);
+        return false;
+    }
+
+    return true;
 }
 
 bool ItemUseReward::ExecuteGMCommand(Player* player, const std::string& command)
@@ -172,16 +228,19 @@ bool ItemUseReward::ExecuteGMCommand(Player* player, const std::string& command)
     if (!player || command.empty())
         return false;
 
-    // 创建一个ChatHandler来执行命令
     ChatHandler handler(player->GetSession());
 
-    // 移除命令前的点号（如果有）
-    std::string actualCommand = command;
-    if (!actualCommand.empty() && actualCommand[0] == '.')
-        actualCommand = actualCommand.substr(1);
+    std::string commandToParse = command;
+    if (!commandToParse.empty() && commandToParse[0] != '.' && commandToParse[0] != '!')
+        commandToParse.insert(commandToParse.begin(), '.');
+
+    std::string actualCommand = commandToParse.substr(1);
+    bool result = false;
+    if (TryExecuteXianmenContributionCommand(player, actualCommand, result))
+        return result;
 
     // 执行命令
-    bool result = handler.ParseCommands(actualCommand.c_str());
+    result = handler.ParseCommands(commandToParse.c_str());
 
     // 如果命令执行成功，通知玩家
     if (result)
