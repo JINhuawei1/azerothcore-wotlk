@@ -5974,9 +5974,9 @@ void Player::_LoadInventory(PreparedQueryResult result, uint32 timeDiff)
                 }
                 else
                 {
-                    // 【模块虚拟背包兼容】检查是否是模块托管的虚拟背包（bag=200/201）
+                    // 【模块虚拟背包兼容】检查是否是模块托管的虚拟背包（bag=200/201/202）
                     // 如果是，跳过这个物品，让对应模块自己加载和管理
-                    if (bagGuid == 200 || bagGuid == 201)
+                    if (bagGuid == 200 || bagGuid == 201 || bagGuid == 202)
                     {
                         // 模块托管物品，设置为 ITEM_UNCHANGED 状态，不添加到更新队列
                         item->SetSlot(slot);

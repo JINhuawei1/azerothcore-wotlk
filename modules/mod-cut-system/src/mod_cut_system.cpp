@@ -5,6 +5,7 @@
 
 #if __has_include("RequirementSystem.h")
 #include "RequirementSystem.h"
+#include "AddonThrottle.h"
 #define CUT_SYSTEM_HAS_REQUIREMENT_SYSTEM 1
 #else
 #define CUT_SYSTEM_HAS_REQUIREMENT_SYSTEM 0
@@ -168,18 +169,28 @@ public:
         return &instance;
     }
 
+    // 配置开关缓存：IsEnabled/IsDebugEnabled 挂在伤害热路径上，
+    // 不能每次调用都做 GetOption 的字符串查找；LoadEntries（启动/重载）时刷新
     bool IsEnabled() const
     {
-        return sConfigMgr->GetOption<bool>(CONF_ENABLE, true);
+        return _configEnabled;
     }
 
     bool IsDebugEnabled() const
     {
-        return sConfigMgr->GetOption<bool>(CONF_DEBUG, false);
+        return _configDebug;
     }
 
+private:
+    bool _configEnabled = true;
+    bool _configDebug = false;
+
+public:
     void LoadEntries()
     {
+        _configEnabled = sConfigMgr->GetOption<bool>(CONF_ENABLE, true);
+        _configDebug = sConfigMgr->GetOption<bool>(CONF_DEBUG, false);
+
         _entries.clear();
 
         QueryResult result = WorldDatabase.Query(
@@ -798,9 +809,8 @@ public:
 
     void OnAfterConfigLoad(bool reload) override
     {
-        if (!CutSystemMgr::Instance()->IsEnabled())
-            return;
-
+        // 【reload 短路修复】不能先判 IsEnabled 再重载——enable 缓存由 LoadEntries 刷新，
+        // 禁用状态下原实现直接 return，配置改回启用后 reload 也永远无法重新启用
         if (reload)
         {
             CutSystemMgr::Instance()->LoadEntries();
@@ -908,6 +918,10 @@ public:
 
         std::string prefix = msg.substr(0, tabPos);
         if (prefix != CUT_SYSTEM_ADDON_PREFIX)
+            return;
+
+        // 【防刷】统一令牌桶节流：默认 500ms/突发4，超频静默丢弃（modules/AddonThrottle.h）
+        if (!ModuleAddon::Throttle::Allow(player->GetGUID(), "CUTSYS"))
             return;
 
         std::string command = msg.substr(tabPos + 1);

@@ -12870,6 +12870,13 @@ float Unit::processDummyAuras(float TakenTotalMod) const
 
 int32 Unit::SpellBaseDamageBonusDone(SpellSchoolMask schoolMask)
 {
+    if (Player* player = ToPlayer())
+    {
+        int128 extendedBonus = player->GetExtendedSpellDamageBonus128(schoolMask);
+        if (extendedBonus > 0)
+            return ToClientStatValue(Acore::Number::ToLongDouble(extendedBonus));
+    }
+
     long double DoneAdvertisedBenefit = 0.0L;
 
     AuraEffectList const& mDamageDone = GetAuraEffectsByType(SPELL_AURA_MOD_DAMAGE_DONE);
@@ -13676,6 +13683,13 @@ uint128 Unit::SpellHealingBonusTaken(Unit* caster, SpellInfo const* spellProto, 
 
 int32 Unit::SpellBaseHealingBonusDone(SpellSchoolMask schoolMask)
 {
+    if (Player* player = ToPlayer())
+    {
+        int128 extendedBonus = player->GetExtendedHealingBonus128();
+        if (extendedBonus > 0)
+            return ToClientStatValue(Acore::Number::ToLongDouble(extendedBonus));
+    }
+
     long double AdvertisedBenefit = 0.0L;
 
     AuraEffectList const& mHealingDone = GetAuraEffectsByType(SPELL_AURA_MOD_HEALING_DONE);

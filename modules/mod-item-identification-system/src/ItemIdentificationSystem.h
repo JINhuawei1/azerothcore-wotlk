@@ -420,7 +420,8 @@ public:
     ItemIdentificationPlayerScript();
 
     // 玩家登录后触发
-    void OnLogin(Player* player, bool firstLogin);
+    // 【死钩子修复】原签名 OnLogin(Player*, bool) 非核心钩子，从未执行 → 登录后属性统一刷新失效
+    void OnPlayerLogin(Player* player) override;
 };
 
 #endif // MODULE_ITEM_IDENTIFICATION_SYSTEM_H

@@ -1,4 +1,5 @@
 #include "PluginManager.h"
+#include "AddonThrottle.h"
 #include "World.h"
 #include <algorithm>
 #include <limits>
@@ -836,6 +837,10 @@ void PluginManagerPlayerScript::OnPlayerChat(Player* player, uint32 type, uint32
 
     std::string prefix = msg.substr(0, tabPos);
     if (prefix != PLUGIN_MANAGER_ADDON_PREFIX)
+        return;
+
+    // 【防刷】统一令牌桶节流：默认 500ms/突发4，超频静默丢弃（modules/AddonThrottle.h）
+    if (!ModuleAddon::Throttle::Allow(player->GetGUID(), "PLUGINMGR"))
         return;
 
     std::string payload = msg.substr(tabPos + 1);

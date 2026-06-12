@@ -31,6 +31,12 @@
 #include "WorldSession.h"
 #include "ObjectAccessor.h"
 
+// 施法/伤害钩子每次查询 TalentSoul.Enable（字符串构造+map查找），缓存为文件级标志
+namespace
+{
+    bool s_talentSoulEnabled = true;
+}
+
 // 世界脚本类，用于延迟加载天赋之魂数据
 class TalentSoulWorldScript : public WorldScript
 {
@@ -73,17 +79,18 @@ public:
         if (_saveTimer >= 5000)
         {
             _saveTimer = 0;
-            if (sConfigMgr->GetOption("TalentSoul.Enable", true))
+            if (s_talentSoulEnabled)
                 sTalentSoulMgr->FlushDirtyPlayerData();
         }
     }
 
     void OnAfterConfigLoad(bool reload) override
     {
+        s_talentSoulEnabled = sConfigMgr->GetOption("TalentSoul.Enable", true);
+
         if (reload && _loaded)
         {
-            bool enabled = sConfigMgr->GetOption("TalentSoul.Enable", true);
-            if (!enabled)
+            if (!s_talentSoulEnabled)
             {
                 LOG_INFO("module", "天赋之魂模块已禁用");
                 return;
@@ -118,7 +125,7 @@ public:
         if (!player)
             return;
 
-        if (!sConfigMgr->GetOption("TalentSoul.Enable", true))
+        if (!s_talentSoulEnabled)
             return;
 
         // 加载玩家的天赋之魂数据
@@ -131,7 +138,7 @@ public:
         if (!player)
             return;
 
-        if (!sConfigMgr->GetOption("TalentSoul.Enable", true))
+        if (!s_talentSoulEnabled)
             return;
 
         uint32 playerGuid = player->GetGUID().GetCounter();
@@ -156,7 +163,7 @@ public:
         if (!attacker || !spellInfo || damage <= 0)
             return;
 
-        if (!sConfigMgr->GetOption("TalentSoul.Enable", true))
+        if (!s_talentSoulEnabled)
             return;
 
         Player* player = attacker->ToPlayer();
@@ -197,7 +204,7 @@ public:
         if (!spell || !caster || !spellInfo)
             return;
 
-        if (!sConfigMgr->GetOption("TalentSoul.Enable", true))
+        if (!s_talentSoulEnabled)
             return;
 
         Player* player = caster->ToPlayer();
@@ -235,7 +242,7 @@ public:
         if (!spell || !caster || !spellInfo)
             return;
 
-        if (!sConfigMgr->GetOption("TalentSoul.Enable", true))
+        if (!s_talentSoulEnabled)
             return;
 
         Player* player = caster->ToPlayer();
@@ -302,7 +309,7 @@ public:
         if (!spell || !caster || !spellInfo || gcd <= 0)
             return;
 
-        if (!sConfigMgr->GetOption("TalentSoul.Enable", true))
+        if (!s_talentSoulEnabled)
             return;
 
         Player* player = caster->ToPlayer();

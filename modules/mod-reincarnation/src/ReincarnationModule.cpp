@@ -20,6 +20,21 @@
 
 namespace
 {
+// 模块开关缓存：转身系统的属性钩子（OnPlayerAfterUpdateStat 等 10 个）在每次
+// UpdateAllStats 期间被高频调用，不能每次都做 GetOption 的字符串查找。
+// 启动与配置重载时刷新。
+bool sReincarnationEnabled = true;
+
+bool IsReincarnationEnabled()
+{
+    return sReincarnationEnabled;
+}
+
+void RefreshReincarnationEnabled()
+{
+    sReincarnationEnabled = sConfigMgr->GetOption<bool>("Reincarnation.Enable", true);
+}
+
 int128 ScaleRatingForReincarnation(int128 const& amount, float bonusPercent)
 {
     long double scaled = Acore::Number::ToLongDouble(amount) * (1.0L + static_cast<long double>(bonusPercent) / 100.0L);
@@ -79,7 +94,8 @@ public:
         // 等待1秒后加载数据
         if (_updateTimer >= 1000)
         {
-            bool enabled = sConfigMgr->GetOption("Reincarnation.Enable", true);
+            RefreshReincarnationEnabled();
+            bool enabled = IsReincarnationEnabled();
             if (!enabled)
             {
                 LOG_INFO("server.loading", ">> 转身系统模块已禁用");
@@ -96,9 +112,11 @@ public:
 
     void OnAfterConfigLoad(bool reload) override
     {
+        RefreshReincarnationEnabled();
+
         if (reload && _loaded)
         {
-            bool enabled = sConfigMgr->GetOption("Reincarnation.Enable", true);
+            bool enabled = IsReincarnationEnabled();
             if (!enabled)
             {
                 LOG_INFO("module", "转身系统模块已禁用");
@@ -130,7 +148,7 @@ public:
         if (!player)
             return;
 
-        if (!sConfigMgr->GetOption("Reincarnation.Enable", true))
+        if (!IsReincarnationEnabled())
             return;
 
         // 在这里加载玩家转身数据
@@ -143,7 +161,7 @@ public:
         if (!player)
             return;
 
-        if (!sConfigMgr->GetOption("Reincarnation.Enable", true))
+        if (!IsReincarnationEnabled())
             return;
 
         uint32 playerGuid = player->GetGUID().GetCounter();
@@ -175,7 +193,7 @@ public:
         if (!player)
             return;
 
-        if (!sConfigMgr->GetOption("Reincarnation.Enable", true))
+        if (!IsReincarnationEnabled())
             return;
 
         uint32 playerGuid = player->GetGUID().GetCounter();
@@ -193,7 +211,7 @@ public:
         if (!player)
             return;
 
-        if (!sConfigMgr->GetOption("Reincarnation.Enable", true))
+        if (!IsReincarnationEnabled())
             return;
 
         uint32 playerGuid = player->GetGUID().GetCounter();
@@ -209,7 +227,7 @@ public:
     // 计算生命上限时调用
     void OnPlayerAfterUpdateMaxHealth(Player* player, float& value) override
     {
-        if (!player || !sConfigMgr->GetOption("Reincarnation.Enable", true))
+        if (!player || !IsReincarnationEnabled())
             return;
 
         float bonusPercent = sReincarnationMgr->GetPlayerBonusStats(player->GetGUID().GetCounter());
@@ -222,7 +240,7 @@ public:
     // 计算能量上限时调用
     void OnPlayerAfterUpdateMaxPower(Player* player, Powers& power, float& value) override
     {
-        if (!player || !sConfigMgr->GetOption("Reincarnation.Enable", true))
+        if (!player || !IsReincarnationEnabled())
             return;
 
         float bonusPercent = sReincarnationMgr->GetPlayerBonusStats(player->GetGUID().GetCounter());
@@ -235,7 +253,7 @@ public:
     // 计算天赋点时调用
     void OnPlayerCalculateTalentsPoints(Player const* player, uint32& talentPointsForLevel) override
     {
-        if (!player || !sConfigMgr->GetOption("Reincarnation.Enable", true))
+        if (!player || !IsReincarnationEnabled())
             return;
 
         uint32 bonusTalent = sReincarnationMgr->GetPlayerBonusTalentPoints(player->GetGUID().GetCounter());
@@ -248,7 +266,7 @@ public:
     // 计算攻击强度时调用
     void OnPlayerAfterUpdateAttackPowerAndDamage(Player* player, float& level, float& base_attPower, float& attPowerMod, float& attPowerMultiplier, bool ranged) override
     {
-        if (!player || !sConfigMgr->GetOption("Reincarnation.Enable", true))
+        if (!player || !IsReincarnationEnabled())
             return;
 
         float bonusPercent = sReincarnationMgr->GetPlayerBonusStats(player->GetGUID().GetCounter());
@@ -263,7 +281,7 @@ public:
     // 计算护甲时调用
     void OnPlayerAfterUpdateArmor(Player* player, float& value) override
     {
-        if (!player || !sConfigMgr->GetOption("Reincarnation.Enable", true))
+        if (!player || !IsReincarnationEnabled())
             return;
 
         float bonusPercent = sReincarnationMgr->GetPlayerBonusStats(player->GetGUID().GetCounter());
@@ -276,7 +294,7 @@ public:
     // 计算物理暴击率时调用
     void OnPlayerAfterUpdateCritPercentage(Player* player, WeaponAttackType attType, float& value) override
     {
-        if (!player || !sConfigMgr->GetOption("Reincarnation.Enable", true))
+        if (!player || !IsReincarnationEnabled())
             return;
 
         float bonusPercent = sReincarnationMgr->GetPlayerBonusStats(player->GetGUID().GetCounter());
@@ -290,7 +308,7 @@ public:
     // 计算法术暴击率时调用
     void OnPlayerAfterUpdateSpellCritChance(Player* player, uint32 school, float& value) override
     {
-        if (!player || !sConfigMgr->GetOption("Reincarnation.Enable", true))
+        if (!player || !IsReincarnationEnabled())
             return;
 
         float bonusPercent = sReincarnationMgr->GetPlayerBonusStats(player->GetGUID().GetCounter());
@@ -309,7 +327,7 @@ public:
     // CR_WEAPON_SKILL_MAINHAND, CR_WEAPON_SKILL_OFFHAND, CR_WEAPON_SKILL_RANGED, CR_EXPERTISE, CR_ARMOR_PENETRATION
     void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int128& amount) override
     {
-        if (!player || !sConfigMgr->GetOption("Reincarnation.Enable", true))
+        if (!player || !IsReincarnationEnabled())
             return;
 
         float bonusPercent = sReincarnationMgr->GetPlayerBonusStats(player->GetGUID().GetCounter());
@@ -323,7 +341,7 @@ public:
     // 计算法术强度和治疗强度时调用
     void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int128& healingBonus, int128 spellDamage[7]) override
     {
-        if (!player || !sConfigMgr->GetOption("Reincarnation.Enable", true))
+        if (!player || !IsReincarnationEnabled())
             return;
 
         float bonusPercent = sReincarnationMgr->GetPlayerBonusStats(player->GetGUID().GetCounter());

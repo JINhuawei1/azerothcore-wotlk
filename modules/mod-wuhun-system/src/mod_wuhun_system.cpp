@@ -3,6 +3,7 @@
  */
 
 #include "ScriptMgr.h"
+#include "AddonThrottle.h"
 #include "Configuration/Config.h"
 #include "DatabaseEnv.h"
 #include "Log.h"
@@ -59,6 +60,7 @@ constexpr uint64 WUHUN_CLIENT_VISIBLE_HEALTH_LIMIT = 2147483520ULL;
 constexpr uint32 WUHUN_RANGED_MIRROR_MELEE_DELAY_MS = 2000;
 constexpr uint32 WUHUN_SKILL_SCAN_INTERVAL_MS = 100;
 constexpr uint32 WUHUN_MIN_SKILL_COOLDOWN_MS = 100;
+constexpr uint32 XIANMEN_YULING_SKILL_BASE = 382040;
 constexpr long double WUHUN_DIRECT_SKILL_POWER_COEFFICIENT = 1.0L;
 constexpr long double WUHUN_PERIODIC_SKILL_POWER_COEFFICIENT = 0.35L;
 constexpr TriggerCastFlags WUHUN_SPELL_CAST_FLAGS = TriggerCastFlags(
@@ -117,11 +119,24 @@ struct WuhunSkillTemplate
     float damageBonusPerLevel = 1.0f;
 };
 
+struct WuhunItemAttributeMultiplier
+{
+    float value = 1.0f;
+    char mode = 'x';
+    bool active = false;
+};
+
 struct WuhunEquipmentSlot
 {
     uint32 itemEntry = 0;
     ObjectGuid::LowType itemGuid = 0;
     Item* item = nullptr;
+
+    // 属性增强倍率缓存（来自 玩家装备属性增强 表）。
+    // CalculateEquipmentBonus 每 3 秒对每件装备调用一次，不能每次同步查库；
+    // 30 秒 TTL 后自动重新查库刷新。
+    mutable WuhunItemAttributeMultiplier multiplierCache;
+    mutable uint32 multiplierRefreshMs = 0;
 };
 
 struct WuhunEquipSlotConfig
@@ -153,6 +168,9 @@ struct PlayerWuhunData
     uint32 syncTimer = 0;
     uint32 statRefreshTimer = 0;
     uint32 uiStateTimer = 0;
+    uint32 xianmenYulingMask = 0;
+    uint32 xianmenYulingLevel = 0;
+    uint32 xianmenYulingLevelRefreshMs = 0; // 御灵修为等级上次查库时间(getMSTime)，0=未加载
     double avatarAttackPower = 0.0;
     double avatarRangedAttackPower = 0.0;
     double avatarSpellPower = 0.0;
@@ -181,13 +199,6 @@ struct WuhunEquipmentBonus
     int128 spellHasteRating = 0;
     uint32 itemCount = 0;
     uint32 enhancedItemCount = 0;
-};
-
-struct WuhunItemAttributeMultiplier
-{
-    float value = 1.0f;
-    char mode = 'x';
-    bool active = false;
 };
 
 uint32 ToWuhunClientHealth(uint128 const& value)
@@ -576,6 +587,140 @@ uint32 CalculateWuhunAttackTime(uint32 baseAttackTime, float hasteBonusPct)
     float speedPct = std::clamp(100.0f - hasteBonusPct, 5.0f, 500.0f);
     uint32 attackTime = static_cast<uint32>(std::round(static_cast<float>(baseAttackTime) * speedPct / 100.0f));
     return std::max<uint32>(100, attackTime);
+}
+
+uint32 BuildXianmenYulingMask(Player* player)
+{
+    if (!player)
+        return 0;
+
+    uint32 mask = 0;
+    for (uint8 order = 1; order <= 10; ++order)
+        if (player->HasAura(XIANMEN_YULING_SKILL_BASE + order))
+            mask |= uint32(1) << order;
+
+    return mask;
+}
+
+bool HasXianmenYulingSkill(uint32 mask, uint8 order)
+{
+    return order >= 1 && order <= 10 && (mask & (uint32(1) << order));
+}
+
+uint32 LoadXianmenYulingLevel(Player* player, uint32 mask)
+{
+    if (!player || !mask)
+        return 0;
+
+    if (QueryResult result = CharacterDatabase.Query(
+        "SELECT `修为等级` FROM `_仙门_玩家` WHERE `角色GUID` = {} AND `门派ID` = 4",
+        player->GetGUID().GetCounter()))
+        return (*result)[0].Get<uint32>();
+
+    return 0;
+}
+
+float XianmenLevelStep(uint32 level, uint32 step)
+{
+    return step ? static_cast<float>(level / step) : 0.0f;
+}
+
+uint32 GetXianmenYulingVirtualSpiritCount(uint32 mask, uint32 level)
+{
+    uint32 count = 1;
+    if (HasXianmenYulingSkill(mask, 2))
+        count += 1 + std::min<uint32>(2, level / 50);
+    if (HasXianmenYulingSkill(mask, 10))
+        ++count;
+
+    return count;
+}
+
+float GetXianmenYulingInheritanceBonusPct(uint32 mask, uint32 level)
+{
+    float bonus = 0.0f;
+    if (HasXianmenYulingSkill(mask, 1))
+        bonus += 15.0f + XianmenLevelStep(level, 10);
+    if (HasXianmenYulingSkill(mask, 6))
+        bonus += 8.0f + XianmenLevelStep(level, 20);
+    if (HasXianmenYulingSkill(mask, 10))
+        bonus += 25.0f + XianmenLevelStep(level, 10);
+
+    return bonus;
+}
+
+float GetXianmenYulingAvatarBonusPct(uint32 mask, uint32 level)
+{
+    float bonus = 0.0f;
+    uint32 virtualCount = GetXianmenYulingVirtualSpiritCount(mask, level);
+    if (virtualCount > 1)
+        bonus += static_cast<float>(virtualCount - 1) * (20.0f + XianmenLevelStep(level, 20));
+
+    if (HasXianmenYulingSkill(mask, 7))
+        bonus += 20.0f + XianmenLevelStep(level, 10);
+    if (HasXianmenYulingSkill(mask, 10))
+        bonus += 20.0f + XianmenLevelStep(level, 10);
+
+    return bonus;
+}
+
+float GetXianmenYulingSkillDamageBonusPct(uint32 mask, uint32 level)
+{
+    float bonus = 0.0f;
+    if (HasXianmenYulingSkill(mask, 5))
+        bonus += 15.0f + XianmenLevelStep(level, 10);
+    if (HasXianmenYulingSkill(mask, 6))
+        bonus += 10.0f + XianmenLevelStep(level, 20);
+    if (HasXianmenYulingSkill(mask, 10))
+        bonus += 25.0f + XianmenLevelStep(level, 10);
+
+    return bonus;
+}
+
+float GetXianmenYulingSoulPowerBonusPct(uint32 mask, uint32 level)
+{
+    float bonus = 0.0f;
+    if (HasXianmenYulingSkill(mask, 3))
+        bonus += 50.0f + 10.0f * XianmenLevelStep(level, 10);
+    if (HasXianmenYulingSkill(mask, 9))
+        bonus += 25.0f + XianmenLevelStep(level, 10);
+    if (HasXianmenYulingSkill(mask, 10))
+        bonus += 50.0f + XianmenLevelStep(level, 5);
+
+    return bonus;
+}
+
+uint32 GetXianmenYulingRingLevelBonus(uint32 mask, uint32 level)
+{
+    uint32 bonus = 0;
+    if (HasXianmenYulingSkill(mask, 6))
+        bonus += 20 + level / 10;
+    if (HasXianmenYulingSkill(mask, 10))
+        bonus += 50 + level / 5;
+
+    return bonus;
+}
+
+uint128 AddWuhunPercent(uint128 const& value, float percent)
+{
+    return percent > 0.0f ? SaturatingAddUInt128(value, ScaleUInt128(value, percent)) : value;
+}
+
+int128 AddWuhunPercent(int128 const& value, float percent)
+{
+    return percent > 0.0f ? SaturatingAddInt128(value, ScaleInt128(value, percent)) : value;
+}
+
+double AddWuhunPercent(double value, float percent)
+{
+    if (value <= 0.0 || percent <= 0.0f)
+        return value;
+
+    long double scaled = static_cast<long double>(value) * (100.0L + static_cast<long double>(percent)) / 100.0L;
+    if (!std::isfinite(static_cast<double>(scaled)))
+        return std::numeric_limits<double>::max();
+
+    return static_cast<double>(std::min<long double>(scaled, std::numeric_limits<double>::max()));
 }
 }
 
@@ -1153,6 +1298,27 @@ public:
         return ObjectAccessor::GetCreature(*player, data->avatarGuid);
     }
 
+    void RefreshXianmenYulingState(Player* player, PlayerWuhunData& data)
+    {
+        data.xianmenYulingMask = BuildXianmenYulingMask(player);
+
+        if (!data.xianmenYulingMask)
+        {
+            data.xianmenYulingLevel = 0;
+            data.xianmenYulingLevelRefreshMs = 0;
+            return;
+        }
+
+        // 御灵修为等级查的是 _仙门_玩家 表（跨模块数据），变化频率极低，
+        // 而本函数挂在伤害/周期/3秒刷新路径上——此前每次都同步查库。加 30 秒 TTL 缓存。
+        uint32 const now = getMSTime();
+        if (data.xianmenYulingLevelRefreshMs && getMSTimeDiff(data.xianmenYulingLevelRefreshMs, now) < 30 * IN_MILLISECONDS)
+            return;
+
+        data.xianmenYulingLevelRefreshMs = now ? now : 1;
+        data.xianmenYulingLevel = LoadXianmenYulingLevel(player, data.xianmenYulingMask);
+    }
+
     void UpdateAvatarStats(Player* player)
     {
         if (!player)
@@ -1163,7 +1329,9 @@ public:
         if (!avatar || !data)
             return;
 
+        RefreshXianmenYulingState(player, *data);
         float inheritPercent = GetInheritancePercent(*data);
+        float xianmenAvatarBonusPct = GetXianmenYulingAvatarBonusPct(data->xianmenYulingMask, data->xianmenYulingLevel);
         WuhunEquipmentBonus equipmentBonus = CalculateEquipmentBonus(*data);
 
         uint128 oldMaxHealth = avatar->GetMaxHealthForCombat128();
@@ -1174,6 +1342,7 @@ public:
 
         uint128 inheritedHealth = ScaleUInt128(player->GetMaxHealthForCombat128(), inheritPercent);
         uint128 newMaxHealth = std::max<uint128>(static_cast<uint128>(player->GetLevel() * 50), SaturatingAddUInt128(inheritedHealth, equipmentBonus.health));
+        newMaxHealth = AddWuhunPercent(newMaxHealth, xianmenAvatarBonusPct);
         uint128 newHealth = std::max<uint128>(uint128(1), Acore::Number::ToUInt128Saturated(Acore::Number::ToLongDouble(newMaxHealth) * healthPct));
         uint32 clientHealth = ToWuhunClientHealth(newMaxHealth);
         avatar->SetMaxHealth(clientHealth);
@@ -1192,6 +1361,7 @@ public:
 
         uint128 inheritedMana = ScaleUInt128(player->GetMaxPowerForCombat128(POWER_MANA), inheritPercent);
         uint128 newMana = SaturatingAddUInt128(inheritedMana, equipmentBonus.mana);
+        newMana = AddWuhunPercent(newMana, xianmenAvatarBonusPct);
         uint32 clientMana = Acore::Number::ToUInt32Saturated(newMana);
         avatar->SetMaxPower(POWER_MANA, clientMana);
         if (newMana > clientMana)
@@ -1214,6 +1384,7 @@ public:
 
             int128 inheritedStat = ScaleInt128(playerStat, inheritPercent);
             int128 finalStat = SaturatingAddInt128(inheritedStat, equipmentBonus.stats[i]);
+            finalStat = AddWuhunPercent(finalStat, xianmenAvatarBonusPct);
             uint32 displayStat = finalStat > 0 ? Acore::Number::ToUInt32Saturated(static_cast<uint128>(std::min<int128>(finalStat, int128(2000000000)))) : 0;
             displayStat = std::min<uint32>(displayStat, 2000000000);
             avatar->SetCreateStat(Stats(i), static_cast<float>(displayStat));
@@ -1222,6 +1393,7 @@ public:
 
         uint128 inheritedArmor = ScaleUInt128(player->GetExtendedArmor128() > 0 ? static_cast<uint128>(player->GetExtendedArmor128()) : 0, inheritPercent);
         uint128 armor = SaturatingAddUInt128(inheritedArmor, equipmentBonus.armor);
+        armor = AddWuhunPercent(armor, xianmenAvatarBonusPct);
         uint32 displayArmor = Acore::Number::ToUInt32Saturated(std::min<uint128>(armor, uint128(2000000000)));
         avatar->SetArmor(static_cast<int32>(displayArmor));
         avatar->SetModifierValue(UNIT_MOD_ARMOR, BASE_VALUE, static_cast<double>(displayArmor));
@@ -1237,6 +1409,9 @@ public:
         double spellPower = static_cast<double>(std::min<long double>(
             std::numeric_limits<double>::max(),
             std::max<long double>(0.0L, inheritedSpellPower + static_cast<long double>(equipmentBonus.spellPower))));
+        ap = AddWuhunPercent(ap, xianmenAvatarBonusPct);
+        rangedAP = AddWuhunPercent(rangedAP, xianmenAvatarBonusPct);
+        spellPower = AddWuhunPercent(spellPower, xianmenAvatarBonusPct);
         data->avatarAttackPower = ap;
         data->avatarRangedAttackPower = rangedAP;
         data->avatarSpellPower = spellPower;
@@ -1399,6 +1574,12 @@ public:
 
         SpellInfo const* spellInfo = spell->GetSpellInfo();
         if (!spellInfo)
+            return;
+
+        // 【伤害放大修复】只镜像主人的主动施法：触发型法术（装备/饰品 proc、
+        // 其他模块的触发技能等）不复制——否则每个 proc 都被分身再放一遍，
+        // 伤害成倍放大且可能与触发系统连锁
+        if (spell->IsTriggered())
             return;
 
         if (spellInfo->IsPassive() || spellInfo->Id == 6603)
@@ -1626,6 +1807,11 @@ public:
         uint128 reward = creature->isWorldBoss()
             ? (definition ? definition->worldBossSoulPower : GetUInt128Param("WORLD_BOSS_SOUL_POWER", 1))
             : (definition ? definition->dungeonBossSoulPower : GetUInt128Param("DUNGEON_BOSS_SOUL_POWER", 1));
+        if (data)
+        {
+            RefreshXianmenYulingState(player, *data);
+            reward = AddWuhunPercent(reward, GetXianmenYulingSoulPowerBonusPct(data->xianmenYulingMask, data->xianmenYulingLevel));
+        }
 
         AddSoulPower(player, reward, creature->GetName());
     }
@@ -1749,7 +1935,9 @@ public:
             return false;
         }
 
+        RefreshXianmenYulingState(player, *data);
         uint32 maxRingLevel = GetUIntParam("MAX_RING_LEVEL", 100);
+        maxRingLevel = std::min<uint32>(10000, maxRingLevel + GetXianmenYulingRingLevelBonus(data->xianmenYulingMask, data->xianmenYulingLevel));
         uint128 budget = amount ? std::min<uint128>(amount, data->soulPower) : data->soulPower;
         uint128 spent = 0;
         uint32 upgraded = 0;
@@ -2056,7 +2244,20 @@ public:
         invStmt->SetData(3, itemGuid);
         trans->Append(invStmt);
         AppendReplaceItemInstance(trans, item, player->GetGUID().GetCounter());
-        CharacterDatabase.CommitTransaction(trans);
+
+        // 【数据丢失修复】槽位记录并入同一事务，且改为同步提交：
+        // 原先异步 CommitTransaction + SavePlayerData 异步写 `_玩家武魂装备`，而紧随其后的
+        // SendEquip→ReloadEquipDataFromDB 用同步连接查询——异步写尚未落库时，"陈旧数据清理"
+        // 会把刚装上的物品的 character_inventory/item_instance 行直接 DELETE，物品永久丢失。
+        {
+            uint32 nowTime = static_cast<uint32>(GameTime::GetGameTime().count());
+            uint32 unlockTime = data->equipSlotUnlockTimes[wuhunSlot] ? data->equipSlotUnlockTimes[wuhunSlot] : nowTime;
+            trans->Append(
+                "INSERT INTO `_玩家武魂装备` (`角色id`, `槽位`, `解锁时间`, `物品ID`, `物品GUID`) VALUES ({}, {}, {}, {}, {}) "
+                "ON DUPLICATE KEY UPDATE `解锁时间` = VALUES(`解锁时间`), `物品ID` = VALUES(`物品ID`), `物品GUID` = VALUES(`物品GUID`)",
+                player->GetGUID().GetCounter(), static_cast<uint32>(wuhunSlot), unlockTime, itemEntry, itemGuid);
+        }
+        CharacterDatabase.DirectCommitTransaction(trans);
 
         WuhunEquipmentSlot slotData;
         slotData.itemEntry = itemEntry;
@@ -2116,8 +2317,13 @@ public:
                 delStmt->SetData(1, wuhunSlot);
                 delStmt->SetData(2, player->GetGUID().GetCounter());
                 trans->Append(delStmt);
+                // 槽位记录同事务清空（与 EquipItem 对称，防止重载清理误判）
+                trans->Append(
+                    "UPDATE `_玩家武魂装备` SET `物品ID` = 0, `物品GUID` = 0 WHERE `角色id` = {} AND `槽位` = {}",
+                    player->GetGUID().GetCounter(), static_cast<uint32>(wuhunSlot));
                 player->SaveInventoryAndGoldToDB(trans);
-                CharacterDatabase.CommitTransaction(trans);
+                // 【数据丢失修复】同步提交：后续 SendEquip 的同步查询必须能看到本次变更
+                CharacterDatabase.DirectCommitTransaction(trans);
             }
             else
             {
@@ -2127,11 +2333,15 @@ public:
                 delStmt->SetData(1, wuhunSlot);
                 delStmt->SetData(2, player->GetGUID().GetCounter());
                 trans->Append(delStmt);
+                trans->Append(
+                    "UPDATE `_玩家武魂装备` SET `物品ID` = 0, `物品GUID` = 0 WHERE `角色id` = {} AND `槽位` = {}",
+                    player->GetGUID().GetCounter(), static_cast<uint32>(wuhunSlot));
 
                 MailDraft draft("武魂系统", "您的背包已满，武魂装备已通过邮件返还。");
                 draft.AddItem(item);
                 draft.SendMailTo(trans, MailReceiver(player, player->GetGUID().GetCounter()), MailSender(MAIL_NORMAL, 0, MAIL_STATIONERY_GM), MAIL_CHECK_MASK_COPIED, 0);
-                CharacterDatabase.CommitTransaction(trans);
+                // 【数据丢失修复】同步提交（理由同上）
+                CharacterDatabase.DirectCommitTransaction(trans);
 
                 if (!silent)
                     ChatHandler(player->GetSession()).SendSysMessage("背包已满，武魂装备已通过邮件返还。");
@@ -2139,9 +2349,12 @@ public:
         }
         else
         {
-            CharacterDatabase.Execute("DELETE FROM `item_instance` WHERE `guid` = {}", itemGuid);
-            CharacterDatabase.Execute("DELETE FROM `character_inventory` WHERE `guid` = {} AND `bag` = {} AND `slot` = {}",
+            // 【修复】同步删除：后续重载的同步查询需要立即可见
+            CharacterDatabase.DirectExecute("DELETE FROM `item_instance` WHERE `guid` = {}", itemGuid);
+            CharacterDatabase.DirectExecute("DELETE FROM `character_inventory` WHERE `guid` = {} AND `bag` = {} AND `slot` = {}",
                 player->GetGUID().GetCounter(), WUHUN_VIRTUAL_BAG, wuhunSlot);
+            CharacterDatabase.DirectExecute("UPDATE `_玩家武魂装备` SET `物品ID` = 0, `物品GUID` = 0 WHERE `角色id` = {} AND `槽位` = {}",
+                player->GetGUID().GetCounter(), static_cast<uint32>(wuhunSlot));
         }
 
         data->equipment.erase(itr);
@@ -2227,9 +2440,12 @@ public:
         if (!data || data->avatarGuid != avatar->GetGUID())
             return;
 
+        if (Player* owner = ObjectAccessor::FindPlayer(ownerGuid))
+            RefreshXianmenYulingState(owner, *data);
+
         bool periodic = source && std::string(source) == "periodic";
         long double powerBonus = CalculateAvatarSkillPowerBonus(*data, spellInfo, periodic);
-        float bonusPct = 0.0f;
+        float bonusPct = GetXianmenYulingSkillDamageBonusPct(data->xianmenYulingMask, data->xianmenYulingLevel);
         for (uint32 skillId : data->skillSlots)
         {
             if (!skillId)
@@ -2347,6 +2563,8 @@ public:
         if (!data)
             return;
 
+        RefreshXianmenYulingState(player, *data);
+
         std::ostringstream rings;
         for (uint8 i = 0; i < WUHUN_RING_COUNT; ++i)
         {
@@ -2426,6 +2644,9 @@ public:
             return;
 
         PlayerWuhunData* data = EnsurePlayerData(player);
+        if (data)
+            RefreshXianmenYulingState(player, *data);
+
         std::ostringstream inherit;
         inherit << std::fixed << std::setprecision(2) << (data ? GetInheritancePercent(*data) : 0.0f);
 
@@ -2981,8 +3202,12 @@ private:
             highestRingLevel = std::max(highestRingLevel, ringLevel);
 
         float percent = GetRingInheritBonus(highestRingLevel);
+        percent += GetXianmenYulingInheritanceBonusPct(data.xianmenYulingMask, data.xianmenYulingLevel);
 
         float maxPercent = static_cast<float>(GetUIntParam("MAX_INHERIT_PERCENT", 900));
+        if (HasXianmenYulingSkill(data.xianmenYulingMask, 10))
+            maxPercent += 100.0f + XianmenLevelStep(data.xianmenYulingLevel, 2);
+
         return std::min(percent, maxPercent);
     }
 
@@ -3055,9 +3280,11 @@ private:
                 Field* fields = stale->Fetch();
                 uint8 slot = fields[0].Get<uint8>();
                 ObjectGuid::LowType itemGuid = static_cast<ObjectGuid::LowType>(fields[1].Get<uint64>());
-                CharacterDatabase.Execute("DELETE FROM `character_inventory` WHERE `guid` = {} AND `bag` = {} AND `slot` = {}",
+                // 【修复】清理改同步执行：保证与本函数后续的同步 SELECT 顺序一致。
+                // （配合 EquipItem/UnequipItem 的同步事务提交，此清理不再可能命中"写入尚未落库"的正常装备）
+                CharacterDatabase.DirectExecute("DELETE FROM `character_inventory` WHERE `guid` = {} AND `bag` = {} AND `slot` = {}",
                     player->GetGUID().GetCounter(), WUHUN_VIRTUAL_BAG, slot);
-                CharacterDatabase.Execute("DELETE FROM `item_instance` WHERE `guid` = {}", itemGuid);
+                CharacterDatabase.DirectExecute("DELETE FROM `item_instance` WHERE `guid` = {}", itemGuid);
             } while (stale->NextRow());
         }
 
@@ -3294,6 +3521,19 @@ private:
         return result;
     }
 
+    WuhunItemAttributeMultiplier const& GetCachedItemAttributeMultiplier(WuhunEquipmentSlot const& slot) const
+    {
+        // 此前 CalculateEquipmentBonus 每 3 秒对每件装备同步查一次库（满配 19 件 = 每 3 秒 19 次往返），
+        // 改为 30 秒 TTL 缓存；倍率变更（强化）最迟 30 秒后生效
+        uint32 const now = getMSTime();
+        if (!slot.multiplierRefreshMs || getMSTimeDiff(slot.multiplierRefreshMs, now) >= 30 * IN_MILLISECONDS)
+        {
+            slot.multiplierCache = GetWuhunItemAttributeMultiplier(slot.itemGuid);
+            slot.multiplierRefreshMs = now ? now : 1;
+        }
+        return slot.multiplierCache;
+    }
+
     WuhunEquipmentBonus CalculateEquipmentBonus(PlayerWuhunData const& data) const
     {
         WuhunEquipmentBonus bonus;
@@ -3305,7 +3545,7 @@ private:
                 continue;
 
             ++bonus.itemCount;
-            WuhunItemAttributeMultiplier multiplier = GetWuhunItemAttributeMultiplier(pair.second.itemGuid);
+            WuhunItemAttributeMultiplier multiplier = GetCachedItemAttributeMultiplier(pair.second);
             if (multiplier.active)
                 ++bonus.enhancedItemCount;
 
@@ -4129,6 +4369,10 @@ public:
 
         std::string prefix = msg.substr(0, tabPos);
         if (prefix != WUHUN_ADDON_PREFIX)
+            return;
+
+        // 【防刷】统一令牌桶节流：默认 500ms/突发4，超频静默丢弃（modules/AddonThrottle.h）
+        if (!ModuleAddon::Throttle::Allow(player->GetGUID(), "WUHUN"))
             return;
 
         std::string command = msg.substr(tabPos + 1);

@@ -4,6 +4,7 @@
 
 #if __has_include("RequirementSystem.h")
 #include "RequirementSystem.h"
+#include "AddonThrottle.h"
 #define CHENGHAO_SYSTEM_HAS_REQUIREMENT_SYSTEM 1
 #else
 #define CHENGHAO_SYSTEM_HAS_REQUIREMENT_SYSTEM 0
@@ -117,12 +118,19 @@ public:
 
     bool IsEnabled() const
     {
-        return sConfigMgr->GetOption<bool>(CONF_ENABLE, true);
+        return _enabled;
     }
 
     bool ShouldNotifyPlayer() const
     {
-        return sConfigMgr->GetOption<bool>(CONF_NOTIFY_PLAYER, true);
+        return _notifyPlayer;
+    }
+
+    // 伤害钩子/每 tick 都会查询，配置缓存进成员，OnAfterConfigLoad 时刷新
+    void LoadConfig()
+    {
+        _enabled = sConfigMgr->GetOption<bool>(CONF_ENABLE, true);
+        _notifyPlayer = sConfigMgr->GetOption<bool>(CONF_NOTIFY_PLAYER, true);
     }
 
     void Initialize()
@@ -461,7 +469,8 @@ public:
         state.attributeValue1 = entry->attributeValue1;
         state.attributeValue2 = entry->attributeValue2;
 
-        CharacterDatabase.DirectExecute(
+        // 内存即权威（下方随即更新 _playerTitles），upsert 无后续回读，异步写即可
+        CharacterDatabase.Execute(
             "INSERT INTO `_玩家称号系统` (`玩家GUID`, `称号ID`, `称号等级`, `属性值1`, `属性值2`) "
             "VALUES ({}, {}, {}, {}, {}) "
             "ON DUPLICATE KEY UPDATE `称号ID` = VALUES(`称号ID`), `称号等级` = VALUES(`称号等级`), "
@@ -570,6 +579,8 @@ private:
 
     std::vector<ChenghaoSystemEntry> _entries;
     std::unordered_map<uint32, std::unordered_map<uint32, ChenghaoSystemPlayerState>> _playerTitles;
+    bool _enabled = true;
+    bool _notifyPlayer = true;
 };
 
 void SendAddonPayload(Player* player, std::string const& payload)
@@ -673,7 +684,8 @@ void SendChengHaoAllDataToPlayer(Player* player)
     if (!player)
         return;
 
-    ChenghaoSystemMgr::Instance()->LoadPlayerData(player);
+    // 内存即权威：登录时已 LoadPlayerData，激活路径 UnlockTitle 直接更新内存，
+    // 此处不再强制重新查库（外部改库可用 .称号 刷新 兜底）
     SendChengHaoListToPlayer(player);
     SendChengHaoStateToPlayer(player);
 }
@@ -697,6 +709,11 @@ class ChenghaoSystemWorldScript : public WorldScript
 {
 public:
     ChenghaoSystemWorldScript() : WorldScript("ChenghaoSystemWorldScript") { }
+
+    void OnAfterConfigLoad(bool /*reload*/) override
+    {
+        ChenghaoSystemMgr::Instance()->LoadConfig();
+    }
 
     void OnStartup() override
     {
@@ -787,6 +804,10 @@ public:
         if (prefix != CHENGHAO_SYSTEM_ADDON_PREFIX)
             return;
 
+        // 【防刷】统一令牌桶节流：默认 500ms/突发4，超频静默丢弃（modules/AddonThrottle.h）
+        if (!ModuleAddon::Throttle::Allow(player->GetGUID(), "CHENGHAO"))
+            return;
+
         std::string command = msg.substr(tabPos + 1);
         if (command == "REQ_ALL")
         {
@@ -802,7 +823,6 @@ public:
 
         if (command == "REQ_STATE")
         {
-            ChenghaoSystemMgr::Instance()->LoadPlayerData(player);
             SendChengHaoStateToPlayer(player);
             return;
         }

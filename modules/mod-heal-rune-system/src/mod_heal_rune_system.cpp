@@ -5,6 +5,7 @@
 
 #if __has_include("RequirementSystem.h")
 #include "RequirementSystem.h"
+#include "AddonThrottle.h"
 #define HEAL_RUNE_HAS_REQUIREMENT_SYSTEM 1
 #else
 #define HEAL_RUNE_HAS_REQUIREMENT_SYSTEM 0
@@ -142,28 +143,42 @@ public:
         return &instance;
     }
 
+    // 配置缓存：这些函数每 tick/每次治疗都会被调用，
+    // 不能每次调用都做 GetOption 的字符串查找；LoadEntries（启动/重载）时刷新
     bool IsEnabled() const
     {
-        return sConfigMgr->GetOption<bool>(CONF_ENABLE, true);
+        return _configEnabled;
     }
 
     bool ShouldNotifyPlayer() const
     {
-        return sConfigMgr->GetOption<bool>(CONF_NOTIFY_PLAYER, true);
+        return _configNotifyPlayer;
     }
 
     bool IsDebugEnabled() const
     {
-        return sConfigMgr->GetOption<bool>(CONF_DEBUG, false);
+        return _configDebug;
     }
 
     uint32 GetTickIntervalMs() const
     {
-        return std::max<uint32>(100, sConfigMgr->GetOption<uint32>(CONF_TICK_INTERVAL_MS, 1000));
+        return _configTickIntervalMs;
     }
 
+private:
+    bool _configEnabled = true;
+    bool _configNotifyPlayer = true;
+    bool _configDebug = false;
+    uint32 _configTickIntervalMs = 1000;
+
+public:
     void LoadEntries()
     {
+        _configEnabled = sConfigMgr->GetOption<bool>(CONF_ENABLE, true);
+        _configNotifyPlayer = sConfigMgr->GetOption<bool>(CONF_NOTIFY_PLAYER, true);
+        _configDebug = sConfigMgr->GetOption<bool>(CONF_DEBUG, false);
+        _configTickIntervalMs = std::max<uint32>(100, sConfigMgr->GetOption<uint32>(CONF_TICK_INTERVAL_MS, 1000));
+
         _entries.clear();
 
         QueryResult result = WorldDatabase.Query(
@@ -532,7 +547,8 @@ public:
         playerRunes.clear();
         playerRunes[runeId] = { entry->healLevel };
 
-        CharacterDatabase.DirectExecute(
+        // 内存即权威（上面已先更新 _playerRunes），upsert 无后续回读，异步写即可
+        CharacterDatabase.Execute(
             "INSERT INTO `_玩家回血神符` (`玩家GUID`, `神符ID`, `回血等级`) VALUES ({}, {}, {}) "
             "ON DUPLICATE KEY UPDATE `神符ID` = VALUES(`神符ID`), `回血等级` = VALUES(`回血等级`)",
             playerGuid,
@@ -872,7 +888,9 @@ public:
 
     void OnAfterConfigLoad(bool reload) override
     {
-        if (!reload || !HealRuneMgr::Instance()->IsEnabled())
+        // 【reload 短路修复】理由同 cut-system：enable 缓存由 LoadEntries 刷新，
+        // 先判 IsEnabled 会导致禁用后无法通过 reload 重新启用
+        if (!reload)
             return;
 
         HealRuneMgr::Instance()->LoadEntries();
@@ -971,6 +989,10 @@ public:
 
         std::string prefix = msg.substr(0, tabPos);
         if (prefix != HEAL_RUNE_ADDON_PREFIX)
+            return;
+
+        // 【防刷】统一令牌桶节流：默认 500ms/突发4，超频静默丢弃（modules/AddonThrottle.h）
+        if (!ModuleAddon::Throttle::Allow(player->GetGUID(), "HEALRUNE"))
             return;
 
         std::string command = msg.substr(tabPos + 1);

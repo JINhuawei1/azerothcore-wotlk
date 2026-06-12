@@ -14,7 +14,7 @@
 #include "RequirementInterface.h"
 #include "RewardInterface.h"
 #include <unordered_map>
-#include <set>
+#include <unordered_set>
 #include <set>
 
 // 回收类型枚举
@@ -120,6 +120,10 @@ public:
 private:
     static std::vector<ItemRecycleInfo> m_ItemRecycleStore;
     static std::unordered_map<uint32, PlayerRecycleSettings> m_PlayerSettings;
+
+    // 材料仓库"自动存储"物品集合缓存 <玩家GUID, (物品ID集合, 上次查库时间ms)>
+    // 此前自动回收每周期对每个背包物品同步查一次 _材料仓库玩家 表
+    static std::unordered_map<uint32, std::pair<std::unordered_set<uint32>, uint32>> m_MaterialReserveCache;
 
     friend bool CheckRecycleModuleInit(ChatHandler* handler);
     friend bool HandleRecycleMainCommand(ChatHandler* handler);

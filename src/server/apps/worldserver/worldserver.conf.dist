@@ -1341,6 +1341,12 @@ MapUpdateInterval = 10
 #    MapUpdate.Threads
 #        Description: Number of threads to update maps.
 #        Default:     1
+#
+#        【部署红线】本服 modules/ 下自定义模块大量使用无锁全局容器并挂接地图线程钩子
+#        （第二轮审查确认 40+ 处），全部按单线程地图假设编写。
+#        此值必须保持 1；改为 >1 将导致随机崩溃与数据损坏。
+#        若未来需要多线程地图，须先完成全模块加锁/数据下沉整改（见
+#        modules/全模块代码审查报告_第二轮_2026-06-11.md 三-3）。
 
 MapUpdate.Threads = 1
 

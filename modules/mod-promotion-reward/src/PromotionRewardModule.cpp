@@ -3,6 +3,7 @@
  */
 
 #include "PromotionRewardModule.h"
+#include "AddonThrottle.h"
 #include "loader.h"
 #include "Config.h"
 #include "Chat.h"
@@ -455,6 +456,10 @@ void PromotionReward_PlayerScript::OnPlayerChat(Player* player, uint32 type, uin
 
     std::string prefix = msg.substr(0, tab);
     if (prefix != PROMO_ADDON_PREFIX)
+        return;
+
+    // 【防刷】统一令牌桶节流：默认 500ms/突发4，超频静默丢弃（modules/AddonThrottle.h）
+    if (!ModuleAddon::Throttle::Allow(player->GetGUID(), "PROMO"))
         return;
 
     std::string cmd = msg.substr(tab + 1);

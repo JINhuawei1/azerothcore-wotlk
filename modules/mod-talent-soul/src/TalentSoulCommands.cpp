@@ -3,6 +3,7 @@
  */
 
 #include "TalentSoul.h"
+#include "AddonThrottle.h"
 #include "ScriptMgr.h"
 #include "Chat.h"
 #include "Player.h"
@@ -650,6 +651,10 @@ public:
         {
             return;
         }
+
+        // 【防刷】统一令牌桶节流：默认 500ms/突发4，超频静默丢弃（modules/AddonThrottle.h）
+        if (!ModuleAddon::Throttle::Allow(player->GetGUID(), "TALENTSOUL"))
+            return;
 
         std::string command = msg.substr(tabPos + 1);
 

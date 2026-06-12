@@ -1,4 +1,5 @@
 #include "ItemIdentificationSystem.h"
+#include "AddonThrottle.h"
 #include "Define.h"
 #include <limits>
 #include "ScriptMgr.h"
@@ -2853,10 +2854,8 @@ void ItemIdentificationSystemModuleLoader::OnShutdownInitiate(ShutdownExitCode /
 // 玩家脚本实现
 ItemIdentificationPlayerScript::ItemIdentificationPlayerScript() : PlayerScript("ItemIdentificationPlayerScript") { }
 
-void ItemIdentificationPlayerScript::OnLogin(Player* player, bool firstLogin)
+void ItemIdentificationPlayerScript::OnPlayerLogin(Player* player)
 {
-    auto loginStart = std::chrono::high_resolution_clock::now();
-
     if (!player || !sItemIdentificationSystem->_enabled)
         return;
 
@@ -2879,9 +2878,6 @@ void ItemIdentificationPlayerScript::OnLogin(Player* player, bool firstLogin)
     player->UpdateAllStats();
     player->UpdateAttackPowerAndDamage();
     player->UpdateAttackPowerAndDamage(true);
-
-    auto loginEnd = std::chrono::high_resolution_clock::now();
-    auto totalDuration = std::chrono::duration_cast<std::chrono::milliseconds>(loginEnd - loginStart).count();
 }
 
 // 鉴定记录管理实现
@@ -3296,6 +3292,10 @@ public:
         }
 
         // 提取消息内容（TAB之后的部分）
+        // 【防刷】统一令牌桶节流：默认 500ms/突发4，超频静默丢弃（modules/AddonThrottle.h）
+        if (!ModuleAddon::Throttle::Allow(player->GetGUID(), "ITEMIDENT"))
+            return;
+
         std::string command = msg.substr(tabPos + 1);
 
         // 处理INSPECT_ITEM_GUID请求
@@ -3982,14 +3982,20 @@ private:
 #endif
 
         // 4. 执行鉴定（如果有鉴定组）
+        // 【安全修复】改调 IdentifyItem：包含成功率掷骰与金币扣费。
+        // 原先直调 ApplyIdentification 使 Addon 路径可免费且 100% 成功鉴定（绕过命令/批量路径的收费机制）
         bool identifySuccess = true;
         if (identificationGroupId > 0)
         {
-            identifySuccess = sItemIdentificationSystem->ApplyIdentification(player, item, identificationGroupId);
+            identifySuccess = sItemIdentificationSystem->IdentifyItem(player, item, identificationGroupId);
         }
 
         // 5. 删除待鉴定标记
-        CharacterDatabase.DirectExecute("DELETE FROM `待鉴定物品标记` WHERE `物品GUID` = {}", itemGuid);
+        // 【修复】仅在鉴定成功时删除标记；掷骰失败/金币不足等可恢复失败保留标记，允许玩家重试
+        if (identifySuccess)
+        {
+            CharacterDatabase.DirectExecute("DELETE FROM `待鉴定物品标记` WHERE `物品GUID` = {}", itemGuid);
+        }
 
         // 【关键修复】鉴定成功后清除批量查询缓存，确保下次查询返回新数据
         {
@@ -4057,13 +4063,13 @@ private:
             char huanJingMode = DbValueToHuanJingMode(fields[3].Get<int32>());
             uint32 identificationGroupId = fields[4].Get<uint32>();
 
-            processedGuids.push_back(itemGuid);
-
             // 从本次请求的一次性背包索引中查找物品，避免每个GUID重复扫描背包
             auto itemItr = itemsByGuid.find(itemGuid);
             Item* item = itemItr != itemsByGuid.end() ? itemItr->second : nullptr;
             if (!item || item->GetEntry() != itemId)
             {
+                // 物品不存在/不匹配：标记已失效，纳入批量清理
+                processedGuids.push_back(itemGuid);
                 skipCount++;
                 continue;
             }
@@ -4089,6 +4095,8 @@ private:
             if (success)
             {
                 successCount++;
+                // 【修复】仅成功时删除待鉴定标记；掷骰失败等可恢复失败保留标记允许重试
+                processedGuids.push_back(itemGuid);
 
                 // 【关键修复】鉴定成功后清除批量查询缓存
                 {
@@ -4558,9 +4566,11 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
         if (!cacheInitialized)
         {
             // 一次性检查所有需要的表
+            // 【表名修复】技能数据表真名为 `_物品技能_数据`（带前缀，见 mod-item-skills 的
+            // SQL 与全部查询）——此前预检写成无前缀，存在性守卫永假，技能数据永不下发
             std::vector<std::string> tablesToCheck = {
                 "物品属性_数据", "物品_鉴定记录", "物品成长_玩家记录",
-                "物品强化_记录", "物品技能_数据", "魔次系统_数据",
+                "物品强化_记录", "_物品技能_数据", "魔次系统_数据",
                 "符文系统_数据", "_物品套装_数据", "待鉴定物品标记"
             };
 
@@ -4676,7 +4686,7 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
         }
 
         // 4. 技能系统数据
-        if (TableExists("物品技能_数据"))
+        if (TableExists("_物品技能_数据"))
         {
             if (hasAnyQuery) unionQuery << " UNION ALL ";
             unionQuery << "SELECT 'skills' COLLATE utf8mb4_general_ci, "
@@ -5023,7 +5033,7 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
     }
 
     // 特殊处理：技能需要额外查询模板数据
-    if (TableExists("物品技能_数据"))
+    if (TableExists("_物品技能_数据"))
     {
 #if defined(MODULE_ITEM_SKILLS)
         std::vector<ItemSkillData> skills = sItemSkillsDBHelper->GetItemSkillsData(static_cast<uint64>(guid));
@@ -5772,8 +5782,12 @@ static bool DoIdentifyItem(Player* player, Item* item, ChatHandler* handler = nu
             handler->SendSysMessage("|cffffa500此物品没有配置鉴定组，只应用了幻境倍率|r");
     }
 
-    // 删除待鉴定标记（无论成功失败都删除，避免重复鉴定尝试）
-    CharacterDatabase.DirectExecute("DELETE FROM `待鉴定物品标记` WHERE `物品GUID` = {}", itemGuid);
+    // 删除待鉴定标记
+    // 【修复】仅成功（或无鉴定组仅应用倍率）时删除；掷骰失败等可恢复失败保留标记允许重试
+    if (identifySuccess)
+    {
+        CharacterDatabase.DirectExecute("DELETE FROM `待鉴定物品标记` WHERE `物品GUID` = {}", itemGuid);
+    }
 
     if (identificationGroupId == 0)
         QueueAllModuleDataAddonRefresh(player, itemId, itemGuid, 2000ms);
@@ -6007,13 +6021,13 @@ bool ItemIdentificationCommandScript::HandleBatchIdentifyCommand(ChatHandler* ha
         char huanJingMode = DbValueToHuanJingMode(fields[3].Get<int32>());
         uint32 identificationGroupId = fields[4].Get<uint32>();
 
-        processedGuids.push_back(itemGuid);
-
         // 从本次请求的一次性背包索引中查找物品，避免每个GUID重复扫描背包
         auto itemItr = itemsByGuid.find(itemGuid);
         Item* item = itemItr != itemsByGuid.end() ? itemItr->second : nullptr;
         if (!item)
         {
+            // 物品不存在：标记已失效，纳入批量清理
+            processedGuids.push_back(itemGuid);
             skipCount++;
             continue;
         }
@@ -6021,6 +6035,7 @@ bool ItemIdentificationCommandScript::HandleBatchIdentifyCommand(ChatHandler* ha
         // 验证物品ID
         if (item->GetEntry() != itemId)
         {
+            processedGuids.push_back(itemGuid);
             skipCount++;
             continue;
         }
@@ -6047,6 +6062,8 @@ bool ItemIdentificationCommandScript::HandleBatchIdentifyCommand(ChatHandler* ha
         if (success)
         {
             successCount++;
+            // 【修复】仅成功时删除待鉴定标记；失败保留标记允许重试
+            processedGuids.push_back(itemGuid);
             if (identificationGroupId == 0)
                 QueueAllModuleDataAddonRefresh(player, itemId, itemGuid, 2000ms);
         }

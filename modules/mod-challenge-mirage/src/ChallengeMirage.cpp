@@ -3,6 +3,7 @@
  */
 
 #include "ChallengeMirage.h"
+#include "AddonThrottle.h"
 #include "AllCreatureScript.h"
 #include "Chat.h"
 #include "ChatCommand.h"
@@ -16,7 +17,9 @@
 #include "ScriptMgr.h"
 #include "WorldPacket.h"
 
+#include <algorithm>
 #include <sstream>
+#include <vector>
 
 using namespace Acore::ChatCommands;
 
@@ -132,30 +135,32 @@ void SendChallengeMirageLevelList(Player* player)
 
     SendChallengeMirageAddonMessage(player, "LEVELS_BEGIN");
 
-    QueryResult result = WorldDatabase.Query(
-        "SELECT `等级`, `名称`, `需求物品`, `需求数量`, `持续秒数` "
-        "FROM `_挑战幻境等级` WHERE `等级` > 0 ORDER BY `等级` ASC LIMIT 200");
+    // 数据在 LoadTemplates 时已整表缓存（含等级>0 与 <=maxLevel 过滤），直接读内存按等级升序输出
+    auto const& templates = sChallengeMirageMgr->GetLevelTemplates();
+    std::vector<ChallengeMirageLevelTemplate const*> sorted;
+    sorted.reserve(templates.size());
+    for (auto const& pair : templates)
+        sorted.push_back(&pair.second);
 
-    if (result)
+    std::sort(sorted.begin(), sorted.end(),
+        [](ChallengeMirageLevelTemplate const* a, ChallengeMirageLevelTemplate const* b) { return a->level < b->level; });
+
+    size_t sent = 0;
+    for (ChallengeMirageLevelTemplate const* tpl : sorted)
     {
-        do
-        {
-            Field* fields = result->Fetch();
-            uint32 level = fields[0].Get<uint32>();
+        if (sent >= 200)
+            break;
 
-            if (level > sChallengeMirageMgr->GetMaxLevel())
-                continue;
+        std::ostringstream ss;
+        ss << "LEVEL:"
+           << tpl->level << ':'
+           << SanitizeAddonField(tpl->name) << ':'
+           << tpl->requiredItem << ':'
+           << tpl->requiredCount << ':'
+           << tpl->durationSec;
 
-            std::ostringstream ss;
-            ss << "LEVEL:"
-               << level << ':'
-               << SanitizeAddonField(fields[1].Get<std::string>()) << ':'
-               << fields[2].Get<uint32>() << ':'
-               << fields[3].Get<uint32>() << ':'
-               << fields[4].Get<uint32>();
-
-            SendChallengeMirageAddonMessage(player, ss.str());
-        } while (result->NextRow());
+        SendChallengeMirageAddonMessage(player, ss.str());
+        ++sent;
     }
 
     SendChallengeMirageAddonMessage(player, "LEVELS_END");
@@ -485,13 +490,17 @@ void ChallengeMirageMgr::SpawnCreaturesForPlayer(Player* player)
                 continue;
 
             float offset = static_cast<float>(i) * 1.5f;
+            // 【孤儿怪修复】原 TEMPSUMMON_CORPSE_TIMED_DESPAWN 只对尸体计时，存活召唤怪
+            // 永不消失——玩家离开/换层后活怪与 _creatureLayers 等状态无限累积。
+            // 改脱战存活计时：战斗中不消失；玩家离开后 respawnSec 秒自动 despawn
+            //（OnCreatureRemoveWorld 清理状态并释放 spawnKey，玩家在层内则 3 秒 tick 重新召唤）
             Creature* creature = player->SummonCreature(
                 creatureTemplate.entry,
                 creatureTemplate.x + offset,
                 creatureTemplate.y + offset,
                 creatureTemplate.z,
                 creatureTemplate.o,
-                TEMPSUMMON_CORPSE_TIMED_DESPAWN,
+                TEMPSUMMON_TIMED_DESPAWN_OOC_ALIVE,
                 creatureTemplate.respawnSec * 1000U);
 
             if (!creature)
@@ -622,6 +631,10 @@ public:
 
         std::string prefix = msg.substr(0, tabPos);
         if (prefix != CHALLENGE_MIRAGE_ADDON_PREFIX)
+            return;
+
+        // 【防刷】统一令牌桶节流：默认 500ms/突发4，超频静默丢弃（modules/AddonThrottle.h）
+        if (!ModuleAddon::Throttle::Allow(player->GetGUID(), "MIRAGE"))
             return;
 
         std::string command = msg.substr(tabPos + 1);

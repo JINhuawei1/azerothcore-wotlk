@@ -266,7 +266,7 @@ int main(int argc, char** argv)
     // Set process priority according to configuration settings
     SetProcessPriority("server.worldserver", sConfigMgr->GetOption<int32>(CONFIG_PROCESSOR_AFFINITY, 0), sConfigMgr->GetOption<bool>(CONFIG_HIGH_PRIORITY, true));
 
-    // Module settings are loaded from the world database table `通用配置` after DB startup.
+    // Module settings are loaded from the world database table `_通用配置` after DB startup.
     sConfigMgr->SetLoadModulesConfigsFromFiles(false);
     sConfigMgr->LoadModulesConfigs();
 
@@ -503,15 +503,15 @@ void RegisterDatabaseConfigSource()
     {
         std::vector<std::pair<std::string, std::string>> configs;
 
-        if (!WorldDatabase.Query("SHOW TABLES LIKE '通用配置'"))
+        if (!WorldDatabase.Query("SHOW TABLES LIKE '_通用配置'"))
         {
-            throw ConfigException("World database table `通用配置` does not exist. Import `_通用配置.sql` before starting worldserver.");
+            throw ConfigException("World database table `_通用配置` does not exist. Import `_通用配置.sql` before starting worldserver.");
         }
 
-        QueryResult result = WorldDatabase.Query("SELECT `配置键`, `配置值` FROM `通用配置` WHERE `启用状态` = 1 AND `配置值` IS NOT NULL ORDER BY `模块ID` ASC, `配置ID` ASC");
+        QueryResult result = WorldDatabase.Query("SELECT `配置键`, `配置值` FROM `_通用配置` WHERE `启用状态` = 1 AND `配置值` IS NOT NULL ORDER BY `模块ID` ASC, `配置ID` ASC");
         if (!result)
         {
-            LOG_WARN("server.loading", "> Config: Database table `通用配置` has no enabled config rows.");
+            LOG_WARN("server.loading", "> Config: Database table `_通用配置` has no enabled config rows.");
             return configs;
         }
 

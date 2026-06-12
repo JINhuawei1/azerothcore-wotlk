@@ -921,6 +921,12 @@ void SendCultivationAllData(Player* player)
 // WorldScript - 延迟加载
 // ============================================
 
+// 属性钩子/聊天/击杀热路径每次查询 Cultivation.Enable（字符串构造+map查找），缓存为文件级标志
+namespace
+{
+    bool s_cultivationEnabled = true;
+}
+
 class CultivationWorldScript : public WorldScript
 {
 public:
@@ -952,10 +958,11 @@ public:
 
     void OnAfterConfigLoad(bool reload) override
     {
+        s_cultivationEnabled = sConfigMgr->GetOption("Cultivation.Enable", true);
+
         if (reload && _loaded)
         {
-            bool enabled = sConfigMgr->GetOption("Cultivation.Enable", true);
-            if (!enabled)
+            if (!s_cultivationEnabled)
             {
                 LOG_INFO("module", "修仙系统模块已禁用");
                 return;
@@ -987,7 +994,7 @@ public:
     // 加载玩家数据
     void OnPlayerLoadFromDB(Player* player) override
     {
-        if (!player || !sConfigMgr->GetOption("Cultivation.Enable", true))
+        if (!player || !s_cultivationEnabled)
             return;
         sCultivationMgr->LoadPlayerData(player);
     }
@@ -995,7 +1002,7 @@ public:
     // 登录时刷新属性 + 学习技能
     void OnPlayerLogin(Player* player) override
     {
-        if (!player || !sConfigMgr->GetOption("Cultivation.Enable", true))
+        if (!player || !s_cultivationEnabled)
             return;
 
         uint32 guid = player->GetGUID().GetCounter();
@@ -1020,7 +1027,7 @@ public:
     // 登出时保存
     void OnPlayerLogout(Player* player) override
     {
-        if (!player || !sConfigMgr->GetOption("Cultivation.Enable", true))
+        if (!player || !s_cultivationEnabled)
             return;
 
         uint32 guid = player->GetGUID().GetCounter();
@@ -1037,7 +1044,7 @@ public:
     // 击杀生物（渡劫Boss判定）
     void OnPlayerCreatureKill(Player* player, Creature* creature) override
     {
-        if (!player || !creature || !sConfigMgr->GetOption("Cultivation.Enable", true))
+        if (!player || !creature || !s_cultivationEnabled)
             return;
         sCultivationMgr->OnCreatureKilled(player, creature);
     }
@@ -1045,7 +1052,7 @@ public:
     // 被生物击杀（渡劫失败判定）
     void OnPlayerKilledByCreature(Creature* /*killer*/, Player* player) override
     {
-        if (!player || !sConfigMgr->GetOption("Cultivation.Enable", true))
+        if (!player || !s_cultivationEnabled)
             return;
         sCultivationMgr->OnPlayerDeath(player);
     }
@@ -1053,7 +1060,7 @@ public:
     // Addon消息处理（客户端UI通信）
     void OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg, Player* /*receiver*/) override
     {
-        if (!sConfigMgr->GetOption("Cultivation.Enable", true) || !player || type != CHAT_MSG_WHISPER || lang != LANG_ADDON)
+        if (!s_cultivationEnabled || !player || type != CHAT_MSG_WHISPER || lang != LANG_ADDON)
             return;
 
         size_t tabPos = msg.find('\t');
@@ -1152,7 +1159,7 @@ public:
     // 五维属性（力量、敏捷、耐力、智力、精神）
     void OnPlayerAfterUpdateStat(Player* player, Stats stat, float& value) override
     {
-        if (!player || !sConfigMgr->GetOption("Cultivation.Enable", true))
+        if (!player || !s_cultivationEnabled)
             return;
 
         float bonus = sCultivationMgr->GetPlayerStatBonus(player->GetGUID().GetCounter());
@@ -1167,7 +1174,7 @@ public:
     // 生命上限
     void OnPlayerAfterUpdateMaxHealth(Player* player, float& value) override
     {
-        if (!player || !sConfigMgr->GetOption("Cultivation.Enable", true))
+        if (!player || !s_cultivationEnabled)
             return;
 
         float bonus = sCultivationMgr->GetPlayerStatBonus(player->GetGUID().GetCounter());
@@ -1181,7 +1188,7 @@ public:
     // 法力上限
     void OnPlayerAfterUpdateMaxPower(Player* player, Powers& power, float& value) override
     {
-        if (!player || !sConfigMgr->GetOption("Cultivation.Enable", true))
+        if (!player || !s_cultivationEnabled)
             return;
 
         float bonus = sCultivationMgr->GetPlayerStatBonus(player->GetGUID().GetCounter());
@@ -1195,7 +1202,7 @@ public:
     // 攻击强度
     void OnPlayerAfterUpdateAttackPowerAndDamage(Player* player, float& level, float& base_attPower, float& attPowerMod, float& attPowerMultiplier, bool ranged) override
     {
-        if (!player || !sConfigMgr->GetOption("Cultivation.Enable", true))
+        if (!player || !s_cultivationEnabled)
             return;
 
         float bonus = sCultivationMgr->GetPlayerStatBonus(player->GetGUID().GetCounter());
@@ -1209,7 +1216,7 @@ public:
     // 护甲
     void OnPlayerAfterUpdateArmor(Player* player, float& value) override
     {
-        if (!player || !sConfigMgr->GetOption("Cultivation.Enable", true))
+        if (!player || !s_cultivationEnabled)
             return;
 
         float bonus = sCultivationMgr->GetPlayerStatBonus(player->GetGUID().GetCounter());
@@ -1223,7 +1230,7 @@ public:
     // 法术强度和治疗强度
     void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int128& healingBonus, int128 spellDamage[7]) override
     {
-        if (!player || !sConfigMgr->GetOption("Cultivation.Enable", true))
+        if (!player || !s_cultivationEnabled)
             return;
 
         float bonus = sCultivationMgr->GetPlayerStatBonus(player->GetGUID().GetCounter());
@@ -1249,7 +1256,7 @@ public:
     // 物理暴击
     void OnPlayerAfterUpdateCritPercentage(Player* player, WeaponAttackType attType, float& value) override
     {
-        if (!player || !sConfigMgr->GetOption("Cultivation.Enable", true))
+        if (!player || !s_cultivationEnabled)
             return;
 
         float bonus = sCultivationMgr->GetPlayerStatBonus(player->GetGUID().GetCounter());
@@ -1260,7 +1267,7 @@ public:
     // 法术暴击
     void OnPlayerAfterUpdateSpellCritChance(Player* player, uint32 school, float& value) override
     {
-        if (!player || !sConfigMgr->GetOption("Cultivation.Enable", true))
+        if (!player || !s_cultivationEnabled)
             return;
 
         float bonus = sCultivationMgr->GetPlayerStatBonus(player->GetGUID().GetCounter());
@@ -1271,7 +1278,7 @@ public:
     // 评级属性（命中、急速、精准等）
     void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int128& amount) override
     {
-        if (!player || !sConfigMgr->GetOption("Cultivation.Enable", true))
+        if (!player || !s_cultivationEnabled)
             return;
 
         float bonus = sCultivationMgr->GetPlayerStatBonus(player->GetGUID().GetCounter());
@@ -1315,7 +1322,7 @@ public:
     // .修仙 信息
     static bool HandleInfoCommand(ChatHandler* handler, char const* /*args*/)
     {
-        if (!sConfigMgr->GetOption("Cultivation.Enable", true))
+        if (!s_cultivationEnabled)
         {
             handler->PSendSysMessage("|cffff0000修仙系统已禁用|r");
             return true;
@@ -1353,7 +1360,7 @@ public:
     // .修仙 升级
     static bool HandleUpgradeCommand(ChatHandler* handler, char const* /*args*/)
     {
-        if (!sConfigMgr->GetOption("Cultivation.Enable", true))
+        if (!s_cultivationEnabled)
         {
             handler->PSendSysMessage("|cffff0000修仙系统已禁用|r");
             return true;
@@ -1377,7 +1384,7 @@ public:
     // .修仙 渡劫
     static bool HandleTribulationCommand(ChatHandler* handler, char const* /*args*/)
     {
-        if (!sConfigMgr->GetOption("Cultivation.Enable", true))
+        if (!s_cultivationEnabled)
         {
             handler->PSendSysMessage("|cffff0000修仙系统已禁用|r");
             return true;
@@ -1401,7 +1408,7 @@ public:
     // .修仙 技能
     static bool HandleSkillsCommand(ChatHandler* handler, char const* /*args*/)
     {
-        if (!sConfigMgr->GetOption("Cultivation.Enable", true))
+        if (!s_cultivationEnabled)
         {
             handler->PSendSysMessage("|cffff0000修仙系统已禁用|r");
             return true;
@@ -1443,7 +1450,7 @@ public:
     // .修仙 入门
     static bool HandleStartCommand(ChatHandler* handler, char const* /*args*/)
     {
-        if (!sConfigMgr->GetOption("Cultivation.Enable", true))
+        if (!s_cultivationEnabled)
         {
             handler->PSendSysMessage("|cffff0000修仙系统已禁用|r");
             return true;

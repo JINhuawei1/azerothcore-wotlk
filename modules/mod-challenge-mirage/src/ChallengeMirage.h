@@ -74,6 +74,9 @@ public:
     bool IsCreatureVisibleForPlayer(Creature const* creature, Player const* player) const;
     void RemoveCreature(Creature const* creature);
 
+    // LIST/OPEN 应答直接读模板缓存，不再每次同步查库
+    std::unordered_map<uint32, ChallengeMirageLevelTemplate> const& GetLevelTemplates() const { return _levelTemplates; }
+
 private:
     ChallengeMirageLevelTemplate const* GetLevelTemplate(uint32 level) const;
 

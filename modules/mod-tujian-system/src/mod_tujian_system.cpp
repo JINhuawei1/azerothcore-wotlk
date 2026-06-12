@@ -1,4 +1,5 @@
 #include "ScriptMgr.h"
+#include "AddonThrottle.h"
 #include "Player.h"
 #include "Config.h"
 #include "Chat.h"
@@ -2015,7 +2016,8 @@ namespace
         return true;
     }
 
-    bool ActivateTuJianForPlayer(Player* player, uint32 itemEntry, uint32 level, std::string* failureMessage = nullptr, bool applyImmediately = true)
+    // trans 非空时写库追加到事务（一键收集批量提交），否则单条异步执行
+    bool ActivateTuJianForPlayer(Player* player, uint32 itemEntry, uint32 level, std::string* failureMessage = nullptr, bool applyImmediately = true, CharacterDatabaseTransaction* trans = nullptr)
     {
         if (!player)
         {
@@ -2047,9 +2049,14 @@ namespace
         record.currentItemEntry = tuJian.itemEntry;
 
         uint32 playerGuid = player->GetGUID().GetCounter();
-        CharacterDatabase.Execute(
-            "REPLACE INTO `_玩家激活图鉴` (`玩家GUID`, `图鉴ID`, `套装ID`, `当前等级`, `当前物品entry`) VALUES ({}, {}, {}, {}, {})",
-            playerGuid, record.tuJianId, record.setId, record.currentLevel, record.currentItemEntry);
+        if (trans)
+            (*trans)->Append(
+                "REPLACE INTO `_玩家激活图鉴` (`玩家GUID`, `图鉴ID`, `套装ID`, `当前等级`, `当前物品entry`) VALUES ({}, {}, {}, {}, {})",
+                playerGuid, record.tuJianId, record.setId, record.currentLevel, record.currentItemEntry);
+        else
+            CharacterDatabase.Execute(
+                "REPLACE INTO `_玩家激活图鉴` (`玩家GUID`, `图鉴ID`, `套装ID`, `当前等级`, `当前物品entry`) VALUES ({}, {}, {}, {}, {})",
+                playerGuid, record.tuJianId, record.setId, record.currentLevel, record.currentItemEntry);
 
         UpsertPlayerActivationRecord(playerGuid, record);
         if (applyImmediately)
@@ -2077,6 +2084,9 @@ namespace
         uint32 activatedCount = 0;
         uint32 playerGuid = player->GetGUID().GetCounter();
 
+        // 一键收集的写库聚合为单事务提交（此前每个图鉴一条独立 REPLACE）
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+
         for (auto const& pair : tuJianEntries)
         {
             TuJianEntry const& entry = pair.second;
@@ -2096,7 +2106,7 @@ namespace
             }
 
             std::string failureMessage;
-            if (ActivateTuJianForPlayer(player, entry.itemEntry, 1, &failureMessage, false))
+            if (ActivateTuJianForPlayer(player, entry.itemEntry, 1, &failureMessage, false, &trans))
             {
                 ++activatedCount;
                 uint32 chapterId = GetChapterIdForEntry(entry);
@@ -2112,7 +2122,10 @@ namespace
         }
 
         if (activatedCount > 0)
+        {
+            CharacterDatabase.CommitTransaction(trans);
             ApplyPlayerActivationData(player);
+        }
 
         return activatedCount;
     }
@@ -2335,6 +2348,10 @@ public:
 
         std::string prefix = msg.substr(0, tabPos);
         if (prefix != TUJIAN_SYSTEM_ADDON_PREFIX)
+            return;
+
+        // 【防刷】统一令牌桶节流：默认 500ms/突发4，超频静默丢弃（modules/AddonThrottle.h）
+        if (!ModuleAddon::Throttle::Allow(player->GetGUID(), "TUJIAN"))
             return;
 
         std::string command = msg.substr(tabPos + 1);

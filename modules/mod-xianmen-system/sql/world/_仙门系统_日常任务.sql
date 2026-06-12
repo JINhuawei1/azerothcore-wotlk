@@ -4,7 +4,7 @@
 --   NPC: 383000
 --   日常奖励: 62001 x1000, 62002 x50
 --   贡献令物品: 383001
---   天劫目标: 390101-390200, 每个日常对应同序号天劫, 击杀 2 次
+--   天劫目标: 390101-390200, 每个日常对应同序号天劫, 击杀 5 次
 --   日常任务池: 383100 (每日随机激活 20 个)
 --   日常任务: 383101-383200
 -- ============================================
@@ -22,7 +22,7 @@ SET @XIANMEN_DAILY_POOL := 383100;
 SET @XIANMEN_DAILY_ACTIVE_LIMIT := 20;
 SET @XIANMEN_DAILY_REWARD_CONTRIBUTION := 100;
 SET @XIANMEN_DAILY_TARGET_BASE := 390100;
-SET @XIANMEN_DAILY_TARGET_KILL_COUNT := 2;
+SET @XIANMEN_DAILY_TARGET_KILL_COUNT := 5;
 
 DROP TEMPORARY TABLE IF EXISTS `_tmp_xianmen_daily_numbers`;
 CREATE TEMPORARY TABLE `_tmp_xianmen_daily_numbers` (
@@ -123,7 +123,7 @@ VALUES
  2000, 2000, 1, 1, 1, 2, 2048, 0,
  7, 0, 0, 0, 0, '', 0, 1,
  100, 1, 1, 1, 1,
- 0, 0, 2, '', 12340);
+ 0, 0, 2, 'npc_xianmen_native_daily', 12340);
 
 INSERT INTO `creature_template_model`
 (`CreatureID`, `Idx`, `CreatureDisplayID`, `DisplayScale`, `Probability`, `VerifiedBuild`)
@@ -141,7 +141,7 @@ SELECT
   @XIANMEN_DAILY_QUEST_BASE + n.`n`,
   2,
   80,
-  1,
+  80,
   0,
   0,
   0,
@@ -170,14 +170,14 @@ SELECT
       WHEN 4 THEN '护送香火'
       WHEN 5 THEN '清剿邪祟'
       WHEN 6 THEN '抄录典籍'
-      WHEN 7 THEN '炼丹备料'
+      WHEN 7 THEN '灵材筹备'
       WHEN 8 THEN '剑阵演练'
       WHEN 9 THEN '符箓校验'
       ELSE '秘境巡查'
     END,
     '（', LPAD(n.`n`, 3, '0'), '）'),
-  '完成宗门日常委托，击败指定天劫 2 次，领取灵气石与突破石。',
-  CONCAT('今日宗门事务繁多，请击败第 ', n.`n`, ' 重天劫 2 次。完成后可获得灵气石与突破石。'),
+  CONCAT('完成宗门日常委托，击败指定天劫 ', @XIANMEN_DAILY_TARGET_KILL_COUNT, ' 次，领取灵气石与突破石。'),
+  CONCAT('今日宗门事务繁多，请击败第 ', n.`n`, ' 重天劫 ', @XIANMEN_DAILY_TARGET_KILL_COUNT, ' 次。完成后可获得灵气石与突破石。'),
   '返回仙门日常使者领取灵气石与突破石。',
   12340
 FROM `_tmp_xianmen_daily_numbers` n

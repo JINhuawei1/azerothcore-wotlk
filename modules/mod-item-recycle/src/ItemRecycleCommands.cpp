@@ -194,7 +194,14 @@ bool HandleRecycleGroupCommand(ChatHandler* handler, Acore::ChatCommands::Tail a
     std::vector<ItemRecycleInfo> availableItems;
     for (const auto& recycleItem : allGroupItems)
     {
-        if (ItemRecycleScript::IsProtectedQuestItem(recycleItem.itemId))
+        ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(recycleItem.itemId);
+        if (!itemTemplate)
+            continue;
+
+        if (ItemRecycleScript::IsActiveQuestItem(player, recycleItem.itemId))
+            continue;
+
+        if (itemTemplate->Class == ITEM_CLASS_QUEST && ItemRecycleScript::IsProtectedQuestItem(recycleItem.itemId))
             continue;
 
         if (ItemRecycleScript::IsReservedByMaterialWarehouse(player, recycleItem.itemId))

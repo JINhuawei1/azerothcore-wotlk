@@ -85,6 +85,17 @@ static uint32 ToClientRatingDisplay(float value)
     return static_cast<uint32>(value);
 }
 
+static float NormalizeHitChance(long double value)
+{
+    if (value < 0.0L || std::isnan(value))
+        return 0.0f;
+
+    if (std::isinf(value) || value > static_cast<long double>(std::numeric_limits<float>::max()))
+        return std::numeric_limits<float>::max();
+
+    return static_cast<float>(value);
+}
+
 static int32 ToInt32Saturated(long double value)
 {
     if (std::isnan(value))
@@ -1477,7 +1488,10 @@ void Player::UpdateCritPercentage(WeaponAttackType attType)
     value += static_cast<float>(ToInt32Saturated(static_cast<long double>(GetWeaponSkillValue(attType)) - static_cast<long double>(GetMaxSkillValueForLevel())) * 0.04L);
 
     // 调用钩子允许模块修改暴击率
+    float const baseValue = value;
     sScriptMgr->OnPlayerAfterUpdateCritPercentage(this, attType, value);
+    float const scriptedDelta = value - baseValue;
+    value = baseValue;
 
     // Apply crit limits with priority: Database > Config file
     bool limitApplied = false;
@@ -1508,6 +1522,7 @@ void Player::UpdateCritPercentage(WeaponAttackType attType)
 
 
 
+    value += scriptedDelta;
     value = value < 0.0f ? 0.0f : value;
     SetStatFloatValue(index, value);
 }
@@ -1745,7 +1760,10 @@ void Player::UpdateSpellCritChance(uint32 school)
     crit += GetRatingBonusValue(CR_CRIT_SPELL);
 
     // 调用钩子允许模块修改法术暴击率
+    float const baseCrit = crit;
     sScriptMgr->OnPlayerAfterUpdateSpellCritChance(this, school, crit);
+    float const scriptedDelta = crit - baseCrit;
+    crit = baseCrit;
 
     // Apply spell crit limits with priority: Database > Config file
     bool limitApplied = false;
@@ -1771,6 +1789,9 @@ void Player::UpdateSpellCritChance(uint32 school)
     }
 
 
+
+    crit += scriptedDelta;
+    crit = crit < 0.0f ? 0.0f : crit;
 
     // Store crit value
     SetFloatValue(PLAYER_SPELL_CRIT_PERCENTAGE1 + school, crit);
@@ -1807,13 +1828,12 @@ void Player::UpdateMeleeHitChances()
         }
     }
 
-    double totalHitChance = baseHitChance + hitRating;
-    if (totalHitChance < 0.0 || std::isnan(totalHitChance))
-        totalHitChance = 0.0;
-    else if (std::isinf(totalHitChance) || totalHitChance > static_cast<double>(std::numeric_limits<float>::max()))
-        totalHitChance = static_cast<double>(std::numeric_limits<float>::max());
+    float meleeHit = NormalizeHitChance(baseHitChance + hitRating);
+    float rangedHit = m_modRangedHitChance;
+    float spellHit = m_modSpellHitChance;
+    sScriptMgr->OnPlayerAfterUpdateHitChances(this, meleeHit, rangedHit, spellHit);
 
-    m_modMeleeHitChance = static_cast<float>(totalHitChance);
+    m_modMeleeHitChance = NormalizeHitChance(meleeHit);
 }
 
 void Player::UpdateRangedHitChances()
@@ -1843,13 +1863,12 @@ void Player::UpdateRangedHitChances()
         }
     }
 
-    double totalHitChance = baseHitChance + hitRating;
-    if (totalHitChance < 0.0 || std::isnan(totalHitChance))
-        totalHitChance = 0.0;
-    else if (std::isinf(totalHitChance) || totalHitChance > static_cast<double>(std::numeric_limits<float>::max()))
-        totalHitChance = static_cast<double>(std::numeric_limits<float>::max());
+    float meleeHit = m_modMeleeHitChance;
+    float rangedHit = NormalizeHitChance(baseHitChance + hitRating);
+    float spellHit = m_modSpellHitChance;
+    sScriptMgr->OnPlayerAfterUpdateHitChances(this, meleeHit, rangedHit, spellHit);
 
-    m_modRangedHitChance = static_cast<float>(totalHitChance);
+    m_modRangedHitChance = NormalizeHitChance(rangedHit);
 }
 
 void Player::UpdateSpellHitChances()
@@ -1877,13 +1896,12 @@ void Player::UpdateSpellHitChances()
         }
     }
 
-    double totalHitChance = baseHitChance + hitRating;
-    if (totalHitChance < 0.0 || std::isnan(totalHitChance))
-        totalHitChance = 0.0;
-    else if (std::isinf(totalHitChance) || totalHitChance > static_cast<double>(std::numeric_limits<float>::max()))
-        totalHitChance = static_cast<double>(std::numeric_limits<float>::max());
+    float meleeHit = m_modMeleeHitChance;
+    float rangedHit = m_modRangedHitChance;
+    float spellHit = NormalizeHitChance(baseHitChance + hitRating);
+    sScriptMgr->OnPlayerAfterUpdateHitChances(this, meleeHit, rangedHit, spellHit);
 
-    m_modSpellHitChance = static_cast<float>(totalHitChance);
+    m_modSpellHitChance = NormalizeHitChance(spellHit);
 }
 
 void Player::UpdateAllSpellCritChances()

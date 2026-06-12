@@ -38,6 +38,9 @@ public:
         _checkInterval = 60;
         _notifyBeforeExpire = 300;
         _isLoaded = false;
+        // 【单例修复】instance() 原来返回独立 static 对象，与 AddSC 注册的脚本对象数据分裂
+        // （钩子写注册对象、命令读单例对象）。现在单例即注册对象。
+        _instance = this;
     }
 
     // 加载模块数据
@@ -165,7 +168,9 @@ public:
     }
 
     // 玩家失去物品
-    void OnItemRemove(Player* player, Item* item)
+    // 【死钩子修复】原名 OnItemRemove 并非核心 PlayerScript 钩子，从未执行 → 租赁记录永不清理。
+    // 现由 ItemLeaseAllItemScript::CanItemRemove（物品销毁的真实钩子）转调本方法。
+    void HandleItemRemove(Player* player, Item* item)
     {
         if (!_enabled || !player || !item)
             return;
@@ -275,11 +280,10 @@ public:
         }
     }
 
-    // 获取单例实例
+    // 获取单例实例（即 AddSC 注册的脚本对象）
     static ItemLeaseSystem* instance()
     {
-        static ItemLeaseSystem instance;
-        return &instance;
+        return _instance;
     }
 
     // 获取租赁物品信息
@@ -333,6 +337,8 @@ public:
     }
 
 private:
+    static ItemLeaseSystem* _instance;
+
     bool _enabled;
     bool _isLoaded;
     uint32 _checkTimer;
@@ -342,7 +348,24 @@ private:
     std::vector<CharacterLeaseItemInfo> _charLeaseItems;
 };
 
+ItemLeaseSystem* ItemLeaseSystem::_instance = nullptr;
+
 #define sItemLeaseSystem ItemLeaseSystem::instance()
+
+// 物品销毁的真实钩子，转调租赁系统清理记录
+class ItemLeaseAllItemScript : public AllItemScript
+{
+public:
+    ItemLeaseAllItemScript() : AllItemScript("ItemLeaseAllItemScript") { }
+
+    bool CanItemRemove(Player* player, Item* item) override
+    {
+        if (ItemLeaseSystem* lease = ItemLeaseSystem::instance())
+            lease->HandleItemRemove(player, item);
+
+        return true;
+    }
+};
 
 // 中文命令处理类
 class ItemLeaseCommandScript : public CommandScript
@@ -604,6 +627,7 @@ private:
 void AddItemLeaseSystemScripts()
 {
     new ItemLeaseSystem();
+    new ItemLeaseAllItemScript();
     new ItemLeaseCommandScript();
     new ItemLeaseDelayedLoader();
 }

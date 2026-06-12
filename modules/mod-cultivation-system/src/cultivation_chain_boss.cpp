@@ -7,6 +7,7 @@
 
 #include "ScriptMgr.h"
 #include "ScriptedCreature.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
 #include "Chat.h"
 #include "Log.h"
@@ -167,19 +168,21 @@ struct npc_cultivation_chain_boss_base : public ScriptedAI
                 bossIndex, bossIndex + 1);
         }
 
+        if (!player)
+            return; // 没有可归属的玩家，无法续召下一重
+
         // 5秒后召唤下一个Boss
         uint32 nextEntry = 390100 + bossIndex + 1;
         float x, y, z, o;
         me->GetHomePosition(x, y, z, o);
 
-        me->m_Events.AddEventAtOffset([nextEntry, x, y, z, o, killer]()
-        {
-            if (!killer || !killer->IsInWorld())
-                return;
+        // 不能捕获裸 Unit* —— 5 秒后 killer（尤其是宠物/守护者）可能已被析构，
+        // 捕获 ObjectGuid 并在回调里重新解析
+        ObjectGuid playerGuid = player->GetGUID();
 
-            Player* p = killer->ToPlayer();
-            if (!p)
-                p = killer->GetCharmerOrOwnerPlayerOrPlayerItself();
+        me->m_Events.AddEventAtOffset([nextEntry, x, y, z, o, playerGuid]()
+        {
+            Player* p = ObjectAccessor::FindPlayer(playerGuid);
             if (!p || !p->IsInWorld())
                 return;
 
@@ -234,8 +237,6 @@ struct npc_cultivation_chain_boss_1 : public npc_cultivation_chain_boss_base
         }
         DoMeleeAttackIfReady();
     }
-
-    EventMap events;
 };
 
 // ============================================================
@@ -273,8 +274,6 @@ struct npc_cultivation_chain_boss_2 : public npc_cultivation_chain_boss_base
         }
         DoMeleeAttackIfReady();
     }
-
-    EventMap events;
 };
 
 // ============================================================
@@ -312,8 +311,6 @@ struct npc_cultivation_chain_boss_3 : public npc_cultivation_chain_boss_base
         }
         DoMeleeAttackIfReady();
     }
-
-    EventMap events;
 };
 
 // ============================================================
@@ -351,8 +348,6 @@ struct npc_cultivation_chain_boss_4 : public npc_cultivation_chain_boss_base
         }
         DoMeleeAttackIfReady();
     }
-
-    EventMap events;
 };
 
 // ============================================================
@@ -390,8 +385,6 @@ struct npc_cultivation_chain_boss_5 : public npc_cultivation_chain_boss_base
         }
         DoMeleeAttackIfReady();
     }
-
-    EventMap events;
 };
 
 // ============================================================
@@ -429,8 +422,6 @@ struct npc_cultivation_chain_boss_6 : public npc_cultivation_chain_boss_base
         }
         DoMeleeAttackIfReady();
     }
-
-    EventMap events;
 };
 
 // ============================================================
@@ -468,8 +459,6 @@ struct npc_cultivation_chain_boss_7 : public npc_cultivation_chain_boss_base
         }
         DoMeleeAttackIfReady();
     }
-
-    EventMap events;
 };
 
 // ============================================================
@@ -507,8 +496,6 @@ struct npc_cultivation_chain_boss_8 : public npc_cultivation_chain_boss_base
         }
         DoMeleeAttackIfReady();
     }
-
-    EventMap events;
 };
 
 // ============================================================
@@ -546,8 +533,6 @@ struct npc_cultivation_chain_boss_9 : public npc_cultivation_chain_boss_base
         }
         DoMeleeAttackIfReady();
     }
-
-    EventMap events;
 };
 
 // ============================================================
@@ -585,8 +570,6 @@ struct npc_cultivation_chain_boss_10 : public npc_cultivation_chain_boss_base
         }
         DoMeleeAttackIfReady();
     }
-
-    EventMap events;
 };
 
 // ============================================================

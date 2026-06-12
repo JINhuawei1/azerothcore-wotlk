@@ -39,9 +39,6 @@ extern std::map<uint8, uint32> classTrainerIds;
 extern std::vector<uint32> weaponTrainerIds;
 extern uint32 ridingTrainerId;
 
-// 存储当前正在使用技能大师的玩家及其选择的技能类型
-extern std::map<ObjectGuid, uint32> playerSkillMasterSessions;
-
 // 脚本类声明
 class SkillMasterCreatureScript : public CreatureScript
 {
@@ -65,17 +62,9 @@ public:
     void OnStartup() override;
 };
 
-// ServerScript用于拦截训练师购买数据包
-class SkillMasterServerScript : public ServerScript
-{
-public:
-    SkillMasterServerScript();
-    bool CanPacketReceive(WorldSession* session, WorldPacket& packet) override;
-
-private:
-    bool HandleTrainerBuySpell(WorldSession* session, WorldPacket& packet);
-    TrainerSpell const* FindTrainerSpell(uint32 spellId, uint32 skillType, uint8 playerClass);
-};
+// 购买流程由核心默认的 CMSG_TRAINER_BUY_SPELL 处理器完成:
+// NPC 通过 npc_trainer 引用行(见 sql/world/技能综合大师.sql)持有全量技能列表,
+// 不再注册 ServerScript 拦包(注册任意 ServerScript 会让全服每个收发包多一次深拷贝)。
 
 // 添加脚本函数
 void AddSkillMasterScripts();

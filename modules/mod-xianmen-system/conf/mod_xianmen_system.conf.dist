@@ -8,22 +8,28 @@ XianmenSystem.Enable = 1
 # 登录时是否提示当前仙门信息
 XianmenSystem.AnnounceOnLogin = 1
 
-# 仙门修为等级上限
+# 仙门修为默认等级上限；_仙门_门派.修为上限 > 0 时优先使用门派表字段
 XianmenSystem.MaxLevel = 100
 
 # 每多少级获得 1 个门派技能解锁名额
 XianmenSystem.SkillUnlockLevelStep = 10
 
-# 门主最多可选择的门派生效技能数量
-XianmenSystem.MaxActiveSkills = 5
+# 转投门派时保留的修为百分比，默认保留 50%，最低保留 1 级
+XianmenSystem.TransferKeepLevelPct = 50
+
+# 门主最多可开放的门派技能数量
+XianmenSystem.MaxActiveSkills = 10
+
+# 成员最多可选择的个人生效技能数量
+XianmenSystem.MaxPersonalActiveSkills = 5
 
 # 每日每个门派最多可发布的日常数量
 XianmenSystem.MaxDailyPublishes = 20
 
-# 修为升级需要的基础历史贡献
+# 当 _仙门_升级需求 未配置对应等级时，回退公式使用的基础历史贡献
 XianmenSystem.UpgradeContributionBase = 100
 
-# 修为升级每级递增的历史贡献需求
+# 当 _仙门_升级需求 未配置对应等级时，回退公式使用的每级递增历史贡献
 XianmenSystem.UpgradeContributionPerLevel = 10
 
 # 每日门主结算检查间隔，单位秒
@@ -31,3 +37,26 @@ XianmenSystem.LeaderSettleCheckInterval = 60
 
 # 是否启用每日门主自动结算
 XianmenSystem.EnableDailyLeaderSettle = 1
+
+###################################################################################################
+# 仙器/扩展装备槽位（虚拟背包 202）
+###################################################################################################
+
+# 是否启用仙器槽位系统
+仙器系统.启用 = 1
+
+# 调试模式（输出详细日志）
+仙器系统.调试模式 = 0
+
+# 仙器/扩展槽物品属性的全局倍率
+仙器系统.属性倍率 = 1.0
+
+# 使用仙器系统需要的角色等级
+仙器系统.需要等级 = 1
+
+# 自动解锁全部槽位（开启后忽略 _仙门_仙器槽位.解锁需求ID）
+仙器系统.自动解锁 = 0
+
+# 仙门技能生效明细调试日志（[仙门定位-*] 系列）
+# 开启后每次属性重算/伤害都会构造调试签名字符串，性能开销大，仅排查问题时打开
+XianmenSystem.DebugEffectiveSkillLog = 0

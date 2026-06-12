@@ -471,6 +471,38 @@ bool PlayerHasItemEntry(Player* player, uint32 itemEntry)
     return false;
 }
 
+// 检查玩家背包中是否持有指定物品（主背包 + 背包容器，不含装备与银行）
+// 【零消耗修复】激活路径用本函数：校验范围与 DestroyOneInventoryItemEntry 的销毁范围
+// 一致——原来用 PlayerHasItemEntry（含装备/银行）校验但只销毁背包，
+// 物品在装备栏/银行时激活成功却零消耗
+bool PlayerHasInventoryItemEntry(Player* player, uint32 itemEntry)
+{
+    if (!player)
+        return false;
+
+    for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+    {
+        Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (item && item->GetEntry() == itemEntry)
+            return true;
+    }
+
+    for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+    {
+        if (Bag* bag = player->GetBagByPos(bagSlot))
+        {
+            for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
+            {
+                Item* item = bag->GetItemByPos(slot);
+                if (item && item->GetEntry() == itemEntry)
+                    return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 bool PlayerHasEquippedItemInSlot(Player* player, uint8 slot)
 {
     if (!player || !IsSupportedFashionSlot(slot))
@@ -501,7 +533,10 @@ public:
         return &instance;
     }
 
-    bool IsEnabled() const { return sConfigMgr->GetOption<bool>(CONF_ENABLE, true); }
+    bool IsEnabled() const { return _enabled; }
+
+    // 装备可见槽/聊天钩子高频查询，配置缓存进成员，OnAfterConfigLoad 时刷新
+    void LoadConfig() { _enabled = sConfigMgr->GetOption<bool>(CONF_ENABLE, true); }
 
     // 加载世界库时装配置
     void LoadWorldConfig()
@@ -795,11 +830,11 @@ public:
             return false;
         }
 
-        // 验证玩家持有该物品
-        if (!PlayerHasItemEntry(player, itemEntry))
+        // 验证玩家背包持有该物品（激活会从背包消耗一件，校验范围须与消耗范围一致）
+        if (!PlayerHasInventoryItemEntry(player, itemEntry))
         {
             if (failureMessage)
-                *failureMessage = "你没有该物品";
+                *failureMessage = "背包中没有该物品";
             return false;
         }
 
@@ -813,6 +848,13 @@ public:
 
         // 检查世界配置中该槽位的需求
         FashionSlotConfig const* slotConfig = GetSlotConfig(slot);
+
+        // 【吞材料修复】先完成所有可失败的解析，再消耗需求——原顺序先 Consume 后
+        // ResolveSetIdForActivation，解析失败 return 时材料已扣而激活未发生
+        uint32 newResolvedSetId = ResolveSetIdForActivation(player, slotConfig, failureMessage);
+        if ((slotConfig && slotConfig->setAssignMode != FASHION_SET_ASSIGN_NONE) && newResolvedSetId == 0)
+            return false;
+
         if (slotConfig && slotConfig->requirementId > 0)
         {
 #ifdef ACORE_WITH_REQUIREMENT_SYSTEM
@@ -830,10 +872,6 @@ public:
             }
 #endif
         }
-
-        uint32 newResolvedSetId = ResolveSetIdForActivation(player, slotConfig, failureMessage);
-        if ((slotConfig && slotConfig->setAssignMode != FASHION_SET_ASSIGN_NONE) && newResolvedSetId == 0)
-            return false;
 
         uint32 oldResolvedSetId = GetResolvedSetId(*state, slot);
         auto oldItr = state->visualOverrides.find(slot);
@@ -989,6 +1027,7 @@ public:
 private:
     std::unordered_map<uint32, PlayerFashionState> _playerStates;
     std::unordered_map<uint8, FashionSlotConfig> _slotConfigs;
+    bool _enabled = true;
 };
 
 // ============== 通信层 ==============
@@ -1121,6 +1160,11 @@ class FashionSystemWorldScript : public WorldScript
 {
 public:
     FashionSystemWorldScript() : WorldScript("FashionSystemWorldScript") { }
+
+    void OnAfterConfigLoad(bool /*reload*/) override
+    {
+        FashionSystemMgr::Instance()->LoadConfig();
+    }
 
     void OnStartup() override
     {

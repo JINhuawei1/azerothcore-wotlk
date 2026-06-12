@@ -3677,8 +3677,12 @@ bool AscensionItemScript::CanItemRemove(Player* player, Item* item)
         return false;  // 阻止删除
     }
 
-    // 如果内存中没有找到，查询数据库确认
-    // 这是为了处理玩家状态已被清理但核心还在保存的情况
+    // 内存中存在该玩家的飞升状态时，以内存为准（上面已检查过），直接放行。
+    // 此前任意物品删除（吃食物/卖灰装/消耗消耗品）都会落到下面的同步查库，全服高频。
+    if (sAscensionManager->GetPlayerStatus(playerGuid))
+        return true;
+
+    // 仅在玩家状态已被清理但核心还在保存物品的极端情况下，才回退查询数据库确认
     QueryResult result = CharacterDatabase.Query(
         "SELECT `装备数据` FROM `_飞升系统_数据` WHERE `玩家GUID` = {}", playerGuid);
 

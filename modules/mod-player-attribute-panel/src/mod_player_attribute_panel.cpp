@@ -3,6 +3,7 @@
  */
 
 #include "Chat.h"
+#include "AddonThrottle.h"
 #include "Creature.h"
 #include "CreatureData.h"
 #include "Log.h"
@@ -527,6 +528,10 @@ public:
 
         std::string prefix = msg.substr(0, tabPos);
         if (prefix != PLAYER_ATTRIBUTE_PANEL_ADDON_PREFIX)
+            return;
+
+        // 【防刷】统一令牌桶节流：默认 500ms/突发4，超频静默丢弃（modules/AddonThrottle.h）
+        if (!ModuleAddon::Throttle::Allow(player->GetGUID(), "PATTRPANEL"))
             return;
 
         std::string command = msg.substr(tabPos + 1);

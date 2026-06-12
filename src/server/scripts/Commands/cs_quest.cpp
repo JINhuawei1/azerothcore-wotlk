@@ -261,23 +261,12 @@ public:
 
         uint32 entry = quest->GetQuestId();
 
-        // 黑名单: 禁止 .quest complete 直接完成 modules/物品数据/神器任务链 模块下的任务.
-        // 这些任务 (神器任务链 30001-30020, 远古战袍 70001-71000, 远古衬衫 71001-72000) 需求量极大且物品可出售换钱,
-        // 用 .quest complete 一键完成会被反复利用刷金币 (接取->complete->卖出->放弃->再接取).
-        // 如需新增其他黑名单区段, 在下方数组追加 {start, end} 即可.
-        static constexpr struct { uint32 start; uint32 end; } kBlockedQuestRanges[] = {
-            { 30001, 30020 }, // modules/mod-artifact-quest-chain (神器任务链)
-            { 70001, 72000 }, // modules/物品数据 (远古战袍/衬衫任务框架)
-        };
-        for (auto const& range : kBlockedQuestRanges)
+        if (WorldDatabase.Query("SELECT 1 FROM `_秒任务跳过` WHERE `任务ID` = {} LIMIT 1", entry))
         {
-            if (entry >= range.start && entry <= range.end)
-            {
-                handler->PSendSysMessage("[.quest complete] 任务 [{}] (entry {}) 属于受保护区段 [{}, {}], 命令拒绝执行. 请让玩家正常完成任务.",
-                    quest->GetTitle(), entry, range.start, range.end);
-                handler->SetSentErrorMessage(true);
-                return false;
-            }
+            handler->PSendSysMessage("[.quest complete] 这个任务无法直接使用秒任务，请正常完成. 任务 [{}] (entry {})",
+                quest->GetTitle(), entry);
+            handler->SetSentErrorMessage(true);
+            return false;
         }
 
         if (Player* player = playerTarget->GetConnectedPlayer())

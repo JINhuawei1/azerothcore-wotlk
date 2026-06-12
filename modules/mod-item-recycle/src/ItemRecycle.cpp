@@ -1,4 +1,5 @@
 #include "ItemRecycle.h"
+#include "AddonThrottle.h"
 #include "Log.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
@@ -44,18 +45,6 @@ namespace
                 {
                     if (quest->RequiredItemId[i] && quest->RequiredItemCount[i] > 0)
                         protectedItems.insert(quest->RequiredItemId[i]);
-                }
-
-                for (uint8 i = 0; i < QUEST_REWARDS_COUNT; ++i)
-                {
-                    if (quest->RewardItemId[i] && quest->RewardItemIdCount[i] > 0)
-                        protectedItems.insert(quest->RewardItemId[i]);
-                }
-
-                for (uint8 i = 0; i < QUEST_REWARD_CHOICES_COUNT; ++i)
-                {
-                    if (quest->RewardChoiceItemId[i] && quest->RewardChoiceItemCount[i] > 0)
-                        protectedItems.insert(quest->RewardChoiceItemId[i]);
                 }
             }
 
@@ -176,6 +165,10 @@ public:
         if (prefix != ITEM_RECYCLE_ADDON_PREFIX)
             return;
 
+        // 【防刷】统一令牌桶节流：默认 500ms/突发4，超频静默丢弃（modules/AddonThrottle.h）
+        if (!ModuleAddon::Throttle::Allow(player->GetGUID(), "ITEMRECYCLE"))
+            return;
+
         std::string command = msg.substr(tabPos + 1);
 
         // UI 配置请求
@@ -285,6 +278,7 @@ private:
 
 std::vector<ItemRecycleInfo> ItemRecycleScript::m_ItemRecycleStore;
 std::unordered_map<uint32, PlayerRecycleSettings> ItemRecycleScript::m_PlayerSettings;
+std::unordered_map<uint32, std::pair<std::unordered_set<uint32>, uint32>> ItemRecycleScript::m_MaterialReserveCache;
 
 // 构造函数
 ItemRecycleScript::ItemRecycleScript() : CommandScript("ItemRecycleScript")
@@ -508,9 +502,12 @@ bool ItemRecycleScript::CanRecycleItem(Player* player, Item* item, const PlayerR
     if (IsReservedByMaterialWarehouse(player, item->GetEntry()))
         return false;
 
-    // 任何任务作为来源/需求/奖励使用的物品不允许回收。
-    // 例如 10733 相关紫罗兰徽记即使可通过放弃任务或补发逻辑重新获得，也不能进入回收链刷奖励。
-    if (IsProtectedQuestItem(item->GetEntry()))
+    // 当前任务仍需要的来源/需求物品不能回收，避免玩家正在做任务时误删进度物品。
+    if (IsActiveQuestItem(player, item->GetEntry()))
+        return false;
+
+    // 任务奖励装备允许回收；只对真正的任务道具保留全局保护，避免回收未来任务会直接用到的道具。
+    if (itemTemplate->Class == ITEM_CLASS_QUEST && IsProtectedQuestItem(item->GetEntry()))
         return false;
 
     // 检查是否在过滤物品列表中
@@ -594,11 +591,27 @@ bool ItemRecycleScript::IsReservedByMaterialWarehouse(Player* player, uint32 ite
     if (!sConfigMgr->GetOption<bool>("MaterialWarehouse.Enable", true))
         return false;
 
-    QueryResult result = CharacterDatabase.Query(
-        "SELECT 1 FROM `_材料仓库玩家` WHERE `玩家GUID` = {} AND `物品ID` = {} AND `自动存储` = 1 LIMIT 1",
-        player->GetGUID().GetCounter(), itemId);
+    // 每玩家一次性加载"自动存储"物品集合并缓存 60 秒。
+    // 此前自动回收每周期对每个背包物品都同步查一次库。
+    uint32 const guid = player->GetGUID().GetCounter();
+    uint32 const now = getMSTime();
+    auto& cache = m_MaterialReserveCache[guid];
+    if (!cache.second || getMSTimeDiff(cache.second, now) >= 60 * IN_MILLISECONDS)
+    {
+        cache.first.clear();
+        if (QueryResult result = CharacterDatabase.Query(
+            "SELECT `物品ID` FROM `_材料仓库玩家` WHERE `玩家GUID` = {} AND `自动存储` = 1",
+            guid))
+        {
+            do
+            {
+                cache.first.insert((*result)[0].Get<uint32>());
+            } while (result->NextRow());
+        }
+        cache.second = now ? now : 1;
+    }
 
-    return !!result;
+    return cache.first.count(itemId) > 0;
 }
 
 // 新增：查找匹配的回收规则
@@ -765,73 +778,12 @@ void ItemRecycleScript::PerformAutoRecycle(Player* player)
         }
     }
 
-    // 【审计修复】需求模板系统集成 - 按物品数量检查和消耗需求
-    // 收集每个需求模板需要消耗的次数（按物品数量累加）
-    std::map<uint32, uint32> requirementTemplateCounts;
-    for (Item* item : itemsToRecycle)
-    {
-        if (const ItemRecycleInfo* recycleRule = FindMatchingRecycleRule(item, settings))
-        {
-            if (recycleRule->requirementTemplateId > 0)
-            {
-                // 按物品数量累加需求次数
-                requirementTemplateCounts[recycleRule->requirementTemplateId] += item->GetCount();
-            }
-        }
-    }
-
-    // 检查和消耗所有需求模板（按物品数量）
-    if (!requirementTemplateCounts.empty())
-    {
-        if (RequirementInterface* reqModule = sModuleManager->GetRequirementModule())
-        {
-            // 先检查所有需求是否满足（按次数检查）
-            for (const auto& pair : requirementTemplateCounts)
-            {
-                uint32 templateId = pair.first;
-                uint32 count = pair.second;
-
-                // 检查是否能满足指定次数的需求
-                for (uint32 i = 0; i < count; ++i)
-                {
-                    if (!reqModule->CheckRequirements(player, templateId, false))
-                    {
-                        // 获取需求详细信息并显示
-                        std::string requirementDetails = GetRequirementDetails(templateId);
-                        if (!requirementDetails.empty())
-                        {
-                            ChatHandler(player->GetSession()).PSendSysMessage(
-                                "|cffff0000[自动回收]|r {}（需要{}次，仅满足{}次），回收取消",
-                                requirementDetails, count, i);
-                        }
-                        else
-                        {
-                            ChatHandler(player->GetSession()).PSendSysMessage(
-                                "|cffff0000[自动回收]|r 不满足回收需求（需要{}次，仅满足{}次），回收取消", count, i);
-                        }
-                        return;
-                    }
-                }
-            }
-
-            // 消耗所有需求（按次数消耗）
-            for (const auto& pair : requirementTemplateCounts)
-            {
-                uint32 templateId = pair.first;
-                uint32 count = pair.second;
-
-                for (uint32 i = 0; i < count; ++i)
-                {
-                    if (!reqModule->ConsumeRequirements(player, templateId))
-                    {
-                        ChatHandler(player->GetSession()).PSendSysMessage(
-                            "|cffff0000[自动回收]|r 消耗需求失败（第{}次），回收取消", i + 1);
-                        return;
-                    }
-                }
-            }
-        }
-    }
+    // 【白扣材料修复】原实现：先对每个模板"检查 N 次"（检查无副作用，N 次结果恒同，
+    // 拥有 1 次的材料即可通过 N 次检查），再批量消耗 N 次——第 i 次消耗失败时直接 return，
+    // 前 i-1 次已扣材料且对应物品未回收（白扣）。
+    // 现改为回收循环内逐堆叠原子处理：消耗成功多少件就回收多少件，需求耗尽即停止。
+    RequirementInterface* recycleReqModule = sModuleManager->GetRequirementModule();
+    bool requirementExhausted = false;
 
     // 执行回收并收集奖励
     std::map<uint32, uint32> rewardTemplateCount; // 奖励模板ID -> 数量
@@ -840,14 +792,39 @@ void ItemRecycleScript::PerformAutoRecycle(Player* player)
 
     for (Item* item : itemsToRecycle)
     {
-        if (!item)
+        if (!item || requirementExhausted)
             continue;
 
         ItemTemplate const* itemTemplate = item->GetTemplate();
         if (!itemTemplate)
             continue;
 
-        uint32 count = item->GetCount();
+        uint32 stackCount = item->GetCount();
+        uint32 count = stackCount;
+
+        // 需求消耗：每回收 1 件消耗 1 次，失败即停（已消耗的次数与已回收件数一一对应）
+        if (const ItemRecycleInfo* recycleRule = FindMatchingRecycleRule(item, settings))
+        {
+            if (recycleRule->requirementTemplateId > 0)
+            {
+                if (!recycleReqModule)
+                    continue; // 配置了需求但需求模块不可用：跳过该物品，避免白拿
+
+                uint32 consumed = 0;
+                while (consumed < stackCount && recycleReqModule->ConsumeRequirements(player, recycleRule->requirementTemplateId))
+                    ++consumed;
+
+                if (consumed < stackCount)
+                {
+                    requirementExhausted = true;
+                    if (consumed == 0)
+                        continue; // 一次都没消耗成功：本堆叠原样保留
+
+                    count = consumed; // 部分回收：按已消耗次数回收对应件数
+                }
+            }
+        }
+
         uint32 rewardType = GetItemRecycleReward(item, player, settings);
 
         if (rewardType == UINT32_MAX)
@@ -873,8 +850,21 @@ void ItemRecycleScript::PerformAutoRecycle(Player* player)
 
         totalCount += count;
 
-        // 销毁物品
-        player->DestroyItem(item->GetBagSlot(), item->GetSlot(), true);
+        // 销毁物品（部分回收时只销毁已消耗需求对应的件数）
+        if (count >= stackCount)
+        {
+            player->DestroyItem(item->GetBagSlot(), item->GetSlot(), true);
+        }
+        else
+        {
+            uint32 destroyPartial = count;
+            player->DestroyItemCount(item, destroyPartial, true);
+        }
+    }
+
+    if (requirementExhausted)
+    {
+        ChatHandler(player->GetSession()).SendSysMessage("|cffff0000[自动回收]|r 回收需求材料不足，剩余物品未回收。");
     }
 
     if (totalCount > 0)
@@ -1185,6 +1175,9 @@ void ItemRecyclePlayerScript::OnPlayerLogout(Player* player)
 
     uint32 playerGuid = player->GetGUID().GetCounter();
 
+    // 清理材料仓库保留集合缓存
+    ItemRecycleScript::m_MaterialReserveCache.erase(playerGuid);
+
     // 保存当前设置到数据库，然后从内存中移除
     auto it = ItemRecycleScript::m_PlayerSettings.find(playerGuid);
     if (it != ItemRecycleScript::m_PlayerSettings.end())
@@ -1205,7 +1198,19 @@ void ItemRecyclePlayerScript::OnPlayerUpdate(Player* player, uint32 diff)
         return;
 
     uint32 playerGuid = player->GetGUID().GetCounter();
-    PlayerRecycleSettings settings = ItemRecycleScript::GetPlayerRecycleSettings(playerGuid);
+
+    // 直接引用内存中的设置：此前这里每 tick 按值深拷贝整个设置（含 std::set）
+    auto it = ItemRecycleScript::m_PlayerSettings.find(playerGuid);
+    if (it == ItemRecycleScript::m_PlayerSettings.end())
+    {
+        // 登录时已加载，这里只做兜底加载
+        ItemRecycleScript::GetPlayerRecycleSettings(playerGuid);
+        it = ItemRecycleScript::m_PlayerSettings.find(playerGuid);
+        if (it == ItemRecycleScript::m_PlayerSettings.end())
+            return;
+    }
+
+    PlayerRecycleSettings& settings = it->second;
 
     if (!settings.autoRecycleEnabled)
         return;
@@ -1214,10 +1219,10 @@ void ItemRecyclePlayerScript::OnPlayerUpdate(Player* player, uint32 diff)
     uint32 currentTime = GameTime::GetGameTime().count();
 
     // 如果是第一次或者上次回收时间为0，初始化时间
+    // （lastRecycleTime 登录时会重置为0，只在内存中维护即可，不需要写库）
     if (settings.lastRecycleTime == 0)
     {
         settings.lastRecycleTime = currentTime;
-        ItemRecycleScript::SavePlayerRecycleSettings(settings);
         return;
     }
 
@@ -1225,9 +1230,8 @@ void ItemRecyclePlayerScript::OnPlayerUpdate(Player* player, uint32 diff)
     uint32 timeSinceLastRecycle = currentTime - settings.lastRecycleTime;
     if (timeSinceLastRecycle >= settings.recycleInterval)
     {
-        // 更新上次回收时间
+        // 更新上次回收时间（仅内存）
         settings.lastRecycleTime = currentTime;
-        ItemRecycleScript::SavePlayerRecycleSettings(settings);
 
         // 执行自动回收
         ItemRecycleScript::PerformAutoRecycle(player);

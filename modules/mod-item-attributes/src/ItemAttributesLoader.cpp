@@ -1,5 +1,4 @@
 #include "ItemAttributesLoader.h"
-#include "ItemAttributesDatabase.h"
 #include "ItemAttributesEffects.h"
 #include "ItemAttributesDBHelper.h"
 #include "DatabaseEnv.h"

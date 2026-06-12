@@ -2,9 +2,10 @@
 -- 每行代表一个模块配置项；后台按 模块名称 分组管理。
 -- 服务器启动和 .reload config 时读取 启用状态=1 且 配置值非NULL 的 配置键/配置值。
 
-DROP TABLE IF EXISTS `通用配置`;
+DROP TABLE IF EXISTS `通用配置`; -- 旧表名，升级清理
+DROP TABLE IF EXISTS `_通用配置`;
 
-CREATE TABLE `通用配置` (
+CREATE TABLE `_通用配置` (
   `配置ID` INT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '配置项ID',
   `模块ID` INT UNSIGNED NOT NULL COMMENT '模块编号，同一模块的配置使用相同模块ID',
   `模块名称` VARCHAR(100) NOT NULL COMMENT '中文模块名称',
@@ -21,7 +22,7 @@ CREATE TABLE `通用配置` (
   KEY `idx_启用状态` (`启用状态`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='通用配置 - 单表配置源';
 
-INSERT INTO `通用配置` (`模块ID`, `模块名称`, `模块标识`, `配置键`, `配置名称`, `配置值`, `配置说明`, `启用状态`) VALUES
+INSERT INTO `_通用配置` (`模块ID`, `模块名称`, `模块标识`, `配置键`, `配置名称`, `配置值`, `配置说明`, `启用状态`) VALUES
 (1, '属性调整光环', 'AuraAttributes', 'AuraAttributes.Enable', '是否启用', '1', '设置为 0 禁用', 1),
 (1, '属性调整光环', 'AuraAttributes', 'AuraAttributes.DebugMode', '调试模式', '0', '设置为 1 启用', 1),
 (1, '属性调整光环', 'AuraAttributes', 'AuraAttributes.LoadDelay', '加载延迟', '1', '服务器启动后多少秒加载模块', 1),
@@ -222,6 +223,7 @@ INSERT INTO `通用配置` (`模块ID`, `模块名称`, `模块标识`, `配置�
 (42, '魔次系统', 'mod_magic_hit_system', 'MagicHitSystem.MaxHitCount', '建议值: 根据服务器性能调整，建议不超过100000', '100000', '建议值: 根据服务器性能调整，建议不超过100000', 1),
 (42, '魔次系统', 'mod_magic_hit_system', 'MagicHitSystem.DebugMode', '调试模式', '0', '日志通道: module.magichit', 1),
 (42, '魔次系统', 'mod_magic_hit_system', 'MagicHitSystem.AnnounceToPlayer', '0 (不显示)', '0', '0 (不显示)', 1),
+(42, '魔次系统', 'mod_magic_hit_system', 'MagicHitSystem.MaxCastEffectHits', '单次施法最大生效次数', '50', '单次施法效果的魔次命中上限，最小1', 1),
 (43, '地图生物调整', 'mod_map_creature_adjust', 'MapCreatureAdjust.Enable', '是否启用', '1', '是否启用模块', 1),
 (44, '材料仓库', 'mod_material_warehouse', 'MaterialWarehouse.Enable', '是否启用', '1', '是否启用材料仓库系统', 1),
 (44, '材料仓库', 'mod_material_warehouse', 'MaterialWarehouse.DepositExistingOnAdd', '玩家把新物品加入仓库列表时，是否立刻把背包中已有的同类物品存入仓库', '1', '玩家把新物品加入仓库列表时，是否立刻把背包中已有的同类物品存入仓库', 1),
@@ -266,6 +268,7 @@ INSERT INTO `通用配置` (`模块ID`, `模块名称`, `模块标识`, `配置�
 (49, '宝箱系统', 'mod_treasure_box', 'TreasureBox.Enable', '是否启用', '1', '0 - 禁用', 1),
 (49, '宝箱系统', 'mod_treasure_box', 'TreasureBox.Announce', '发送公告', '1', '0 - 禁用', 1),
 (49, '宝箱系统', 'mod_treasure_box', 'TreasureBox.PopupWindow', 'PopupWindow', '1', '0 - 禁用', 1),
+(49, '宝箱系统', 'mod_treasure_box', 'TreasureBox.Debug', '调试模式', '0', '设置为 1 输出宝箱调试日志', 1),
 (50, '图鉴系统', 'mod_tujian_system', 'TujianSystem.Enable', '是否启用', '1', '默认: 1 (启用)', 1),
 (50, '图鉴系统', 'mod_tujian_system', 'TujianSystem.Announce', '发送公告', '1', '发送公告', 1),
 (51, '武魂系统', 'mod_wuhun_system', 'WuhunSystem.Enable', '是否启用', '1', '武魂系统', 1),
@@ -278,10 +281,15 @@ INSERT INTO `通用配置` (`模块ID`, `模块名称`, `模块标识`, `配置�
 (52, '仙门系统', 'mod_xianmen_system', 'XianmenSystem.AnnounceOnLogin', '登录公告', '1', '登录时是否提示当前仙门信息', 1),
 (52, '仙门系统', 'mod_xianmen_system', 'XianmenSystem.MaxLevel', '最高等级', '100', '仙门修为等级上限', 1),
 (52, '仙门系统', 'mod_xianmen_system', 'XianmenSystem.SkillUnlockLevelStep', '每多少级获得 1 个门派技能解锁名额', '10', '每多少级获得 1 个门派技能解锁名额', 1),
-(52, '仙门系统', 'mod_xianmen_system', 'XianmenSystem.MaxActiveSkills', '门主最多可选择的门派生效技能数量', '5', '门主最多可选择的门派生效技能数量', 1),
+(52, '仙门系统', 'mod_xianmen_system', 'XianmenSystem.TransferKeepLevelPct', '转投保留修为百分比', '50.000000', '转投门派时保留的修为百分比，最低保留 1 级', 1),
+(52, '仙门系统', 'mod_xianmen_system', 'XianmenSystem.MaxActiveSkills', '门主最多可开放的门派技能数量', '10', '门主最多可开放的门派技能数量', 1),
+(52, '仙门系统', 'mod_xianmen_system', 'XianmenSystem.MaxPersonalActiveSkills', '成员最多可选择的个人生效技能数量', '5', '成员最多可选择的个人生效技能数量', 1),
 (52, '仙门系统', 'mod_xianmen_system', 'XianmenSystem.LeaderSettleCheckInterval', '每日门主结算检查间隔，单位秒', '60', '每日门主结算检查间隔，单位秒', 1),
 (52, '仙门系统', 'mod_xianmen_system', 'XianmenSystem.EnableDailyLeaderSettle', '是否启用每日门主自动结算', '1', '是否启用每日门主自动结算', 1),
 (52, '仙门系统', 'mod_xianmen_system', 'XianmenSystem.MaxDailyPublishes', '每日最多发布次数', '20', '每个角色每天最多发布仙门招募/公告次数', 1),
+(52, '仙门系统', 'mod_xianmen_system', 'XianmenSystem.UpgradeContributionBase', '修为升级基础历史贡献', '100', '修为升级需要的基础历史贡献', 1),
+(52, '仙门系统', 'mod_xianmen_system', 'XianmenSystem.UpgradeContributionPerLevel', '修为升级每级递增历史贡献', '10', '修为升级每级递增的历史贡献需求', 1),
+(52, '仙门系统', 'mod_xianmen_system', 'XianmenSystem.DebugEffectiveSkillLog', '生效技能调试日志', '0', '一次属性重算会触发30-50次调用，默认必须关闭', 1),
 (53, '战宠系统', 'mod_zhanchong', 'ZhanChong.Enable', '是否启用', '1', '0 - 禁用', 1),
 (53, '战宠系统', 'mod_zhanchong', 'ZhanChong.Announce', '发送公告', '1', '0 - 禁用', 1),
 (54, '自定义AI', 'mod-custom-ai', 'CustomAI.Enable', '是否启用', '1', '0 - 禁用', 1),
@@ -369,7 +377,12 @@ INSERT INTO `通用配置` (`模块ID`, `模块名称`, `模块标识`, `配置�
 (71, 'VIP系统', 'VipSystem', 'VipSystem.DailyResetHour', '每日重置小时', '0', '默认: 0 - 午夜0点', 1),
 (71, 'VIP系统', 'VipSystem', 'VipSystem.CommandCooldown', '命令冷却', '5', '默认: 5', 1),
 (71, 'VIP系统', 'VipSystem', 'VipSystem.MaxVipLevel', '最高VIP等级', '1000', '默认: 5', 1),
-(71, 'VIP系统', 'VipSystem', 'VipSystem.EnableDebug', '启用调试', '0', '1 - 启用', 1)
+(71, 'VIP系统', 'VipSystem', 'VipSystem.EnableDebug', '启用调试', '0', '1 - 启用', 1),
+(72, '仙器系统', 'mod_xianmen_system', '仙器系统.启用', '是否启用', '1', '设置为 0 禁用仙器槽位系统', 1),
+(72, '仙器系统', 'mod_xianmen_system', '仙器系统.调试模式', '调试模式', '0', '设置为 1 输出仙器调试日志', 1),
+(72, '仙器系统', 'mod_xianmen_system', '仙器系统.属性倍率', '属性倍率', '1.000000', '仙器属性加成的全局倍率', 1),
+(72, '仙器系统', 'mod_xianmen_system', '仙器系统.需要等级', '需要等级', '1', '使用仙器槽位的最低角色等级', 1),
+(72, '仙器系统', 'mod_xianmen_system', '仙器系统.自动解锁', '自动解锁', '0', '设置为 1 时槽位自动解锁', 1)
 ON DUPLICATE KEY UPDATE
   `模块ID` = VALUES(`模块ID`),
   `模块名称` = VALUES(`模块名称`),

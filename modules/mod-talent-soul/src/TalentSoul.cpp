@@ -591,6 +591,15 @@ bool TalentSoulMgr::UpgradePlayerSpell(Player* player, uint32 spellId, TalentSou
             playerData.usedTalentPoints += 1;
             _dirtyPlayers.insert(playerGuid);
         }
+        else if (isNewSkill)
+        {
+            // 【白扣回滚修复】新技能场景先扣了解锁费并插入技能条目，升级失败时
+            //（如该升级类型 maxLevel=0 未启用）原实现直接返回——解锁点白扣、
+            // 污染条目残留内存并随后续操作落库。失败即回滚两者
+            playerData.skills.erase(spellId);
+            if (config->talentPointCost > 0)
+                playerData.usedTalentPoints -= config->talentPointCost;
+        }
     }
 
     return success;

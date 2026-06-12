@@ -4,6 +4,7 @@
  */
 
 #include "Chat.h"
+#include "AddonThrottle.h"
 #include "ChatCommand.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
@@ -966,6 +967,10 @@ public:
             return;
 
         if (msg.substr(0, tabPos) != MATERIAL_WAREHOUSE_ADDON_PREFIX)
+            return;
+
+        // 【防刷】统一令牌桶节流：默认 500ms/突发4，超频静默丢弃（modules/AddonThrottle.h）
+        if (!ModuleAddon::Throttle::Allow(player->GetGUID(), "MATWAREHOUSE"))
             return;
 
         sMaterialWarehouseMgr->HandleAddonCommand(player, msg.substr(tabPos + 1));

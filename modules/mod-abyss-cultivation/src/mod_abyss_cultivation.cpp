@@ -1,4 +1,5 @@
 #include "ScriptMgr.h"
+#include "AddonThrottle.h"
 
 #include "Cell.h"
 #include "CellImpl.h"
@@ -15,6 +16,7 @@
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "QuestDef.h"
+#include "Random.h"
 #include "Spell.h"
 #include "SpellAuraEffects.h"
 #include "SpellScript.h"
@@ -45,19 +47,32 @@ namespace
 constexpr char ABYSS_ADDON_PREFIX[] = "ABYSS_UI";
 constexpr size_t ABYSS_MAX_ADDON_PAYLOAD = 220;
 
+// 施法/伤害/属性热路径反复查询这三项配置（字符串构造+map查找），缓存为文件级标志，
+// OnAfterConfigLoad（首启+reload 都触发）刷新
+bool s_abyssEnabled = false;
+bool s_abyssDebug = false;
+bool s_abyssAutoBeginOnMapEnter = false;
+
+void RefreshAbyssConfigCache()
+{
+    s_abyssEnabled = sConfigMgr->GetOption<bool>("AbyssCultivation.Enable", false);
+    s_abyssDebug = sConfigMgr->GetOption<bool>("AbyssCultivation.Debug", false);
+    s_abyssAutoBeginOnMapEnter = sConfigMgr->GetOption<bool>("AbyssCultivation.AutoBeginOnMapEnter", false);
+}
+
 bool IsModuleEnabled()
 {
-    return sConfigMgr->GetOption<bool>("AbyssCultivation.Enable", false);
+    return s_abyssEnabled;
 }
 
 bool IsDebugEnabled()
 {
-    return sConfigMgr->GetOption<bool>("AbyssCultivation.Debug", false);
+    return s_abyssDebug;
 }
 
 bool IsAutoBeginOnMapEnterEnabled()
 {
-    return sConfigMgr->GetOption<bool>("AbyssCultivation.AutoBeginOnMapEnter", false);
+    return s_abyssAutoBeginOnMapEnter;
 }
 
 uint32 GetNow()
@@ -70,22 +85,17 @@ bool IsAbyssCustomBossEntry(uint32 entry)
     return (entry >= 910001 && entry <= 910074) || (entry >= 919001 && entry <= 919074);
 }
 
+// 【随机修复】原实现用 std::rand()：MSVC 下 RAND_MAX=32767，
+// RollWeight 在权重池总和超过 32767 时高位区间（高品质候选）永远抽不中，
+// 且取模存在分布偏置。统一改核心线程安全 RNG（SFMT）。
 float RollPercentage()
 {
-    static bool seeded = false;
-    if (!seeded)
-    {
-        std::srand(static_cast<unsigned>(std::time(nullptr)));
-        seeded = true;
-    }
-
-    return static_cast<float>(std::rand() % 10000) / 100.0f;
+    return static_cast<float>(urand(0, 9999)) / 100.0f;
 }
 
 uint32 GetRandomSeed()
 {
-    RollPercentage();
-    return static_cast<uint32>(std::rand());
+    return rand32();
 }
 
 uint32 RollWeight(uint32 totalWeight)
@@ -93,8 +103,7 @@ uint32 RollWeight(uint32 totalWeight)
     if (totalWeight == 0)
         return 0;
 
-    RollPercentage();
-    return static_cast<uint32>(std::rand()) % totalWeight;
+    return urand(0, totalWeight - 1);
 }
 
 char const* GetTaskTypeName(uint8 taskType)
@@ -9022,6 +9031,8 @@ public:
 
     void OnAfterConfigLoad(bool reload) override
     {
+        RefreshAbyssConfigCache();
+
         if (!reload)
             return;
 
@@ -9267,6 +9278,10 @@ public:
 
         std::string prefix = msg.substr(0, tabPos);
         if (prefix != ABYSS_ADDON_PREFIX)
+            return;
+
+        // 【防刷】统一令牌桶节流：默认 500ms/突发4，超频静默丢弃（modules/AddonThrottle.h）
+        if (!ModuleAddon::Throttle::Allow(player->GetGUID(), "ABYSS"))
             return;
 
         std::string command = msg.substr(tabPos + 1);
