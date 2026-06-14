@@ -112,6 +112,7 @@ struct PlayerXianqiStatus
     std::set<uint8> unlockedSlots;
     std::map<uint8, std::vector<XianqiAppliedStat>> slotStats;
     std::map<uint8, std::vector<uint32>> slotSpells;
+    std::map<uint8, uint32> slotItemSets;
 };
 
 RequirementInterface* GetXianqiRequirementModule()
@@ -1255,6 +1256,18 @@ public:
                 player->RemoveAurasDueToSpell(spellId);
         status->slotSpells.clear();
 
+        for (auto const& itemSetPair : status->slotItemSets)
+        {
+            auto slotItr = status->slots.find(itemSetPair.first);
+            if (slotItr == status->slots.end())
+                continue;
+
+            ItemTemplate const* proto = sObjectMgr->GetItemTemplate(slotItr->second.itemId);
+            if (proto && proto->ItemSet)
+                RemoveItemsSetItem(player, proto);
+        }
+        status->slotItemSets.clear();
+
         for (auto const& slotPair : status->slotStats)
             for (XianqiAppliedStat const& effect : slotPair.second)
                 RemoveStatEffect(player, effect.statType, effect.statValue);
@@ -1293,6 +1306,20 @@ public:
 
         if (apply && item && item->IsBroken())
             return;
+
+        if (item && proto->ItemSet)
+        {
+            if (apply)
+            {
+                AddItemsSetItem(player, item);
+                status->slotItemSets[slot] = proto->ItemSet;
+            }
+            else
+            {
+                RemoveItemsSetItem(player, proto);
+                status->slotItemSets.erase(slot);
+            }
+        }
 
         float totalMultiplier = _statMultiplier;
 
@@ -1506,6 +1533,20 @@ private:
                 if (!IsSpellFromOtherSlot(status, slot, spellId))
                     player->RemoveAurasDueToSpell(spellId);
             status->slotSpells.erase(spellItr);
+        }
+
+        auto itemSetItr = status->slotItemSets.find(slot);
+        if (itemSetItr != status->slotItemSets.end())
+        {
+            auto slotItr = status->slots.find(slot);
+            ItemTemplate const* proto = nullptr;
+            if (slotItr != status->slots.end())
+                proto = sObjectMgr->GetItemTemplate(slotItr->second.itemId);
+
+            if (proto && proto->ItemSet)
+                RemoveItemsSetItem(player, proto);
+
+            status->slotItemSets.erase(itemSetItr);
         }
     }
 

@@ -73,6 +73,11 @@ void ScriptMgr::OnBeforeRollMeleeOutcomeAgainst(Unit const* attacker, Unit const
     CALL_ENABLED_HOOKS(UnitScript, UNITHOOK_ON_BEFORE_ROLL_MELEE_OUTCOME_AGAINST, script->OnBeforeRollMeleeOutcomeAgainst(attacker, victim, attType, attackerMaxSkillValueForLevel, victimMaxSkillValueForLevel, attackerWeaponSkill, victimDefenseSkill, crit_chance, miss_chance, dodge_chance, parry_chance, block_chance));
 }
 
+void ScriptMgr::OnAfterRollMeleeOutcomeAgainst(Unit const* attacker, Unit const* victim, WeaponAttackType attType, uint8 outcome)
+{
+    CALL_ENABLED_HOOKS(UnitScript, UNITHOOK_ON_AFTER_ROLL_MELEE_OUTCOME_AGAINST, script->OnAfterRollMeleeOutcomeAgainst(attacker, victim, attType, outcome));
+}
+
 void ScriptMgr::OnAuraApply(Unit* unit, Aura* aura)
 {
     CALL_ENABLED_HOOKS(UnitScript, UNITHOOK_ON_AURA_APPLY, script->OnAuraApply(unit, aura));

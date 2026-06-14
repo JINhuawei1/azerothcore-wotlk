@@ -1870,12 +1870,12 @@ struct SpellItemEnchantmentConditionEntry
 struct SpellVisualEntry
 {
     //uint32 Id;
-    //uint32 PrecastKit;
-    //uint32 CastingKit;
-    //uint32 ImpactKit;
-    //uint32 StateKit;
-    //uint32 StateDoneKit;
-    //uint32 ChannelKit;
+    uint32 PrecastKit;
+    uint32 CastKit;
+    uint32 ImpactKit;
+    uint32 StateKit;
+    uint32 StateDoneKit;
+    uint32 ChannelKit;
     uint32 HasMissile;
     int32 MissileModel;
     //uint32 MissilePathType;
@@ -1883,8 +1883,8 @@ struct SpellVisualEntry
     //uint32 MissileSound;
     //uint32 AnimEventSoundID;
     //uint32 Flags;
-    //uint32 CasterImpactKit;
-    //uint32 TargetImpactKit;
+    uint32 CasterImpactKit;
+    uint32 TargetImpactKit;
     //int32 MissileAttachment;
     //uint32 MissileFollowGroundHeight;
     //uint32 MissileFollowGroundDropSpeed;
@@ -1892,9 +1892,9 @@ struct SpellVisualEntry
     //uint32 MissileFollowGroundFlags;
     //uint32 MissileMotionId;
     //uint32 MissileTargetingKit;
-    //uint32 InstantAreaKit;
-    //uint32 ImpactAreaKit;
-    //uint32 PersistentAreaKit;
+    uint32 InstantAreaKit;
+    uint32 ImpactAreaKit;
+    uint32 PersistentAreaKit;
     //DBCPosition3D MissileCastOffset;
     //DBCPosition3D MissileImpactOffset;
 };

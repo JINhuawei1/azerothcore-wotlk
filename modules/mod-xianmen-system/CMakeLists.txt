@@ -12,6 +12,7 @@ endif()
 
 AC_ADD_SCRIPT("${CMAKE_CURRENT_LIST_DIR}/src/mod_xianmen_system.cpp")
 AC_ADD_SCRIPT("${CMAKE_CURRENT_LIST_DIR}/src/XianmenArtifactSlots.cpp")
+AC_ADD_SCRIPT("${CMAKE_CURRENT_LIST_DIR}/src/XianqiFeatureSpells.cpp")
 AC_ADD_SCRIPT_LOADER("mod_xianmen_system" "${CMAKE_CURRENT_LIST_DIR}/src/mod_xianmen_system_loader.cpp")
 
 AC_ADD_CONFIG_FILE("${CMAKE_CURRENT_LIST_DIR}/conf/mod_xianmen_system.conf.dist")

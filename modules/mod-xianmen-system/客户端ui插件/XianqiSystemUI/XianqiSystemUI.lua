@@ -1,6 +1,8 @@
 -- ============================================================
 -- 仙器装备 UI (XianqiSystemUI)
--- 10 仙器槽(1-10) + 13 扩展槽(11-23，按部位)
+-- 10 仙器槽(1-10) + 19 扩展槽(11-29，按部位)
+-- 独立艺术面板窗口，背景使用 Assets/ 下自制暗金设计图
+-- (512x1024 单张 BLP/TGA，槽位按设计稿像素坐标定位)
 -- 服务端: mod-xianmen-system/src/XianmenArtifactSlots.cpp
 -- 协议: XIANQI 前缀，下行 U=<解锁位图>;E=<槽:物品ID:GUID,...>
 --       上行走聊天命令 .仙器 查看/装备/卸下/解锁
@@ -12,8 +14,18 @@ local PLUGIN_NAME = "XianqiSystemUI"
 local ICON_SIZE = 20
 local ICON_TEXTURE = "Interface\\Icons\\INV_Sword_39"
 local SLOT_FIRST, SLOT_LAST = 1, 29
-local SLOT_SIZE = 40
 local QUESTION_MARK_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
+
+local ASSET_PATH = "Interface\\AddOns\\XianqiSystemUI\\Assets\\"
+local XIANQI_TEX_SLOT_LOCKED = ASSET_PATH .. "xianqi-slot-locked-red"
+local ART_CANVAS_W = 512        -- 设计稿画布宽度
+local ART_CANVAS_H = 1024       -- 设计稿画布高度
+local ART_SCALE = 0.42          -- 设计稿像素 -> 屏幕坐标缩放（整体窗口大小在此调整，竖条≈215x430）
+local ASCENSION_ANCHOR_GAP = -2  -- 贴靠飞升窗口外侧，轻微重叠避免中间露缝
+
+local function px(v)
+    return v * ART_SCALE
+end
 
 XianqiSystemUIDB = XianqiSystemUIDB or {}
 
@@ -24,10 +36,12 @@ local pendingIcons = {}         -- itemId -> true（等待 GET_ITEM_INFO_RECEIVE
 local iconButton
 local pluginManagerRegistered = false
 local pluginManagerConfigApplied = false
+local ascensionFrameHooked = false
+local characterFrameHooked = false
 local dragSource = nil          -- { bag, slot, itemId } 拖起物品时的来源格
 
--- 槽位静态配置（与 _仙门_仙器槽位 数据一致；扩展槽 11-29 镜像官方 19 装备槽）
--- invSlotName 用于取官方空槽底图；equipLocs 用于光标高亮（仅扩展槽）
+-- 槽位静态配置（与 _仙门_仙器槽位 数据一致）
+-- equipLocs 用于光标高亮（仅扩展槽）
 local SLOT_CONFIG = {
     [1]  = { name = "仙器槽一",    artifact = true },
     [2]  = { name = "仙器槽二",    artifact = true },
@@ -39,30 +53,67 @@ local SLOT_CONFIG = {
     [8]  = { name = "仙器槽八",    artifact = true },
     [9]  = { name = "仙器槽九",    artifact = true },
     [10] = { name = "仙器槽十",    artifact = true },
-    [11] = { name = "头部扩展槽",  invSlotName = "HeadSlot",          equipLocs = { INVTYPE_HEAD = true } },
-    [12] = { name = "颈部扩展槽",  invSlotName = "NeckSlot",          equipLocs = { INVTYPE_NECK = true } },
-    [13] = { name = "肩部扩展槽",  invSlotName = "ShoulderSlot",      equipLocs = { INVTYPE_SHOULDER = true } },
-    [14] = { name = "衬衣扩展槽",  invSlotName = "ShirtSlot",         equipLocs = { INVTYPE_BODY = true } },
-    [15] = { name = "胸部扩展槽",  invSlotName = "ChestSlot",         equipLocs = { INVTYPE_CHEST = true, INVTYPE_ROBE = true } },
-    [16] = { name = "腰带扩展槽",  invSlotName = "WaistSlot",         equipLocs = { INVTYPE_WAIST = true } },
-    [17] = { name = "腿部扩展槽",  invSlotName = "LegsSlot",          equipLocs = { INVTYPE_LEGS = true } },
-    [18] = { name = "脚部扩展槽",  invSlotName = "FeetSlot",          equipLocs = { INVTYPE_FEET = true } },
-    [19] = { name = "护腕扩展槽",  invSlotName = "WristSlot",         equipLocs = { INVTYPE_WRIST = true } },
-    [20] = { name = "手套扩展槽",  invSlotName = "HandsSlot",         equipLocs = { INVTYPE_HAND = true } },
-    [21] = { name = "戒指扩展槽1", invSlotName = "Finger0Slot",       equipLocs = { INVTYPE_FINGER = true } },
-    [22] = { name = "戒指扩展槽2", invSlotName = "Finger1Slot",       equipLocs = { INVTYPE_FINGER = true } },
-    [23] = { name = "饰品扩展槽1", invSlotName = "Trinket0Slot",      equipLocs = { INVTYPE_TRINKET = true } },
-    [24] = { name = "饰品扩展槽2", invSlotName = "Trinket1Slot",      equipLocs = { INVTYPE_TRINKET = true } },
-    [25] = { name = "披风扩展槽",  invSlotName = "BackSlot",          equipLocs = { INVTYPE_CLOAK = true } },
-    [26] = { name = "主手扩展槽",  invSlotName = "MainHandSlot",      weapon = true, equipLocs = {
+    [11] = { name = "头部扩展槽",  equipLocs = { INVTYPE_HEAD = true } },
+    [12] = { name = "颈部扩展槽",  equipLocs = { INVTYPE_NECK = true } },
+    [13] = { name = "肩部扩展槽",  equipLocs = { INVTYPE_SHOULDER = true } },
+    [14] = { name = "衬衣扩展槽",  equipLocs = { INVTYPE_BODY = true } },
+    [15] = { name = "胸部扩展槽",  equipLocs = { INVTYPE_CHEST = true, INVTYPE_ROBE = true } },
+    [16] = { name = "腰带扩展槽",  equipLocs = { INVTYPE_WAIST = true } },
+    [17] = { name = "腿部扩展槽",  equipLocs = { INVTYPE_LEGS = true } },
+    [18] = { name = "脚部扩展槽",  equipLocs = { INVTYPE_FEET = true } },
+    [19] = { name = "护腕扩展槽",  equipLocs = { INVTYPE_WRIST = true } },
+    [20] = { name = "手套扩展槽",  equipLocs = { INVTYPE_HAND = true } },
+    [21] = { name = "戒指扩展槽1", equipLocs = { INVTYPE_FINGER = true } },
+    [22] = { name = "戒指扩展槽2", equipLocs = { INVTYPE_FINGER = true } },
+    [23] = { name = "饰品扩展槽1", equipLocs = { INVTYPE_TRINKET = true } },
+    [24] = { name = "饰品扩展槽2", equipLocs = { INVTYPE_TRINKET = true } },
+    [25] = { name = "披风扩展槽",  equipLocs = { INVTYPE_CLOAK = true } },
+    [26] = { name = "主手扩展槽",  weapon = true, equipLocs = {
         INVTYPE_WEAPON = true, INVTYPE_2HWEAPON = true, INVTYPE_WEAPONMAINHAND = true,
         INVTYPE_WEAPONOFFHAND = true, INVTYPE_SHIELD = true, INVTYPE_HOLDABLE = true } },
-    [27] = { name = "副手扩展槽",  invSlotName = "SecondaryHandSlot", weapon = true, equipLocs = {
+    [27] = { name = "副手扩展槽",  weapon = true, equipLocs = {
         INVTYPE_WEAPON = true, INVTYPE_2HWEAPON = true, INVTYPE_WEAPONMAINHAND = true,
         INVTYPE_WEAPONOFFHAND = true, INVTYPE_SHIELD = true, INVTYPE_HOLDABLE = true } },
-    [28] = { name = "远程扩展槽",  invSlotName = "RangedSlot",        weapon = true, equipLocs = {
+    [28] = { name = "远程扩展槽",  weapon = true, equipLocs = {
         INVTYPE_RANGED = true, INVTYPE_RANGEDRIGHT = true, INVTYPE_THROWN = true, INVTYPE_RELIC = true } },
-    [29] = { name = "战袍扩展槽",  invSlotName = "TabardSlot",        equipLocs = { INVTYPE_TABARD = true } },
+    [29] = { name = "战袍扩展槽",  equipLocs = { INVTYPE_TABARD = true } },
+}
+
+-- 槽位在 512x1024 设计稿上的开孔矩形（像素实测值，勿手调）
+--   左两竖列 = 19 扩展槽；右竖列 = 10 仙器槽
+local SLOT_ART = {
+    -- 仙器槽（右竖列，上->下）
+    [1]  = { x = 354, y = 116, w = 78, h = 78, octagon = true },
+    [2]  = { x = 354, y = 206, w = 78, h = 78, octagon = true },
+    [3]  = { x = 354, y = 296, w = 78, h = 78, octagon = true },
+    [4]  = { x = 354, y = 386, w = 78, h = 78, octagon = true },
+    [5]  = { x = 354, y = 476, w = 78, h = 78, octagon = true },
+    [6]  = { x = 354, y = 566, w = 78, h = 78, octagon = true },
+    [7]  = { x = 354, y = 656, w = 78, h = 78, octagon = true },
+    [8]  = { x = 354, y = 746, w = 78, h = 78, octagon = true },
+    [9]  = { x = 354, y = 836, w = 78, h = 78, octagon = true },
+    [10] = { x = 354, y = 926, w = 78, h = 78, octagon = true },
+    -- 扩展槽左竖列（10）
+    [11] = { x = 58,  y = 116, w = 78, h = 78 },
+    [12] = { x = 58,  y = 206, w = 78, h = 78 },
+    [13] = { x = 58,  y = 296, w = 78, h = 78 },
+    [25] = { x = 58,  y = 386, w = 78, h = 78 },
+    [15] = { x = 58,  y = 476, w = 78, h = 78 },
+    [14] = { x = 58,  y = 566, w = 78, h = 78 },
+    [29] = { x = 58,  y = 656, w = 78, h = 78 },
+    [19] = { x = 58,  y = 746, w = 78, h = 78 },
+    [20] = { x = 58,  y = 836, w = 78, h = 78 },
+    [16] = { x = 58,  y = 926, w = 78, h = 78 },
+    -- 扩展槽中竖列（9）
+    [17] = { x = 206, y = 116, w = 78, h = 78 },
+    [18] = { x = 206, y = 206, w = 78, h = 78 },
+    [21] = { x = 206, y = 296, w = 78, h = 78 },
+    [22] = { x = 206, y = 386, w = 78, h = 78 },
+    [23] = { x = 206, y = 476, w = 78, h = 78 },
+    [24] = { x = 206, y = 566, w = 78, h = 78 },
+    [26] = { x = 206, y = 656, w = 78, h = 78 },
+    [27] = { x = 206, y = 746, w = 78, h = 78 },
+    [28] = { x = 206, y = 836, w = 78, h = 78 },
 }
 
 local function Print(msg)
@@ -110,37 +161,106 @@ local function GetCachedItemIcon(itemId)
 end
 
 -- ============================================================
--- 主框架：全部槽位停靠在官方角色面板上，透明无边框
+-- 主窗口：独立艺术面板（可拖动、ESC 关闭）
 -- ============================================================
 
-local UI = CreateFrame("Frame", "XianqiSystemUIFrame", PaperDollFrame or CharacterFrame)
-UI:SetAllPoints()
--- 抬高图层，避免被官方武器座等装饰贴图盖住
-UI:SetFrameLevel(((CharacterFrame and CharacterFrame:GetFrameLevel()) or 1) + 10)
-local extPanel = UI
+local UI = CreateFrame("Frame", "XianqiSystemUIFrame", UIParent)
+UI:SetSize(px(ART_CANVAS_W), px(ART_CANVAS_H))
+UI:SetPoint("CENTER")
+UI:SetFrameStrata("LOW")
+UI:SetFrameLevel(4)
+UI:SetMovable(true)
+UI:EnableMouse(true)
+UI:RegisterForDrag("LeftButton")
+UI:SetClampedToScreen(true)
+UI:Hide()
+table.insert(UISpecialFrames, "XianqiSystemUIFrame")
 
-local title = UI:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+UI:SetScript("OnDragStart", function(self)
+    self:StartMoving()
+end)
+UI:SetScript("OnDragStop", function(self)
+    self:StopMovingOrSizing()
+    local point, _, _, x, y = self:GetPoint()
+    if point then
+        XianqiSystemUIDB.windowPosition = { point = point, x = x, y = y }
+    end
+end)
+
+local function IsUsableAnchorFrame(frame)
+    if not frame or frame == UI or not frame.GetWidth or not frame.GetHeight then
+        return false
+    end
+
+    if frame.IsShown and not frame:IsShown() then
+        return false
+    end
+
+    if frame.IsVisible and not frame:IsVisible() then
+        return false
+    end
+
+    return (frame:GetWidth() or 0) >= 180 and (frame:GetHeight() or 0) >= 360
+end
+
+local function FindAscensionFrame()
+    local frame = _G.AscensionMainFrame
+    if IsUsableAnchorFrame(frame) then
+        return frame
+    end
+
+    return nil
+end
+
+local function AnchorBesideAscension()
+    local ascensionFrame = FindAscensionFrame()
+    if not ascensionFrame then
+        return false
+    end
+
+    UI:ClearAllPoints()
+    local screenWidth = GetScreenWidth and GetScreenWidth() or 0
+    local ascensionRight = ascensionFrame.GetRight and ascensionFrame:GetRight() or nil
+    local uiWidth = UI.GetWidth and UI:GetWidth() or px(ART_CANVAS_W)
+
+    if ascensionRight and screenWidth > 0 and (ascensionRight + ASCENSION_ANCHOR_GAP + uiWidth) > screenWidth then
+        UI:SetPoint("TOPRIGHT", ascensionFrame, "TOPLEFT", -ASCENSION_ANCHOR_GAP, 0)
+    else
+        UI:SetPoint("TOPLEFT", ascensionFrame, "TOPRIGHT", ASCENSION_ANCHOR_GAP, 0)
+    end
+    return true
+end
+
+local function RestoreWindowPosition()
+    if AnchorBesideAscension() then
+        return
+    end
+
+    local pos = XianqiSystemUIDB.windowPosition
+    if pos and pos.point then
+        UI:ClearAllPoints()
+        UI:SetPoint(pos.point, UIParent, pos.point, pos.x or 0, pos.y or 0)
+    end
+end
+
+-- 背景：纯槽位面板（单张 1024x1024 BLP/TGA）
+local panelTexture = UI:CreateTexture(nil, "BACKGROUND")
+panelTexture:SetTexture(ASSET_PATH .. "xianqi-panel-reforge-darkgold-01")
+panelTexture:SetAllPoints(UI)
+
+local title = UI:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+title:SetPoint("TOP", UI, "TOP", 0, -16)
 title:SetText("|cffffd700仙器装备|r")
+
+-- 关闭按钮整体缩小；与飞升关闭按钮一样贴住右上角
+local CLOSE_SCALE = 0.95
+local closeButton = CreateFrame("Button", nil, UI, "UIPanelCloseButton")
+closeButton:SetScale(CLOSE_SCALE)
+closeButton:SetPoint("TOPRIGHT", UI, "TOPRIGHT", -3 / CLOSE_SCALE, -3 / CLOSE_SCALE)
 
 -- ============================================================
 -- 槽位按钮
 -- ============================================================
-
-local function GetEmptySlotTexture(slotId)
-    local config = SLOT_CONFIG[slotId]
-    if config.artifact then
-        return "Interface\\Paperdoll\\UI-PaperDoll-Slot-Relic"
-    end
-
-    if config.invSlotName and GetInventorySlotInfo then
-        local ok, _, texture = pcall(GetInventorySlotInfo, config.invSlotName)
-        if ok and texture then
-            return texture
-        end
-    end
-
-    return "Interface\\Paperdoll\\UI-Backpack-EmptySlot"
-end
 
 local function UpdateSlot(slotId)
     local button = slotButtons[slotId]
@@ -155,14 +275,15 @@ local function UpdateSlot(slotId)
     button.icon:SetVertexColor(1, 1, 1)
 
     if not unlocked then
-        button.icon:SetTexture(GetEmptySlotTexture(slotId))
-        button.icon:SetVertexColor(0.35, 0.35, 0.35)
+        button.icon:Hide()
         button.lockIcon:Show()
     elseif data and data.itemId then
         local icon = GetCachedItemIcon(data.itemId)
         button.icon:SetTexture(icon or QUESTION_MARK_ICON)
+        button.icon:Show()
     else
-        button.icon:SetTexture(GetEmptySlotTexture(slotId))
+        -- 空槽：露出艺术图开孔即可
+        button.icon:Hide()
     end
 end
 
@@ -221,6 +342,78 @@ end
 local function After(seconds, func)
     table.insert(delayQueue, { remaining = seconds, func = func })
     delayFrame:SetScript("OnUpdate", DelayOnUpdate)
+end
+
+local function HookAscensionFrame()
+    if ascensionFrameHooked or not AscensionMainFrame or not AscensionMainFrame.HookScript then
+        return
+    end
+
+    AscensionMainFrame:HookScript("OnShow", function()
+        if UI:IsShown() then
+            RestoreWindowPosition()
+            After(0.05, RestoreWindowPosition)
+            After(0.25, RestoreWindowPosition)
+        end
+    end)
+
+    ascensionFrameHooked = true
+end
+
+local function ShowWithCharacterPanel()
+    if not UI:IsShown() then
+        UI:Show()
+    else
+        RestoreWindowPosition()
+    end
+
+    HookAscensionFrame()
+    After(0.05, RestoreWindowPosition)
+    After(0.25, RestoreWindowPosition)
+end
+
+local function HideWithCharacterPanel()
+    if UI:IsShown() then
+        UI:Hide()
+    end
+end
+
+local function HookCharacterFrame()
+    if characterFrameHooked or not CharacterFrame then
+        return
+    end
+
+    if CharacterFrame.HookScript then
+        CharacterFrame:HookScript("OnShow", ShowWithCharacterPanel)
+        CharacterFrame:HookScript("OnHide", HideWithCharacterPanel)
+    else
+        local oldOnShow = CharacterFrame:GetScript("OnShow")
+        CharacterFrame:SetScript("OnShow", function(self, ...)
+            if oldOnShow then
+                oldOnShow(self, ...)
+            end
+            ShowWithCharacterPanel()
+        end)
+
+        local oldOnHide = CharacterFrame:GetScript("OnHide")
+        CharacterFrame:SetScript("OnHide", function(self, ...)
+            if oldOnHide then
+                oldOnHide(self, ...)
+            end
+            HideWithCharacterPanel()
+        end)
+    end
+
+    if PaperDollFrame and PaperDollFrame.HookScript then
+        PaperDollFrame:HookScript("OnShow", ShowWithCharacterPanel)
+        PaperDollFrame:HookScript("OnHide", HideWithCharacterPanel)
+    end
+
+    characterFrameHooked = true
+
+    if CharacterFrame.IsShown and CharacterFrame:IsShown() then
+        ShowWithCharacterPanel()
+    end
 end
 
 local function EquipCursorItem(slotId)
@@ -379,21 +572,22 @@ local function SlotOnEnter(self)
     GameTooltip:Show()
 end
 
-local function CreateSlotButton(slotId, parent, size)
-    local button = CreateFrame("Button", "XianqiSlot" .. slotId, parent or UI)
-    button:SetSize(size or SLOT_SIZE, size or SLOT_SIZE)
+local function CreateSlotButton(slotId)
+    local art = SLOT_ART[slotId]
+    local button = CreateFrame("Button", "XianqiSlot" .. slotId, UI)
+    button:SetSize(px(art.w), px(art.h))
+    button:SetPoint("TOPLEFT", UI, "TOPLEFT", px(art.x), -px(art.y))
+    button:SetFrameLevel(UI:GetFrameLevel() + 2)
     button.slotId = slotId
     button:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     button:RegisterForDrag("LeftButton")
 
-    local bg = button:CreateTexture(nil, "BACKGROUND")
-    bg:SetAllPoints()
-    bg:SetTexture("Interface\\Buttons\\UI-EmptySlot-Disabled")
-    bg:SetTexCoord(0.15, 0.85, 0.15, 0.85)
-
+    -- 八角槽内缩更多，让方形物品图标不压住金边
+    local inset = px(art.octagon and 9 or 5)
     local icon = button:CreateTexture(nil, "ARTWORK")
-    icon:SetPoint("TOPLEFT", 2, -2)
-    icon:SetPoint("BOTTOMRIGHT", -2, 2)
+    icon:SetPoint("TOPLEFT", inset, -inset)
+    icon:SetPoint("BOTTOMRIGHT", -inset, inset)
+    icon:Hide()
     button.icon = icon
 
     local selected = button:CreateTexture(nil, "OVERLAY")
@@ -405,10 +599,9 @@ local function CreateSlotButton(slotId, parent, size)
     button.selected = selected
 
     local lockIcon = button:CreateTexture(nil, "OVERLAY")
-    lockIcon:SetSize(16, 16)
+    lockIcon:SetSize(px(art.w) * 1.20, px(art.h) * 1.20)
     lockIcon:SetPoint("CENTER")
-    lockIcon:SetTexture("Interface\\LFGFrame\\UI-LFG-ICON-LOCK")
-    lockIcon:SetTexCoord(0, 0.71875, 0, 0.875)
+    lockIcon:SetTexture(XIANQI_TEX_SLOT_LOCKED)
     lockIcon:Hide()
     button.lockIcon = lockIcon
 
@@ -431,92 +624,9 @@ local function CreateSlotButton(slotId, parent, size)
     return button
 end
 
--- 布局：
---   仙器槽 2×5 在独立小面板
---   扩展槽逐个锚定到官方装备格外侧：左列贴官方左列、右列贴官方右列、武器贴官方武器下方
---   （行与官方完全对齐，随角色面板显示/隐藏）
-local EXT_SLOT_ANCHORS = {
-    -- 左列（官方左列：头/颈/肩/披风/胸/衬衣/战袍/护腕）
-    [11] = { official = "CharacterHeadSlot",          side = "LEFT" },
-    [12] = { official = "CharacterNeckSlot",          side = "LEFT" },
-    [13] = { official = "CharacterShoulderSlot",      side = "LEFT" },
-    [25] = { official = "CharacterBackSlot",          side = "LEFT" },
-    [15] = { official = "CharacterChestSlot",         side = "LEFT" },
-    [14] = { official = "CharacterShirtSlot",         side = "LEFT" },
-    [29] = { official = "CharacterTabardSlot",        side = "LEFT" },
-    [19] = { official = "CharacterWristSlot",         side = "LEFT" },
-    -- 右列（官方右列：手套/腰带/腿/脚/戒1/戒2/饰1/饰2）
-    [20] = { official = "CharacterHandsSlot",         side = "RIGHT" },
-    [16] = { official = "CharacterWaistSlot",         side = "RIGHT" },
-    [17] = { official = "CharacterLegsSlot",          side = "RIGHT" },
-    [18] = { official = "CharacterFeetSlot",          side = "RIGHT" },
-    [21] = { official = "CharacterFinger0Slot",       side = "RIGHT" },
-    [22] = { official = "CharacterFinger1Slot",       side = "RIGHT" },
-    [23] = { official = "CharacterTrinket0Slot",      side = "RIGHT" },
-    [24] = { official = "CharacterTrinket1Slot",      side = "RIGHT" },
-    -- 底部（官方武器槽正下方）
-    [26] = { official = "CharacterMainHandSlot",      side = "BOTTOM" },
-    [27] = { official = "CharacterSecondaryHandSlot", side = "BOTTOM" },
-    [28] = { official = "CharacterRangedSlot",        side = "BOTTOM" },
-}
-
--- 与官方框体的间距（可微调）
-local EXT_SIDE_GAP_LEFT = 5     -- 左列与官方左列的水平间距
-local EXT_SIDE_GAP_RIGHT = 5    -- 右列与官方右列的水平间距
-local EXT_BOTTOM_GAP = 38       -- 武器行与官方武器格的垂直间距
-local ARTIFACT_GAP = -4         -- 仙器槽与扩展槽右列的水平间距（负值=可见图案贴合）
-local ARTIFACT_COL_PAD = -10    -- 仙器槽两列间距（负值抵消贴图透明边距）
-local ARTIFACT_ROW_PAD = -10    -- 仙器槽行间距（负值抵消贴图透明边距）
-
--- 仙器槽块顶部对齐官方右列第一格
-local ARTIFACT_TOP_ANCHOR = "CharacterHandsSlot"
-
 local function LayoutSlots()
-    -- 扩展槽：锚定官方装备格，尺寸直接取官方格实际宽高保证完全一致
-    for slotId, anchor in pairs(EXT_SLOT_ANCHORS) do
-        local official = _G[anchor.official]
-        local button = CreateSlotButton(slotId, extPanel)
-        if official then
-            button:SetSize(official:GetWidth(), official:GetHeight())
-            if anchor.side == "LEFT" then
-                button:SetPoint("RIGHT", official, "LEFT", -EXT_SIDE_GAP_LEFT, 0)
-            elseif anchor.side == "RIGHT" then
-                button:SetPoint("LEFT", official, "RIGHT", EXT_SIDE_GAP_RIGHT, 0)
-            else
-                button:SetPoint("TOP", official, "BOTTOM", 0, -EXT_BOTTOM_GAP)
-            end
-        else
-            -- 官方按钮不存在时兜底挂在面板左上角，避免报错
-            button:SetSize(37, 37)
-            button:SetPoint("TOPLEFT", extPanel, "TOPLEFT", 0, 0)
-        end
-        slotButtons[slotId] = button
-    end
-
-    -- 仙器槽：紧凑 2列×5行，停靠在扩展槽右列外侧，顶部与官方右列第一格对齐
-    local topAnchor = _G[ARTIFACT_TOP_ANCHOR]
-    for i = 1, 10 do
-        local row = math.floor((i - 1) / 2)
-        local col = (i - 1) % 2
-        local button = CreateSlotButton(i, extPanel)
-        if topAnchor then
-            local w = topAnchor:GetWidth()
-            local h = topAnchor:GetHeight()
-            button:SetSize(w, h)
-            local offsetX = EXT_SIDE_GAP_RIGHT + w + ARTIFACT_GAP + col * (w + ARTIFACT_COL_PAD)
-            local offsetY = -row * (h + ARTIFACT_ROW_PAD)
-            button:SetPoint("TOPLEFT", topAnchor, "TOPRIGHT", offsetX, offsetY)
-        else
-            button:SetSize(37, 37)
-            button:SetPoint("TOPLEFT", extPanel, "TOPLEFT", 0, 0)
-        end
-        slotButtons[i] = button
-    end
-
-    -- 标题：悬在仙器槽块上方
-    if slotButtons[1] then
-        title:ClearAllPoints()
-        title:SetPoint("BOTTOMLEFT", slotButtons[1], "TOPLEFT", 0, 6)
+    for slotId in pairs(SLOT_ART) do
+        slotButtons[slotId] = CreateSlotButton(slotId)
     end
 end
 
@@ -577,8 +687,11 @@ end
 -- ============================================================
 
 local function ToggleUI()
-    -- 槽位停靠在角色面板上，入口即开关角色面板
-    ToggleCharacter("PaperDollFrame")
+    if UI:IsShown() then
+        UI:Hide()
+    else
+        UI:Show()
+    end
 end
 
 local function SaveIconPosition(button)
@@ -696,8 +809,6 @@ local function ApplyPluginManagerConfig(posX, posY, width, height, enabled)
         return
     end
 
-    UI:Show()
-
     local button = CreateIconButton()
     button:SetSize(ICON_SIZE, ICON_SIZE)
 
@@ -774,16 +885,30 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
         local loaded = ...
         if loaded == ADDON_NAME then
+            RestoreWindowPosition()
+            HookAscensionFrame()
+            HookCharacterFrame()
             if RegisterAddonMessagePrefix then
                 pcall(RegisterAddonMessagePrefix, PREFIX)
             elseif C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
                 pcall(C_ChatInfo.RegisterAddonMessagePrefix, PREFIX)
             end
+        elseif loaded == "AscensionSystemUI" then
+            HookAscensionFrame()
+            if UI:IsShown() then
+                RestoreWindowPosition()
+            end
+        elseif loaded == "Blizzard_CharacterUI" then
+            HookCharacterFrame()
+            After(0.05, HookCharacterFrame)
         end
         return
     end
 
     if event == "PLAYER_ENTERING_WORLD" then
+        HookAscensionFrame()
+        HookCharacterFrame()
+        After(1, HookCharacterFrame)
         After(3, RequestData)
         return
     end
@@ -813,6 +938,10 @@ SlashCmdList.XIANQISYSTEMUI = function()
 end
 
 UI:SetScript("OnShow", function()
+    HookAscensionFrame()
+    RestoreWindowPosition()
+    After(0.05, RestoreWindowPosition)
+    After(0.25, RestoreWindowPosition)
     RequestData()
     UpdateAllSlots()
 end)

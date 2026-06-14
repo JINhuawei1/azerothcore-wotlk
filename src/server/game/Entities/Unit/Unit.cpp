@@ -3563,9 +3563,15 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
 
 MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackType attType, int32 crit_chance, int32 miss_chance, int32 dodge_chance, int32 parry_chance, int32 block_chance) const
 {
+    auto finishOutcome = [this, victim, attType](MeleeHitOutcome outcome) -> MeleeHitOutcome
+    {
+        sScriptMgr->OnAfterRollMeleeOutcomeAgainst(this, victim, attType, static_cast<uint8>(outcome));
+        return outcome;
+    };
+
     if (victim->IsCreature() && victim->ToCreature()->IsEvadingAttacks())
     {
-        return MELEE_HIT_EVADE;
+        return finishOutcome(MELEE_HIT_EVADE);
     }
 
     int32 attackerMaxSkillValueForLevel = GetMaxSkillValueForLevel(victim);
@@ -3590,7 +3596,7 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
     if (tmp > 0 && roll < (sum += tmp))
     {
         LOG_DEBUG("entities.unit", "RollMeleeOutcomeAgainst: MISS");
-        return MELEE_HIT_MISS;
+        return finishOutcome(MELEE_HIT_MISS);
     }
 
     // Dodge chance
@@ -3627,7 +3633,7 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
                 && roll < (sum += tmp))
         {
             LOG_DEBUG("entities.unit", "RollMeleeOutcomeAgainst: DODGE <{}, {})", sum - tmp, sum);
-            return MELEE_HIT_DODGE;
+            return finishOutcome(MELEE_HIT_DODGE);
         }
     }
 
@@ -3662,7 +3668,7 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
                     && roll < (sum += tmp))
             {
                 LOG_DEBUG("entities.unit", "RollMeleeOutcomeAgainst: PARRY <{}, {})", sum - tmp, sum);
-                return MELEE_HIT_PARRY;
+                return finishOutcome(MELEE_HIT_PARRY);
             }
         }
 
@@ -3679,7 +3685,7 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
                     && roll < (sum += tmp))
             {
                 LOG_DEBUG("entities.unit", "RollMeleeOutcomeAgainst: BLOCK <{}, {})", sum - tmp, sum);
-                return MELEE_HIT_BLOCK;
+                return finishOutcome(MELEE_HIT_BLOCK);
             }
         }
     }
@@ -3700,7 +3706,7 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
         if (roll < (sum += tmp))
         {
             LOG_DEBUG("entities.unit", "RollMeleeOutcomeAgainst: GLANCING <{}, {})", sum - 4000, sum);
-            return MELEE_HIT_GLANCING;
+            return finishOutcome(MELEE_HIT_GLANCING);
         }
     }
 
@@ -3724,7 +3730,7 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
             if (roll < (sum += tmp))
             {
                 LOG_DEBUG("entities.unit", "RollMeleeOutcomeAgainst: CRUSHING <{}, {})", sum - tmp, sum);
-                return MELEE_HIT_CRUSHING;
+                return finishOutcome(MELEE_HIT_CRUSHING);
             }
         }
     }
@@ -3738,11 +3744,11 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
         if (IsCreature() && (ToCreature()->HasFlagsExtra(CREATURE_FLAG_EXTRA_NO_CRIT)))
             LOG_DEBUG("entities.unit", "RollMeleeOutcomeAgainst: CRIT DISABLED)");
         else
-            return MELEE_HIT_CRIT;
+            return finishOutcome(MELEE_HIT_CRIT);
     }
 
     LOG_DEBUG("entities.unit", "RollMeleeOutcomeAgainst: NORMAL");
-    return MELEE_HIT_NORMAL;
+    return finishOutcome(MELEE_HIT_NORMAL);
 }
 
 uint128 Unit::CalculateDamage(WeaponAttackType attType, bool normalized, bool addTotalPct, uint8 itemDamagesMask /*= 0*/)
