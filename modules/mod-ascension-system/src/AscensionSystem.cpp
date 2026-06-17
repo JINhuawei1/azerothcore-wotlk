@@ -10,6 +10,7 @@
 #include "World.h"
 #include "Mail.h"
 #include "DBCStores.h"
+#include "Spell.h"
 #include "SpellAuras.h"
 #include "Util.h"
 #include <array>
@@ -532,15 +533,164 @@ namespace
         }
     }
 
-    void CastAscensionEquipSpell(Player* player, Item* item, SpellInfo const* spellInfo)
+    bool IsAscensionWeaponSlotForAttack(uint8 slot, WeaponAttackType attType)
     {
-        (void)item;
+        switch (attType)
+        {
+            case BASE_ATTACK:
+                return slot == ASCENSION_SLOT_MAINHAND;
+            case OFF_ATTACK:
+                return slot == ASCENSION_SLOT_OFFHAND;
+            case RANGED_ATTACK:
+                return slot == ASCENSION_SLOT_RANGED;
+            default:
+                return false;
+        }
+    }
 
+    bool IsAscensionDamageTriggeredCombatSpellId(uint32 spellId)
+    {
+        return spellId >= 383001 && spellId <= 383084;
+    }
+
+    bool HasAscensionDamageTriggeredCombatSpell(ItemTemplate const* proto)
+    {
+        if (!proto)
+            return false;
+
+        for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+        {
+            _Spell const& spellData = proto->Spells[i];
+            if (spellData.SpellTrigger == ITEM_SPELLTRIGGER_CHANCE_ON_HIT
+                && IsAscensionDamageTriggeredCombatSpellId(spellData.SpellId))
+                return true;
+        }
+
+        return false;
+    }
+
+    bool CastAscensionDamageTriggeredCombatSpell(Player* player, Unit* target, Item* item, SpellInfo const* spellInfo)
+    {
+        if (!player || !target || !target->IsAlive() || target == player)
+            return false;
+
+        return player->TriggerDamageTriggeredArtifactItemProcSpell(target, item, spellInfo);
+    }
+
+    bool CastAscensionDamageTriggeredCombatSpells(Player* player, Unit* target, Item* item, ItemTemplate const* proto)
+    {
+        if (!player || !target || !proto)
+            return false;
+
+        bool triggered = false;
+        for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+        {
+            _Spell const& spellData = proto->Spells[i];
+            if (spellData.SpellTrigger != ITEM_SPELLTRIGGER_CHANCE_ON_HIT || !IsAscensionDamageTriggeredCombatSpellId(spellData.SpellId))
+                continue;
+
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellData.SpellId);
+            if (!spellInfo)
+                continue;
+
+            if (CastAscensionDamageTriggeredCombatSpell(player, target, item, spellInfo))
+                triggered = true;
+        }
+
+        return triggered;
+    }
+
+    bool CanAscensionItemProcForAttack(uint8 slot, ItemTemplate const* proto, WeaponAttackType attType)
+    {
+        if (!proto)
+            return false;
+
+        // 383001-383084 按“任意玩家伤害触发”处理，避免依赖射击/武器命中入口并防止重复触发。
+        if (HasAscensionDamageTriggeredCombatSpell(proto))
+            return false;
+
+        if (proto->Class != ITEM_CLASS_WEAPON)
+            return true;
+
+        return IsAscensionWeaponSlotForAttack(slot, attType);
+    }
+
+    void CastAscensionDamageTriggeredItemCombatSpells(Player* player, Unit* target, uint32 procVictim, uint32 procEx)
+    {
+        if (!player || !target || !target->IsAlive() || target == player)
+            return;
+
+        PlayerAscensionStatus* status = sAscensionManager->GetPlayerStatus(player->GetGUID().GetCounter());
+        if (!status || status->slots.empty())
+            return;
+
+        for (auto const& slotPair : status->slots)
+        {
+            uint8 ascensionSlot = slotPair.first;
+
+            AscensionSlotControl const* control = sAscensionManager->GetSlotControl(ascensionSlot);
+            if (control && !control->enabled)
+                continue;
+
+            Item* ascensionItem = slotPair.second.itemPtr;
+            if (!ascensionItem || ascensionItem->IsBroken())
+                continue;
+
+            ItemTemplate const* ascensionProto = ascensionItem->GetTemplate();
+            if (!HasAscensionDamageTriggeredCombatSpell(ascensionProto))
+                continue;
+
+            CastAscensionDamageTriggeredCombatSpells(player, target, ascensionItem, ascensionProto);
+        }
+    }
+
+    bool HasAscensionItemUseSpell(Item* item, ItemTemplate const* proto)
+    {
+        if (!item || !proto)
+            return false;
+
+        for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+            if (proto->Spells[i].SpellId && proto->Spells[i].SpellTrigger == ITEM_SPELLTRIGGER_ON_USE)
+                return true;
+
+        for (uint8 enchantSlot = 0; enchantSlot < MAX_ENCHANTMENT_SLOT; ++enchantSlot)
+        {
+            uint32 enchantId = item->GetEnchantmentId(EnchantmentSlot(enchantSlot));
+            if (!enchantId)
+                continue;
+
+            SpellItemEnchantmentEntry const* enchant = sSpellItemEnchantmentStore.LookupEntry(enchantId);
+            if (!enchant)
+                continue;
+
+            for (uint8 effectIndex = 0; effectIndex < MAX_SPELL_ITEM_ENCHANTMENT_EFFECTS; ++effectIndex)
+                if (enchant->type[effectIndex] == ITEM_ENCHANTMENT_TYPE_USE_SPELL && enchant->spellid[effectIndex])
+                    return true;
+        }
+
+        return false;
+    }
+
+    void ApplyAscensionEquipSpell(Player* player, Item* item, SpellInfo const* spellInfo)
+    {
         if (!player || !spellInfo)
             return;
 
-        player->CastSpell(player, spellInfo, true);
+        player->ApplyEquipSpell(spellInfo, item, true);
         MakeAscensionItemSetSpellPermanent(player, spellInfo->Id);
+    }
+
+    void RemoveAscensionEquipSpell(Player* player, Item* item, uint32 spellId)
+    {
+        if (!player || !spellId)
+            return;
+
+        if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId))
+            player->ApplyEquipSpell(spellInfo, item, false);
+        else if (item)
+            player->RemoveAurasDueToItemSpell(spellId, item->GetGUID());
+        else
+            player->RemoveAurasDueToSpell(spellId);
     }
 
     bool HasAscensionEquipSpell(Player* player, uint32 spellId)
@@ -763,11 +913,6 @@ void AscensionManager::LoadPlayerData(Player* player)
     // 【新方案】从 character_inventory 表加载物品实例（bag=200）
     LoadAscensionItems(player);
 
-    if (sAscensionConfig->IsDebugMode())
-    {
-        LOG_INFO("module", "飞升系统: 玩家 {} 数据加载完成，已解锁 {} 个槽位，已装备 {} 件",
-            player->GetName(), status.unlockedSlots.size(), _playerStatus[playerGuid].slots.size());
-    }
 }
 
 void AscensionManager::SavePlayerData(Player* player)
@@ -1123,30 +1268,14 @@ void AscensionManager::ValidateEquippedItems(Player* player)
         auto spellIt = status->slotSpells.find(slot);
         if (spellIt != status->slotSpells.end())
         {
+            Item* removedItem = nullptr;
+            auto removedSlotIt = status->slots.find(slot);
+            if (removedSlotIt != status->slots.end())
+                removedItem = removedSlotIt->second.itemPtr;
+
             for (uint32 spellId : spellIt->second)
-            {
-                // 检查其他槽位是否也有相同法术
-                bool spellFromOtherSlot = false;
-                for (const auto& otherSlot : status->slotSpells)
-                {
-                    if (otherSlot.first != slot)
-                    {
-                        for (uint32 otherId : otherSlot.second)
-                        {
-                            if (otherId == spellId)
-                            {
-                                spellFromOtherSlot = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (spellFromOtherSlot) break;
-                }
-                if (!spellFromOtherSlot)
-                {
-                    player->RemoveAurasDueToSpell(spellId);
-                }
-            }
+                RemoveAscensionEquipSpell(player, removedItem, spellId);
+
             status->slotSpells.erase(spellIt);
             LOG_INFO("module", "飞升系统: 已移除玩家 {} 槽位 {} 的法术效果", player->GetName(), slot);
         }
@@ -1474,29 +1603,8 @@ bool AscensionManager::UnequipItem(Player* player, uint8 slot)
     if (spellIt != status->slotSpells.end())
     {
         for (uint32 spellId : spellIt->second)
-        {
-            // 检查其他槽位是否也有相同法术
-            bool spellFromOtherSlot = false;
-            for (const auto& otherSlot : status->slotSpells)
-            {
-                if (otherSlot.first != slot)
-                {
-                    for (uint32 otherId : otherSlot.second)
-                    {
-                        if (otherId == spellId)
-                        {
-                            spellFromOtherSlot = true;
-                            break;
-                        }
-                    }
-                }
-                if (spellFromOtherSlot) break;
-            }
-            if (!spellFromOtherSlot)
-            {
-                player->RemoveAurasDueToSpell(spellId);
-            }
-        }
+            RemoveAscensionEquipSpell(player, item, spellId);
+
         status->slotSpells.erase(spellIt);
     }
 
@@ -1700,10 +1808,6 @@ void AscensionManager::ApplyAllEffects(Player* player)
     if (appliedCount > 0 || !status->slotStats.empty() || !status->slotSpells.empty())
         UpdatePlayerStats(player);
 
-    if (sAscensionConfig->IsDebugMode())
-    {
-        LOG_INFO("module", "飞升系统: 玩家 {} 应用了 {} 件飞升装备的属性", player->GetName(), status->slots.size());
-    }
 }
 
 void AscensionManager::RemoveAllEffects(Player* player)
@@ -1721,10 +1825,13 @@ void AscensionManager::RemoveAllEffects(Player* player)
     // 【修复】移除所有已应用的法术 - 遍历按槽位记录的法术
     for (const auto& slotPair : status->slotSpells)
     {
+        Item* item = nullptr;
+        auto slotIt = status->slots.find(slotPair.first);
+        if (slotIt != status->slots.end())
+            item = slotIt->second.itemPtr;
+
         for (uint32 spellId : slotPair.second)
-        {
-            player->RemoveAurasDueToSpell(spellId);
-        }
+            RemoveAscensionEquipSpell(player, item, spellId);
     }
     status->slotSpells.clear();
 
@@ -2080,51 +2187,34 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
                 uint32 enchType = enchant->type[s];
                 int32 amount = enchant->amount[s];
 
-                if (amount == 0)
-                    continue;
-
                 // 附魔不应用倍率（保持原始效果）
                 switch (enchType)
                 {
                     case ITEM_ENCHANTMENT_TYPE_COMBAT_SPELL:
+                        // 官方逻辑：命中时由 Player::CastItemCombatSpell 处理。
+                        break;
                     case ITEM_ENCHANTMENT_TYPE_DAMAGE:
+                        // 虚拟槽位不改写当前武器白字伤害，避免覆盖真实装备栏武器伤害。
+                        break;
                     case ITEM_ENCHANTMENT_TYPE_EQUIP_SPELL:
-                        // 这些类型通过法术处理
                         if (enchant->spellid[s])
                         {
                             if (apply)
                             {
                                 if (SpellInfo const* enchantSpellInfo = sSpellMgr->GetSpellInfo(enchant->spellid[s]))
-                                    CastAscensionEquipSpell(player, item, enchantSpellInfo);
-                                status->slotSpells[slot].push_back(enchant->spellid[s]);
+                                {
+                                    ApplyAscensionEquipSpell(player, item, enchantSpellInfo);
+                                    status->slotSpells[slot].push_back(enchant->spellid[s]);
+                                }
                             }
                             else
-                            {
-                                // 检查其他槽位是否有相同法术
-                                bool spellFromOtherSlot = false;
-                                for (const auto& slotPair : status->slotSpells)
-                                {
-                                    if (slotPair.first != slot)
-                                    {
-                                        for (uint32 spId : slotPair.second)
-                                        {
-                                            if (spId == enchant->spellid[s])
-                                            {
-                                                spellFromOtherSlot = true;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    if (spellFromOtherSlot) break;
-                                }
-                                if (!spellFromOtherSlot)
-                                {
-                                    player->RemoveAurasDueToSpell(enchant->spellid[s]);
-                                }
-                            }
+                                RemoveAscensionEquipSpell(player, item, enchant->spellid[s]);
                         }
                         break;
                     case ITEM_ENCHANTMENT_TYPE_STAT:
+                        if (amount == 0)
+                            break;
+
                         // 属性附魔
                         if (enchant->spellid[s] < MAX_ITEM_MOD)
                         {
@@ -2141,6 +2231,9 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
                         }
                         break;
                     case ITEM_ENCHANTMENT_TYPE_RESISTANCE:
+                        if (amount == 0)
+                            break;
+
                         // 抗性附魔
                         if (enchant->spellid[s] < MAX_SPELL_SCHOOL)
                         {
@@ -2171,36 +2264,13 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
 
             if (apply)
             {
-                CastAscensionEquipSpell(player, item, spellInfo);
+                ApplyAscensionEquipSpell(player, item, spellInfo);
                 // 按槽位记录法术，便于单件卸下时精确移除
                 status->slotSpells[slot].push_back(spellId);
             }
             else
             {
-                // 【修复】只移除属于该槽位的法术，检查其他槽位是否也有相同法术
-                bool spellFromOtherSlot = false;
-                for (const auto& slotPair : status->slotSpells)
-                {
-                    if (slotPair.first != slot)
-                    {
-                        for (uint32 otherSpellId : slotPair.second)
-                        {
-                            if (otherSpellId == spellId)
-                            {
-                                spellFromOtherSlot = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (spellFromOtherSlot)
-                        break;
-                }
-
-                // 只有当其他槽位没有提供相同法术时才移除
-                if (!spellFromOtherSlot)
-                {
-                    player->RemoveAurasDueToSpell(spellId);
-                }
+                RemoveAscensionEquipSpell(player, item, spellId);
 
                 // 从该槽位的法术列表中移除
                 auto& slotSpellList = status->slotSpells[slot];
@@ -2222,11 +2292,6 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
             // 应用鉴定系统的自定义属性（包含倍率计算）
             sHuanJingSystem->ApplyHuanJingEnhancement(player, item, updateStats);
 
-            if (sAscensionConfig->IsDebugMode())
-            {
-                LOG_INFO("module", "飞升系统: 玩家 {} 槽位 {} 应用了鉴定系统自定义属性 (物品GUID: {})",
-                    player->GetName(), slot, item->GetGUID().GetCounter());
-            }
         }
         else
         {
@@ -3190,10 +3255,6 @@ void AscensionManager::SendAscensionDataToClient(Player* player)
         }
     }
 
-    if (sAscensionConfig->IsDebugMode())
-    {
-        LOG_INFO("module", "飞升系统: 发送数据到客户端 (长度:{}) - {}", fullMessage.length(), fullMessage);
-    }
 }
 
 //=============================================================================
@@ -3243,7 +3304,8 @@ AscensionPlayerScript::AscensionPlayerScript() : PlayerScript("AscensionPlayerSc
     PLAYERHOOK_ON_LOGIN,
     PLAYERHOOK_ON_LOGOUT,
     PLAYERHOOK_ON_DELETE,
-    PLAYERHOOK_CAN_EQUIP_ITEM
+    PLAYERHOOK_CAN_EQUIP_ITEM,
+    PLAYERHOOK_CAN_CAST_ITEM_COMBAT_SPELL
 })
 {
 }
@@ -3276,10 +3338,6 @@ void AscensionPlayerScript::OnPlayerLogin(Player* player)
             restrictedEquippedCount);
     }
 
-    if (sAscensionConfig->IsDebugMode())
-    {
-        LOG_INFO("module", "飞升系统: 玩家 {} 登录，已加载飞升数据", player->GetName());
-    }
 }
 
 void AscensionPlayerScript::OnPlayerLogout(Player* player)
@@ -3360,11 +3418,57 @@ bool AscensionPlayerScript::OnPlayerCanEquipItem(Player* player, uint8 slot, uin
     return false;
 }
 
+bool AscensionPlayerScript::OnPlayerCanCastItemCombatSpell(Player* player, Unit* target, WeaponAttackType attType, uint32 procVictim, uint32 procEx, Item* item, ItemTemplate const* proto)
+{
+    if (!sAscensionConfig->IsEnabled() || !player || !target)
+        return true;
+
+    // 核心用空 item/proto 通知“本次命中开始”；真实装备逐件触发时直接放行。
+    if (item || proto)
+        return true;
+
+    static thread_local bool applyingAscensionCombatSpells = false;
+    if (applyingAscensionCombatSpells)
+        return true;
+
+    PlayerAscensionStatus* status = sAscensionManager->GetPlayerStatus(player->GetGUID().GetCounter());
+    if (!status || status->slots.empty())
+        return true;
+
+    applyingAscensionCombatSpells = true;
+
+    for (auto const& slotPair : status->slots)
+    {
+        uint8 ascensionSlot = slotPair.first;
+
+        AscensionSlotControl const* control = sAscensionManager->GetSlotControl(ascensionSlot);
+        if (control && !control->enabled)
+            continue;
+
+        Item* ascensionItem = slotPair.second.itemPtr;
+        if (!ascensionItem || ascensionItem->IsBroken())
+            continue;
+
+        ItemTemplate const* ascensionProto = ascensionItem->GetTemplate();
+        if (!ascensionProto)
+            continue;
+
+        if (!CanAscensionItemProcForAttack(ascensionSlot, ascensionProto, attType))
+            continue;
+
+        player->CastItemCombatSpell(target, attType, procVictim, procEx, ascensionItem, ascensionProto);
+    }
+
+    applyingAscensionCombatSpells = false;
+    return true;
+}
+
 class AscensionUnitScript : public UnitScript
 {
 public:
     AscensionUnitScript() : UnitScript("AscensionUnitScript", true, {
-        UNITHOOK_ON_AURA_APPLY
+        UNITHOOK_ON_AURA_APPLY,
+        UNITHOOK_ON_DAMAGE
     })
     {
     }
@@ -3388,6 +3492,33 @@ public:
         aura->SetMaxDuration(-1);
         aura->SetDuration(-1);
     }
+
+    void OnDamage(Unit* attacker, Unit* victim, uint128& damage) override
+    {
+        TriggerDamageItemProcs(victim, attacker, damage);
+    }
+
+private:
+    static void TriggerDamageItemProcs(Unit* target, Unit* attacker, uint128& damage)
+    {
+        if (!sAscensionConfig->IsEnabled() || !target || !attacker)
+            return;
+
+        if (Player::IsTriggeringDamageTriggeredArtifactItemProcSpell())
+            return;
+
+        static thread_local bool triggeringAscensionDamageItemProcs = false;
+        if (triggeringAscensionDamageItemProcs)
+            return;
+
+        Player* player = attacker->GetCharmerOrOwnerPlayerOrPlayerItself();
+        if (!player || player == target)
+            return;
+
+        triggeringAscensionDamageItemProcs = true;
+        CastAscensionDamageTriggeredItemCombatSpells(player, target, PROC_FLAG_TAKEN_DAMAGE, PROC_EX_NORMAL_HIT);
+        triggeringAscensionDamageItemProcs = false;
+    }
 };
 
 //=============================================================================
@@ -3405,6 +3536,7 @@ Acore::ChatCommands::ChatCommandTable AscensionCommandScript::GetCommands() cons
         { "查看",   HandleAscensionView,    SEC_PLAYER,        Console::No },
         { "装备",   HandleAscensionEquip,   SEC_PLAYER,        Console::No },
         { "卸下",   HandleAscensionUnequip, SEC_PLAYER,        Console::No },
+        { "使用",   HandleAscensionUse,     SEC_PLAYER,        Console::No },
         { "清空",   HandleAscensionClear,   SEC_PLAYER,        Console::No },
         { "刷新",   HandleAscensionRefresh, SEC_PLAYER,        Console::No },
         { "解锁",   HandleAscensionUnlock,  SEC_PLAYER,        Console::No },
@@ -3576,6 +3708,95 @@ bool AscensionCommandScript::HandleAscensionUnequip(ChatHandler* handler, const 
     }
     uint8 slot = static_cast<uint8>(slotInt);
     sAscensionManager->UnequipItem(player, slot);
+    return true;
+}
+
+bool AscensionCommandScript::HandleAscensionUse(ChatHandler* handler, const char* args)
+{
+    if (!sAscensionConfig->IsEnabled())
+    {
+        handler->SendSysMessage("飞升系统已禁用。");
+        return true;
+    }
+
+    Player* player = handler->GetSession()->GetPlayer();
+    if (!player)
+        return false;
+
+    if (!*args)
+    {
+        handler->SendSysMessage("用法: .飞升 使用 <槽位>");
+        return true;
+    }
+
+    int slotInt = atoi(args);
+    if (slotInt < 0 || slotInt >= ASCENSION_SLOT_COUNT)
+    {
+        handler->PSendSysMessage("无效槽位，有效范围: 0-{}", ASCENSION_SLOT_COUNT - 1);
+        return true;
+    }
+
+    uint8 slot = static_cast<uint8>(slotInt);
+    AscensionSlotControl const* control = sAscensionManager->GetSlotControl(slot);
+    if (control && !control->enabled)
+    {
+        handler->SendSysMessage("该飞升槽位未启用。");
+        return true;
+    }
+
+    PlayerAscensionStatus* status = sAscensionManager->GetPlayerStatus(player->GetGUID().GetCounter());
+    if (!status)
+        return true;
+
+    auto slotIt = status->slots.find(slot);
+    if (slotIt == status->slots.end() || !slotIt->second.itemPtr)
+    {
+        handler->SendSysMessage("该槽位没有可使用的飞升装备。");
+        return true;
+    }
+
+    Item* item = slotIt->second.itemPtr;
+    ItemTemplate const* proto = item->GetTemplate();
+    if (!proto)
+    {
+        handler->SendSysMessage("飞升装备模板不存在，无法使用。");
+        return true;
+    }
+
+    if (item->IsBroken())
+    {
+        handler->SendSysMessage("该飞升装备已损坏，无法使用。");
+        return true;
+    }
+
+    if (!HasAscensionItemUseSpell(item, proto))
+    {
+        handler->SendSysMessage("该飞升装备没有使用触发效果。");
+        return true;
+    }
+
+    if (!player->IsAlive())
+    {
+        handler->SendSysMessage("死亡状态不能使用飞升装备。");
+        return true;
+    }
+
+    if ((proto->Bonding == BIND_WHEN_USE || proto->Bonding == BIND_WHEN_PICKED_UP || proto->Bonding == BIND_QUEST_ITEM) && !item->IsSoulBound())
+    {
+        item->SetState(ITEM_CHANGED, player);
+        item->SetBinding(true);
+    }
+
+    Unit* target = player->GetSelectedUnit();
+    if (!target)
+        target = player;
+
+    SpellCastTargets targets;
+    targets.SetUnitTarget(target);
+    targets.SetSrc(*player);
+    targets.SetDst(*target);
+
+    player->CastItemUseSpell(item, targets, 1, 0);
     return true;
 }
 

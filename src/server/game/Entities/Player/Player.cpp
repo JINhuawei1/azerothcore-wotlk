@@ -40,6 +40,7 @@
 #include "Config.h"
 #include "CreatureAI.h"
 #include "DatabaseEnv.h"
+#include "DBCStores.h"
 #include "DisableMgr.h"
 #include "Formulas.h"
 #include "GameEventMgr.h"
@@ -79,6 +80,7 @@
 #include "Transport.h"
 #include "UpdateData.h"
 #include <limits>
+#include <unordered_map>
 #include "Util.h"
 #include "Vehicle.h"
 #include "Weather.h"
@@ -126,6 +128,364 @@ float ToFloatForStatModifier(int128 const& value)
         return value < 0 ? -std::numeric_limits<float>::max() : std::numeric_limits<float>::max();
 
     return converted;
+}
+
+bool IsDamageTriggeredArtifactItemProcSpell(uint32 spellId)
+{
+    return spellId >= 383001 && spellId <= 383084;
+}
+
+bool IsArtifactChainEffectSpell(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return false;
+
+    int32 const marker = spellInfo->Effects[EFFECT_2].BasePoints;
+    return marker >= 9100101 && marker <= 9100105;
+}
+
+bool HasDamageTriggeredArtifactItemProc(ItemTemplate const* proto)
+{
+    if (!proto)
+        return false;
+
+    for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+    {
+        _Spell const& spellData = proto->Spells[i];
+        if (spellData.SpellTrigger == ITEM_SPELLTRIGGER_CHANCE_ON_HIT
+            && IsDamageTriggeredArtifactItemProcSpell(spellData.SpellId))
+            return true;
+    }
+
+    return false;
+}
+
+bool IsValidDamageTriggeredArtifactProcTarget(Player* player, Unit* target)
+{
+    if (!player || !target || !target->IsAlive() || target == player || !player->IsInMap(target))
+        return false;
+
+    if (target->GetCharmerOrOwnerPlayerOrPlayerItself() == player)
+        return false;
+
+    if (player->IsFriendlyTo(target))
+        return false;
+
+    return player->IsValidAttackTarget(target);
+}
+
+struct ArtifactProcVisualKey
+{
+    uint64 playerGuid = 0;
+    uint64 targetGuid = 0;
+    uint32 spellId = 0;
+
+    bool operator==(ArtifactProcVisualKey const& other) const
+    {
+        return playerGuid == other.playerGuid && targetGuid == other.targetGuid && spellId == other.spellId;
+    }
+};
+
+struct ArtifactProcVisualKeyHash
+{
+    std::size_t operator()(ArtifactProcVisualKey const& key) const
+    {
+        std::size_t seed = std::hash<uint64>()(key.playerGuid);
+        seed ^= std::hash<uint64>()(key.targetGuid + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
+        seed ^= std::hash<uint32>()(key.spellId + 0x9e3779b9U + uint32(seed << 6) + uint32(seed >> 2));
+        return seed;
+    }
+};
+
+struct ArtifactProcVisualBudget
+{
+    uint32 windowStartMs = 0;
+    uint32 used = 0;
+};
+
+struct ArtifactProcDamageBatchKey
+{
+    uint64 playerGuid = 0;
+    uint64 targetGuid = 0;
+    uint32 spellId = 0;
+
+    bool operator==(ArtifactProcDamageBatchKey const& other) const
+    {
+        return playerGuid == other.playerGuid && targetGuid == other.targetGuid && spellId == other.spellId;
+    }
+};
+
+struct ArtifactProcDamageBatchKeyHash
+{
+    std::size_t operator()(ArtifactProcDamageBatchKey const& key) const
+    {
+        std::size_t seed = std::hash<uint64>()(key.playerGuid);
+        seed ^= std::hash<uint64>()(key.targetGuid + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
+        seed ^= std::hash<uint32>()(key.spellId + 0x9e3779b9U + uint32(seed << 6) + uint32(seed >> 2));
+        return seed;
+    }
+};
+
+struct ArtifactProcDamageBatchPending
+{
+    ObjectGuid targetGuid = ObjectGuid::Empty;
+    uint32 spellId = 0;
+    uint32 firstMs = 0;
+    uint32 lastMs = 0;
+    uint32 hits = 0;
+    uint128 damage = 0;
+};
+
+thread_local bool g_triggeringDamageTriggeredArtifactItemProcSpell = false;
+
+struct DamageTriggeredArtifactProcGuard
+{
+    DamageTriggeredArtifactProcGuard()
+    {
+        g_triggeringDamageTriggeredArtifactItemProcSpell = true;
+    }
+
+    ~DamageTriggeredArtifactProcGuard()
+    {
+        g_triggeringDamageTriggeredArtifactItemProcSpell = false;
+    }
+};
+
+constexpr uint32 ARTIFACT_PROC_VISUAL_MIN_INTERVAL_MS = 1000;
+constexpr uint32 ARTIFACT_PROC_VISUAL_MAX_BURSTS_PER_SECOND = 4;
+constexpr uint32 ARTIFACT_PROC_VISUAL_STATE_CLEAR_SIZE = 8192;
+constexpr uint32 ARTIFACT_PROC_DAMAGE_BATCH_MAX_DELAY_MS = 1000;
+constexpr uint32 ARTIFACT_PROC_DAMAGE_BATCH_MAX_HITS = 100000;
+constexpr uint32 ARTIFACT_PROC_DAMAGE_BATCH_STATE_CLEAR_SIZE = 8192;
+constexpr uint32 ITEM_COMBAT_PROC_THROTTLE_MS = 1000;
+constexpr uint32 ITEM_COMBAT_PROC_THROTTLE_STATE_CLEAR_SIZE = 16384;
+
+thread_local std::unordered_map<ArtifactProcDamageBatchKey, ArtifactProcDamageBatchPending, ArtifactProcDamageBatchKeyHash> g_artifactProcDamageBatches;
+thread_local std::unordered_map<uint64, uint32> g_itemCombatProcThrottleMs;
+
+bool IsItemCombatProcThrottleActive(Player const* player)
+{
+    if (!player)
+        return true;
+
+    if (g_itemCombatProcThrottleMs.size() > ITEM_COMBAT_PROC_THROTTLE_STATE_CLEAR_SIZE)
+        g_itemCombatProcThrottleMs.clear();
+
+    uint32 const now = getMSTime();
+    uint64 const playerGuid = player->GetGUID().GetRawValue();
+
+    auto lastItr = g_itemCombatProcThrottleMs.find(playerGuid);
+    if (lastItr != g_itemCombatProcThrottleMs.end() && getMSTimeDiff(lastItr->second, now) < ITEM_COMBAT_PROC_THROTTLE_MS)
+        return true;
+
+    return false;
+}
+
+bool ConsumeItemCombatProcThrottle(Player const* player)
+{
+    if (IsItemCombatProcThrottleActive(player))
+        return false;
+
+    g_itemCombatProcThrottleMs[player->GetGUID().GetRawValue()] = getMSTime();
+    return true;
+}
+
+uint32 PickDamageTriggeredArtifactVisualKit(uint32 first, uint32 second = 0, uint32 third = 0, uint32 fourth = 0, uint32 fifth = 0)
+{
+    uint32 const kits[] = { first, second, third, fourth, fifth };
+    for (uint32 kitId : kits)
+        if (kitId && kitId != std::numeric_limits<uint32>::max())
+            return kitId;
+
+    return 0;
+}
+
+uint128 GetDamageTriggeredArtifactItemProcSpellDamage(SpellInfo const* spellInfo)
+{
+    if (!spellInfo || !IsDamageTriggeredArtifactItemProcSpell(spellInfo->Id))
+        return 0;
+
+    uint128 damage = 0;
+    for (uint8 effectIndex = EFFECT_0; effectIndex < MAX_SPELL_EFFECTS; ++effectIndex)
+    {
+        if (spellInfo->Effects[effectIndex].Effect != SPELL_EFFECT_SCHOOL_DAMAGE)
+            continue;
+
+        int32 const basePoints = spellInfo->Effects[effectIndex].BasePoints;
+        if (basePoints > 0)
+            damage += static_cast<uint128>(basePoints);
+    }
+
+    return damage;
+}
+
+bool ShouldSendDamageTriggeredArtifactClientFeedback(Player* player, Unit* target, SpellInfo const* spellInfo)
+{
+    if (!player || !target || !spellInfo)
+        return false;
+
+    static thread_local std::unordered_map<ArtifactProcVisualKey, uint32, ArtifactProcVisualKeyHash> lastVisualMs;
+    static thread_local std::unordered_map<uint64, ArtifactProcVisualBudget> budgets;
+
+    if (lastVisualMs.size() > ARTIFACT_PROC_VISUAL_STATE_CLEAR_SIZE)
+        lastVisualMs.clear();
+
+    if (budgets.size() > 1024)
+        budgets.clear();
+
+    uint32 const now = getMSTime();
+    ArtifactProcVisualKey const key{ player->GetGUID().GetRawValue(), target->GetGUID().GetRawValue(), spellInfo->Id };
+
+    auto lastItr = lastVisualMs.find(key);
+    if (lastItr != lastVisualMs.end() && getMSTimeDiff(lastItr->second, now) < ARTIFACT_PROC_VISUAL_MIN_INTERVAL_MS)
+        return false;
+
+    uint64 const budgetKey = key.playerGuid ^ (key.targetGuid + 0x9e3779b97f4a7c15ULL + (uint64(key.spellId) << 32));
+    ArtifactProcVisualBudget& budget = budgets[budgetKey];
+    if (!budget.windowStartMs || getMSTimeDiff(budget.windowStartMs, now) >= 1000)
+    {
+        budget.windowStartMs = now;
+        budget.used = 0;
+    }
+
+    if (budget.used >= ARTIFACT_PROC_VISUAL_MAX_BURSTS_PER_SECOND)
+        return false;
+
+    ++budget.used;
+    lastVisualMs[key] = now;
+    return true;
+}
+
+void SendDamageTriggeredArtifactItemProcVisual(Player* player, Unit* target, SpellInfo const* spellInfo)
+{
+    if (!player || !target || !spellInfo || !player->IsInMap(target))
+        return;
+
+    SpellVisualEntry const* visual = nullptr;
+    for (uint32 visualId : spellInfo->SpellVisual)
+    {
+        if (!visualId)
+            continue;
+
+        visual = sSpellVisualStore.LookupEntry(visualId);
+        if (visual)
+            break;
+    }
+
+    if (!visual)
+        return;
+
+    uint32 const casterKit = PickDamageTriggeredArtifactVisualKit(visual->CastKit, visual->PrecastKit, visual->StateKit, visual->ChannelKit, visual->CasterImpactKit);
+    uint32 const targetKit = PickDamageTriggeredArtifactVisualKit(visual->TargetImpactKit, visual->ImpactKit, visual->ImpactAreaKit, visual->InstantAreaKit);
+
+    if (casterKit)
+        player->SendPlaySpellVisual(casterKit);
+
+    if (targetKit)
+        player->SendPlaySpellImpact(target->GetGUID(), targetKit);
+}
+
+bool ApplyDamageTriggeredArtifactItemProcBatch(Player* player, Unit* target, SpellInfo const* spellInfo, uint128 const& damage)
+{
+    if (!IsValidDamageTriggeredArtifactProcTarget(player, target) || !spellInfo || damage == 0)
+        return false;
+
+    DamageTriggeredArtifactProcGuard procGuard;
+
+    bool const sendClientFeedback = player->ShouldSendCustomProcClientFeedback(target, spellInfo, "item-proc-batch");
+    if (sendClientFeedback)
+        SendDamageTriggeredArtifactItemProcVisual(player, target, spellInfo);
+
+    SpellSchoolMask schoolMask = spellInfo->GetSchoolMask();
+    if (!schoolMask)
+        schoolMask = SPELL_SCHOOL_MASK_NORMAL;
+
+    SpellNonMeleeDamage damageInfo(player, target, spellInfo, schoolMask);
+    damageInfo.damage = damage;
+    Unit::DealDamageMods(damageInfo.target, damageInfo.damage, &damageInfo.absorb);
+
+    if (sendClientFeedback)
+        player->SendSpellNonMeleeDamageLog(&damageInfo);
+
+    CleanDamage cleanDamage(damageInfo.cleanDamage, damageInfo.absorb, BASE_ATTACK,
+        (damageInfo.HitInfo & SPELL_HIT_TYPE_CRIT) ? MELEE_HIT_CRIT : MELEE_HIT_NORMAL);
+    Unit::DealDamage(player, target, damageInfo.damage, &cleanDamage, SPELL_DIRECT_DAMAGE, schoolMask, spellInfo, true);
+
+    return true;
+}
+
+bool FlushDamageTriggeredArtifactItemProcBatch(Player* player, ArtifactProcDamageBatchKey const& key, bool forcedKillFlush = false)
+{
+    if (!player)
+        return false;
+
+    auto pendingItr = g_artifactProcDamageBatches.find(key);
+    if (pendingItr == g_artifactProcDamageBatches.end())
+        return false;
+
+    ArtifactProcDamageBatchPending pending = pendingItr->second;
+    g_artifactProcDamageBatches.erase(pendingItr);
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(pending.spellId);
+    Unit* target = ObjectAccessor::GetUnit(*player, pending.targetGuid);
+    if (!spellInfo || !target || !target->IsAlive() || target == player)
+        return false;
+
+    return ApplyDamageTriggeredArtifactItemProcBatch(player, target, spellInfo, pending.damage);
+}
+
+bool QueueDamageTriggeredArtifactItemProcBatch(Player* player, Unit* target, SpellInfo const* spellInfo, uint128 const& damage)
+{
+    if (!player || !target || !spellInfo || damage == 0)
+        return false;
+
+    if (g_artifactProcDamageBatches.size() > ARTIFACT_PROC_DAMAGE_BATCH_STATE_CLEAR_SIZE)
+        g_artifactProcDamageBatches.clear();
+
+    uint32 const now = getMSTime();
+    ArtifactProcDamageBatchKey const key{ player->GetGUID().GetRawValue(), target->GetGUID().GetRawValue(), spellInfo->Id };
+    ArtifactProcDamageBatchPending& pending = g_artifactProcDamageBatches[key];
+
+    if (!pending.firstMs)
+    {
+        pending.targetGuid = target->GetGUID();
+        pending.spellId = spellInfo->Id;
+        pending.firstMs = now;
+    }
+
+    pending.lastMs = now;
+    ++pending.hits;
+    pending.damage += damage;
+
+    bool const forcedKillFlush = pending.damage >= target->GetHealthForCombat128();
+    if (forcedKillFlush
+        || pending.hits >= ARTIFACT_PROC_DAMAGE_BATCH_MAX_HITS
+        || getMSTimeDiff(pending.firstMs, now) >= ARTIFACT_PROC_DAMAGE_BATCH_MAX_DELAY_MS)
+        return FlushDamageTriggeredArtifactItemProcBatch(player, key, forcedKillFlush);
+
+    return true;
+}
+
+void FlushDamageTriggeredArtifactItemProcBatchesForPlayer(Player* player, bool force)
+{
+    if (!player || g_artifactProcDamageBatches.empty())
+        return;
+
+    uint32 const now = getMSTime();
+    uint64 const playerGuid = player->GetGUID().GetRawValue();
+
+    for (auto itr = g_artifactProcDamageBatches.begin(); itr != g_artifactProcDamageBatches.end();)
+    {
+        ArtifactProcDamageBatchKey const key = itr->first;
+        ArtifactProcDamageBatchPending const& pending = itr->second;
+        bool const shouldFlush = key.playerGuid == playerGuid
+            && (force || getMSTimeDiff(pending.firstMs, now) >= ARTIFACT_PROC_DAMAGE_BATCH_MAX_DELAY_MS);
+
+        ++itr;
+
+        if (shouldFlush)
+            FlushDamageTriggeredArtifactItemProcBatch(player, key, false);
+    }
 }
 
 uint128 ApplyPlayerHealthGain(Player* player, uint128 const& amount)
@@ -286,6 +646,23 @@ enum CharacterCustomizeFlags
     CHAR_CUSTOMIZE_FLAG_FACTION         = 0x00010000,       // name, gender, faction, etc...
     CHAR_CUSTOMIZE_FLAG_RACE            = 0x00100000        // name, gender, race, etc...
 };
+
+bool Player::ShouldSendCustomProcClientFeedback(Unit* target, SpellInfo const* spellInfo, char const* source)
+{
+    (void)source;
+
+    bool sent = false;
+
+    if (target && spellInfo)
+    {
+        if (IsDamageTriggeredArtifactItemProcSpell(spellInfo->Id) || IsArtifactChainEffectSpell(spellInfo))
+            sent = ShouldSendDamageTriggeredArtifactClientFeedback(this, target, spellInfo);
+        else
+            sent = ConsumeItemCombatProcThrottle(this);
+    }
+
+    return sent;
+}
 
 static uint32 copseReclaimDelay[MAX_DEATH_COUNT] = { 30, 60, 120 };
 
@@ -7644,6 +8021,9 @@ void Player::CastItemCombatSpell(Unit* target, WeaponAttackType attType, uint32 
     if (!CanUseAttackType(attType) || GetShapeshiftForm() == FORM_GHOSTWOLF)
         return;
 
+    if (!sScriptMgr->OnPlayerCanCastItemCombatSpell(this, target, attType, procVictim, procEx, nullptr, nullptr))
+        return;
+
     for (uint8 i = EQUIPMENT_SLOT_START; i < EQUIPMENT_SLOT_END; ++i)
     {
         // If usable, try to cast item spell
@@ -7671,13 +8051,73 @@ void Player::CastItemCombatSpell(Unit* target, WeaponAttackType attType, uint32 
                                 slot = EQUIPMENT_SLOT_END;
                                 break;
                         }
-                        if (slot != i)
+                        if (slot != i && !HasDamageTriggeredArtifactItemProc(proto))
                             continue;
                     }
 
                     CastItemCombatSpell(target, attType, procVictim, procEx, item, proto);
                 }
     }
+}
+
+void Player::CastDamageTriggeredArtifactItemCombatSpell(Unit* target, uint32 procVictim, uint32 procEx, SpellInfo const* triggeringSpellInfo)
+{
+    if (!IsValidDamageTriggeredArtifactProcTarget(this, target))
+        return;
+
+    if (triggeringSpellInfo && IsDamageTriggeredArtifactItemProcSpell(triggeringSpellInfo->Id))
+        return;
+
+    if (GetShapeshiftForm() == FORM_GHOSTWOLF)
+        return;
+
+    static thread_local bool castingDamageTriggeredArtifactItemProc = false;
+    if (castingDamageTriggeredArtifactItemProc)
+        return;
+
+    castingDamageTriggeredArtifactItemProc = true;
+
+    for (uint8 i = EQUIPMENT_SLOT_START; i < EQUIPMENT_SLOT_END; ++i)
+    {
+        Item* item = GetItemByPos(INVENTORY_SLOT_BAG_0, i);
+        if (!item || item->IsBroken())
+            continue;
+
+        ItemTemplate const* proto = item->GetTemplate();
+        if (!HasDamageTriggeredArtifactItemProc(proto))
+            continue;
+
+        CastItemCombatSpell(target, BASE_ATTACK, procVictim, procEx, item, proto);
+    }
+
+    castingDamageTriggeredArtifactItemProc = false;
+}
+
+bool Player::TriggerDamageTriggeredArtifactItemProcSpell(Unit* target, Item* item, SpellInfo const* spellInfo)
+{
+    (void)item;
+
+    if (!IsValidDamageTriggeredArtifactProcTarget(this, target) || !spellInfo || !IsDamageTriggeredArtifactItemProcSpell(spellInfo->Id))
+        return false;
+
+    if (g_triggeringDamageTriggeredArtifactItemProcSpell)
+        return false;
+
+    uint128 const damage = GetDamageTriggeredArtifactItemProcSpellDamage(spellInfo);
+    if (damage == 0)
+        return false;
+
+    return QueueDamageTriggeredArtifactItemProcBatch(this, target, spellInfo, damage);
+}
+
+void Player::FlushDamageTriggeredArtifactItemProcBatches(bool force)
+{
+    FlushDamageTriggeredArtifactItemProcBatchesForPlayer(this, force);
+}
+
+bool Player::IsTriggeringDamageTriggeredArtifactItemProcSpell()
+{
+    return g_triggeringDamageTriggeredArtifactItemProcSpell;
 }
 
 void Player::CastItemCombatSpell(Unit* target, WeaponAttackType attType, uint32 procVictim, uint32 procEx, Item* item, ItemTemplate const* proto)
@@ -7707,10 +8147,13 @@ void Player::CastItemCombatSpell(Unit* target, WeaponAttackType attType, uint32 
                 LOG_ERROR("entities.player", "WORLD: unknown Item spellid {}", spellData.SpellId);
                 continue;
             }
-
             float chance = (float)spellInfo->ProcChance;
 
-            if (spellData.SpellPPMRate)
+            if (IsDamageTriggeredArtifactItemProcSpell(spellData.SpellId))
+            {
+                chance = 100.0f;
+            }
+            else if (spellData.SpellPPMRate)
             {
                 uint32 WeaponSpeed = GetAttackTime(attType);
                 chance = GetPPMProcChance(WeaponSpeed, spellData.SpellPPMRate, spellInfo);
@@ -7720,8 +8163,24 @@ void Player::CastItemCombatSpell(Unit* target, WeaponAttackType attType, uint32 
                 chance = GetWeaponProcChance();
             }
 
-            if (roll_chance_f(chance) && sScriptMgr->OnCastItemCombatSpell(this, target, spellInfo, item))
-                CastSpell(target, spellInfo->Id, TriggerCastFlags(TRIGGERED_FULL_MASK & ~TRIGGERED_IGNORE_SPELL_AND_CATEGORY_CD), item);
+            if (roll_chance_f(chance))
+            {
+                if (IsDamageTriggeredArtifactItemProcSpell(spellData.SpellId))
+                {
+                    TriggerDamageTriggeredArtifactItemProcSpell(target, item, spellInfo);
+                    continue;
+                }
+
+                if (!sScriptMgr->OnCastItemCombatSpell(this, target, spellInfo, item))
+                    continue;
+
+                TriggerCastFlags triggerFlags = TriggerCastFlags(TRIGGERED_FULL_MASK & ~TRIGGERED_IGNORE_SPELL_AND_CATEGORY_CD);
+                bool const suppressClientFeedback = !ConsumeItemCombatProcThrottle(this);
+                if (suppressClientFeedback)
+                    triggerFlags = TriggerCastFlags(triggerFlags | TRIGGERED_SUPPRESS_CLIENT_FEEDBACK);
+
+                CastSpell(target, spellInfo->Id, triggerFlags, item);
+            }
         }
     }
 
@@ -7764,7 +8223,6 @@ void Player::CastItemCombatSpell(Unit* target, WeaponAttackType attType, uint32 
                                GetGUID().ToString(), GetName(), pEnchant->ID, pEnchant->spellid[s]);
                 continue;
             }
-
             if (entry && (entry->attributeMask & ENCHANT_PROC_ATTR_EXCLUSIVE) != 0)
             {
                 Unit* checkTarget = spellInfo->IsPositive() ? this : target;
@@ -7793,6 +8251,12 @@ void Player::CastItemCombatSpell(Unit* target, WeaponAttackType attType, uint32 
 
             if (roll_chance_f(chance))
             {
+                Unit* unitTarget = spellInfo->IsPositive() ? this : target;
+                TriggerCastFlags triggerFlags = TriggerCastFlags(TRIGGERED_FULL_MASK & ~TRIGGERED_IGNORE_SPELL_AND_CATEGORY_CD);
+                bool const suppressClientFeedback = !ConsumeItemCombatProcThrottle(this);
+                if (suppressClientFeedback)
+                    triggerFlags = TriggerCastFlags(triggerFlags | TRIGGERED_SUPPRESS_CLIENT_FEEDBACK);
+
                 // Xinef: implement enchant charges
                 if (uint32 charges = item->GetEnchantmentCharges(EnchantmentSlot(e_slot)))
                 {
@@ -7805,8 +8269,7 @@ void Player::CastItemCombatSpell(Unit* target, WeaponAttackType attType, uint32 
                         item->SetEnchantmentCharges(EnchantmentSlot(e_slot), charges);
                 }
 
-                Unit* unitTarget = spellInfo->IsPositive() ? this : target;
-                CastSpell(unitTarget, spellInfo, TriggerCastFlags(TRIGGERED_FULL_MASK & ~TRIGGERED_IGNORE_SPELL_AND_CATEGORY_CD), item);
+                CastSpell(unitTarget, spellInfo, triggerFlags, item);
             }
         }
     }

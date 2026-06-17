@@ -1780,7 +1780,11 @@ static void DealCultivationPeriodicAuraDamage(Unit* caster, Unit* target, AuraEf
     if (tickDamage)
         procVictim |= PROC_FLAG_TAKEN_DAMAGE;
 
-    caster->SendSpellNonMeleeDamageLog(target, spellInfo, ToUInt32Damage(tickDamage), schoolMask, ToUInt32Damage(absorb), ToUInt32Damage(resist), false, 0, false);
+    SpellNonMeleeDamage periodicLog(caster, target, spellInfo, schoolMask);
+    periodicLog.damage = tickDamage;
+    periodicLog.absorb = absorb;
+    periodicLog.resist = resist;
+    caster->SendSpellNonMeleeDamageLog(&periodicLog);
 
     ApplyCultivationExtendedDamage(caster, target, tickDamage, &cleanDamage, DOT, schoolMask, spellInfo, true);
     Unit::ProcDamageAndSpell(caster, target, procAttacker, procVictim, procEx, tickDamage, BASE_ATTACK, spellInfo, nullptr, aurEff ? static_cast<int8>(aurEff->GetEffIndex()) : int8(-1), nullptr, &dmgInfo);

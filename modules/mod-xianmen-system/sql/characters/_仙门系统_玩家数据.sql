@@ -99,13 +99,50 @@ UPDATE `_仙门_当日日常` SET `门派ID` = 2 WHERE `门派ID` = 3;
 UPDATE `_仙门_当日日常` SET `门派ID` = 3 WHERE `门派ID` = 4;
 UPDATE `_仙门_当日日常` SET `门派ID` = 4 WHERE `门派ID` = 5;
 
+-- ============================================
+-- 仙器玩家槽位：每玩家一行，每个槽位一列（`槽位N` = 1 表示该槽位已解锁，0 表示未解锁）
+-- 手动改库时一目了然：要给玩家开第 5 槽，把 `槽位5` 改成 1 即可
+-- ============================================
+
+-- 旧结构（多行 `槽位ID` 版 / 单行 `已解锁掩码` 版）存在时直接重建（不迁移旧解锁数据）
+SET @xianmen_xianqi_rebuild = IF(
+  (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '_仙门_仙器玩家槽位') = 1
+  AND (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '_仙门_仙器玩家槽位' AND COLUMN_NAME = '槽位1') = 0,
+  'DROP TABLE `_仙门_仙器玩家槽位`', 'SELECT 1');
+PREPARE xianmen_xianqi_stmt FROM @xianmen_xianqi_rebuild; EXECUTE xianmen_xianqi_stmt; DEALLOCATE PREPARE xianmen_xianqi_stmt;
+
 CREATE TABLE IF NOT EXISTS `_仙门_仙器玩家槽位` (
   `角色GUID` int UNSIGNED NOT NULL DEFAULT 0,
-  `槽位ID` tinyint UNSIGNED NOT NULL DEFAULT 0,
-  `物品GUID` int UNSIGNED NOT NULL DEFAULT 0,
-  `已解锁` tinyint UNSIGNED NOT NULL DEFAULT 0,
-  `更新时间` int UNSIGNED NOT NULL DEFAULT 0,
-  PRIMARY KEY (`角色GUID`, `槽位ID`) USING BTREE
-) ENGINE = MyISAM CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '仙门仙器与扩展装备槽玩家数据' ROW_FORMAT = DYNAMIC;
+  `槽位1` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位2` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位3` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位4` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位5` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位6` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位7` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位8` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位9` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位10` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位11` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位12` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位13` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位14` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位15` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位16` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位17` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位18` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位19` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位20` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位21` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位22` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位23` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位24` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位25` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位26` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位27` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位28` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  `槽位29` tinyint UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (`角色GUID`) USING BTREE
+) ENGINE = MyISAM CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '仙门仙器与扩展装备槽玩家数据(每槽位一列,1=解锁)' ROW_FORMAT = DYNAMIC;
 
 DROP TABLE IF EXISTS `_仙门_玩家丹药属性`;

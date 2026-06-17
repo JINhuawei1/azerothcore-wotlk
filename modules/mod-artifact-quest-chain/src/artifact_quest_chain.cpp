@@ -4,6 +4,7 @@
  */
 
 #include "Duration.h"
+#include "DBCStores.h"
 #include "Item.h"
 #include "ItemScript.h"
 #include "ObjectAccessor.h"
@@ -20,6 +21,20 @@
 #include <cmath>
 #include <limits>
 
+#if __has_include("AscensionSystem.h")
+    #ifndef MODULE_ASCENSION_SYSTEM
+        #define MODULE_ASCENSION_SYSTEM
+    #endif
+    #include "AscensionSystem.h"
+#endif
+
+#if __has_include("XianmenArtifactSlots.h")
+    #ifndef MODULE_XIANMEN_ARTIFACT_SLOTS
+        #define MODULE_XIANMEN_ARTIFACT_SLOTS
+    #endif
+    #include "XianmenArtifactSlots.h"
+#endif
+
 namespace
 {
 enum ArtifactEffectMarker
@@ -32,6 +47,9 @@ enum ArtifactEffectMarker
 };
 
 constexpr uint32 ARTIFACT_SCALE_DENOMINATOR = 10000;
+// 注意：SQL 注释把 EffectBasePoints_1 描述为“万分比”，但这里分母是 100，实际按百分比解读
+// （100 = 100%，400 = 400%）。已确认保持现有高伤害行为，分母维持 100，不要随意改成 10000，
+// 否则伤害会变成原来的 1/100。治疗用的 ARTIFACT_SCALE_DENOMINATOR 才是真正的万分比（10000）。
 constexpr uint32 ARTIFACT_PERCENT_DENOMINATOR = 100;
 constexpr uint32 ARTIFACT_ITEM_START = 90001;
 constexpr uint32 ARTIFACT_ITEM_END = 90016;
@@ -74,7 +92,35 @@ bool IsArtifactEffectSpell(SpellInfo const* spellInfo)
     return spellInfo && IsArtifactEffectMarker(spellInfo->Effects[EFFECT_2].BasePoints);
 }
 
+bool IsValidArtifactEffectTarget(Player* player, Unit* target)
+{
+    if (!player || !target || !player->IsAlive() || !target->IsAlive() || target == player || !player->IsInMap(target))
+        return false;
+
+    if (target->GetCharmerOrOwnerPlayerOrPlayerItself() == player)
+        return false;
+
+    if (player->IsFriendlyTo(target))
+        return false;
+
+    return player->IsValidAttackTarget(target);
+}
+
 uint32 GetArtifactWeaponRank(ItemTemplate const* proto);
+
+void SelectBetterArtifactCandidate(Item*& bestItem, uint32& bestRank, Item* item)
+{
+    ItemTemplate const* proto = item ? item->GetTemplate() : nullptr;
+    if (!IsArtifactWeapon(proto))
+        return;
+
+    uint32 rank = GetArtifactWeaponRank(proto);
+    if (!bestItem || rank > bestRank)
+    {
+        bestItem = item;
+        bestRank = rank;
+    }
+}
 
 Item* FindEquippedArtifactWeapon(Player* player)
 {
@@ -87,17 +133,36 @@ Item* FindEquippedArtifactWeapon(Player* player)
     for (uint8 slot : ARTIFACT_WEAPON_SLOTS)
     {
         Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
-        ItemTemplate const* proto = item ? item->GetTemplate() : nullptr;
-        if (!IsArtifactWeapon(proto))
-            continue;
+        SelectBetterArtifactCandidate(bestItem, bestRank, item);
+    }
 
-        uint32 rank = GetArtifactWeaponRank(proto);
-        if (!bestItem || rank > bestRank)
+#ifdef MODULE_ASCENSION_SYSTEM
+    if (sAscensionConfig->IsEnabled())
+    {
+        if (PlayerAscensionStatus* status = sAscensionManager->GetPlayerStatus(player->GetGUID().GetCounter()))
         {
-            bestItem = item;
-            bestRank = rank;
+            for (uint8 slot : ARTIFACT_WEAPON_SLOTS)
+            {
+                AscensionSlotControl const* control = sAscensionManager->GetSlotControl(slot);
+                if (control && !control->enabled)
+                    continue;
+
+                auto slotIt = status->slots.find(slot);
+                if (slotIt == status->slots.end())
+                    continue;
+
+                SelectBetterArtifactCandidate(bestItem, bestRank, slotIt->second.itemPtr);
+            }
         }
     }
+#endif
+
+#ifdef MODULE_XIANMEN_ARTIFACT_SLOTS
+    XianmenArtifactSlots::ForEachEquippedWeaponItem(player, [&](Item* item)
+    {
+        SelectBetterArtifactCandidate(bestItem, bestRank, item);
+    });
+#endif
 
     return bestItem;
 }
@@ -211,7 +276,7 @@ uint128 ApplyArtifactHealthGain(Unit* unit, uint128 const& value)
 
 void ApplyTimeLock(Player* caster, Unit* target, uint32 durationSeconds)
 {
-    if (!caster || !target || durationSeconds == 0 || target->isDead())
+    if (durationSeconds == 0 || !IsValidArtifactEffectTarget(caster, target))
         return;
 
     if (target->HasUnitState(UNIT_STATE_ROOT))
@@ -228,8 +293,50 @@ void ApplyTimeLock(Player* caster, Unit* target, uint32 durationSeconds)
     }, Seconds(durationSeconds));
 }
 
+uint32 PickArtifactVisualKit(uint32 first, uint32 second = 0, uint32 third = 0, uint32 fourth = 0, uint32 fifth = 0)
+{
+    uint32 const kits[] = { first, second, third, fourth, fifth };
+    for (uint32 kitId : kits)
+        if (kitId && kitId != std::numeric_limits<uint32>::max())
+            return kitId;
+
+    return 0;
+}
+
+void SendArtifactEffectVisual(Player* player, Unit* victim, SpellInfo const* spellInfo)
+{
+    if (!player || !victim || !spellInfo || !player->IsInMap(victim))
+        return;
+
+    SpellVisualEntry const* visual = nullptr;
+    for (uint32 visualId : spellInfo->SpellVisual)
+    {
+        if (!visualId)
+            continue;
+
+        visual = sSpellVisualStore.LookupEntry(visualId);
+        if (visual)
+            break;
+    }
+
+    if (!visual)
+        return;
+
+    uint32 const casterKit = PickArtifactVisualKit(visual->CastKit, visual->PrecastKit, visual->StateKit, visual->ChannelKit, visual->CasterImpactKit);
+    uint32 const targetKit = PickArtifactVisualKit(visual->TargetImpactKit, visual->ImpactKit, visual->ImpactAreaKit, visual->InstantAreaKit);
+
+    if (casterKit)
+        player->SendPlaySpellVisual(casterKit);
+
+    if (targetKit)
+        player->SendPlaySpellImpact(victim->GetGUID(), targetKit);
+}
+
 uint128 DealArtifactSpellDamage(Player* player, Unit* victim, SpellInfo const* spellInfo, uint128 const& damage)
 {
+    if (!spellInfo || damage == 0 || !IsValidArtifactEffectTarget(player, victim))
+        return 0;
+
     SpellSchoolMask schoolMask = spellInfo->GetSchoolMask();
     if (!schoolMask)
         schoolMask = SPELL_SCHOOL_MASK_NORMAL;
@@ -238,7 +345,11 @@ uint128 DealArtifactSpellDamage(Player* player, Unit* victim, SpellInfo const* s
     damageInfo.damage = damage;
 
     Unit::DealDamageMods(damageInfo.target, damageInfo.damage, &damageInfo.absorb);
-    player->SendSpellNonMeleeDamageLog(&damageInfo);
+    if (player->ShouldSendCustomProcClientFeedback(victim, spellInfo, "artifact-chain"))
+    {
+        SendArtifactEffectVisual(player, victim, spellInfo);
+        player->SendSpellNonMeleeDamageLog(&damageInfo);
+    }
 
     CleanDamage cleanDamage(damageInfo.cleanDamage, damageInfo.absorb, BASE_ATTACK, (damageInfo.HitInfo & SPELL_HIT_TYPE_CRIT) ? MELEE_HIT_CRIT : MELEE_HIT_NORMAL);
     return Unit::DealDamage(player, victim, damageInfo.damage, &cleanDamage, SPELL_DIRECT_DAMAGE, schoolMask, spellInfo, true);
@@ -246,7 +357,7 @@ uint128 DealArtifactSpellDamage(Player* player, Unit* victim, SpellInfo const* s
 
 bool ApplyArtifactEffect(Player* player, Unit* victim, SpellInfo const* spellInfo, Item* item)
 {
-    if (!player || !victim || !spellInfo || victim->isDead())
+    if (!spellInfo || !IsValidArtifactEffectTarget(player, victim))
         return false;
 
     if (!IsArtifactEffectSpell(spellInfo))
@@ -283,7 +394,7 @@ bool ApplyArtifactEffect(Player* player, Unit* victim, SpellInfo const* spellInf
 
 bool TriggerEquippedArtifactEffects(Player* player, Unit* victim)
 {
-    if (!player || !victim || victim->isDead())
+    if (!IsValidArtifactEffectTarget(player, victim))
         return false;
 
     Item* item = FindEquippedArtifactWeapon(player);
@@ -306,13 +417,14 @@ bool TriggerEquippedArtifactEffects(Player* player, Unit* victim)
 
     return triggered;
 }
-}
 
 class item_artifact_chain_weapon : public ItemScript
 {
 public:
     item_artifact_chain_weapon() : ItemScript("item_artifact_chain_weapon") { }
 
+    // 有意失活物品 proc 路径：神器技能返回 false，阻止核心走随机几率的 CHANCE_ON_HIT proc。
+    // 神器特效由 artifact_chain_unit_script 的伤害计算钩子触发，避免被幻境血条 OnDamage 吸收逻辑吞掉。
     bool OnCastItemCombatSpell(Player* player, Unit* victim, SpellInfo const* spellInfo, Item* item) override
     {
         ItemTemplate const* proto = item ? item->GetTemplate() : nullptr;
@@ -345,12 +457,31 @@ private:
     bool _entered;
 };
 
+bool TriggerEquippedArtifactEffectsGuarded(Player* player, Unit* victim)
+{
+    if (!IsValidArtifactEffectTarget(player, victim))
+        return false;
+
+    static thread_local bool applyingArtifactEffect = false;
+    ArtifactEffectGuard guard(applyingArtifactEffect);
+    if (!guard.Entered())
+        return false;
+
+    return TriggerEquippedArtifactEffects(player, victim);
+}
+}
+
 class artifact_chain_unit_script : public UnitScript
 {
 public:
-    artifact_chain_unit_script() : UnitScript("artifact_chain_unit_script", true, { UNITHOOK_ON_DAMAGE }) { }
+    artifact_chain_unit_script() : UnitScript("artifact_chain_unit_script", true,
+        {
+            UNITHOOK_MODIFY_MELEE_DAMAGE,
+            UNITHOOK_MODIFY_SPELL_DAMAGE_TAKEN,
+            UNITHOOK_MODIFY_PERIODIC_DAMAGE_AURAS_TICK
+        }) { }
 
-    void OnDamage(Unit* attacker, Unit* victim, uint128& damage) override
+    void ModifyMeleeDamage(Unit* victim, Unit* attacker, uint128& damage) override
     {
         if (damage == 0 || !attacker || !victim)
             return;
@@ -359,12 +490,31 @@ public:
         if (!player)
             return;
 
-        static thread_local bool applyingArtifactEffect = false;
-        ArtifactEffectGuard guard(applyingArtifactEffect);
-        if (!guard.Entered())
+        TriggerEquippedArtifactEffectsGuarded(player, victim);
+    }
+
+    void ModifySpellDamageTaken(Unit* victim, Unit* attacker, uint128& damage, SpellInfo const* spellInfo) override
+    {
+        if (damage == 0 || !attacker || !victim || IsArtifactEffectSpell(spellInfo))
             return;
 
-        TriggerEquippedArtifactEffects(player, victim);
+        Player* player = attacker->GetCharmerOrOwnerPlayerOrPlayerItself();
+        if (!player)
+            return;
+
+        TriggerEquippedArtifactEffectsGuarded(player, victim);
+    }
+
+    void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint128& damage, SpellInfo const* spellInfo) override
+    {
+        if (damage == 0 || !attacker || !target || IsArtifactEffectSpell(spellInfo))
+            return;
+
+        Player* player = attacker->GetCharmerOrOwnerPlayerOrPlayerItself();
+        if (!player)
+            return;
+
+        TriggerEquippedArtifactEffectsGuarded(player, target);
     }
 };
 

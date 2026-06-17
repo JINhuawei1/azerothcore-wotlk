@@ -218,6 +218,7 @@ public:
     void OnPlayerLogout(Player* player) override;
     void OnPlayerDelete(ObjectGuid guid, uint32 accountId) override;
     bool OnPlayerCanEquipItem(Player* player, uint8 slot, uint16& dest, Item* pItem, bool swap, bool not_loading) override;
+    bool OnPlayerCanCastItemCombatSpell(Player* player, Unit* target, WeaponAttackType attType, uint32 procVictim, uint32 procEx, Item* item, ItemTemplate const* proto) override;
 };
 
 // 命令脚本
@@ -230,6 +231,7 @@ public:
     static bool HandleAscensionView(ChatHandler* handler, const char* args);
     static bool HandleAscensionEquip(ChatHandler* handler, const char* args);
     static bool HandleAscensionUnequip(ChatHandler* handler, const char* args);
+    static bool HandleAscensionUse(ChatHandler* handler, const char* args);
     static bool HandleAscensionClear(ChatHandler* handler, const char* args);
     static bool HandleAscensionRefresh(ChatHandler* handler, const char* args);
     static bool HandleAscensionUnlock(ChatHandler* handler, const char* args);

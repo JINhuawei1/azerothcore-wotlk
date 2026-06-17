@@ -278,7 +278,10 @@ public:
             playerGuid);
 
         if (!result)
+        {
+            RefreshAutoStoreSnapshot(player);
             return;
+        }
 
         do
         {
@@ -290,6 +293,8 @@ public:
             items[itemId] = state;
         }
         while (result->NextRow());
+
+        QueueCurrentAutoStoreInventory(player);
     }
 
     void UnloadPlayer(Player* player)
@@ -300,6 +305,8 @@ public:
         uint32 playerGuid = player->GetGUID().GetCounter();
         _players.erase(playerGuid);
         _pendingAutoStore.erase(playerGuid);
+        _recentStoreNewAutoStore.erase(playerGuid);
+        _inventoryAutoStoreCounts.erase(playerGuid);
         _playerPages.erase(playerGuid);
     }
 
@@ -308,6 +315,8 @@ public:
         uint32 playerGuid = guid.GetCounter();
         _players.erase(playerGuid);
         _pendingAutoStore.erase(playerGuid);
+        _recentStoreNewAutoStore.erase(playerGuid);
+        _inventoryAutoStoreCounts.erase(playerGuid);
         _playerPages.erase(playerGuid);
         CharacterDatabase.Execute("DELETE FROM `_材料仓库玩家` WHERE `玩家GUID` = {}", playerGuid);
     }
@@ -343,6 +352,7 @@ public:
         else
             SendResult(player, "ADD", true, "已加入仓库");
 
+        RefreshAutoStoreSnapshot(player);
         SendWarehouse(player);
         return true;
     }
@@ -370,6 +380,7 @@ public:
         if (itemItr->second.count > 0)
         {
             itemItr->second.autoStore = false;
+            _inventoryAutoStoreCounts[playerGuid].erase(itemId);
             CharacterDatabase.Execute(
                 "UPDATE `_材料仓库玩家` SET `自动存储` = 0 WHERE `玩家GUID` = {} AND `物品ID` = {}",
                 playerGuid, itemId);
@@ -379,6 +390,7 @@ public:
         }
 
         playerItr->second.erase(itemItr);
+        _inventoryAutoStoreCounts[playerGuid].erase(itemId);
         CharacterDatabase.Execute("DELETE FROM `_材料仓库玩家` WHERE `玩家GUID` = {} AND `物品ID` = {}", playerGuid, itemId);
 
         SendResult(player, "REMOVE", true, "已移出仓库列表");
@@ -404,6 +416,10 @@ public:
             "UPDATE `_材料仓库玩家` SET `自动存储` = {} WHERE `玩家GUID` = {} AND `物品ID` = {}",
             enabled ? 1 : 0, playerGuid, itemId);
 
+        if (enabled)
+            QueueCurrentAutoStoreInventory(player, itemId);
+        else
+            RefreshAutoStoreSnapshot(player, itemId);
         SendResult(player, "AUTO", true, enabled ? "已开启自动存储" : "已关闭自动存储");
         SendWarehouse(player);
         return true;
@@ -450,6 +466,7 @@ public:
             SendWarehouse(player);
         }
 
+        RefreshAutoStoreSnapshot(player, itemId);
         return destroyCount;
     }
 
@@ -541,6 +558,7 @@ public:
         chatMessage << BuildItemChatLink(itemTemplate, itemId) << "x" << amount32 << " 取出成功";
         SendResult(player, "WITHDRAW", true, addonMessage.str(), chatMessage.str());
         SendWarehouse(player);
+        RefreshAutoStoreSnapshot(player, itemId);
         return true;
     }
 
@@ -563,6 +581,34 @@ public:
 
         uint128& pendingCount = _pendingAutoStore[playerGuid][itemId];
         pendingCount = SaturatingAddUInt128(pendingCount, count);
+        RememberStoreNewEvent(playerGuid, item, count);
+        RefreshAutoStoreSnapshot(player, itemId);
+    }
+
+    void HandleConfirmedAutoStore(Player* player, Item* item, uint32 count)
+    {
+        if (!player || !item || !_enabled || !count)
+            return;
+
+        uint32 playerGuid = player->GetGUID().GetCounter();
+        if (_withdrawGuard.find(playerGuid) != _withdrawGuard.end())
+            return;
+
+        uint32 itemId = item->GetEntry();
+        MaterialWarehouseStoredItem* state = GetStoredState(playerGuid, itemId);
+        if (!state || !state->autoStore)
+            return;
+
+        if (!IsItemAllowed(itemId))
+            return;
+
+        uint128 uncoveredCount = ConsumeRecentStoreNewEvent(playerGuid, item, count);
+        if (!uncoveredCount)
+            return;
+
+        uint128& pendingCount = _pendingAutoStore[playerGuid][itemId];
+        pendingCount = SaturatingAddUInt128(pendingCount, uncoveredCount);
+        RefreshAutoStoreSnapshot(player, itemId);
     }
 
     void Update(Player* player, uint32 /*diff*/)
@@ -570,7 +616,10 @@ public:
         if (!player || !_enabled)
             return;
 
+        ReconcileAutoStoreInventory(player);
         ProcessPendingAutoStore(player, MATERIAL_WAREHOUSE_AUTO_STORE_BATCH_SIZE);
+        RefreshAutoStoreSnapshot(player);
+        _recentStoreNewAutoStore.erase(player->GetGUID().GetCounter());
     }
 
     void SendOpen(Player* player)
@@ -849,6 +898,133 @@ private:
             SendWarehouse(player);
     }
 
+    void RememberStoreNewEvent(uint32 playerGuid, Item* item, uint128 const& count)
+    {
+        if (!item || !count)
+            return;
+
+        _recentStoreNewAutoStore[playerGuid][item->GetGUID().GetCounter()] =
+            SaturatingAddUInt128(_recentStoreNewAutoStore[playerGuid][item->GetGUID().GetCounter()], count);
+    }
+
+    uint128 ConsumeRecentStoreNewEvent(uint32 playerGuid, Item* item, uint128 const& count)
+    {
+        if (!item || !count)
+            return 0;
+
+        auto playerItr = _recentStoreNewAutoStore.find(playerGuid);
+        if (playerItr == _recentStoreNewAutoStore.end())
+            return count;
+
+        auto itemItr = playerItr->second.find(item->GetGUID().GetCounter());
+        if (itemItr == playerItr->second.end())
+            return count;
+
+        uint128 coveredCount = std::min<uint128>(itemItr->second, count);
+        if (itemItr->second <= coveredCount)
+            playerItr->second.erase(itemItr);
+        else
+            itemItr->second -= coveredCount;
+
+        if (playerItr->second.empty())
+            _recentStoreNewAutoStore.erase(playerItr);
+
+        return count - coveredCount;
+    }
+
+    void ReconcileAutoStoreInventory(Player* player)
+    {
+        if (!player)
+            return;
+
+        uint32 playerGuid = player->GetGUID().GetCounter();
+        auto playerItr = _players.find(playerGuid);
+        if (playerItr == _players.end())
+            return;
+
+        auto& lastCounts = _inventoryAutoStoreCounts[playerGuid];
+        for (auto const& [itemId, state] : playerItr->second)
+        {
+            if (!state.autoStore || !IsItemAllowed(itemId))
+            {
+                lastCounts.erase(itemId);
+                continue;
+            }
+
+            uint32 currentCount = player->GetItemCount(itemId, false);
+            uint32 previousCount = 0;
+            auto countItr = lastCounts.find(itemId);
+            if (countItr != lastCounts.end())
+                previousCount = countItr->second;
+
+            if (currentCount > previousCount)
+            {
+                uint128& pendingCount = _pendingAutoStore[playerGuid][itemId];
+                pendingCount = SaturatingAddUInt128(pendingCount, uint128(currentCount - previousCount));
+            }
+
+            lastCounts[itemId] = currentCount;
+        }
+    }
+
+    void RefreshAutoStoreSnapshot(Player* player, uint32 onlyItemId = 0)
+    {
+        if (!player)
+            return;
+
+        uint32 playerGuid = player->GetGUID().GetCounter();
+        auto playerItr = _players.find(playerGuid);
+        if (playerItr == _players.end())
+        {
+            _inventoryAutoStoreCounts.erase(playerGuid);
+            return;
+        }
+
+        auto& lastCounts = _inventoryAutoStoreCounts[playerGuid];
+        if (!onlyItemId)
+            lastCounts.clear();
+
+        for (auto const& [itemId, state] : playerItr->second)
+        {
+            if (onlyItemId && itemId != onlyItemId)
+                continue;
+
+            if (state.autoStore)
+                lastCounts[itemId] = player->GetItemCount(itemId, false);
+            else
+                lastCounts.erase(itemId);
+        }
+    }
+
+    void QueueCurrentAutoStoreInventory(Player* player, uint32 onlyItemId = 0)
+    {
+        if (!player)
+            return;
+
+        uint32 playerGuid = player->GetGUID().GetCounter();
+        auto playerItr = _players.find(playerGuid);
+        if (playerItr == _players.end())
+            return;
+
+        for (auto const& [itemId, state] : playerItr->second)
+        {
+            if (onlyItemId && itemId != onlyItemId)
+                continue;
+
+            if (!state.autoStore || !IsItemAllowed(itemId))
+                continue;
+
+            uint32 currentCount = player->GetItemCount(itemId, false);
+            if (!currentCount)
+                continue;
+
+            uint128& pendingCount = _pendingAutoStore[playerGuid][itemId];
+            pendingCount = SaturatingAddUInt128(pendingCount, currentCount);
+        }
+
+        RefreshAutoStoreSnapshot(player, onlyItemId);
+    }
+
     void SubtractStoredCount(uint32 playerGuid, uint32 itemId, uint128 const& count)
     {
         MaterialWarehouseStoredItem* state = GetStoredState(playerGuid, itemId);
@@ -898,6 +1074,8 @@ private:
     std::vector<MaterialWarehouseType> _allowedTypes;
     std::unordered_map<uint32, std::unordered_map<uint32, MaterialWarehouseStoredItem>> _players;
     std::unordered_map<uint32, std::unordered_map<uint32, uint128>> _pendingAutoStore;
+    std::unordered_map<uint32, std::unordered_map<uint64, uint128>> _recentStoreNewAutoStore;
+    std::unordered_map<uint32, std::unordered_map<uint32, uint32>> _inventoryAutoStoreCounts;
     std::unordered_map<uint32, uint32> _playerPages;
     std::unordered_set<uint32> _withdrawGuard;
 };
@@ -925,7 +1103,11 @@ public:
         PLAYERHOOK_ON_LOGOUT,
         PLAYERHOOK_ON_DELETE,
         PLAYERHOOK_ON_UPDATE,
+        PLAYERHOOK_ON_LOOT_ITEM,
         PLAYERHOOK_ON_STORE_NEW_ITEM,
+        PLAYERHOOK_ON_CREATE_ITEM,
+        PLAYERHOOK_ON_QUEST_REWARD_ITEM,
+        PLAYERHOOK_ON_GROUP_ROLL_REWARD_ITEM,
         PLAYERHOOK_ON_CHAT
     }) { }
 
@@ -955,6 +1137,26 @@ public:
     void OnPlayerStoreNewItem(Player* player, Item* item, uint32 count) override
     {
         sMaterialWarehouseMgr->HandleAutoStore(player, item, count);
+    }
+
+    void OnPlayerLootItem(Player* player, Item* item, uint32 count, ObjectGuid /*lootguid*/) override
+    {
+        sMaterialWarehouseMgr->HandleConfirmedAutoStore(player, item, count);
+    }
+
+    void OnPlayerCreateItem(Player* player, Item* item, uint32 count) override
+    {
+        sMaterialWarehouseMgr->HandleConfirmedAutoStore(player, item, count);
+    }
+
+    void OnPlayerQuestRewardItem(Player* player, Item* item, uint32 count) override
+    {
+        sMaterialWarehouseMgr->HandleConfirmedAutoStore(player, item, count);
+    }
+
+    void OnPlayerGroupRollRewardItem(Player* player, Item* item, uint32 count, RollVote /*voteType*/, Roll* /*roll*/) override
+    {
+        sMaterialWarehouseMgr->HandleConfirmedAutoStore(player, item, count);
     }
 
     void OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg, Player* /*receiver*/) override

@@ -2729,7 +2729,8 @@ void DealXianmenScriptDamage(Player* player, Unit* victim, uint128 const& damage
     SpellNonMeleeDamage damageInfo(player, victim, spellInfo, schoolMask);
     damageInfo.damage = damage;
     Unit::DealDamageMods(damageInfo.target, damageInfo.damage, &damageInfo.absorb);
-    player->SendSpellNonMeleeDamageLog(&damageInfo);
+    if (player->ShouldSendCustomProcClientFeedback(victim, spellInfo, "xianmen-script"))
+        player->SendSpellNonMeleeDamageLog(&damageInfo);
     CleanDamage cleanDamage(damageInfo.cleanDamage, damageInfo.absorb, BASE_ATTACK, MELEE_HIT_NORMAL);
     Unit::DealDamage(player, victim, damageInfo.damage, &cleanDamage, SPELL_DIRECT_DAMAGE, schoolMask, spellInfo, true);
 

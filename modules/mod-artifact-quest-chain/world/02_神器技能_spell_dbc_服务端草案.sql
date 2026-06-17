@@ -3,9 +3,12 @@
 -- 1. 本文件只写 world 库 spell_dbc 数据草案，不生成客户端 Spell.dbc，不打包客户端补丁。
 -- 2. 80 个技能 ID：381001..381080；每阶 5 个击中特效。
 -- 3. 技能 ID 只作为数据行主键。后续 C++ 增强逻辑必须读取 EffectBasePoints_1..3，不按技能 ID 判断。
--- 4. EffectBasePoints_1 = 主伤害比例，万分比；10000 = 100%，100 = 1%。
--- 5. EffectBasePoints_2 = 副效果参数；时空禁锢为定身秒数，噬魂回响为治疗万分比。
+-- 4. EffectBasePoints_1 = 主伤害比例。原设计为万分比，但当前 C++ ScalePercentValue 分母为 100，
+--    实际按百分比解读（100 = 100%，400 = 400%）。已确认保持现有高伤害，未改动分母。
+-- 5. EffectBasePoints_2 = 副效果参数；时空禁锢为定身秒数，噬魂回响为治疗万分比（分母 10000）。
 -- 6. EffectBasePoints_3 = 神器技能标记；9100101..9100105。
+-- 7. 触发方式：神器特效由 C++ artifact_chain_unit_script::OnDamage 钩子在每次造成伤害时 100% 触发，
+--    不走物品 proc 系统；因此本表 ProcChance/ProcTypeMask 全部为 0 是有意为之，并非配置遗漏。
 
 SET NAMES utf8mb4;
 

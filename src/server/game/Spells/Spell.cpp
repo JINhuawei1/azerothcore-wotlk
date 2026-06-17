@@ -49,6 +49,7 @@
 #include "Unit.h"
 #include "Util.h"
 #include <limits>
+#include <unordered_map>
 #include "VMapFactory.h"
 #include "Vehicle.h"
 #include "World.h"
@@ -68,6 +69,97 @@ extern pEffect SpellEffects[TOTAL_SPELL_EFFECTS];
 namespace
 {
     constexpr uint32 MaxClientSpellPowerValue = 2000000000u;
+
+    enum class SuppressedClientFeedbackPacket : uint8
+    {
+        DamageLog,
+        SpellStart,
+        SpellGo,
+        LogExecute
+    };
+
+    struct SuppressedClientFeedbackDebugStats
+    {
+        uint32 windowStartMs = 0;
+        uint32 total = 0;
+        uint32 damageLog = 0;
+        uint32 spellStart = 0;
+        uint32 spellGo = 0;
+        uint32 logExecute = 0;
+    };
+
+    thread_local std::unordered_map<uint64, SuppressedClientFeedbackDebugStats> g_suppressedClientFeedbackDebugStats;
+
+    void RecordSuppressedClientFeedbackDebug(Spell const* spell, SuppressedClientFeedbackPacket packet)
+    {
+        if (!spell || !spell->GetCaster() || !spell->GetSpellInfo())
+            return;
+
+        Player* player = spell->GetCaster()->GetCharmerOrOwnerPlayerOrPlayerItself();
+        if (!player)
+            return;
+
+        if (g_suppressedClientFeedbackDebugStats.size() > 1024)
+            g_suppressedClientFeedbackDebugStats.clear();
+
+        uint32 const now = getMSTime();
+        SuppressedClientFeedbackDebugStats& stats = g_suppressedClientFeedbackDebugStats[player->GetGUID().GetRawValue()];
+
+        if (!stats.windowStartMs)
+            stats.windowStartMs = now;
+
+        ++stats.total;
+        if (stats.total == 1)
+        {
+            char const* packetName = "unknown";
+            switch (packet)
+            {
+                case SuppressedClientFeedbackPacket::DamageLog:
+                    packetName = "damageLog";
+                    break;
+                case SuppressedClientFeedbackPacket::SpellStart:
+                    packetName = "spellStart";
+                    break;
+                case SuppressedClientFeedbackPacket::SpellGo:
+                    packetName = "spellGo";
+                    break;
+                case SuppressedClientFeedbackPacket::LogExecute:
+                    packetName = "logExecute";
+                    break;
+            }
+
+            LOG_INFO("server.loading",
+                "[装备触发封包压制首条] player={} spell={} packet={}",
+                player->GetName(), spell->GetSpellInfo()->Id, packetName);
+        }
+
+        switch (packet)
+        {
+            case SuppressedClientFeedbackPacket::DamageLog:
+                ++stats.damageLog;
+                break;
+            case SuppressedClientFeedbackPacket::SpellStart:
+                ++stats.spellStart;
+                break;
+            case SuppressedClientFeedbackPacket::SpellGo:
+                ++stats.spellGo;
+                break;
+            case SuppressedClientFeedbackPacket::LogExecute:
+                ++stats.logExecute;
+                break;
+        }
+
+        if (getMSTimeDiff(stats.windowStartMs, now) < 5000)
+            return;
+
+        LOG_INFO("server.loading",
+            "[装备触发封包压制定位] player={} spell={} windowMs={} suppressedPackets={} damageLog={} spellStart={} spellGo={} logExecute={}",
+            player->GetName(), spell->GetSpellInfo()->Id, getMSTimeDiff(stats.windowStartMs, now),
+            stats.total, stats.damageLog, stats.spellStart, stats.spellGo, stats.logExecute);
+
+        stats = SuppressedClientFeedbackDebugStats{};
+        stats.windowStartMs = now;
+    }
 
     int64 urand64(int64 min, int64 max)
     {
@@ -2988,13 +3080,24 @@ void Spell::DoAllEffectOnTarget(TargetInfo* target)
         }
 
         // Send log damage message to client
-        caster->SendSpellNonMeleeDamageLog(&damageInfo);
+        if (!HasTriggeredCastFlag(TRIGGERED_SUPPRESS_CLIENT_FEEDBACK))
+            caster->SendSpellNonMeleeDamageLog(&damageInfo);
+        else
+            RecordSuppressedClientFeedbackDebug(this, SuppressedClientFeedbackPacket::DamageLog);
         // Xinef: send info to target about reflect
         if (reflectedSpell)
             effectUnit->SendSpellNonMeleeReflectLog(&damageInfo, effectUnit);
 
         procEx |= createProcExtendMask(&damageInfo, missInfo);
         procVictim |= PROC_FLAG_TAKEN_DAMAGE;
+
+        if (damageInfo.damage > 0
+            && m_spellInfo->DmgClass != SPELL_DAMAGE_CLASS_MELEE
+            && m_spellInfo->DmgClass != SPELL_DAMAGE_CLASS_RANGED)
+        {
+            if (Player* player = caster->GetCharmerOrOwnerPlayerOrPlayerItself())
+                player->CastDamageTriggeredArtifactItemCombatSpell(unitTarget, procVictim, procEx, m_spellInfo);
+        }
 
         caster->DealSpellDamage(&damageInfo, true, this);
 
@@ -4860,6 +4963,12 @@ void Spell::SendPetCastResult(SpellCastResult result)
 
 void Spell::SendSpellStart()
 {
+    if (HasTriggeredCastFlag(TRIGGERED_SUPPRESS_CLIENT_FEEDBACK))
+    {
+        RecordSuppressedClientFeedbackDebug(this, SuppressedClientFeedbackPacket::SpellStart);
+        return;
+    }
+
     if (!IsNeedSendToClient(false))
         return;
 
@@ -4943,6 +5052,12 @@ void Spell::SendSpellStart()
 
 void Spell::SendSpellGo()
 {
+    if (HasTriggeredCastFlag(TRIGGERED_SUPPRESS_CLIENT_FEEDBACK))
+    {
+        RecordSuppressedClientFeedbackDebug(this, SuppressedClientFeedbackPacket::SpellGo);
+        return;
+    }
+
     // not send invisible spell casting
     if (!IsNeedSendToClient(true))
         return;
@@ -5222,6 +5337,12 @@ void Spell::WriteSpellGoTargets(WorldPacket* data)
 
 void Spell::SendLogExecute()
 {
+    if (HasTriggeredCastFlag(TRIGGERED_SUPPRESS_CLIENT_FEEDBACK))
+    {
+        RecordSuppressedClientFeedbackDebug(this, SuppressedClientFeedbackPacket::LogExecute);
+        return;
+    }
+
     WorldPacket data(SMSG_SPELLLOGEXECUTE, (8 + 4 + 4 + 4 + 4 + 8));
 
     data << m_caster->GetPackGUID();

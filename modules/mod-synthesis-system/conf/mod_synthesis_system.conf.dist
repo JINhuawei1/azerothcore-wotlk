@@ -1,0 +1,12 @@
+#
+# 合成系统配置
+#
+
+# 是否启用合成系统
+SynthesisSystem.Enable = 1
+
+# 启动时是否在 worldserver 控制台输出加载日志
+SynthesisSystem.AnnounceStartup = 1
+
+# Addon 请求节流标识，默认沿用统一模块节流器
+SynthesisSystem.AddonThrottleKey = "SYNTHSYS"

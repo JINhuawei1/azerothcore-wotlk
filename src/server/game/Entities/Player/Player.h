@@ -2453,6 +2453,11 @@ public:
     void ApplyEquipSpell(SpellInfo const* spellInfo, Item* item, bool apply, bool form_change = false);
     void UpdateEquipSpellsAtFormChange();
     void CastItemCombatSpell(Unit* target, WeaponAttackType attType, uint32 procVictim, uint32 procEx);
+    void CastDamageTriggeredArtifactItemCombatSpell(Unit* target, uint32 procVictim, uint32 procEx, SpellInfo const* triggeringSpellInfo);
+    bool TriggerDamageTriggeredArtifactItemProcSpell(Unit* target, Item* item, SpellInfo const* spellInfo);
+    void FlushDamageTriggeredArtifactItemProcBatches(bool force = false);
+    bool ShouldSendCustomProcClientFeedback(Unit* target, SpellInfo const* spellInfo, char const* source);
+    static bool IsTriggeringDamageTriggeredArtifactItemProcSpell();
     void CastItemUseSpell(Item* item, SpellCastTargets const& targets, uint8 cast_count, uint32 glyphIndex);
     void CastItemCombatSpell(Unit* target, WeaponAttackType attType, uint32 procVictim, uint32 procEx, Item* item, ItemTemplate const* proto);
 

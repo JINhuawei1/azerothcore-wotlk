@@ -50,6 +50,7 @@
 #include "OutdoorPvP.h"
 #include <chrono>
 #include <limits>
+#include <unordered_map>
 #include "PassiveAI.h"
 #include "Pet.h"
 #include "PetAI.h"
@@ -137,6 +138,88 @@ namespace
     constexpr char PlayerAttributePanelAddonPrefix[] = "PATTRPANEL";
     constexpr uint32 MaxClientResourceValue = 2000000000u;
     constexpr uint32 MaxClientCombatLogValue = MaxClientResourceValue - 1u;
+    constexpr uint32 FastMeleeFeedbackAttackTimeThresholdMs = 100;
+    constexpr uint32 FastMeleeFeedbackMinIntervalMs = 50;
+    constexpr uint32 FastMeleeFeedbackMaxPerSecond = 60;
+    constexpr uint32 FastMeleeFeedbackStateClearSize = 8192;
+
+    struct FastMeleeFeedbackKey
+    {
+        uint64 attackerGuid = 0;
+        uint64 targetGuid = 0;
+        uint8 attackType = 0;
+
+        bool operator==(FastMeleeFeedbackKey const& other) const
+        {
+            return attackerGuid == other.attackerGuid && targetGuid == other.targetGuid && attackType == other.attackType;
+        }
+    };
+
+    struct FastMeleeFeedbackKeyHash
+    {
+        std::size_t operator()(FastMeleeFeedbackKey const& key) const
+        {
+            std::size_t seed = std::hash<uint64>()(key.attackerGuid);
+            seed ^= std::hash<uint64>()(key.targetGuid + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
+            seed ^= std::hash<uint8>()(key.attackType + uint8(seed << 1));
+            return seed;
+        }
+    };
+
+    struct FastMeleeFeedbackBudget
+    {
+        uint32 windowStartMs = 0;
+        uint32 used = 0;
+    };
+
+    bool ShouldSendFastMeleeClientFeedback(CalcDamageInfo const& damageInfo)
+    {
+        Unit* attacker = damageInfo.attacker;
+        Unit* target = damageInfo.target;
+        if (!attacker || !target)
+            return true;
+
+        if (!attacker->IsPlayer() || target->IsPlayer())
+            return true;
+
+        if (damageInfo.attackType != BASE_ATTACK && damageInfo.attackType != OFF_ATTACK)
+            return true;
+
+        uint32 const attackTime = attacker->GetAttackTime(damageInfo.attackType);
+        if (attackTime > FastMeleeFeedbackAttackTimeThresholdMs)
+            return true;
+
+        uint128 const totalDamage = damageInfo.damages[0].damage + damageInfo.damages[1].damage;
+        if (totalDamage >= target->GetHealthForCombat128())
+            return true;
+
+        static thread_local std::unordered_map<FastMeleeFeedbackKey, uint32, FastMeleeFeedbackKeyHash> lastFeedbackMs;
+        static thread_local std::unordered_map<uint64, FastMeleeFeedbackBudget> budgets;
+
+        if (lastFeedbackMs.size() > FastMeleeFeedbackStateClearSize)
+            lastFeedbackMs.clear();
+
+        uint32 const now = getMSTime();
+        FastMeleeFeedbackKey const key{ attacker->GetGUID().GetRawValue(), target->GetGUID().GetRawValue(), uint8(damageInfo.attackType) };
+
+        auto lastItr = lastFeedbackMs.find(key);
+        if (lastItr != lastFeedbackMs.end() && getMSTimeDiff(lastItr->second, now) < FastMeleeFeedbackMinIntervalMs)
+            return false;
+
+        FastMeleeFeedbackBudget& budget = budgets[key.attackerGuid];
+        if (!budget.windowStartMs || getMSTimeDiff(budget.windowStartMs, now) >= 1000)
+        {
+            budget.windowStartMs = now;
+            budget.used = 0;
+        }
+
+        if (budget.used >= FastMeleeFeedbackMaxPerSecond)
+            return false;
+
+        ++budget.used;
+        lastFeedbackMs[key] = now;
+        return true;
+    }
 
     uint64 GetProcDamageForCombat(uint32 legacyDamage, ProcEventInfo const& eventInfo)
     {
@@ -145,6 +228,121 @@ namespace
                 return Acore::Number::ToUInt64Saturated(damage);
 
         return legacyDamage;
+    }
+
+    bool IsDamageTriggeredArtifactItemProcSpellInfo(SpellInfo const* spellInfo)
+    {
+        return spellInfo && spellInfo->Id >= 383001 && spellInfo->Id <= 383084;
+    }
+
+    struct ArtifactProcPanelKey
+    {
+        uint64 playerGuid = 0;
+        uint64 targetGuid = 0;
+        uint32 spellId = 0;
+
+        bool operator==(ArtifactProcPanelKey const& other) const
+        {
+            return playerGuid == other.playerGuid && targetGuid == other.targetGuid && spellId == other.spellId;
+        }
+    };
+
+    struct ArtifactProcPanelKeyHash
+    {
+        std::size_t operator()(ArtifactProcPanelKey const& key) const
+        {
+            std::size_t seed = std::hash<uint64>()(key.playerGuid);
+            seed ^= std::hash<uint64>()(key.targetGuid + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
+            seed ^= std::hash<uint32>()(key.spellId + 0x9e3779b9U + uint32(seed << 6) + uint32(seed >> 2));
+            return seed;
+        }
+    };
+
+    struct ArtifactProcPanelBudget
+    {
+        uint32 windowStartMs = 0;
+        uint32 used = 0;
+    };
+
+    struct ArtifactProcPanelPending
+    {
+        uint128 damage = 0;
+        bool critical = false;
+    };
+
+    constexpr uint32 ArtifactProcPanelMinIntervalMs = 250;
+    constexpr uint32 ArtifactProcPanelMaxPerSecond = 10;
+    constexpr uint32 ArtifactProcPanelStateClearSize = 8192;
+
+    bool PrepareArtifactProcPanelFeedback(Player* player, Unit* target, SpellInfo const* spellInfo, uint128 const& damage, bool critical, uint128& displayDamage, bool& displayCritical)
+    {
+        displayDamage = damage;
+        displayCritical = critical;
+
+        if (!IsDamageTriggeredArtifactItemProcSpellInfo(spellInfo))
+            return true;
+
+        if (!player || !target)
+            return false;
+
+        static thread_local std::unordered_map<ArtifactProcPanelKey, uint32, ArtifactProcPanelKeyHash> lastPanelMs;
+        static thread_local std::unordered_map<uint64, ArtifactProcPanelBudget> budgets;
+        static thread_local std::unordered_map<ArtifactProcPanelKey, ArtifactProcPanelPending, ArtifactProcPanelKeyHash> pendingByKey;
+
+        if (lastPanelMs.size() > ArtifactProcPanelStateClearSize || pendingByKey.size() > ArtifactProcPanelStateClearSize)
+        {
+            lastPanelMs.clear();
+            pendingByKey.clear();
+        }
+
+        if (budgets.size() > 1024)
+            budgets.clear();
+
+        uint32 const now = getMSTime();
+        ArtifactProcPanelKey const key{ player->GetGUID().GetRawValue(), target->GetGUID().GetRawValue(), spellInfo->Id };
+
+        auto lastItr = lastPanelMs.find(key);
+        if (lastItr != lastPanelMs.end() && getMSTimeDiff(lastItr->second, now) < ArtifactProcPanelMinIntervalMs)
+        {
+            ArtifactProcPanelPending& pending = pendingByKey[key];
+            pending.damage = AddUInt128Damage(pending.damage, damage);
+            pending.critical = pending.critical || critical;
+            return false;
+        }
+
+        ArtifactProcPanelBudget& budget = budgets[key.playerGuid];
+        if (!budget.windowStartMs || getMSTimeDiff(budget.windowStartMs, now) >= 1000)
+        {
+            budget.windowStartMs = now;
+            budget.used = 0;
+        }
+
+        if (budget.used >= ArtifactProcPanelMaxPerSecond)
+        {
+            ArtifactProcPanelPending& pending = pendingByKey[key];
+            pending.damage = AddUInt128Damage(pending.damage, damage);
+            pending.critical = pending.critical || critical;
+            return false;
+        }
+
+        ++budget.used;
+        lastPanelMs[key] = now;
+
+        auto pendingItr = pendingByKey.find(key);
+        if (pendingItr != pendingByKey.end())
+        {
+            displayDamage = AddUInt128Damage(pendingItr->second.damage, damage);
+            displayCritical = displayCritical || pendingItr->second.critical;
+            pendingByKey.erase(pendingItr);
+        }
+
+        return true;
+    }
+
+    bool ShouldSuppressArtifactProcCombatLogForAddon(SpellNonMeleeDamage const* log)
+    {
+        (void)log;
+        return false;
     }
 
     uint32 ToSafeClientResourceValue(uint32 value)
@@ -655,9 +853,14 @@ namespace
         if (!player || !player->GetSession() || !player->GetSession()->HasEnabledAddon("LargeDamageText"))
             return;
 
+        uint128 displayDamage = damage;
+        bool displayCritical = critical;
+        if (!PrepareArtifactProcPanelFeedback(player, victim, spellInfo, damage, critical, displayDamage, displayCritical))
+            return;
+
         uint32 spellId = spellInfo ? spellInfo->Id : 0;
 
-        std::string payload = "DMG:" + damage.convert_to<std::string>() + ":" + (critical ? "1" : "0") + ":" +
+        std::string payload = "DMG:" + displayDamage.convert_to<std::string>() + ":" + (displayCritical ? "1" : "0") + ":" +
             std::to_string(static_cast<uint32>(schoolMask)) + ":" + std::to_string(spellId) + ":" +
             std::to_string(static_cast<uint32>(damageType));
         std::string fullMessage = std::string(PlayerAttributePanelAddonPrefix) + '\t' + payload;
@@ -1464,11 +1667,14 @@ uint128 Unit::DealDamage(Unit* attacker, Unit* victim, uint128 const& damageIn, 
     if (aiDamage != originalAiDamage)
         damage = aiDamage;
 
-    // Hook for OnDamage Event
-    uint128 scriptDamage = damage;
-    sScriptMgr->OnDamage(attacker, victim, scriptDamage);
-    if (scriptDamage != damage)
-        damage = scriptDamage;
+    if (!IsDamageTriggeredArtifactItemProcSpellInfo(spellProto))
+    {
+        // Hook for OnDamage Event
+        uint128 scriptDamage = damage;
+        sScriptMgr->OnDamage(attacker, victim, scriptDamage);
+        if (scriptDamage != damage)
+            damage = scriptDamage;
+    }
 
     if (victim->IsPlayer() && attacker != victim)
     {
@@ -3387,7 +3593,8 @@ void Unit::AttackerStateUpdate(Unit* victim, WeaponAttackType attType /*= BASE_A
         if (victim->CanSparringWith(damageInfo.attacker))
             damageInfo.HitInfo |= HITINFO_FAKE_DAMAGE;
 
-        SendAttackStateUpdate(&damageInfo);
+        if (ShouldSendFastMeleeClientFeedback(damageInfo))
+            SendAttackStateUpdate(&damageInfo);
 
         //TriggerAurasProcOnEvent(damageInfo);
 
@@ -7179,6 +7386,10 @@ void Unit::SendSpellNonMeleeReflectLog(SpellNonMeleeDamage* log, Unit* attacker)
 void Unit::SendSpellNonMeleeDamageLog(SpellNonMeleeDamage* log)
 {
     SendPlayerAttributePanelDamagePayload(log->attacker, log->target, log->damage, (log->HitInfo & SPELL_HIT_TYPE_CRIT) != 0, SpellSchoolMask(log->schoolMask), log->spellInfo, SPELL_DIRECT_DAMAGE);
+
+    bool const suppressArtifactProcCombatLog = ShouldSuppressArtifactProcCombatLogForAddon(log);
+    if (suppressArtifactProcCombatLog)
+        return;
 
     WorldPacket data(SMSG_SPELLNONMELEEDAMAGELOG, (16 + 4 + 4 + 4 + 1 + 4 + 4 + 1 + 1 + 4 + 4 + 1)); // we guess size
     //IF we are in cheat mode we swap absorb with damage and set damage to 0, this way we can still debug damage but our hp bar will not drop
@@ -19153,7 +19364,8 @@ bool Unit::HandleAuraRaidProcFromCharge(AuraEffect* triggeredByAura)
 void Unit::Kill(Unit* killer, Unit* victim, bool durabilityLoss, WeaponAttackType attackType, SpellInfo const* spellProto, Spell const* spell /*= nullptr*/)
 {
     // Prevent killing unit twice (and giving reward from kill twice)
-    if (!victim->GetHealth())
+    uint128 const victimHealthForCombat = victim->GetHealthForCombat128();
+    if (!victim->GetHealth() && victimHealthForCombat == 0)
         return;
 
     if (killer && !killer->IsInMap(victim))

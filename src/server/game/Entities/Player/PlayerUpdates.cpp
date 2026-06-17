@@ -83,6 +83,7 @@ void Player::Update(uint32 p_time)
     SetMustDelayTeleport(true);
     ProcessSpellQueue();
     Unit::Update(p_time);
+    FlushDamageTriggeredArtifactItemProcBatches(false);
     ApplyPendingClientHealthSync();
     SetMustDelayTeleport(false);
 

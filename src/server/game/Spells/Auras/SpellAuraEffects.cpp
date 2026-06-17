@@ -148,6 +148,15 @@ int64 ToPositiveInt64(uint64 value)
 {
     return value > static_cast<uint64>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(value);
 }
+
+void TriggerDamageTriggeredArtifactItemProcFromAuraTick(Unit* caster, Unit* target, uint128 const& damage, uint32 procVictim, uint32 procEx, SpellInfo const* spellInfo)
+{
+    if (!caster || !target || damage == 0)
+        return;
+
+    if (Player* player = caster->GetCharmerOrOwnerPlayerOrPlayerItself())
+        player->CastDamageTriggeredArtifactItemCombatSpell(target, procVictim, procEx, spellInfo);
+}
 }
 
 /// @todo: this import is not necessary for compilation and marked as unused by the IDE
@@ -6944,6 +6953,8 @@ void AuraEffect::HandlePeriodicDamageAurasTick(Unit* target, Unit* caster) const
     if (tickDamage)
         procVictim |= PROC_FLAG_TAKEN_DAMAGE;
 
+    TriggerDamageTriggeredArtifactItemProcFromAuraTick(caster, target, tickDamage, procVictim, procEx, GetSpellInfo());
+
     uint128 targetHealth = target->GetHealthForCombat128();
     uint128 overkill128 = tickDamage > targetHealth ? tickDamage - targetHealth : uint128(0);
     uint64 overkill = Acore::Number::ToUInt64Saturated(overkill128);
@@ -7055,6 +7066,8 @@ void AuraEffect::HandlePeriodicHealthLeechAuraTick(Unit* target, Unit* caster) c
     }
 
     tickDamage = dmgInfo.GetDamage();
+    TriggerDamageTriggeredArtifactItemProcFromAuraTick(caster, target, tickDamage, procVictim, procEx, GetSpellInfo());
+
     LOG_DEBUG("spells.aura.effect", "PeriodicTick: {} health leech of {} for {} dmg inflicted by {} abs is {}",
                     GetCasterGUID().ToString(), target->GetGUID().ToString(), tickDamage, GetId(), absorb);
     if (caster)

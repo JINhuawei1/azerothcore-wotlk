@@ -28,13 +28,16 @@
 #include "Player.h"
 #include "RequirementInterface.h"
 #include "ScriptMgr.h"
+#include "Spell.h"
 #include "SpellAuras.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "Util.h"
 #include "WorldSession.h"
+#include "XianmenArtifactSlots.h"
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <map>
 #include <set>
@@ -195,18 +198,149 @@ void MakeXianqiAuraPermanent(Player* player, uint32 spellId)
     }
 }
 
-void CastXianqiEquipSpell(Player* player, SpellInfo const* spellInfo)
+void MakeXianqiEquipSpellPermanent(Player* player, uint32 spellId)
+{
+    MakeXianqiAuraPermanent(player, spellId);
+
+    if (std::vector<int32> const* linkedSpells = sSpellMgr->GetSpellLinked(spellId + SPELL_LINK_AURA))
+        for (int32 linkedSpellId : *linkedSpells)
+            if (linkedSpellId > 0)
+                MakeXianqiAuraPermanent(player, uint32(linkedSpellId));
+}
+
+void ApplyXianqiEquipSpell(Player* player, Item* item, SpellInfo const* spellInfo)
 {
     if (!player || !spellInfo)
         return;
 
-    player->CastSpell(player, spellInfo, true);
-    MakeXianqiAuraPermanent(player, spellInfo->Id);
+    player->ApplyEquipSpell(spellInfo, item, true);
+    MakeXianqiEquipSpellPermanent(player, spellInfo->Id);
+}
 
-    if (std::vector<int32> const* linkedSpells = sSpellMgr->GetSpellLinked(spellInfo->Id + SPELL_LINK_AURA))
-        for (int32 linkedSpellId : *linkedSpells)
-            if (linkedSpellId > 0)
-                MakeXianqiAuraPermanent(player, uint32(linkedSpellId));
+void RemoveXianqiEquipSpell(Player* player, Item* item, uint32 spellId)
+{
+    if (!player || !spellId)
+        return;
+
+    if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId))
+        player->ApplyEquipSpell(spellInfo, item, false);
+    else if (item)
+        player->RemoveAurasDueToItemSpell(spellId, item->GetGUID());
+    else
+        player->RemoveAurasDueToSpell(spellId);
+}
+
+uint8 GetXianqiAttackBodyPart(WeaponAttackType attType)
+{
+    switch (attType)
+    {
+        case BASE_ATTACK:
+            return XIANQI_PART_MAINHAND;
+        case OFF_ATTACK:
+            return XIANQI_PART_OFFHAND;
+        case RANGED_ATTACK:
+            return XIANQI_PART_RANGED;
+        default:
+            return XIANQI_PART_NONE;
+    }
+}
+
+bool IsXianqiDamageTriggeredCombatSpellId(uint32 spellId)
+{
+    return spellId >= 383001 && spellId <= 383084;
+}
+
+bool HasXianqiDamageTriggeredCombatSpell(ItemTemplate const* proto)
+{
+    if (!proto)
+        return false;
+
+    for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+    {
+        _Spell const& spellData = proto->Spells[i];
+        if (spellData.SpellTrigger == ITEM_SPELLTRIGGER_CHANCE_ON_HIT
+            && IsXianqiDamageTriggeredCombatSpellId(spellData.SpellId))
+            return true;
+    }
+
+    return false;
+}
+
+bool CastXianqiDamageTriggeredCombatSpell(Player* player, Unit* target, Item* item, SpellInfo const* spellInfo)
+{
+    if (!player || !target || !target->IsAlive() || target == player)
+        return false;
+
+    return player->TriggerDamageTriggeredArtifactItemProcSpell(target, item, spellInfo);
+}
+
+bool CastXianqiDamageTriggeredCombatSpells(Player* player, Unit* target, Item* item, ItemTemplate const* proto)
+{
+    if (!player || !target || !proto)
+        return false;
+
+    bool triggered = false;
+    for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+    {
+        _Spell const& spellData = proto->Spells[i];
+        if (spellData.SpellTrigger != ITEM_SPELLTRIGGER_CHANCE_ON_HIT || !IsXianqiDamageTriggeredCombatSpellId(spellData.SpellId))
+            continue;
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellData.SpellId);
+        if (!spellInfo)
+            continue;
+
+        if (CastXianqiDamageTriggeredCombatSpell(player, target, item, spellInfo))
+            triggered = true;
+    }
+
+    return triggered;
+}
+
+bool CanXianqiItemProcForAttack(XianqiSlotConfig const* config, ItemTemplate const* proto, WeaponAttackType attType)
+{
+    if (!config || !proto)
+        return false;
+
+    // 383001-383084 按“任意玩家伤害触发”处理，避免依赖射击/武器命中入口并防止重复触发。
+    if (HasXianqiDamageTriggeredCombatSpell(proto))
+        return false;
+
+    if (proto->Class != ITEM_CLASS_WEAPON)
+        return true;
+
+    // 专属仙器槽没有官方手位语义，按装备特效处理；扩展武器槽按攻击手位处理。
+    if (config->bodyPart == XIANQI_PART_NONE)
+        return true;
+
+    return config->bodyPart == GetXianqiAttackBodyPart(attType);
+}
+
+bool HasXianqiItemUseSpell(Item* item, ItemTemplate const* proto)
+{
+    if (!item || !proto)
+        return false;
+
+    for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+        if (proto->Spells[i].SpellId && proto->Spells[i].SpellTrigger == ITEM_SPELLTRIGGER_ON_USE)
+            return true;
+
+    for (uint8 enchantSlot = 0; enchantSlot < MAX_ENCHANTMENT_SLOT; ++enchantSlot)
+    {
+        uint32 enchantId = item->GetEnchantmentId(EnchantmentSlot(enchantSlot));
+        if (!enchantId)
+            continue;
+
+        SpellItemEnchantmentEntry const* enchant = sSpellItemEnchantmentStore.LookupEntry(enchantId);
+        if (!enchant)
+            continue;
+
+        for (uint8 effectIndex = 0; effectIndex < MAX_SPELL_ITEM_ENCHANTMENT_EFFECTS; ++effectIndex)
+            if (enchant->type[effectIndex] == ITEM_ENCHANTMENT_TYPE_USE_SPELL && enchant->spellid[effectIndex])
+                return true;
+    }
+
+    return false;
 }
 
 //=============================================================================
@@ -338,15 +472,15 @@ public:
         status.playerGuid = playerGuid;
 
         if (QueryResult result = CharacterDatabase.Query(
-            "SELECT `槽位ID`, `已解锁` FROM `_仙门_仙器玩家槽位` WHERE `角色GUID` = {}", playerGuid))
+            "SELECT `槽位1`,`槽位2`,`槽位3`,`槽位4`,`槽位5`,`槽位6`,`槽位7`,`槽位8`,`槽位9`,`槽位10`,"
+            "`槽位11`,`槽位12`,`槽位13`,`槽位14`,`槽位15`,`槽位16`,`槽位17`,`槽位18`,`槽位19`,`槽位20`,"
+            "`槽位21`,`槽位22`,`槽位23`,`槽位24`,`槽位25`,`槽位26`,`槽位27`,`槽位28`,`槽位29` "
+            "FROM `_仙门_仙器玩家槽位` WHERE `角色GUID` = {}", playerGuid))
         {
-            do
-            {
-                Field* fields = result->Fetch();
-                uint8 slot = fields[0].Get<uint8>();
-                if (IsValidXianqiSlot(slot) && fields[1].Get<uint8>())
+            Field* fields = result->Fetch();
+            for (uint8 slot = XIANQI_SLOT_FIRST; slot <= XIANQI_SLOT_LAST; ++slot)
+                if (fields[slot - XIANQI_SLOT_FIRST].Get<uint8>())
                     status.unlockedSlots.insert(slot);
-            } while (result->NextRow());
         }
 
         if (_autoUnlock)
@@ -482,9 +616,6 @@ public:
             CharacterDatabase.Execute(
                 "DELETE FROM character_inventory WHERE guid = {} AND bag = {} AND slot = {}",
                 playerGuid, XIANQI_VIRTUAL_BAG, slot);
-            CharacterDatabase.Execute(
-                "UPDATE `_仙门_仙器玩家槽位` SET `物品GUID` = 0, `更新时间` = UNIX_TIMESTAMP() WHERE `角色GUID` = {} AND `槽位ID` = {}",
-                playerGuid, slot);
 
             status->slots.erase(slot);
         }
@@ -637,11 +768,13 @@ public:
 
         status->unlockedSlots.insert(slot);
 
+        // slot 已由 IsValidXianqiSlot 限定在 1-29，列名拼接无注入风险
+        std::string col = "槽位" + std::to_string(slot);
         CharacterDatabase.Execute(
-            "INSERT INTO `_仙门_仙器玩家槽位` (`角色GUID`, `槽位ID`, `物品GUID`, `已解锁`, `更新时间`) "
-            "VALUES ({}, {}, 0, 1, UNIX_TIMESTAMP()) "
-            "ON DUPLICATE KEY UPDATE `已解锁` = 1, `更新时间` = UNIX_TIMESTAMP()",
-            playerGuid, slot);
+            "INSERT INTO `_仙门_仙器玩家槽位` (`角色GUID`, `{}`) "
+            "VALUES ({}, 1) "
+            "ON DUPLICATE KEY UPDATE `{}` = 1",
+            col, playerGuid, col);
 
         ChatHandler(player->GetSession()).PSendSysMessage("|cff66ffcc[仙器系统]|r 成功解锁槽位: {}", GetSlotName(slot));
         SendXianqiDataToClient(player);
@@ -927,6 +1060,52 @@ public:
         return false;
     }
 
+    void CastDamageTriggeredItemCombatSpells(Player* player, Unit* target, uint32 procVictim, uint32 procEx,
+        bool includeOfficialItems, bool officialRangedOnly, bool includeXianqiItems)
+    {
+        if (!player || !target || !target->IsAlive() || target == player)
+            return;
+
+        if (includeOfficialItems)
+        {
+            for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+            {
+                if (officialRangedOnly && slot != EQUIPMENT_SLOT_RANGED)
+                    continue;
+
+                Item* equippedItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+                if (!equippedItem || equippedItem->IsBroken())
+                    continue;
+
+                ItemTemplate const* equippedProto = equippedItem->GetTemplate();
+                if (!HasXianqiDamageTriggeredCombatSpell(equippedProto))
+                    continue;
+
+                CastXianqiDamageTriggeredCombatSpells(player, target, equippedItem, equippedProto);
+            }
+        }
+
+        if (!includeXianqiItems)
+            return;
+
+        PlayerXianqiStatus* status = GetPlayerStatus(player->GetGUID().GetCounter());
+        if (!status || status->slots.empty())
+            return;
+
+        for (auto const& slotPair : status->slots)
+        {
+            Item* xianqiItem = slotPair.second.itemPtr;
+            if (!xianqiItem || xianqiItem->IsBroken())
+                continue;
+
+            ItemTemplate const* xianqiProto = xianqiItem->GetTemplate();
+            if (!HasXianqiDamageTriggeredCombatSpell(xianqiProto))
+                continue;
+
+            CastXianqiDamageTriggeredCombatSpells(player, target, xianqiItem, xianqiProto);
+        }
+    }
+
     bool EquipItem(Player* player, uint8 slot, uint32 itemId, uint32 itemGuid)
     {
         if (!player || !IsValidXianqiSlot(slot))
@@ -1044,12 +1223,6 @@ public:
 
         CharacterDatabase.CommitTransaction(trans);
 
-        CharacterDatabase.Execute(
-            "INSERT INTO `_仙门_仙器玩家槽位` (`角色GUID`, `槽位ID`, `物品GUID`, `已解锁`, `更新时间`) "
-            "VALUES ({}, {}, {}, 1, UNIX_TIMESTAMP()) "
-            "ON DUPLICATE KEY UPDATE `物品GUID` = {}, `更新时间` = UNIX_TIMESTAMP()",
-            playerGuid, slot, itemGuid, itemGuid);
-
         ApplyItemEffect(player, itemId, slot, true);
 
         ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
@@ -1134,10 +1307,6 @@ public:
 
         status->slots.erase(itr);
 
-        CharacterDatabase.Execute(
-            "UPDATE `_仙门_仙器玩家槽位` SET `物品GUID` = 0, `更新时间` = UNIX_TIMESTAMP() WHERE `角色GUID` = {} AND `槽位ID` = {}",
-            playerGuid, slot);
-
         ChatHandler(player->GetSession()).PSendSysMessage("|cff66ffcc[仙器系统]|r {} 已从 {} 卸下",
             proto ? proto->Name1 : "未知物品", GetSlotName(slot));
 
@@ -1206,10 +1375,6 @@ public:
 
         status->slots.clear();
 
-        CharacterDatabase.Execute(
-            "UPDATE `_仙门_仙器玩家槽位` SET `物品GUID` = 0, `更新时间` = UNIX_TIMESTAMP() WHERE `角色GUID` = {}",
-            playerGuid);
-
         ChatHandler(player->GetSession()).SendSysMessage("|cff66ffcc[仙器系统]|r 已卸下所有仙器装备。");
         SendXianqiDataToClient(player);
         NotifyXianqiAttributePanelRefresh(player);
@@ -1252,8 +1417,15 @@ public:
             return;
 
         for (auto const& slotPair : status->slotSpells)
+        {
+            Item* item = nullptr;
+            auto slotItr = status->slots.find(slotPair.first);
+            if (slotItr != status->slots.end())
+                item = slotItr->second.itemPtr;
+
             for (uint32 spellId : slotPair.second)
-                player->RemoveAurasDueToSpell(spellId);
+                RemoveXianqiEquipSpell(player, item, spellId);
+        }
         status->slotSpells.clear();
 
         for (auto const& itemSetPair : status->slotItemSets)
@@ -1394,6 +1566,11 @@ public:
 
                     switch (enchType)
                     {
+                        case ITEM_ENCHANTMENT_TYPE_COMBAT_SPELL:
+                        case ITEM_ENCHANTMENT_TYPE_USE_SPELL:
+                        case ITEM_ENCHANTMENT_TYPE_DAMAGE:
+                            // 命中、使用、武器白字类附魔由对应官方触发入口处理，装备时不直接施放。
+                            break;
                         case ITEM_ENCHANTMENT_TYPE_EQUIP_SPELL:
                             if (enchant->spellid[s])
                                 ApplySlotSpell(player, status, slot, enchant->spellid[s], apply);
@@ -1518,6 +1695,11 @@ private:
     // 卸下/失效时按记账回滚该槽位的属性与法术
     void RollbackSlotEffects(Player* player, PlayerXianqiStatus* status, uint8 slot)
     {
+        Item* item = nullptr;
+        auto slotItr = status->slots.find(slot);
+        if (slotItr != status->slots.end())
+            item = slotItr->second.itemPtr;
+
         auto statItr = status->slotStats.find(slot);
         if (statItr != status->slotStats.end())
         {
@@ -1530,15 +1712,13 @@ private:
         if (spellItr != status->slotSpells.end())
         {
             for (uint32 spellId : spellItr->second)
-                if (!IsSpellFromOtherSlot(status, slot, spellId))
-                    player->RemoveAurasDueToSpell(spellId);
+                RemoveXianqiEquipSpell(player, item, spellId);
             status->slotSpells.erase(spellItr);
         }
 
         auto itemSetItr = status->slotItemSets.find(slot);
         if (itemSetItr != status->slotItemSets.end())
         {
-            auto slotItr = status->slots.find(slot);
             ItemTemplate const* proto = nullptr;
             if (slotItr != status->slots.end())
                 proto = sObjectMgr->GetItemTemplate(slotItr->second.itemId);
@@ -1550,34 +1730,25 @@ private:
         }
     }
 
-    bool IsSpellFromOtherSlot(PlayerXianqiStatus* status, uint8 slot, uint32 spellId) const
-    {
-        for (auto const& otherPair : status->slotSpells)
-        {
-            if (otherPair.first == slot)
-                continue;
-            for (uint32 otherSpellId : otherPair.second)
-                if (otherSpellId == spellId)
-                    return true;
-        }
-        return false;
-    }
-
     void ApplySlotSpell(Player* player, PlayerXianqiStatus* status, uint8 slot, uint32 spellId, bool apply)
     {
         SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
         if (!spellInfo)
             return;
 
+        Item* item = nullptr;
+        auto slotItr = status->slots.find(slot);
+        if (slotItr != status->slots.end())
+            item = slotItr->second.itemPtr;
+
         if (apply)
         {
-            CastXianqiEquipSpell(player, spellInfo);
+            ApplyXianqiEquipSpell(player, item, spellInfo);
             status->slotSpells[slot].push_back(spellId);
         }
         else
         {
-            if (!IsSpellFromOtherSlot(status, slot, spellId))
-                player->RemoveAurasDueToSpell(spellId);
+            RemoveXianqiEquipSpell(player, item, spellId);
 
             auto& slotSpellList = status->slotSpells[slot];
             slotSpellList.erase(std::remove(slotSpellList.begin(), slotSpellList.end(), spellId), slotSpellList.end());
@@ -1840,7 +2011,8 @@ public:
         PLAYERHOOK_ON_LOGIN,
         PLAYERHOOK_ON_LOGOUT,
         PLAYERHOOK_ON_DELETE,
-        PLAYERHOOK_CAN_EQUIP_ITEM
+        PLAYERHOOK_CAN_EQUIP_ITEM,
+        PLAYERHOOK_CAN_CAST_ITEM_COMBAT_SPELL
     }) { }
 
     void OnPlayerLogin(Player* player) override
@@ -1885,6 +2057,50 @@ public:
 
         return false;
     }
+
+    bool OnPlayerCanCastItemCombatSpell(Player* player, Unit* target, WeaponAttackType attType, uint32 procVictim, uint32 procEx, Item* item, ItemTemplate const* proto) override
+    {
+        if (!sXianqiSlotMgr->IsEnabled() || !player || !target)
+            return true;
+
+        // 核心用空 item/proto 通知“本次命中开始”；真实装备逐件触发时直接放行。
+        if (item || proto)
+            return true;
+
+        static thread_local bool applyingXianqiCombatSpells = false;
+        if (applyingXianqiCombatSpells)
+            return true;
+
+        applyingXianqiCombatSpells = true;
+
+        PlayerXianqiStatus* status = sXianqiSlotMgr->GetPlayerStatus(player->GetGUID().GetCounter());
+        if (status && !status->slots.empty())
+        {
+            for (auto const& slotPair : status->slots)
+            {
+                uint8 xianqiSlot = slotPair.first;
+                XianqiSlotConfig const* config = sXianqiSlotMgr->GetSlotConfig(xianqiSlot);
+                if (!config)
+                    continue;
+
+                Item* xianqiItem = slotPair.second.itemPtr;
+                if (!xianqiItem || xianqiItem->IsBroken())
+                    continue;
+
+                ItemTemplate const* xianqiProto = xianqiItem->GetTemplate();
+                if (!xianqiProto)
+                    continue;
+
+                if (!CanXianqiItemProcForAttack(config, xianqiProto, attType))
+                    continue;
+
+                player->CastItemCombatSpell(target, attType, procVictim, procEx, xianqiItem, xianqiProto);
+            }
+        }
+
+        applyingXianqiCombatSpells = false;
+        return true;
+    }
 };
 
 class XianqiItemScript : public AllItemScript
@@ -1908,12 +2124,49 @@ public:
             return true;
 
         // 仅在状态已清理但核心仍在保存的窗口期才回退查库兜底
+        // 仙器装备实际落库于 character_inventory 虚拟背包，故以此为准
         if (QueryResult result = CharacterDatabase.Query(
-            "SELECT 1 FROM `_仙门_仙器玩家槽位` WHERE `角色GUID` = {} AND `物品GUID` = {}",
-            player->GetGUID().GetCounter(), itemGuid))
+            "SELECT 1 FROM character_inventory WHERE guid = {} AND bag = {} AND item = {}",
+            player->GetGUID().GetCounter(), XIANQI_VIRTUAL_BAG, itemGuid))
             return false;
 
         return true;
+    }
+};
+
+class XianqiDamageTriggeredItemProcScript : public UnitScript
+{
+public:
+    XianqiDamageTriggeredItemProcScript() : UnitScript("XianqiDamageTriggeredItemProcScript", true,
+    {
+        UNITHOOK_ON_DAMAGE
+    }) { }
+
+    void OnDamage(Unit* attacker, Unit* victim, uint128& damage) override
+    {
+        TriggerDamageProcs(victim, attacker, damage);
+    }
+
+private:
+    static void TriggerDamageProcs(Unit* target, Unit* attacker, uint128& damage)
+    {
+        if (!sXianqiSlotMgr->IsEnabled() || !target || !attacker)
+            return;
+
+        if (Player::IsTriggeringDamageTriggeredArtifactItemProcSpell())
+            return;
+
+        static thread_local bool triggeringXianqiDamageItemProcs = false;
+        if (triggeringXianqiDamageItemProcs)
+            return;
+
+        Player* player = attacker->GetCharmerOrOwnerPlayerOrPlayerItself();
+        if (!player || player == target)
+            return;
+
+        triggeringXianqiDamageItemProcs = true;
+        sXianqiSlotMgr->CastDamageTriggeredItemCombatSpells(player, target, PROC_FLAG_TAKEN_DAMAGE, PROC_EX_NORMAL_HIT, false, false, true);
+        triggeringXianqiDamageItemProcs = false;
     }
 };
 
@@ -1929,6 +2182,7 @@ public:
             { "查看", HandleViewCommand,    SEC_PLAYER,        Console::No },
             { "装备", HandleEquipCommand,   SEC_PLAYER,        Console::No },
             { "卸下", HandleUnequipCommand, SEC_PLAYER,        Console::No },
+            { "使用", HandleUseCommand,     SEC_PLAYER,        Console::No },
             { "清空", HandleClearCommand,   SEC_PLAYER,        Console::No },
             { "刷新", HandleRefreshCommand, SEC_PLAYER,        Console::No },
             { "解锁", HandleUnlockCommand,  SEC_PLAYER,        Console::No },
@@ -2075,6 +2329,84 @@ private:
         return true;
     }
 
+    static bool HandleUseCommand(ChatHandler* handler, char const* args)
+    {
+        if (!CheckEnabled(handler))
+            return true;
+
+        Player* player = GetPlayer(handler);
+        if (!player)
+            return false;
+
+        if (!args || !*args)
+        {
+            handler->SendSysMessage("用法: .仙器 使用 <槽位1-29>");
+            return true;
+        }
+
+        int slotInt = atoi(args);
+        if (slotInt < XIANQI_SLOT_FIRST || slotInt > XIANQI_SLOT_LAST)
+        {
+            handler->PSendSysMessage("无效槽位，有效范围: {}-{}", XIANQI_SLOT_FIRST, XIANQI_SLOT_LAST);
+            return true;
+        }
+
+        PlayerXianqiStatus* status = sXianqiSlotMgr->GetPlayerStatus(player->GetGUID().GetCounter());
+        if (!status)
+            return true;
+
+        auto slotItr = status->slots.find(static_cast<uint8>(slotInt));
+        if (slotItr == status->slots.end() || !slotItr->second.itemPtr)
+        {
+            handler->SendSysMessage("该槽位没有可使用的仙器装备。");
+            return true;
+        }
+
+        Item* item = slotItr->second.itemPtr;
+        ItemTemplate const* proto = item->GetTemplate();
+        if (!proto)
+        {
+            handler->SendSysMessage("仙器装备模板不存在，无法使用。");
+            return true;
+        }
+
+        if (item->IsBroken())
+        {
+            handler->SendSysMessage("该仙器装备已损坏，无法使用。");
+            return true;
+        }
+
+        if (!HasXianqiItemUseSpell(item, proto))
+        {
+            handler->SendSysMessage("该仙器装备没有使用触发效果。");
+            return true;
+        }
+
+        if (!player->IsAlive())
+        {
+            handler->SendSysMessage("死亡状态不能使用仙器装备。");
+            return true;
+        }
+
+        if ((proto->Bonding == BIND_WHEN_USE || proto->Bonding == BIND_WHEN_PICKED_UP || proto->Bonding == BIND_QUEST_ITEM) && !item->IsSoulBound())
+        {
+            item->SetState(ITEM_CHANGED, player);
+            item->SetBinding(true);
+        }
+
+        Unit* target = player->GetSelectedUnit();
+        if (!target)
+            target = player;
+
+        SpellCastTargets targets;
+        targets.SetUnitTarget(target);
+        targets.SetSrc(*player);
+        targets.SetDst(*target);
+
+        player->CastItemUseSpell(item, targets, 1, 0);
+        return true;
+    }
+
     static bool HandleClearCommand(ChatHandler* handler, char const* /*args*/)
     {
         if (!CheckEnabled(handler))
@@ -2139,10 +2471,42 @@ private:
 
 } // namespace
 
+namespace XianmenArtifactSlots
+{
+void ForEachEquippedWeaponItem(Player* player, std::function<void(Item*)> const& visitor)
+{
+    if (!player || !visitor || !sXianqiSlotMgr->IsEnabled())
+        return;
+
+    PlayerXianqiStatus* status = sXianqiSlotMgr->GetPlayerStatus(player->GetGUID().GetCounter());
+    if (!status || status->slots.empty())
+        return;
+
+    for (auto const& slotPair : status->slots)
+    {
+        XianqiSlotConfig const* config = sXianqiSlotMgr->GetSlotConfig(slotPair.first);
+        if (!config)
+            continue;
+
+        if (config->bodyPart != XIANQI_PART_MAINHAND
+            && config->bodyPart != XIANQI_PART_OFFHAND
+            && config->bodyPart != XIANQI_PART_RANGED)
+            continue;
+
+        Item* item = slotPair.second.itemPtr;
+        if (!item || item->IsBroken())
+            continue;
+
+        visitor(item);
+    }
+}
+}
+
 void AddSC_xianmen_artifact_slots()
 {
     new XianqiWorldScript();
     new XianqiPlayerScript();
     new XianqiItemScript();
+    new XianqiDamageTriggeredItemProcScript();
     new XianqiCommandScript();
 }

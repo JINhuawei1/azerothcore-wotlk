@@ -10,9 +10,6 @@
 
 local ADDON_NAME = "XianqiSystemUI"
 local PREFIX = "XIANQI"
-local PLUGIN_NAME = "XianqiSystemUI"
-local ICON_SIZE = 20
-local ICON_TEXTURE = "Interface\\Icons\\INV_Sword_39"
 local SLOT_FIRST, SLOT_LAST = 1, 29
 local QUESTION_MARK_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
 
@@ -33,9 +30,6 @@ local slotButtons = {}          -- slotId -> button
 local equipData = {}            -- slotId -> { itemId, itemGuid }
 local unlockedSlots = {}        -- slotId -> true
 local pendingIcons = {}         -- itemId -> true（等待 GET_ITEM_INFO_RECEIVED）
-local iconButton
-local pluginManagerRegistered = false
-local pluginManagerConfigApplied = false
 local ascensionFrameHooked = false
 local characterFrameHooked = false
 local dragSource = nil          -- { bag, slot, itemId } 拖起物品时的来源格
@@ -683,7 +677,7 @@ local function HandleServerMessage(message)
 end
 
 -- ============================================================
--- 入口图标 + 插件管理器集成
+-- 入口
 -- ============================================================
 
 local function ToggleUI()
@@ -692,184 +686,6 @@ local function ToggleUI()
     else
         UI:Show()
     end
-end
-
-local function SaveIconPosition(button)
-    if not button or not button.GetPoint then
-        return
-    end
-
-    local point, _, _, x, y = button:GetPoint()
-    if point and x and y then
-        XianqiSystemUIDB.iconPosition = { point = point, x = x, y = y }
-    end
-
-    local pm = _G.PluginManagerClient
-    if pm and pm.SaveFramePosition then
-        pm:SaveFramePosition(PLUGIN_NAME, button)
-    end
-end
-
-local function CreateIconButton()
-    if iconButton then
-        return iconButton
-    end
-
-    iconButton = CreateFrame("Button", "XianqiSystemIconButton", UIParent)
-    iconButton:SetSize(ICON_SIZE, ICON_SIZE)
-    iconButton:SetFrameStrata("MEDIUM")
-    iconButton:SetFrameLevel(10)
-    iconButton:SetMovable(true)
-    iconButton:EnableMouse(true)
-    iconButton:RegisterForDrag("LeftButton")
-    if iconButton.SetClampedToScreen then
-        iconButton:SetClampedToScreen(true)
-    end
-
-    local pos = XianqiSystemUIDB.iconPosition or { point = "TOP", x = 130, y = -10 }
-    iconButton:SetPoint(pos.point or "TOP", UIParent, pos.point or "TOP", pos.x or 130, pos.y or -10)
-
-    iconButton:SetNormalTexture(ICON_TEXTURE)
-    local normalTexture = iconButton:GetNormalTexture()
-    if normalTexture then
-        normalTexture:SetAllPoints(iconButton)
-        normalTexture:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-    end
-
-    iconButton:SetPushedTexture(ICON_TEXTURE)
-    local pushedTexture = iconButton:GetPushedTexture()
-    if pushedTexture then
-        pushedTexture:SetAllPoints(iconButton)
-        pushedTexture:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-    end
-
-    iconButton:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
-    local highlight = iconButton:GetHighlightTexture()
-    if highlight then
-        highlight:SetAllPoints(iconButton)
-    end
-
-    local text = iconButton:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    text:SetPoint("TOP", iconButton, "BOTTOM", 0, -1)
-    text:SetText("|cffffd700仙器|r")
-
-    local isDragging = false
-    local dragStartTime = 0
-
-    iconButton:SetScript("OnDragStart", function(self)
-        isDragging = true
-        dragStartTime = GetTime and GetTime() or 0
-        GameTooltip:Hide()
-        self:StartMoving()
-    end)
-
-    iconButton:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-        isDragging = false
-        SaveIconPosition(self)
-    end)
-
-    iconButton:SetScript("OnMouseDown", function(_, button)
-        if button == "LeftButton" then
-            dragStartTime = GetTime and GetTime() or 0
-        end
-    end)
-
-    iconButton:SetScript("OnMouseUp", function(_, button)
-        local now = GetTime and GetTime() or 0
-        if button == "LeftButton" and not isDragging and now - dragStartTime < 0.3 then
-            ToggleUI()
-        end
-    end)
-
-    iconButton:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText("仙器装备", 1, 1, 1)
-        GameTooltip:AddLine("左键: 打开界面", 0.8, 0.8, 0.8)
-        GameTooltip:AddLine("拖拽: 移动位置", 0.8, 0.8, 0.8)
-        GameTooltip:Show()
-    end)
-
-    iconButton:SetScript("OnLeave", function()
-        GameTooltip:Hide()
-    end)
-
-    iconButton:Hide()
-    return iconButton
-end
-
-local function ApplyPluginManagerConfig(posX, posY, width, height, enabled)
-    pluginManagerConfigApplied = true
-
-    if not enabled then
-        if iconButton then
-            iconButton:Hide()
-        end
-        UI:Hide()
-        return
-    end
-
-    local button = CreateIconButton()
-    button:SetSize(ICON_SIZE, ICON_SIZE)
-
-    if posX and posY then
-        local parentWidth = UIParent:GetWidth() or 0
-        local parentHeight = UIParent:GetHeight() or 0
-        if parentWidth > 0 then
-            posX = math.max(0, math.min(posX, parentWidth - button:GetWidth()))
-        end
-        if parentHeight > 0 then
-            posY = math.max(0, math.min(posY, parentHeight - button:GetHeight()))
-        end
-
-        button:ClearAllPoints()
-        button:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", posX, posY)
-        XianqiSystemUIDB.iconPosition = { point = "BOTTOMLEFT", x = posX, y = posY }
-    end
-
-    button:Show()
-    button:SetFrameStrata("MEDIUM")
-    button:SetFrameLevel(10)
-end
-
-local function RegisterPluginManager()
-    if pluginManagerRegistered then
-        return true
-    end
-
-    local pm = _G.PluginManagerClient
-    if pm and pm.RegisterPlugin then
-        pm:RegisterPlugin(PLUGIN_NAME, function(message, parts)
-            if parts and parts[1] == ".plugincfg" and parts[2] == PLUGIN_NAME then
-                ApplyPluginManagerConfig(
-                    tonumber(parts[3]),
-                    tonumber(parts[4]),
-                    tonumber(parts[5]),
-                    tonumber(parts[6]),
-                    tonumber(parts[7]) == 1)
-            end
-        end)
-        pluginManagerRegistered = true
-        return true
-    end
-
-    return false
-end
-
-local function SchedulePluginManagerRegistration()
-    local elapsed = 0
-    local timer = CreateFrame("Frame")
-    timer:SetScript("OnUpdate", function(self, delta)
-        elapsed = elapsed + delta
-        RegisterPluginManager()
-
-        if elapsed >= 5 then
-            self:SetScript("OnUpdate", nil)
-            if not pluginManagerConfigApplied then
-                CreateIconButton():Show()
-            end
-        end
-    end)
 end
 
 -- ============================================================
@@ -945,8 +761,5 @@ UI:SetScript("OnShow", function()
     RequestData()
     UpdateAllSlots()
 end)
-
-RegisterPluginManager()
-SchedulePluginManagerRegistration()
 
 _G.XianqiSystemUI = UI

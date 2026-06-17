@@ -795,6 +795,7 @@ uint128 DealRawFeatureDamage(Player* player, Unit* victim, PlayerFeatureState& s
     if (!school)
         school = spellInfo->GetSchoolMask() ? spellInfo->GetSchoolMask() : SPELL_SCHOOL_MASK_NORMAL;
 
+    bool const sendClientFeedback = player->ShouldSendCustomProcClientFeedback(victim, spellInfo, "xianqi-feature");
     uint128 dealt = 0;
     {
         FeatureDamageGuard guard(s_applyingFeatureDamage);
@@ -804,7 +805,8 @@ uint128 DealRawFeatureDamage(Player* player, Unit* victim, PlayerFeatureState& s
         SpellNonMeleeDamage damageInfo(player, victim, spellInfo, school);
         damageInfo.damage = damage;
         Unit::DealDamageMods(damageInfo.target, damageInfo.damage, &damageInfo.absorb);
-        player->SendSpellNonMeleeDamageLog(&damageInfo);
+        if (sendClientFeedback)
+            player->SendSpellNonMeleeDamageLog(&damageInfo);
 
         CleanDamage cleanDamage(damageInfo.cleanDamage, damageInfo.absorb, BASE_ATTACK,
             (damageInfo.HitInfo & SPELL_HIT_TYPE_CRIT) ? MELEE_HIT_CRIT : MELEE_HIT_NORMAL);
@@ -814,7 +816,8 @@ uint128 DealRawFeatureDamage(Player* player, Unit* victim, PlayerFeatureState& s
     if (dealt == 0)
         return 0;
 
-    PlayFeatureTargetVisual(player, victim, state, spellId);
+    if (sendClientFeedback)
+        PlayFeatureTargetVisual(player, victim, state, spellId);
 
     if (recordRecent)
     {

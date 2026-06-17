@@ -124,6 +124,10 @@ SELECT
   0,
   0,
   1900,
+  -- 以下 5 个 spellid 绑定 spelltrigger=2（CHANCE_ON_HIT），但对应 spell_dbc 的 ProcChance=0，
+  -- 且 item_artifact_chain_weapon::OnCastItemCombatSpell 对神器技能返回 false，
+  -- 故物品 proc 路径有意失活。神器特效真正由 C++ OnDamage 钩子每次造成伤害时 100% 触发。
+  -- 此处保留绑定仅用于武器 tooltip 显示这 5 个技能。
   381001 + (d.`rank_id` - 1) * 5 + 0, 2, 0, 0, 0, 0, 0,
   381001 + (d.`rank_id` - 1) * 5 + 1, 2, 0, 0, 0, 0, 0,
   381001 + (d.`rank_id` - 1) * 5 + 2, 2, 0, 0, 0, 0, 0,
