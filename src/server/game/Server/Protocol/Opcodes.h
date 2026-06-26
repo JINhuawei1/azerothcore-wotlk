@@ -1338,7 +1338,11 @@ enum Opcodes : uint16
     SMSG_COMMENTATOR_SKIRMISH_QUEUE_RESULT1         = 0x51C,
     SMSG_COMMENTATOR_SKIRMISH_QUEUE_RESULT2         = 0x51D,
     SMSG_MULTIPLE_MOVES                             = 0x51E, // uncompressed version of SMSG_COMPRESSED_MOVES
-    NUM_MSG_TYPES                                   = 0x51F
+
+    CMSG_HERMES_BRIDGE                              = 0x990,
+    SMSG_HERMES_BRIDGE                              = 0x991,
+
+    NUM_MSG_TYPES                                   = 0x992
 };
 
 enum OpcodeMisc : uint16

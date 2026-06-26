@@ -555,6 +555,8 @@ public:                                                 // opcodes handlers
     void Handle_ServerSide(WorldPacket& recvPacket);    // sever side only, can't be accepted from client
     void Handle_Deprecated(WorldPacket& recvPacket);    // never used anymore by client
 
+    void HandleHermesBridgeOpcode(WorldPacket& recvPacket);
+
     void HandleCharEnumOpcode(WorldPacket& recvPacket);
     void HandleCharDeleteOpcode(WorldPacket& recvPacket);
     void HandleCharCreateOpcode(WorldPacket& recvPacket);

@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>合成系统 UI 重构稿</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(circle at 18% 12%, rgba(94, 234, 212, .18), transparent 28%),
+        radial-gradient(circle at 80% 18%, rgba(245, 158, 11, .16), transparent 30%),
+        linear-gradient(135deg, #061016 0%, #111827 48%, #05070b 100%);
+      color: #e5f6ff;
+      font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+    }
+    .game-bg {
+      position: fixed;
+      inset: 0;
+      background:
+        linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px),
+        linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px);
+      background-size: 46px 46px;
+      opacity: .35;
+      pointer-events: none;
+    }
+    .forge {
+      width: 1040px;
+      height: 670px;
+      border: 1px solid rgba(251, 191, 36, .55);
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(10, 18, 28, .98), rgba(3, 7, 12, .96));
+      box-shadow: 0 28px 80px rgba(0,0,0,.62), inset 0 0 0 1px rgba(255,255,255,.08), inset 0 0 80px rgba(14,165,233,.08);
+      overflow: hidden;
+      position: relative;
+    }
+    .forge:before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(circle at 50% 0%, rgba(251,191,36,.18), transparent 34%);
+      pointer-events: none;
+    }
+    .topbar {
+      height: 76px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      border-bottom: 1px solid rgba(148, 163, 184, .18);
+      position: relative;
+      z-index: 1;
+    }
+    .brand { display: flex; align-items: center; gap: 14px; }
+    .sigil {
+      width: 42px; height: 42px; border-radius: 12px;
+      background: conic-gradient(from 180deg, #fbbf24, #22d3ee, #a78bfa, #fbbf24);
+      padding: 2px;
+      box-shadow: 0 0 30px rgba(251,191,36,.35);
+    }
+    .sigil span { display: grid; place-items: center; width: 100%; height: 100%; border-radius: 10px; background:#07111b; color:#fef3c7; font-weight:900; }
+    h1 { margin: 0; font-size: 24px; letter-spacing: 3px; color: #fef3c7; }
+    .sub { margin-top: 4px; font-size: 12px; color: #93c5fd; letter-spacing: 1px; }
+    .close { width: 34px; height: 34px; border-radius: 10px; border: 1px solid rgba(248,113,113,.55); background: rgba(127,29,29,.55); color:#fecaca; font-size:18px; }
+    .layout { display: grid; grid-template-columns: 360px 1fr; gap: 18px; padding: 18px; position: relative; z-index: 1; }
+    .panel { border: 1px solid rgba(148,163,184,.18); background: rgba(2,8,16,.72); border-radius: 18px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.035); }
+    .left { height: 558px; padding: 16px; }
+    .panel-title { color:#fcd34d; font-weight:700; font-size:15px; letter-spacing:1px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center; }
+    .pill { font-size: 11px; color:#a7f3d0; background:rgba(16,185,129,.12); border:1px solid rgba(16,185,129,.35); padding:4px 8px; border-radius:999px; }
+    .search { height:36px; border-radius:11px; background:rgba(15,23,42,.92); border:1px solid rgba(56,189,248,.28); color:#dbeafe; padding:0 12px; width:100%; margin-bottom:10px; }
+    .tabs { display:flex; gap:7px; margin-bottom:12px; }
+    .tab { flex:1; height:28px; border-radius:9px; border:1px solid rgba(148,163,184,.2); background:rgba(15,23,42,.7); color:#94a3b8; font-size:12px; }
+    .tab.active { color:#07111b; background:linear-gradient(180deg,#fcd34d,#d97706); border-color:#fde68a; font-weight:700; }
+    .recipe { height:46px; display:grid; grid-template-columns:34px 1fr auto; align-items:center; gap:10px; padding:7px 9px; border-radius:13px; margin-bottom:7px; border:1px solid transparent; background:rgba(15,23,42,.48); }
+    .recipe.active { border-color:rgba(251,191,36,.75); background:linear-gradient(90deg,rgba(146,64,14,.65),rgba(15,23,42,.52)); box-shadow:0 0 22px rgba(251,191,36,.12); }
+    .icon { width:32px; height:32px; border-radius:9px; border:1px solid rgba(251,191,36,.45); background: radial-gradient(circle,#f59e0b,#3b1d06 64%,#111827); display:grid; place-items:center; color:#fff7ed; font-weight:900; }
+    .name { font-size:13px; color:#e0f2fe; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .meta { font-size:11px; color:#94a3b8; margin-top:3px; }
+    .state-ok { color:#86efac; font-size:12px; font-weight:700; }
+    .state-miss { color:#fca5a5; font-size:12px; font-weight:700; }
+    .pager { display:flex; align-items:center; gap:8px; justify-content:center; margin-top:14px; }
+    .smallbtn { height:28px; padding:0 12px; border-radius:9px; border:1px solid rgba(251,191,36,.35); background:rgba(120,53,15,.5); color:#fde68a; }
+    .right { height:558px; padding:18px; display:grid; grid-template-rows:auto auto 1fr auto; gap:14px; }
+    .hero { display:grid; grid-template-columns:76px 1fr 148px; gap:14px; align-items:center; padding:14px; border-radius:16px; background:linear-gradient(135deg,rgba(30,41,59,.9),rgba(8,13,22,.72)); border:1px solid rgba(251,191,36,.26); }
+    .bigicon { width:76px; height:76px; border-radius:18px; background:radial-gradient(circle,#fde68a,#b45309 45%,#111827); border:1px solid #fbbf24; display:grid; place-items:center; font-size:36px; box-shadow:0 0 30px rgba(251,191,36,.2); }
+    .target h2 { margin:0; font-size:21px; color:#fffbeb; }
+    .target .line { margin-top:7px; color:#93c5fd; font-size:13px; }
+    .badge { text-align:center; padding:10px; border-radius:14px; background:rgba(20,83,45,.35); border:1px solid rgba(74,222,128,.38); color:#bbf7d0; font-weight:800; }
+    .flow { display:grid; grid-template-columns:1fr 44px 1fr; align-items:center; gap:12px; }
+    .card { min-height:90px; border-radius:16px; padding:13px; border:1px solid rgba(148,163,184,.18); background:rgba(15,23,42,.62); }
+    .arrow { color:#fcd34d; text-align:center; font-size:28px; }
+    .label { color:#94a3b8; font-size:12px; margin-bottom:8px; }
+    .itemline { display:flex; align-items:center; gap:10px; color:#fef3c7; font-weight:700; }
+    .requirements { display:grid; grid-template-columns:1.05fr .95fr; gap:14px; }
+    .material { display:flex; align-items:center; justify-content:space-between; padding:10px 0; border-bottom:1px solid rgba(148,163,184,.13); }
+    .material:last-child { border-bottom:0; }
+    .count-ok { color:#86efac; }
+    .count-miss { color:#fca5a5; }
+    .rules { color:#cbd5e1; line-height:1.9; font-size:13px; }
+    .footer { display:grid; grid-template-columns:1fr 180px; gap:14px; align-items:center; }
+    .hint { color:#fca5a5; font-size:13px; }
+    .primary { height:52px; border-radius:16px; border:1px solid rgba(251,191,36,.8); background:linear-gradient(180deg,#facc15,#b45309); color:#1c1002; font-size:17px; font-weight:900; box-shadow:0 10px 30px rgba(180,83,9,.35); }
+  </style>
+</head>
+<body>
+  <div class="game-bg"></div>
+  <main class="forge">
+    <header class="topbar">
+      <div class="brand"><div class="sigil"><span>炼</span></div><div><h1>星穹仙炉</h1><div class="sub">Xianmen Synthesis Forge · 装备进阶</div></div></div>
+      <button class="close">×</button>
+    </header>
+    <section class="layout">
+      <aside class="panel left">
+        <div class="panel-title">合成列表 <span class="pill">464 条配方</span></div>
+        <input class="search" value="搜索：千影 / 战盔 / 1京" />
+        <div class="tabs"><button class="tab active">全部</button><button class="tab">可合成</button><button class="tab">仙器</button><button class="tab">仙装</button></div>
+        <div class="recipe"><div class="icon">器</div><div><div class="name">1万仙器·破军星阙</div><div class="meta">Lv.1 · 升至 10万</div></div><div class="state-miss">缺源物品</div></div>
+        <div class="recipe"><div class="icon">器</div><div><div class="name">1万仙器·昊阳裁决</div><div class="meta">Lv.1 · 升至 10万</div></div><div class="state-ok">可合成</div></div>
+        <div class="recipe"><div class="icon">器</div><div><div class="name">1万仙器·九幽冥霜</div><div class="meta">Lv.1 · 升至 10万</div></div><div class="state-miss">缺材料</div></div>
+        <div class="recipe active"><div class="icon">装</div><div><div class="name">1京仙装·创世战盔</div><div class="meta">Lv.13 · 升至 10京</div></div><div class="state-ok">可合成</div></div>
+        <div class="recipe"><div class="icon">装</div><div><div class="name">1京仙装·创世肩甲</div><div class="meta">Lv.13 · 升至 10京</div></div><div class="state-miss">缺源物品</div></div>
+        <div class="recipe"><div class="icon">装</div><div><div class="name">1京仙饰·创世命星戒</div><div class="meta">Lv.13 · 升至 10京</div></div><div class="state-ok">可合成</div></div>
+        <div class="recipe"><div class="icon">兵</div><div><div class="name">1000京仙兵·终焉开锋主刃</div><div class="meta">Lv.16 · 升至 1垓</div></div><div class="state-miss">缺源物品</div></div>
+        <div class="pager"><button class="smallbtn">上一页</button><span class="meta">13 / 39</span><button class="smallbtn">下一页</button><button class="smallbtn">刷新</button></div>
+      </aside>
+      <section class="panel right">
+        <div class="hero"><div class="bigicon">盔</div><div class="target"><h2>1京仙装·创世战盔</h2><div class="line">升级等级 13 · 仙装 / 头部 · 橙色品质</div><div class="line">当前状态：材料满足，可立即合成</div></div><div class="badge">成功率<br>100%</div></div>
+        <div class="flow"><div class="card"><div class="label">消耗源装备</div><div class="itemline"><span class="icon">装</span>1京仙装·创世战盔 ×1</div></div><div class="arrow">→</div><div class="card"><div class="label">成功获得</div><div class="itemline"><span class="icon">装</span>10京仙装·灭界战盔 ×1</div></div></div>
+        <div class="requirements"><div class="card"><div class="panel-title">材料需求 <span class="pill">全部满足</span></div><div class="material"><span>角色等级</span><span class="count-ok">80 / 1</span></div><div class="material"><span>源装备</span><span class="count-ok">1 / 1</span></div><div class="material"><span>背包空位</span><span class="count-ok">8 / 1</span></div><div class="material"><span>几率提升物品</span><span class="count-ok">无需</span></div></div><div class="card"><div class="panel-title">合成规则</div><div class="rules">失败结果：不摧毁装备<br>额外保护：无<br>需求模板：951358<br>奖励模板：951358<br>提示：成功后源装备会被替换为下一阶。</div></div></div>
+        <div class="footer"><div class="hint">将消耗当前源装备；请确认背包空间充足。内部物品链接已隐藏，仅显示玩家可读奖励。</div><button class="primary">开始合成</button></div>
+      </section>
+    </section>
+  </main>
+</body>
+</html>

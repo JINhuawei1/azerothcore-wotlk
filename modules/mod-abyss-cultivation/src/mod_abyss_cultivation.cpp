@@ -231,6 +231,19 @@ bool ParseAddonRewardChapterRequest(std::string const& text, uint16& chapterId, 
     return chapterId != 0;
 }
 
+uint32 ParseAddonUInt(std::string const& text, uint32 defaultValue = 0)
+{
+    if (text.empty())
+        return defaultValue;
+
+    char* end = nullptr;
+    unsigned long value = std::strtoul(text.c_str(), &end, 10);
+    if (end == text.c_str())
+        return defaultValue;
+
+    return static_cast<uint32>(value);
+}
+
 bool StringStartsWith(std::string const& value, std::string const& prefix)
 {
     if (prefix.size() > value.size())
@@ -8814,11 +8827,412 @@ void SendAbyssRewardPreviewForChapterIdToAddon(Player* player, uint16 chapterId,
     SendAbyssRewardPreviewToAddon(player, sAbyssCultivationMgr->GetChapterConfig(chapterId), "VIEW", modeType);
 }
 
+struct AbyssAddonEquipmentPageRequest
+{
+    uint32 page = 1;
+    uint32 pageSize = 24;
+    uint32 filterType = 0;
+    uint32 filterMode = 0;
+    uint32 filterChapter = 0;
+    uint32 filterSlot = 0;
+    bool ownedOnly = false;
+};
+
+AbyssAddonEquipmentPageRequest ParseAbyssEquipmentPageRequest(std::string const& args)
+{
+    AbyssAddonEquipmentPageRequest request;
+    std::vector<std::string> fields = SplitAddonCommandFields(args, '|');
+
+    if (fields.size() > 0)
+        request.page = ParseAddonUInt(fields[0], request.page);
+    if (fields.size() > 1)
+        request.pageSize = ParseAddonUInt(fields[1], request.pageSize);
+    if (fields.size() > 2)
+        request.filterType = ParseAddonUInt(fields[2], 0);
+    if (fields.size() > 3)
+        request.filterMode = ParseAddonUInt(fields[3], 0);
+    if (fields.size() > 4)
+        request.filterChapter = ParseAddonUInt(fields[4], 0);
+    if (fields.size() > 5)
+        request.filterSlot = ParseAddonUInt(fields[5], 0);
+    if (fields.size() > 6)
+        request.ownedOnly = ParseAddonUInt(fields[6], 0) != 0;
+
+    request.page = std::max<uint32>(1, request.page);
+    request.pageSize = std::max<uint32>(1, std::min<uint32>(60, request.pageSize));
+    return request;
+}
+
+struct AbyssAddonSetOverviewRequest
+{
+    uint32 page = 1;
+    uint32 pageSize = 1;
+    uint32 filterMode = 0;
+    bool currentActOnly = false;
+};
+
+AbyssAddonSetOverviewRequest ParseAbyssSetOverviewRequest(std::string const& args)
+{
+    AbyssAddonSetOverviewRequest request;
+    std::vector<std::string> fields = SplitAddonCommandFields(args, '|');
+
+    if (fields.size() > 0)
+        request.page = ParseAddonUInt(fields[0], request.page);
+    if (fields.size() > 1)
+        request.pageSize = ParseAddonUInt(fields[1], request.pageSize);
+    if (fields.size() > 2)
+        request.filterMode = ParseAddonUInt(fields[2], 0);
+    if (fields.size() > 3)
+        request.currentActOnly = ParseAddonUInt(fields[3], 0) != 0;
+
+    request.page = std::max<uint32>(1, request.page);
+    request.pageSize = std::max<uint32>(1, std::min<uint32>(10, request.pageSize));
+    return request;
+}
+
+std::string GetAbyssChapterNameForAddon(uint16 chapterId)
+{
+    if (AbyssChapterConfig const* chapter = sAbyssCultivationMgr->GetChapterConfig(chapterId))
+        return SanitizeAddonText(chapter->chapterName);
+
+    return "";
+}
+
+bool PlayerOwnsAbyssEquipment(Player* player, uint32 itemId)
+{
+    return player && itemId != 0 && player->HasItemCount(itemId, 1, true);
+}
+
+AbyssSetBonusConfig const* FindAbyssSetBonusByModeAct(uint8 sourceMode, uint8 actId)
+{
+    AbyssSetBonusConfig const* best = nullptr;
+    for (auto const& pair : sAbyssCultivationMgr->GetSetBonusConfigs())
+    {
+        AbyssSetBonusConfig const& config = pair.second;
+        if (!config.enabled || config.sourceMode != sourceMode || config.actId != actId)
+            continue;
+
+        if (!best || config.setId < best->setId)
+            best = &config;
+    }
+
+    return best;
+}
+
+std::string AddonOptionalText(std::string const& text)
+{
+    std::string sanitized = SanitizeAddonText(text);
+    return sanitized.empty() ? " " : sanitized;
+}
+
+std::string GetAbyssEquipmentSlotName(uint32 slotMask)
+{
+    switch (slotMask)
+    {
+        case 1:   return "武器";
+        case 2:   return "头部";
+        case 4:   return "胸甲";
+        case 16:  return "腰带";
+        case 32:  return "靴子";
+        case 64:  return "戒指";
+        case 128: return "饰品";
+        case 256: return "披风";
+        case 512: return "法器";
+        default:  break;
+    }
+
+    std::ostringstream out;
+    out << "部位#" << slotMask;
+    return out.str();
+}
+
+void SendAbyssEquipmentPageToAddon(Player* player, std::string const& args)
+{
+    if (!player)
+        return;
+
+    AbyssAddonEquipmentPageRequest request = ParseAbyssEquipmentPageRequest(args);
+    std::vector<AbyssEquipmentTemplate const*> equipmentList;
+
+    for (auto const& pair : sAbyssCultivationMgr->GetAllEquipmentTemplates())
+    {
+        AbyssEquipmentTemplate const& equipment = pair.second;
+        if (!equipment.enabled)
+            continue;
+        if (request.filterType != 0 && equipment.equipmentType != request.filterType)
+            continue;
+        if (request.filterMode != 0 && equipment.sourceMode != request.filterMode)
+            continue;
+        if (request.filterChapter != 0 && equipment.sourceChapter != request.filterChapter)
+            continue;
+        if (request.filterSlot != 0 && (equipment.slotMask & request.filterSlot) == 0)
+            continue;
+        if (request.ownedOnly && !PlayerOwnsAbyssEquipment(player, equipment.itemId))
+            continue;
+
+        equipmentList.push_back(&equipment);
+    }
+
+    std::sort(equipmentList.begin(), equipmentList.end(), [](AbyssEquipmentTemplate const* left, AbyssEquipmentTemplate const* right)
+    {
+        if (left->sourceChapter != right->sourceChapter)
+            return left->sourceChapter < right->sourceChapter;
+        if (left->actId != right->actId)
+            return left->actId < right->actId;
+        if (left->sourceMode != right->sourceMode)
+            return left->sourceMode < right->sourceMode;
+        if (left->equipmentType != right->equipmentType)
+            return left->equipmentType > right->equipmentType;
+        if (left->slotMask != right->slotMask)
+            return left->slotMask < right->slotMask;
+        return left->itemId < right->itemId;
+    });
+
+    uint32 totalCount = static_cast<uint32>(equipmentList.size());
+    uint32 pageCount = std::max<uint32>(1, (totalCount + request.pageSize - 1) / request.pageSize);
+    request.page = std::min<uint32>(request.page, pageCount);
+    uint32 start = totalCount == 0 ? 0 : (request.page - 1) * request.pageSize;
+    uint32 end = std::min<uint32>(totalCount, start + request.pageSize);
+
+    std::ostringstream payload;
+    payload << "EQUIPMENT_PAGE:" << request.page << '|'
+            << request.pageSize << '|'
+            << totalCount << '|'
+            << pageCount;
+
+    for (uint32 index = start; index < end; ++index)
+    {
+        AbyssEquipmentTemplate const* equipment = equipmentList[index];
+        std::string chapterName = GetAbyssChapterNameForAddon(equipment->sourceChapter);
+        std::string iconPath = GetItemIconPathForAddon(equipment->itemId);
+        bool owned = PlayerOwnsAbyssEquipment(player, equipment->itemId);
+
+        payload << '~'
+                << equipment->itemId << '^'
+                << SanitizeAddonText(equipment->itemName) << '^'
+                << static_cast<uint32>(equipment->equipmentType) << '^'
+                << equipment->sourceChapter << '^'
+                << chapterName << '^'
+                << static_cast<uint32>(equipment->sourceMode) << '^'
+                << equipment->slotMask << '^'
+                << static_cast<uint32>(equipment->actId) << '^'
+                << equipment->baseItemLevel << '^'
+                << (equipment->fromCacheBoss ? 1 : 0) << '^'
+                << (equipment->requiresFragments ? 1 : 0) << '^'
+                << (owned ? 1 : 0) << '^'
+                << SanitizeAddonText(equipment->flavorText) << '^'
+                << SanitizeAddonText(iconPath);
+    }
+
+    SendAbyssPayload(player, payload.str());
+}
+
+void SendAbyssSetBonusesToAddon(Player* player)
+{
+    if (!player)
+        return;
+
+    std::vector<AbyssSetBonusConfig const*> bonuses;
+    for (auto const& pair : sAbyssCultivationMgr->GetSetBonusConfigs())
+    {
+        if (pair.second.enabled)
+            bonuses.push_back(&pair.second);
+    }
+
+    std::sort(bonuses.begin(), bonuses.end(), [](AbyssSetBonusConfig const* left, AbyssSetBonusConfig const* right)
+    {
+        if (left->actId != right->actId)
+            return left->actId < right->actId;
+        if (left->sourceMode != right->sourceMode)
+            return left->sourceMode < right->sourceMode;
+        return left->setId < right->setId;
+    });
+
+    std::ostringstream payload;
+    payload << "SET_BONUSES:";
+    bool first = true;
+    for (AbyssSetBonusConfig const* bonus : bonuses)
+    {
+        if (!first)
+            payload << '~';
+        first = false;
+
+        payload << bonus->setId << '^'
+                << SanitizeAddonText(bonus->setName) << '^'
+                << static_cast<uint32>(bonus->actId) << '^'
+                << static_cast<uint32>(bonus->sourceMode) << '^'
+                << AddonOptionalText(bonus->twoPieceDesc) << '^'
+                << AddonOptionalText(bonus->fourPieceDesc) << '^'
+                << AddonOptionalText(bonus->sixPieceDesc) << '^'
+                << AddonOptionalText(bonus->eightPieceDesc);
+    }
+
+    SendAbyssPayload(player, payload.str());
+}
+
+struct AbyssAddonSetOverviewGroup
+{
+    uint8 sourceMode = 0;
+    uint8 actId = 0;
+    uint16 sourceChapter = 0;
+    std::string sourceChapterName;
+    std::vector<AbyssEquipmentTemplate const*> items;
+};
+
+void SendAbyssSetOverviewToAddon(Player* player, std::string const& args)
+{
+    if (!player)
+        return;
+
+    AbyssAddonSetOverviewRequest request = ParseAbyssSetOverviewRequest(args);
+    uint32 currentActId = 0;
+    if (PlayerAbyssData const* playerData = sAbyssCultivationMgr->GetPlayerData(player->GetGUID().GetCounter()))
+    {
+        if (AbyssChapterConfig const* chapter = sAbyssCultivationMgr->GetChapterConfig(playerData->currentChapter))
+            currentActId = chapter->actId;
+    }
+
+    std::vector<AbyssAddonSetOverviewGroup> groups;
+    std::vector<uint32> actIds;
+
+    for (auto const& pair : sAbyssCultivationMgr->GetAllEquipmentTemplates())
+    {
+        AbyssEquipmentTemplate const& equipment = pair.second;
+        if (!equipment.enabled || equipment.equipmentType != 1)
+            continue;
+        if (request.filterMode != 0 && equipment.sourceMode != request.filterMode)
+            continue;
+        if (request.currentActOnly && currentActId != 0 && equipment.actId != currentActId)
+            continue;
+
+        if (std::find(actIds.begin(), actIds.end(), static_cast<uint32>(equipment.actId)) == actIds.end())
+            actIds.push_back(equipment.actId);
+
+        AbyssAddonSetOverviewGroup* group = nullptr;
+        for (AbyssAddonSetOverviewGroup& candidate : groups)
+        {
+            if (candidate.sourceMode == equipment.sourceMode &&
+                candidate.actId == equipment.actId &&
+                candidate.sourceChapter == equipment.sourceChapter)
+            {
+                group = &candidate;
+                break;
+            }
+        }
+
+        if (!group)
+        {
+            AbyssAddonSetOverviewGroup newGroup;
+            newGroup.sourceMode = equipment.sourceMode;
+            newGroup.actId = equipment.actId;
+            newGroup.sourceChapter = equipment.sourceChapter;
+            newGroup.sourceChapterName = GetAbyssChapterNameForAddon(equipment.sourceChapter);
+            groups.push_back(newGroup);
+            group = &groups.back();
+        }
+
+        group->items.push_back(&equipment);
+    }
+
+    std::sort(actIds.begin(), actIds.end());
+    actIds.erase(std::unique(actIds.begin(), actIds.end()), actIds.end());
+
+    std::sort(groups.begin(), groups.end(), [](AbyssAddonSetOverviewGroup const& left, AbyssAddonSetOverviewGroup const& right)
+    {
+        if (left.actId != right.actId)
+            return left.actId < right.actId;
+        if (left.sourceMode != right.sourceMode)
+            return left.sourceMode < right.sourceMode;
+        return left.sourceChapter < right.sourceChapter;
+    });
+
+    for (AbyssAddonSetOverviewGroup& group : groups)
+    {
+        std::sort(group.items.begin(), group.items.end(), [](AbyssEquipmentTemplate const* left, AbyssEquipmentTemplate const* right)
+        {
+            if (left->slotMask != right->slotMask)
+                return left->slotMask < right->slotMask;
+            return left->itemId < right->itemId;
+        });
+    }
+
+    uint32 totalActCount = static_cast<uint32>(actIds.size());
+    uint32 pageCount = std::max<uint32>(1, (totalActCount + request.pageSize - 1) / request.pageSize);
+    request.page = std::min<uint32>(request.page, pageCount);
+    uint32 start = totalActCount == 0 ? 0 : (request.page - 1) * request.pageSize;
+    uint32 end = std::min<uint32>(totalActCount, start + request.pageSize);
+    uint32 pageStartActId = start < end ? actIds[start] : 0;
+    uint32 pageEndActId = start < end ? actIds[end - 1] : 0;
+
+    std::ostringstream payload;
+    payload << "SET_OVERVIEW:" << request.page << '|'
+            << request.pageSize << '|'
+            << totalActCount << '|'
+            << pageCount << '|'
+            << currentActId << '|'
+            << pageStartActId << '|'
+            << pageEndActId;
+
+    for (AbyssAddonSetOverviewGroup const& group : groups)
+    {
+        bool inPage = false;
+        for (uint32 index = start; index < end; ++index)
+        {
+            if (actIds[index] == group.actId)
+            {
+                inPage = true;
+                break;
+            }
+        }
+
+        if (!inPage || group.items.empty())
+            continue;
+
+        AbyssEquipmentTemplate const* representative = group.items.front();
+        AbyssSetBonusConfig const* bonus = FindAbyssSetBonusByModeAct(group.sourceMode, group.actId);
+
+        std::vector<std::string> slotNames;
+        for (AbyssEquipmentTemplate const* item : group.items)
+            slotNames.push_back(GetAbyssEquipmentSlotName(item->slotMask));
+
+        std::ostringstream slotSummary;
+        for (size_t i = 0; i < slotNames.size(); ++i)
+        {
+            if (i != 0)
+                slotSummary << " / ";
+            slotSummary << slotNames[i];
+        }
+
+        std::string groupName = bonus ? SanitizeAddonText(bonus->setName) : SanitizeAddonText(representative->itemName);
+        if (groupName.empty())
+            groupName = "Abyss Set";
+
+        payload << '~'
+                << static_cast<uint32>(group.sourceMode) << '^'
+                << static_cast<uint32>(group.actId) << '^'
+                << group.sourceChapter << '^'
+                << group.sourceChapterName << '^'
+                << group.items.size() << '^'
+                << groupName << '^'
+                << SanitizeAddonText(slotSummary.str()) << '^'
+                << representative->itemId << '^'
+                << SanitizeAddonText(representative->itemName) << '^'
+                << SanitizeAddonText(GetItemIconPathForAddon(representative->itemId)) << '^'
+                << (bonus ? AddonOptionalText(bonus->twoPieceDesc) : " ") << '^'
+                << (bonus ? AddonOptionalText(bonus->fourPieceDesc) : " ") << '^'
+                << (bonus ? AddonOptionalText(bonus->sixPieceDesc) : " ") << '^'
+                << (bonus ? AddonOptionalText(bonus->eightPieceDesc) : " ");
+    }
+
+    SendAbyssPayload(player, payload.str());
+}
+
 void SendAbyssAllToAddon(Player* player)
 {
     SendAbyssStateToAddon(player);
     SendAbyssChapterListToAddon(player);
     SendAbyssRelicsToAddon(player);
+    SendAbyssSetBonusesToAddon(player);
 
     if (player)
     {
@@ -9280,8 +9694,8 @@ public:
         if (prefix != ABYSS_ADDON_PREFIX)
             return;
 
-        // 【防刷】统一令牌桶节流：默认 500ms/突发4，超频静默丢弃（modules/AddonThrottle.h）
-        if (!ModuleAddon::Throttle::Allow(player->GetGUID(), "ABYSS"))
+        // 深渊 UI 打开和切页会正常连发多个查询；保留防刷，但避免正常 UI 请求被静默丢弃。
+        if (!ModuleAddon::Throttle::Allow(player->GetGUID(), "ABYSS", 100, 16))
             return;
 
         std::string command = msg.substr(tabPos + 1);
@@ -9308,6 +9722,24 @@ public:
         {
             sAbyssCultivationMgr->LoadPlayerCollections(player);
             SendAbyssRelicsToAddon(player);
+            return;
+        }
+
+        if (command.rfind("REQ_EQUIPMENT_PAGE:", 0) == 0)
+        {
+            SendAbyssEquipmentPageToAddon(player, command.substr(19));
+            return;
+        }
+
+        if (command == "REQ_SET_BONUSES")
+        {
+            SendAbyssSetBonusesToAddon(player);
+            return;
+        }
+
+        if (command.rfind("REQ_SET_OVERVIEW:", 0) == 0)
+        {
+            SendAbyssSetOverviewToAddon(player, command.substr(17));
             return;
         }
 

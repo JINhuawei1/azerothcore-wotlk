@@ -1,8 +1,0 @@
-## Interface: 30300
-## Title: |cFFFFD700仙器装备|r
-## Notes: 仙门仙器/扩展装备槽位UI - 10仙器槽 + 19扩展槽（自制暗金面板）
-## Author: AzerothCore
-## Version: 1.1.0
-## SavedVariables: XianqiSystemUIDB
-
-XianqiSystemUI.lua

@@ -1440,6 +1440,9 @@ void OpcodeTable::Initialize()
     /*0x51D*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_COMMENTATOR_SKIRMISH_QUEUE_RESULT2,                 STATUS_NEVER);
     /*0x51E*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_MULTIPLE_MOVES, STATUS_NEVER);
 
+    /*0x990*/ DEFINE_HANDLER(CMSG_HERMES_BRIDGE,                                                     STATUS_LOGGEDIN,   PROCESS_THREADUNSAFE,   &WorldSession::HandleHermesBridgeOpcode                 );
+    /*0x991*/ DEFINE_SERVER_OPCODE_HANDLER(SMSG_HERMES_BRIDGE,                                      STATUS_NEVER);
+
 #undef DEFINE_HANDLER
 #undef DEFINE_SERVER_OPCODE_HANDLER
 }

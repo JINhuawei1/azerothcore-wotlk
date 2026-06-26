@@ -80,3 +80,9 @@ INSERT INTO `_仙门_仙器物品`
 (95107, 8, '太虚星河'),
 (95108, 9, '万魂虚契'),
 (95109, 10, '彼岸圣影');
+
+-- item_instance.durability 是 smallint unsigned，模板耐久必须限制在 65535 以内。
+UPDATE `item_template`
+SET `MaxDurability` = 65535
+WHERE `entry` BETWEEN 95100 AND 95218
+  AND `MaxDurability` > 65535;

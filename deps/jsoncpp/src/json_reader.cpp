@@ -24,13 +24,13 @@ bool Reader::parse(const char* beginDoc, const char* endDoc, Value& root) {
     column_ = 1;
     errors_.clear();
 
-    Token token;
-    skipCommentTokens(token);
     bool successful = parseValue(root);
     
     if (successful) {
-        skipCommentTokens(token);
-        if (token.type_ != Token::tokenEndOfStream) {
+        Token token;
+        if (!skipCommentTokens(token)) {
+            successful = false;
+        } else if (token.type_ != Token::tokenEndOfStream) {
             addError("Extra non-whitespace after JSON value.");
             successful = false;
         }
@@ -212,16 +212,14 @@ bool Reader::parseObject(Value& value) {
 bool Reader::parseArray(Value& value) {
     value = Value(arrayValue);
     Token token;
-    
-    if (!readToken(token)) return false;
-    
-    if (token.type_ == Token::tokenArrayEnd) {
+
+    skipSpaces();
+    if (current_ < end_ && *current_ == ']') {
+        getNextChar();
         return true; // Empty array
     }
     
     while (true) {
-        ungetChar(current_[-1]); // Put back the token
-        
         Value arrayValue;
         if (!parseValue(arrayValue)) {
             return false;
