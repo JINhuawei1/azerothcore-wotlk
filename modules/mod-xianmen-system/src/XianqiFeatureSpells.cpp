@@ -2,7 +2,7 @@
  * Xianqi feature spell runtime.
  *
  * The DBC records only provide passive/equip auras. This script turns the
- * set spells (384001-384016, 384101-384816) and artifact spells (385001-385050)
+ * set spells and artifact spells (385001-385050)
  * into combat effects while keeping all damage based on "main combat power".
  */
 
@@ -13,6 +13,8 @@
 #include "Duration.h"
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
+#include "HermesBridgeAddonApi.h"
+#include "Item.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "Random.h"
@@ -20,31 +22,45 @@
 #include "Spell.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "StringConvert.h"
 #include "Unit.h"
 #include "UnitScript.h"
 #include "Util.h"
+#include "XianmenArtifactSlots.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <list>
 #include <map>
+#include <mutex>
+#include <sstream>
 #include <unordered_map>
+#include <utility>
 #include <vector>
+
+bool HuanJingPrepareExternalCreatureForPlayerDamage(Unit* attacker, Creature* creature);
+void HuanJingEnterExternalPlayerDamageNoInitialAdjust();
+void HuanJingLeaveExternalPlayerDamageNoInitialAdjust();
 
 namespace
 {
 constexpr uint32 XIANQI_SET_SPELL_FIRST = 384001;
 constexpr uint32 XIANQI_SET_SPELL_LAST = 384016;
 constexpr uint32 XIANQI_SET_SPELLS_PER_TIER = 16;
-constexpr uint32 XIANQI_SET_SPELL_TIER_COUNT = 9;
-constexpr uint32 XIANQI_SET_SPELL_TIER_STRIDE = 100;
+constexpr std::array<uint32, 17> XIANQI_SET_SPELL_TIER_STARTS = {
+    384001, 384101, 384201, 384301, 384401, 384501, 384601, 384701, 384801,
+    384901, 386001, 386101, 386201, 386301, 386401, 386501, 386601
+};
 constexpr uint32 XIANQI_ARTIFACT_SPELL_FIRST = 385001;
 constexpr uint32 XIANQI_ARTIFACT_SPELL_LAST = 385050;
 
-constexpr uint32 XIANQI_SET_UNLOCK_ARTIFACT_BASIC = 384014;
+constexpr uint32 CULTIVATION_SPELL_WANJIAN = 371007;
+constexpr uint32 CULTIVATION_SPELL_JIUTIAN = 371009;
+
 constexpr uint32 XIANQI_SET_ARTIFACT_BOUNCE = 384015;
-constexpr uint32 XIANQI_SET_UNLOCK_ARTIFACT_ULTIMATE = 384016;
+constexpr char XIANQI_DAMAGE_DISPLAY_PREFIX[] = "PATTRPANEL";
 
 constexpr uint32 XIANQI_ASCEND_DURATION_MS = 12000;
 constexpr uint32 XIANQI_ASCEND_COOLDOWN_MS = 90000;
@@ -54,6 +70,7 @@ constexpr uint32 XIANQI_LOCK_DOMAIN_DELAY_MS = 5000;
 constexpr uint32 XIANQI_SPIRIT_BLADE_PERIOD_MS = 5000;
 constexpr uint32 XIANQI_ARTIFACT_ULTIMATE_COOLDOWN_MS = 60000;
 constexpr uint32 XIANQI_DEFAULT_TICK_PERIOD_MS = 1000;
+constexpr uint32 XIANQI_SET_TRIGGER_INTERVAL_MS = 1000;
 constexpr uint32 XIANQI_VISUAL_TARGET_THROTTLE_MS = 250;
 constexpr uint32 XIANQI_VISUAL_AREA_THROTTLE_MS = 700;
 constexpr uint32 XIANQI_VISUAL_CASTER_THROTTLE_MS = 1000;
@@ -110,6 +127,7 @@ struct PlayerFeatureState
     std::map<ObjectGuid, uint8> condemnationStacks;
     std::map<ObjectGuid, uint8> elementMarks;
     std::map<ObjectGuid, uint32> soulDebtMs;
+    std::map<ObjectGuid, uint32> skipGenericDamageTriggerMs;
 
     ObjectGuid lastHitGuid;
     uint8 consecutiveHits = 0;
@@ -119,17 +137,39 @@ struct PlayerFeatureState
     ObjectGuid recentMeleeAttackerGuid;
     uint32 recentMeleeHitMs = 0;
 
-    uint128 lastDamage = 0;
-    uint128 lastNonUltimateDamage = 0;
-    uint128 lastElementDamage = 0;
+    uint256 lastDamage = 0;
+    uint256 lastNonUltimateDamage = 0;
+    uint256 lastElementDamage = 0;
     uint32 lastDamageSpellId = 0;
     SpellSchoolMask lastDamageSchool = SPELL_SCHOOL_MASK_NORMAL;
     SpellSchoolMask lastElementSchool = SPELL_SCHOOL_MASK_NATURE;
 };
 
 std::unordered_map<uint32, PlayerFeatureState> s_playerStates;
+std::mutex s_playerStatesMutex;
 thread_local bool s_applyingFeatureDamage = false;
 thread_local bool s_processingFeatureKill = false;
+
+// GUID whose PlayerFeatureState is currently being processed on this thread (0 = none).
+// Used to defer erasing a state while it is still referenced on the update stack.
+thread_local uint32 s_updatingStateGuid = 0;
+thread_local bool s_updatingStateErasePending = false;
+
+// s_playerStates must only be structurally mutated (operator[]/erase/rehash) under the
+// mutex: map updates run across several threads and a concurrent insert vs erase would
+// corrupt the container. EraseState additionally refuses to free the state that is still
+// live on this thread's update stack, deferring it until the update returns.
+void EraseState(uint32 guid)
+{
+    if (guid != 0 && guid == s_updatingStateGuid)
+    {
+        s_updatingStateErasePending = true;
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(s_playerStatesMutex);
+    s_playerStates.erase(guid);
+}
 
 class FeatureDamageGuard
 {
@@ -153,74 +193,117 @@ private:
     bool _entered;
 };
 
+class HuanJingExternalDamageNoInitialAdjustGuard
+{
+public:
+    HuanJingExternalDamageNoInitialAdjustGuard()
+    {
+        HuanJingEnterExternalPlayerDamageNoInitialAdjust();
+    }
+
+    ~HuanJingExternalDamageNoInitialAdjustGuard()
+    {
+        HuanJingLeaveExternalPlayerDamageNoInitialAdjust();
+    }
+};
+
 PlayerFeatureState& GetState(Player* player)
 {
+    std::lock_guard<std::mutex> lock(s_playerStatesMutex);
     return s_playerStates[player->GetGUID().GetCounter()];
 }
 
-uint128 ToUInt128Positive(int128 const& value)
+bool IsFeaturePlayerActive(Player* player)
 {
-    return value > 0 ? Acore::Number::ToUInt128Saturated(value) : 0;
+    return player && player->IsInWorld() && player->IsAlive();
 }
 
-uint128 ToUInt128Positive(double value)
+bool IsCultivationScriptedPeriodicSource(uint32 spellId)
+{
+    return spellId == CULTIVATION_SPELL_WANJIAN || spellId == CULTIVATION_SPELL_JIUTIAN;
+}
+
+void MarkGenericDamageTriggerHandled(PlayerFeatureState& state, Unit* target)
+{
+    if (target)
+        state.skipGenericDamageTriggerMs[target->GetGUID()] = 1000;
+}
+
+bool ConsumeGenericDamageTriggerHandled(PlayerFeatureState& state, Unit* target)
+{
+    if (!target)
+        return false;
+
+    auto itr = state.skipGenericDamageTriggerMs.find(target->GetGUID());
+    if (itr == state.skipGenericDamageTriggerMs.end())
+        return false;
+
+    state.skipGenericDamageTriggerMs.erase(itr);
+    return true;
+}
+
+uint256 ToUInt256Positive(int256 const& value)
+{
+    return value > 0 ? Acore::Number::ToUInt256Saturated(value) : 0;
+}
+
+uint256 ToUInt256Positive(double value)
 {
     if (value <= 0.0 || std::isnan(value))
         return 0;
 
     if (std::isinf(value))
-        return std::numeric_limits<uint128>::max();
+        return std::numeric_limits<uint256>::max();
 
-    return Acore::Number::ToUInt128Saturated(static_cast<long double>(value));
+    return Acore::Number::ToUInt256Saturated(static_cast<long double>(value));
 }
 
-uint128 GetStatPower(Player* player, Stats stat)
+uint256 GetStatPower(Player* player, Stats stat)
 {
     if (!player)
         return 0;
 
-    int128 const extended = player->GetExtendedStat128(stat);
+    int256 const extended = player->GetExtendedStat256(stat);
     if (extended > 0)
-        return ToUInt128Positive(extended);
+        return ToUInt256Positive(extended);
 
     return player->GetStatUInt32(stat);
 }
 
-uint128 MaxUInt128(uint128 const& left, uint128 const& right)
+uint256 MaxUInt256(uint256 const& left, uint256 const& right)
 {
     return left < right ? right : left;
 }
 
-uint128 GetMainCombatPower(Player* player)
+uint256 GetMainCombatPower(Player* player)
 {
     if (!player)
         return 0;
 
-    uint128 power = 0;
-    power = MaxUInt128(power, GetStatPower(player, STAT_STRENGTH));
-    power = MaxUInt128(power, GetStatPower(player, STAT_AGILITY));
-    power = MaxUInt128(power, GetStatPower(player, STAT_INTELLECT));
-    power = MaxUInt128(power, ToUInt128Positive(player->GetExtendedTotalAttackPowerValue(BASE_ATTACK)));
-    power = MaxUInt128(power, ToUInt128Positive(player->GetExtendedTotalAttackPowerValue(RANGED_ATTACK)));
-    power = MaxUInt128(power, ToUInt128Positive(player->GetExtendedSpellPowerBonus128()));
+    uint256 power = 0;
+    power = MaxUInt256(power, GetStatPower(player, STAT_STRENGTH));
+    power = MaxUInt256(power, GetStatPower(player, STAT_AGILITY));
+    power = MaxUInt256(power, GetStatPower(player, STAT_INTELLECT));
+    power = MaxUInt256(power, ToUInt256Positive(player->GetExtendedTotalAttackPowerValue(BASE_ATTACK)));
+    power = MaxUInt256(power, ToUInt256Positive(player->GetExtendedTotalAttackPowerValue(RANGED_ATTACK)));
+    power = MaxUInt256(power, ToUInt256Positive(player->GetExtendedSpellPowerBonus256()));
 
     return power;
 }
 
-uint128 ScalePercent(uint128 const& value, int32 percent)
+uint256 ScalePercent(uint256 const& value, int32 percent)
 {
     if (value == 0 || percent <= 0)
         return 0;
 
     long double scaled = Acore::Number::ToLongDouble(value) * static_cast<long double>(percent) / 100.0L;
-    return Acore::Number::ToUInt128Saturated(scaled);
+    return Acore::Number::ToUInt256Saturated(scaled);
 }
 
 bool IsSetSpell(uint32 spellId)
 {
-    for (uint32 tier = 0; tier < XIANQI_SET_SPELL_TIER_COUNT; ++tier)
+    for (uint32 first : XIANQI_SET_SPELL_TIER_STARTS)
     {
-        uint32 const first = XIANQI_SET_SPELL_FIRST + tier * XIANQI_SET_SPELL_TIER_STRIDE;
         uint32 const last = first + XIANQI_SET_SPELLS_PER_TIER - 1;
         if (spellId >= first && spellId <= last)
             return true;
@@ -236,9 +319,8 @@ bool IsArtifactSpell(uint32 spellId)
 
 uint32 GetSetSpellOffset(uint32 spellId)
 {
-    for (uint32 tier = 0; tier < XIANQI_SET_SPELL_TIER_COUNT; ++tier)
+    for (uint32 first : XIANQI_SET_SPELL_TIER_STARTS)
     {
-        uint32 const first = XIANQI_SET_SPELL_FIRST + tier * XIANQI_SET_SPELL_TIER_STRIDE;
         uint32 const last = first + XIANQI_SET_SPELLS_PER_TIER - 1;
         if (spellId >= first && spellId <= last)
             return spellId - first;
@@ -249,10 +331,10 @@ uint32 GetSetSpellOffset(uint32 spellId)
 
 uint32 MakeSetSpellId(uint32 baseSpellId, uint32 tier)
 {
-    if (baseSpellId < XIANQI_SET_SPELL_FIRST || baseSpellId > XIANQI_SET_SPELL_LAST || tier >= XIANQI_SET_SPELL_TIER_COUNT)
+    if (baseSpellId < XIANQI_SET_SPELL_FIRST || baseSpellId > XIANQI_SET_SPELL_LAST || tier >= XIANQI_SET_SPELL_TIER_STARTS.size())
         return 0;
 
-    return XIANQI_SET_SPELL_FIRST + tier * XIANQI_SET_SPELL_TIER_STRIDE + (baseSpellId - XIANQI_SET_SPELL_FIRST);
+    return XIANQI_SET_SPELL_TIER_STARTS[tier] + (baseSpellId - XIANQI_SET_SPELL_FIRST);
 }
 
 uint32 NormalizeSetSpellId(uint32 spellId)
@@ -279,6 +361,9 @@ SpellInfo const* GetFeatureSpellInfo(uint32 spellId)
 
 uint32 GetFeatureCooldown(uint32 spellId, uint32 fallbackMs)
 {
+    if (IsSetSpell(spellId))
+        return XIANQI_SET_TRIGGER_INTERVAL_MS;
+
     if (SpellInfo const* spellInfo = GetFeatureSpellInfo(spellId))
     {
         int32 const configured = spellInfo->Effects[EFFECT_1].MiscValueB;
@@ -297,6 +382,9 @@ uint32 GetFeatureCooldown(uint32 spellId, uint32 fallbackMs)
 
 float GetFeatureProcChance(uint32 spellId, float fallback)
 {
+    if (IsSetSpell(spellId))
+        return 100.0f;
+
     if (SpellInfo const* spellInfo = GetFeatureSpellInfo(spellId))
     {
         if (spellInfo->ProcChance)
@@ -369,6 +457,9 @@ uint32 GetFeatureDuration(uint32 spellId, uint32 fallbackMs)
 
 uint32 GetFeaturePeriod(uint32 spellId, uint32 fallbackMs)
 {
+    if (IsSetSpell(spellId))
+        return XIANQI_SET_TRIGGER_INTERVAL_MS;
+
     if (SpellInfo const* spellInfo = GetFeatureSpellInfo(spellId))
         if (spellInfo->Effects[EFFECT_0].Amplitude)
             return spellInfo->Effects[EFFECT_0].Amplitude;
@@ -386,20 +477,55 @@ uint32 GetFeatureTicks(uint32 spellId, uint32 fallbackTicks)
     return fallbackTicks;
 }
 
+bool HasActiveItemSetFeatureSpell(Player* player, uint32 spellId)
+{
+    if (!player || !IsSetSpell(spellId))
+        return false;
+
+    for (ItemSetEffect const* effect : player->ItemSetEff)
+    {
+        if (!effect)
+            continue;
+
+        for (SpellInfo const* spellInfo : effect->spells)
+            if (spellInfo && spellInfo->Id == spellId)
+                return true;
+    }
+
+    return false;
+}
+
 bool HasFeatureAura(Player* player, uint32 spellId)
 {
-    return player && player->HasAura(spellId);
+    if (!player)
+        return false;
+
+    if (IsArtifactSpell(spellId))
+        return player->HasAura(spellId) || XianmenArtifactSlots::HasEquippedArtifactFeatureSpell(player, spellId);
+
+    if (IsSetSpell(spellId))
+        return player->HasAura(spellId) || HasActiveItemSetFeatureSpell(player, spellId);
+
+    return player->HasAura(spellId);
 }
+
+bool HasAnyFeatureAura(Player* player);
+bool IsValidFeatureTarget(Player* player, Unit* target);
 
 uint32 ResolveSetFeatureSpell(Player* player, uint32 baseSpellId)
 {
     if (!player || baseSpellId < XIANQI_SET_SPELL_FIRST || baseSpellId > XIANQI_SET_SPELL_LAST)
         return 0;
 
-    for (int32 tier = static_cast<int32>(XIANQI_SET_SPELL_TIER_COUNT) - 1; tier >= 0; --tier)
+    for (int32 tier = static_cast<int32>(XIANQI_SET_SPELL_TIER_STARTS.size()) - 1; tier >= 0; --tier)
     {
         uint32 const spellId = MakeSetSpellId(baseSpellId, static_cast<uint32>(tier));
-        if (spellId && player->HasAura(spellId))
+        if (!spellId)
+            continue;
+
+        bool const aura = player->HasAura(spellId);
+        bool const itemset = HasActiveItemSetFeatureSpell(player, spellId);
+        if (aura || itemset)
             return spellId;
     }
 
@@ -420,16 +546,15 @@ bool HasAnyFeatureAura(Player* player)
     if (!player)
         return false;
 
-    for (uint32 tier = 0; tier < XIANQI_SET_SPELL_TIER_COUNT; ++tier)
+    for (uint32 first : XIANQI_SET_SPELL_TIER_STARTS)
     {
-        uint32 const first = XIANQI_SET_SPELL_FIRST + tier * XIANQI_SET_SPELL_TIER_STRIDE;
         for (uint32 offset = 0; offset < XIANQI_SET_SPELLS_PER_TIER; ++offset)
-            if (player->HasAura(first + offset))
+            if (HasFeatureAura(player, first + offset))
                 return true;
     }
 
     for (uint32 spellId = XIANQI_ARTIFACT_SPELL_FIRST; spellId <= XIANQI_ARTIFACT_SPELL_LAST; ++spellId)
-        if (player->HasAura(spellId))
+        if (HasFeatureAura(player, spellId))
             return true;
 
     return false;
@@ -438,13 +563,6 @@ bool HasAnyFeatureAura(Player* player)
 bool CanUseArtifactSkill(Player* player, uint32 spellId)
 {
     if (!HasFeatureAura(player, spellId))
-        return false;
-
-    uint32 const indexInArtifact = (spellId - XIANQI_ARTIFACT_SPELL_FIRST) % 5 + 1;
-    if (indexInArtifact <= 2 && !HasSetFeature(player, XIANQI_SET_UNLOCK_ARTIFACT_BASIC))
-        return false;
-
-    if (indexInArtifact == 5 && !HasSetFeature(player, XIANQI_SET_UNLOCK_ARTIFACT_ULTIMATE))
         return false;
 
     return true;
@@ -480,7 +598,7 @@ float AdjustProcChance(Player* player, PlayerFeatureState const& state, float ch
 
 bool IsValidFeatureTarget(Player* player, Unit* target)
 {
-    if (!player || !target || !target->IsAlive() || !player->IsInMap(target) ||
+    if (!IsFeaturePlayerActive(player) || !target || !target->IsAlive() || !player->IsInMap(target) ||
         !player->IsValidAttackTarget(target) || !target->isTargetableForAttack(false, player))
         return false;
 
@@ -751,7 +869,11 @@ ProcDecision RollChanceProc(Player* player, PlayerFeatureState& state, uint32 sp
         return decision;
     }
 
-    if (roll_chance_f(AdjustProcChance(player, state, chance)))
+    float const adjustedChance = AdjustProcChance(player, state, chance);
+    double const roll = rand_chance();
+    bool const success = adjustedChance > roll;
+
+    if (success)
     {
         decision.triggered = true;
         StartCooldown(state, spellId, cooldownMs);
@@ -760,7 +882,7 @@ ProcDecision RollChanceProc(Player* player, PlayerFeatureState& state, uint32 sp
     return decision;
 }
 
-uint128 DealRawFeatureDamage(Player* player, Unit* victim, PlayerFeatureState& state, uint32 spellId, uint128 const& damage,
+uint256 DealRawFeatureDamage(Player* player, Unit* victim, PlayerFeatureState& state, uint32 spellId, uint256 const& damage,
     SpellSchoolMask school, bool fromSet, bool fromArtifact, bool ultimate, bool allowMingxing = true, bool recordRecent = true);
 
 void DealAreaScaled(Player* player, Unit* centerUnit, PlayerFeatureState& state, uint32 spellId, int32 percent,
@@ -769,7 +891,7 @@ void DealAreaScaled(Player* player, Unit* centerUnit, PlayerFeatureState& state,
 
 void HandleKillTriggers(Player* player, Unit* victim);
 
-void TrySetResonance(Player* player, Unit* victim, PlayerFeatureState& state, uint32 spellId, uint128 const& originalDamage, SpellSchoolMask school)
+void TrySetResonance(Player* player, Unit* victim, PlayerFeatureState& state, uint32 spellId, uint256 const& originalDamage, SpellSchoolMask school)
 {
     uint32 resonanceSpellId = 0;
     if (!HasSetFeature(player, 384010, &resonanceSpellId) || NormalizeSetSpellId(spellId) == 384010 || originalDamage == 0)
@@ -782,61 +904,141 @@ void TrySetResonance(Player* player, Unit* victim, PlayerFeatureState& state, ui
         school, false, false, false, false, false);
 }
 
-uint128 DealRawFeatureDamage(Player* player, Unit* victim, PlayerFeatureState& state, uint32 spellId, uint128 const& damage,
-    SpellSchoolMask school, bool fromSet, bool /*fromArtifact*/, bool ultimate, bool allowMingxing, bool recordRecent)
+bool SendFeatureDamageDisplayMessage(Player* player, uint32 spellId, uint256 const& dealt, SpellSchoolMask school)
 {
-    if (!player || !victim || damage == 0 || !IsValidFeatureTarget(player, victim))
+    if (!player || dealt == 0)
+        return false;
+
+    std::ostringstream payload;
+    payload << "DMG:" << Acore::ToString(dealt) << ":0:" << static_cast<uint32>(school) << ":" << spellId << ":0";
+    return HermesBridge_SendAddonMessage(player, XIANQI_DAMAGE_DISPLAY_PREFIX, payload.str());
+}
+
+float ToFeatureThreat(uint256 const& damage)
+{
+    if (damage == 0)
+        return 0.0f;
+
+    long double threat = Acore::Number::ToLongDouble(damage);
+    if (!std::isfinite(threat) || threat <= 0.0L)
+        return 1.0f;
+
+    static constexpr long double MaxFeatureThreat = 1000000000.0L;
+    if (threat > MaxFeatureThreat)
+        threat = MaxFeatureThreat;
+
+    return static_cast<float>(threat);
+}
+
+void ApplyFeatureDamageCombatCredit(Player* player, Unit* victim, uint256 const& threatDamage, uint256 const& damageReqCredit,
+    SpellSchoolMask school, SpellInfo const* spellInfo)
+{
+    Creature* creature = victim ? victim->ToCreature() : nullptr;
+    if (!player || !creature || threatDamage == 0 || !creature->IsAlive())
+        return;
+
+    if (creature->IsControlledByPlayer() && !creature->IsVehicle())
+        return;
+
+    if (!creature->hasLootRecipient())
+        creature->SetLootRecipient(player);
+
+    if (damageReqCredit != 0)
+        creature->LowerPlayerDamageReq(damageReqCredit, true);
+
+    if (creature->CanHaveThreatList() && !creature->HasUnitState(UNIT_STATE_EVADE) && !creature->IsInCombatWith(player))
+        creature->CombatStart(player, spellInfo ? !(spellInfo->AttributesEx3 & SPELL_ATTR3_SUPPRESS_TARGET_PROCS) : true);
+
+    creature->AddThreat(player, ToFeatureThreat(threatDamage), school, spellInfo);
+}
+
+uint256 DealRawFeatureDamage(Player* player, Unit* victim, PlayerFeatureState& state, uint32 spellId, uint256 const& damage,
+    SpellSchoolMask school, bool fromSet, bool fromArtifact, bool ultimate, bool allowMingxing, bool recordRecent)
+{
+    if (!IsFeaturePlayerActive(player) || !victim || damage == 0)
+        return 0;
+
+    if (!IsValidFeatureTarget(player, victim))
         return 0;
 
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
     if (!spellInfo)
         return 0;
 
+    if (victim->IsImmunedToDamageOrSchool(spellInfo))
+    {
+        player->SendSpellDamageImmune(victim, spellId);
+        return 0;
+    }
+
     if (!school)
         school = spellInfo->GetSchoolMask() ? spellInfo->GetSchoolMask() : SPELL_SCHOOL_MASK_NORMAL;
 
-    bool const sendClientFeedback = player->ShouldSendCustomProcClientFeedback(victim, spellInfo, "xianqi-feature");
-    uint128 dealt = 0;
+    HuanJingExternalDamageNoInitialAdjustGuard noInitialHuanJingAdjust;
+
+    bool const sendVisualFeedback = player->ShouldSendCustomProcClientFeedback(victim, spellInfo, "xianqi-feature");
+    if (Creature* creatureVictim = victim->ToCreature())
+        HuanJingPrepareExternalCreatureForPlayerDamage(player, creatureVictim);
+
+    uint256 beforeHealth = victim->GetHealthForCombat256();
+    uint256 afterModsDamage = 0;
     {
         FeatureDamageGuard guard(s_applyingFeatureDamage);
         if (!guard.Entered())
             return 0;
 
         SpellNonMeleeDamage damageInfo(player, victim, spellInfo, school);
-        damageInfo.damage = damage;
+        player->SetLastDamagedTargetGuid(victim->GetGUID());
+        player->CalculateSpellDamageTaken(&damageInfo, damage, spellInfo);
         Unit::DealDamageMods(damageInfo.target, damageInfo.damage, &damageInfo.absorb);
-        if (sendClientFeedback)
-            player->SendSpellNonMeleeDamageLog(&damageInfo);
+        afterModsDamage = damageInfo.damage;
 
-        CleanDamage cleanDamage(damageInfo.cleanDamage, damageInfo.absorb, BASE_ATTACK,
-            (damageInfo.HitInfo & SPELL_HIT_TYPE_CRIT) ? MELEE_HIT_CRIT : MELEE_HIT_NORMAL);
-        dealt = Unit::DealDamage(player, victim, damageInfo.damage, &cleanDamage, SPELL_DIRECT_DAMAGE, school, spellInfo, true);
+        player->SendSpellNonMeleeDamageLog(&damageInfo);
+
+        Player::DamageTriggeredArtifactItemProcGuard procGuard;
+        player->DealSpellDamage(&damageInfo, true);
     }
 
-    if (dealt == 0)
+    uint256 const afterHealth = victim->GetHealthForCombat256();
+    uint256 const healthDelta = beforeHealth > afterHealth ? beforeHealth - afterHealth : uint256(0);
+    uint256 actualDamage = healthDelta != 0 ? healthDelta : afterModsDamage;
+    if (afterModsDamage != 0 && victim->IsCreature())
+    {
+        uint256 const threatDamage = actualDamage != 0 ? actualDamage : afterModsDamage;
+        uint256 const damageReqCredit = std::min<uint256>(threatDamage, beforeHealth);
+        ApplyFeatureDamageCombatCredit(player, victim, threatDamage, damageReqCredit, school, spellInfo);
+
+        if (actualDamage == 0)
+            actualDamage = afterModsDamage;
+    }
+
+    uint256 const displayDamage = actualDamage != 0 ? actualDamage : afterModsDamage;
+    SendFeatureDamageDisplayMessage(player, spellId, displayDamage, school);
+
+    if (actualDamage == 0)
         return 0;
 
-    if (sendClientFeedback)
+    if (sendVisualFeedback)
         PlayFeatureTargetVisual(player, victim, state, spellId);
 
     if (recordRecent)
     {
-        state.lastDamage = dealt;
+        state.lastDamage = actualDamage;
         state.lastDamageSpellId = spellId;
         state.lastDamageSchool = school;
 
         if (!ultimate)
-            state.lastNonUltimateDamage = dealt;
+            state.lastNonUltimateDamage = actualDamage;
 
         if (spellId == 385021 || spellId == 385022 || spellId == 385024 || spellId == 385025)
         {
-            state.lastElementDamage = dealt;
+            state.lastElementDamage = actualDamage;
             state.lastElementSchool = school;
         }
     }
 
     if (fromSet)
-        TrySetResonance(player, victim, state, spellId, dealt, school);
+        TrySetResonance(player, victim, state, spellId, actualDamage, school);
 
     uint32 mingxingSpellId = 0;
     if (allowMingxing && NormalizeSetSpellId(spellId) != 384009 && HasSetFeature(player, 384009, &mingxingSpellId))
@@ -859,14 +1061,14 @@ uint128 DealRawFeatureDamage(Player* player, Unit* victim, PlayerFeatureState& s
         }
     }
 
-    return dealt;
+    return actualDamage;
 }
 
-uint128 DealScaledDamage(Player* player, Unit* victim, PlayerFeatureState& state, uint32 spellId, int32 percent,
+uint256 DealScaledDamage(Player* player, Unit* victim, PlayerFeatureState& state, uint32 spellId, int32 percent,
     SpellSchoolMask school, bool fromSet, bool fromArtifact, bool ultimate = false, bool allowMingxing = true,
-    bool recordRecent = true, uint128 const* baseOverride = nullptr)
+    bool recordRecent = true, uint256 const* baseOverride = nullptr)
 {
-    uint128 const base = baseOverride ? *baseOverride : GetMainCombatPower(player);
+    uint256 const base = baseOverride ? *baseOverride : GetMainCombatPower(player);
     return DealRawFeatureDamage(player, victim, state, spellId, ScalePercent(base, percent), school, fromSet, fromArtifact, ultimate, allowMingxing, recordRecent);
 }
 
@@ -874,7 +1076,7 @@ void DealAreaScaled(Player* player, Unit* centerUnit, PlayerFeatureState& state,
     SpellSchoolMask school, float radius, uint32 maxTargets, bool fromSet, bool fromArtifact, bool ultimate,
     FeatureControl control, uint32 controlMs)
 {
-    if (!player || !centerUnit)
+    if (!IsFeaturePlayerActive(player) || !centerUnit)
         return;
 
     uint32 const adjustedMaxTargets = AdjustTargetCount(player, state, GetFeatureMaxTargets(spellId, maxTargets));
@@ -892,7 +1094,7 @@ void DealAreaScaled(Player* player, Unit* centerUnit, PlayerFeatureState& state,
 void DealChainScaled(Player* player, Unit* firstTarget, PlayerFeatureState& state, uint32 spellId, int32 percent,
     SpellSchoolMask school, uint32 maxJumps, bool fromSet, bool fromArtifact)
 {
-    if (!player || !firstTarget || !maxJumps)
+    if (!IsFeaturePlayerActive(player) || !firstTarget || !maxJumps)
         return;
 
     std::vector<Unit*> targets = SelectNearbyTargets(player, firstTarget, firstTarget, 12.0f,
@@ -904,13 +1106,13 @@ void DealChainScaled(Player* player, Unit* firstTarget, PlayerFeatureState& stat
 void DealExtraBounces(Player* player, Unit* sourceTarget, PlayerFeatureState& state, uint32 spellId, int32 percent,
     SpellSchoolMask school, uint32 count, int32 damageScalePercent)
 {
-    if (!player || !sourceTarget || !count || damageScalePercent <= 0)
+    if (!IsFeaturePlayerActive(player) || !sourceTarget || !count || damageScalePercent <= 0)
         return;
 
     std::vector<Unit*> targets = SelectNearbyTargets(player, sourceTarget, nullptr, 12.0f, count + 1);
     uint32 applied = 0;
-    uint128 const baseDamage = ScalePercent(GetMainCombatPower(player), percent);
-    uint128 const bounceDamage = ScalePercent(baseDamage, damageScalePercent);
+    uint256 const baseDamage = ScalePercent(GetMainCombatPower(player), percent);
+    uint256 const bounceDamage = ScalePercent(baseDamage, damageScalePercent);
     for (Unit* target : targets)
     {
         if (target == sourceTarget)
@@ -1048,7 +1250,7 @@ void StartUltimate(Player* player, Unit* target, PlayerFeatureState& state, uint
             break;
         case 385040:
         {
-            uint128 copyBase = state.lastNonUltimateDamage ? state.lastNonUltimateDamage : ScalePercent(GetMainCombatPower(player), 600);
+            uint256 copyBase = state.lastNonUltimateDamage ? state.lastNonUltimateDamage : ScalePercent(GetMainCombatPower(player), 600);
             DealRawFeatureDamage(player, target, state, spellId, ScalePercent(copyBase, GetFeatureCoeff(spellId, 80)),
                 state.lastDamageSchool ? state.lastDamageSchool : SPELL_SCHOOL_MASK_ARCANE, false, true, true, true, false);
             break;
@@ -1125,7 +1327,7 @@ void HandleSetOutgoingHit(Player* player, Unit* victim, PlayerFeatureState& stat
     {
         uint8& stacks = state.tianhuoStacks[victim->GetGUID()];
         stacks = std::min<uint8>(3, stacks + 1);
-        if (stacks >= 3)
+        if (stacks >= 1)
         {
             if (TryUseCooldown(state, tianhuoSpellId, 1000))
             {
@@ -1175,6 +1377,19 @@ void HandleSetOutgoingHit(Player* player, Unit* victim, PlayerFeatureState& stat
         }
     }
 
+    uint32 echoSpellId = 0;
+    if (HasSetFeature(player, 384006, &echoSpellId) && TryUseCooldown(state, echoSpellId, 1000))
+    {
+        uint256 copyDamage = state.lastDamage ? ScalePercent(state.lastDamage, GetFeatureCoeff(echoSpellId, 45)) :
+            ScalePercent(GetMainCombatPower(player), 180);
+        DealRawFeatureDamage(player, victim, state, echoSpellId, copyDamage,
+            state.lastDamageSchool ? state.lastDamageSchool : SPELL_SCHOOL_MASK_ARCANE, true, false, false, true, false);
+    }
+
+    uint32 reboundSpellId = 0;
+    if (HasSetFeature(player, 384004, &reboundSpellId) && TryUseCooldown(state, reboundSpellId, 1000))
+        DealScaledDamage(player, victim, state, reboundSpellId, GetFeatureCoeff(reboundSpellId, 220), SPELL_SCHOOL_MASK_NORMAL, true, false, false);
+
     uint32 tianfaSpellId = 0;
     if (HasSetFeature(player, 384011, &tianfaSpellId))
     {
@@ -1187,12 +1402,20 @@ void HandleSetOutgoingHit(Player* player, Unit* victim, PlayerFeatureState& stat
             state.consecutiveHits = 1;
         }
 
-        if (state.consecutiveHits >= 6 && TryUseCooldown(state, tianfaSpellId, 6000))
+        if (state.consecutiveHits >= 1 && TryUseCooldown(state, tianfaSpellId, 6000))
         {
             state.consecutiveHits = 0;
             ScheduleArea(state, tianfaSpellId, victim, 0, GetFeaturePeriod(tianfaSpellId, XIANQI_DEFAULT_TICK_PERIOD_MS),
                 GetFeatureTicks(tianfaSpellId, 3), GetFeatureCoeff(tianfaSpellId, 180), SPELL_SCHOOL_MASK_NATURE, 8.0f, 6, true, false);
         }
+    }
+
+    uint32 lockDomainSpellId = 0;
+    if (HasSetFeature(player, 384007, &lockDomainSpellId) && TryUseCooldown(state, lockDomainSpellId, 1000))
+    {
+        PlayFeatureAreaVisual(player, victim, state, lockDomainSpellId);
+        ScheduleArea(state, lockDomainSpellId, victim, GetFeatureDuration(lockDomainSpellId, XIANQI_LOCK_DOMAIN_DELAY_MS),
+            0, 1, GetFeatureCoeff(lockDomainSpellId, 700), SPELL_SCHOOL_MASK_ALL, 12.0f, 8, true, false);
     }
 }
 
@@ -1553,60 +1776,29 @@ void HandleArtifactOutgoingHit(Player* player, Unit* victim, PlayerFeatureState&
         DealAreaScaled(player, victim, state, 385005, GetFeatureCoeff(385005, 200), SPELL_SCHOOL_MASK_ARCANE, 8.0f, 8, false, true, true);
 }
 
-void HandleIncomingHit(Player* player, Unit* attacker, PlayerFeatureState& state, uint128 const& incomingDamage)
+void HandleIncomingHit(Player* player, Unit* attacker, PlayerFeatureState& state, uint256 const& incomingDamage)
 {
     if (!player || !attacker || incomingDamage == 0 || !attacker->IsAlive())
         return;
-
-    uint32 reboundSpellId = 0;
-    if (HasSetFeature(player, 384004, &reboundSpellId))
-    {
-        ProcDecision proc = RollChanceProc(player, state, reboundSpellId, 25.0f, 2000);
-        if (proc.triggered)
-            DealScaledDamage(player, attacker, state, reboundSpellId, GetFeatureCoeff(reboundSpellId, 220), SPELL_SCHOOL_MASK_NORMAL, true, false, false);
-    }
-
-    if (CanUseArtifactSkill(player, 385002))
-    {
-        ProcDecision proc = RollChanceProc(player, state, 385002, 20.0f, 6000);
-        if (proc.triggered)
-        {
-            DealScaledDamage(player, attacker, state, 385002, GetFeatureCoeff(385002, 180), SPELL_SCHOOL_MASK_NORMAL, false, true);
-            ApplyTimedControl(player, attacker, FeatureControl::Interrupt, 0);
-            if (proc.tianjiBounces)
-                DealExtraBounces(player, attacker, state, 385002, GetFeatureCoeff(385002, 180), SPELL_SCHOOL_MASK_NORMAL, proc.tianjiBounces, 100);
-        }
-    }
-
-    if (CanUseArtifactSkill(player, 385008))
-    {
-        ProcDecision proc = RollChanceProc(player, state, 385008, 18.0f, 8000);
-        if (proc.triggered)
-        {
-            DealScaledDamage(player, attacker, state, 385008, GetFeatureCoeff(385008, 300), SPELL_SCHOOL_MASK_HOLY, false, true);
-            if (!IsBossOrElite(attacker))
-                ApplyTimedControl(player, attacker, FeatureControl::Stun, GetFeatureDuration(385008, 2000));
-            if (proc.tianjiBounces)
-                DealExtraBounces(player, attacker, state, 385008, GetFeatureCoeff(385008, 300), SPELL_SCHOOL_MASK_HOLY, proc.tianjiBounces, 100);
-        }
-    }
-
-    if (CanUseArtifactSkill(player, 385034) && state.recentMeleeHitMs && state.recentMeleeAttackerGuid == attacker->GetGUID() &&
-        TryUseCooldown(state, 385034, 3000))
-    {
-        state.recentMeleeHitMs = 0;
-        DealScaledDamage(player, attacker, state, 385034, GetFeatureCoeff(385034, 240), SPELL_SCHOOL_MASK_NORMAL, false, true);
-    }
 }
 
-void HandleOutgoingDamage(Player* player, Unit* victim, uint128 const& damage)
+void HandleFeatureHit(Player* player, Unit* victim, uint256 const& sourceDamage)
 {
-    if (!player || !victim || damage == 0 || s_applyingFeatureDamage || !HasAnyFeatureAura(player) || !IsValidFeatureTarget(player, victim))
+    if (!player || !victim || s_applyingFeatureDamage)
+        return;
+
+    bool const validTarget = IsValidFeatureTarget(player, victim);
+    bool const hasFeature = HasAnyFeatureAura(player);
+
+    if (!validTarget || !hasFeature)
         return;
 
     PlayerFeatureState& state = GetState(player);
-    state.lastDamage = damage;
-    state.lastNonUltimateDamage = damage;
+    if (sourceDamage)
+    {
+        state.lastDamage = sourceDamage;
+        state.lastNonUltimateDamage = sourceDamage;
+    }
 
     HandleSetOutgoingHit(player, victim, state);
     HandleArtifactOutgoingHit(player, victim, state);
@@ -1690,6 +1882,7 @@ void ReduceTimers(PlayerFeatureState& state, uint32 diff)
     };
 
     reduceMap(state.starMarksMs);
+    reduceMap(state.skipGenericDamageTriggerMs);
 
     if (state.recentMeleeHitMs)
         state.recentMeleeHitMs = state.recentMeleeHitMs <= diff ? 0 : state.recentMeleeHitMs - diff;
@@ -1697,40 +1890,62 @@ void ReduceTimers(PlayerFeatureState& state, uint32 diff)
 
 void ProcessScheduledEffects(Player* player, PlayerFeatureState& state, uint32 diff)
 {
-    for (auto itr = state.scheduled.begin(); itr != state.scheduled.end();)
+    if (!IsFeaturePlayerActive(player))
     {
-        if (itr->timerMs > diff)
+        state.scheduled.clear();
+        return;
+    }
+
+    // Phase 1: advance timers and decide what fires this tick WITHOUT running any
+    // callback. Dealing damage in phase 2 can re-enter and push_back into
+    // state.scheduled (reallocating it) or trigger death/logout that erases this
+    // player's whole state - either of which would invalidate an iterator held over
+    // state.scheduled. So rebuild the surviving list and snapshot the due effects
+    // first, and never touch the container again while dealing damage.
+    std::vector<ScheduledEffect> toFire;
+    std::vector<ScheduledEffect> remaining;
+    remaining.reserve(state.scheduled.size());
+
+    for (ScheduledEffect& effect : state.scheduled)
+    {
+        if (effect.timerMs > diff)
         {
-            itr->timerMs -= diff;
-            ++itr;
+            effect.timerMs -= diff;
+            remaining.push_back(effect);
             continue;
         }
 
-        Unit* target = ObjectAccessor::GetUnit(*player, itr->targetGuid);
-        if (target && (itr->area ? player->IsInMap(target) : IsValidFeatureTarget(player, target)))
-        {
-            if (itr->area)
-            {
-                DealAreaScaled(player, target, state, itr->spellId, itr->percent, itr->school, itr->radius, itr->maxTargets,
-                    itr->fromSet, itr->fromArtifact, itr->ultimate, itr->control, itr->controlMs);
-            }
-            else
-            {
-                DealScaledDamage(player, target, state, itr->spellId, itr->percent, itr->school, itr->fromSet, itr->fromArtifact, itr->ultimate);
-                if (itr->control != FeatureControl::None && !IsBossOrElite(target))
-                    ApplyTimedControl(player, target, itr->control, itr->controlMs);
-            }
-        }
+        toFire.push_back(effect);
 
-        if (itr->ticks > 1)
+        if (effect.ticks > 1)
         {
-            --itr->ticks;
-            itr->timerMs = itr->intervalMs ? itr->intervalMs : XIANQI_DEFAULT_TICK_PERIOD_MS;
-            ++itr;
+            ScheduledEffect next = effect;
+            --next.ticks;
+            next.timerMs = next.intervalMs ? next.intervalMs : XIANQI_DEFAULT_TICK_PERIOD_MS;
+            remaining.push_back(next);
+        }
+    }
+
+    state.scheduled = std::move(remaining);
+
+    // Phase 2: execute the due effects. Anything they schedule is appended to
+    // state.scheduled and handled on a later tick; we no longer iterate it here.
+    for (ScheduledEffect const& effect : toFire)
+    {
+        Unit* target = ObjectAccessor::GetUnit(*player, effect.targetGuid);
+        if (!target || !(effect.area ? player->IsInMap(target) : IsValidFeatureTarget(player, target)))
+            continue;
+
+        if (effect.area)
+        {
+            DealAreaScaled(player, target, state, effect.spellId, effect.percent, effect.school, effect.radius, effect.maxTargets,
+                effect.fromSet, effect.fromArtifact, effect.ultimate, effect.control, effect.controlMs);
         }
         else
         {
-            itr = state.scheduled.erase(itr);
+            DealScaledDamage(player, target, state, effect.spellId, effect.percent, effect.school, effect.fromSet, effect.fromArtifact, effect.ultimate);
+            if (effect.control != FeatureControl::None && !IsBossOrElite(target))
+                ApplyTimedControl(player, target, effect.control, effect.controlMs);
         }
     }
 }
@@ -1772,25 +1987,6 @@ void ProcessSetPassiveTimers(Player* player, PlayerFeatureState& state, uint32 d
         state.spiritBlades = 0;
         state.spiritBladeTimerMs = GetFeaturePeriod(384002, XIANQI_SPIRIT_BLADE_PERIOD_MS);
     }
-
-    uint32 lockDomainSpellId = 0;
-    if (HasSetFeature(player, 384007, &lockDomainSpellId))
-    {
-        if (state.lockDomainTimerMs <= diff)
-        {
-            if (Unit* target = GetCurrentEnemyTarget(player))
-            {
-                PlayFeatureAreaVisual(player, target, state, lockDomainSpellId);
-                ScheduleArea(state, lockDomainSpellId, target, GetFeatureDuration(lockDomainSpellId, XIANQI_LOCK_DOMAIN_DELAY_MS),
-                    0, 1, GetFeatureCoeff(lockDomainSpellId, 700), SPELL_SCHOOL_MASK_ALL, 12.0f, 8, true, false);
-            }
-            state.lockDomainTimerMs = GetFeatureCooldown(lockDomainSpellId, XIANQI_LOCK_DOMAIN_COOLDOWN_MS);
-        }
-        else
-            state.lockDomainTimerMs -= diff;
-    }
-    else
-        state.lockDomainTimerMs = GetFeatureCooldown(384007, XIANQI_LOCK_DOMAIN_COOLDOWN_MS);
 
     uint32 ascendSpellId = 0;
     if (HasSetFeature(player, 384008, &ascendSpellId))
@@ -1851,7 +2047,7 @@ void ProcessArtifactPeriodicTimers(Player* player, PlayerFeatureState& state)
 
     if (CanUseArtifactSkill(player, 385023) && TryUseCooldown(state, 385023, 20000))
     {
-        uint128 copyDamage = state.lastElementDamage ? ScalePercent(state.lastElementDamage, GetFeatureCoeff(385023, 60)) :
+        uint256 copyDamage = state.lastElementDamage ? ScalePercent(state.lastElementDamage, GetFeatureCoeff(385023, 60)) :
             ScalePercent(GetMainCombatPower(player), GetFeatureCoeff(385023, 60) * 210 / 100);
         DealRawFeatureDamage(player, target, state, 385023, copyDamage, state.lastElementSchool, false, true, false, true, false);
     }
@@ -1900,8 +2096,7 @@ bool IsOffensivePlayerSpell(Player* player, Spell* spell)
 
 void HandlePlayerSpellCast(Player* player, Spell* spell)
 {
-    uint32 echoSpellId = 0;
-    if (!player || !spell || !HasSetFeature(player, 384006, &echoSpellId) || s_applyingFeatureDamage)
+    if (!player || !spell || s_applyingFeatureDamage)
         return;
 
     if (!IsOffensivePlayerSpell(player, spell))
@@ -1922,15 +2117,7 @@ void HandlePlayerSpellCast(Player* player, Spell* spell)
         state.lastDamageSchool = spellInfo->GetSchoolMask() ? spellInfo->GetSchoolMask() : SPELL_SCHOOL_MASK_NORMAL;
     }
 
-    if (++state.echoCastCount < 5)
-        return;
-
-    if (!TryUseCooldown(state, echoSpellId, 1000))
-        return;
-
-    state.echoCastCount = 0;
-    uint128 copyDamage = state.lastDamage ? ScalePercent(state.lastDamage, GetFeatureCoeff(echoSpellId, 45)) : ScalePercent(GetMainCombatPower(player), 180);
-    DealRawFeatureDamage(player, target, state, echoSpellId, copyDamage, state.lastDamageSchool, true, false, false, true, false);
+    ++state.echoCastCount;
 }
 }
 
@@ -1939,45 +2126,100 @@ class XianqiFeaturePlayerScript : public PlayerScript
 public:
     XianqiFeaturePlayerScript() : PlayerScript("XianqiFeaturePlayerScript",
     {
+        PLAYERHOOK_ON_PLAYER_JUST_DIED,
         PLAYERHOOK_ON_UPDATE,
         PLAYERHOOK_ON_SPELL_CAST,
         PLAYERHOOK_ON_LOGOUT,
-        PLAYERHOOK_ON_DELETE
+        PLAYERHOOK_ON_DELETE,
+        PLAYERHOOK_CAN_APPLY_EQUIP_SPELL,
+        PLAYERHOOK_CAN_CAST_ITEM_COMBAT_SPELL
     }) { }
+
+    bool OnPlayerCanApplyEquipSpell(Player* player, SpellInfo const* spellInfo, Item* item, bool apply, bool formChange) override
+    {
+        if (!apply || item || !spellInfo || !IsSetSpell(spellInfo->Id))
+            return true;
+
+        return false;
+    }
+
+    bool OnPlayerCanCastItemCombatSpell(Player* player, Unit* target, WeaponAttackType attackType, uint32 procVictim, uint32 procEx,
+        Item* item, ItemTemplate const* proto) override
+    {
+        if (!IsFeaturePlayerActive(player) || !target || item || proto || !(procVictim & PROC_FLAG_TAKEN_DAMAGE))
+            return true;
+
+        (void)attackType;
+        (void)procEx;
+
+        HandleFeatureHit(player, target, GetMainCombatPower(player));
+        return true;
+    }
 
     void OnPlayerUpdate(Player* player, uint32 diff) override
     {
         if (!player)
             return;
 
+        uint32 const guid = player->GetGUID().GetCounter();
+
+        if (!IsFeaturePlayerActive(player))
+        {
+            EraseState(guid);
+            return;
+        }
+
         if (!HasAnyFeatureAura(player))
         {
-            s_playerStates.erase(player->GetGUID().GetCounter());
+            EraseState(guid);
             return;
         }
 
         PlayerFeatureState& state = GetState(player);
+
+        // Mark this state as live on the stack: any erase triggered by the damage
+        // callbacks below (death / logout / deactivation) is deferred until we return,
+        // so 'state' is never freed while we are still using it.
+        uint32 const prevGuid = s_updatingStateGuid;
+        s_updatingStateGuid = guid;
+        s_updatingStateErasePending = false;
+
         ReduceTimers(state, diff);
         ProcessSetPassiveTimers(player, state, diff);
         ProcessScheduledEffects(player, state, diff);
         ProcessSoulDebts(player, state, diff);
         ProcessArtifactPeriodicTimers(player, state);
+
+        bool const erasePending = s_updatingStateErasePending;
+        s_updatingStateGuid = prevGuid;
+
+        if (erasePending)
+            EraseState(guid);
     }
 
     void OnPlayerSpellCast(Player* player, Spell* spell, bool /*skipCheck*/) override
     {
+        if (!IsFeaturePlayerActive(player))
+            return;
+
         HandlePlayerSpellCast(player, spell);
+    }
+
+    void OnPlayerJustDied(Player* player) override
+    {
+        if (player)
+            EraseState(player->GetGUID().GetCounter());
     }
 
     void OnPlayerLogout(Player* player) override
     {
         if (player)
-            s_playerStates.erase(player->GetGUID().GetCounter());
+            EraseState(player->GetGUID().GetCounter());
     }
 
     void OnPlayerDelete(ObjectGuid guid, uint32 /*accountId*/) override
     {
-        s_playerStates.erase(guid.GetCounter());
+        EraseState(guid.GetCounter());
     }
 };
 
@@ -1990,17 +2232,29 @@ public:
         UNITHOOK_ON_UNIT_DEATH,
         UNITHOOK_MODIFY_PERIODIC_DAMAGE_AURAS_TICK,
         UNITHOOK_MODIFY_MELEE_DAMAGE,
+        UNITHOOK_MODIFY_SPELL_DAMAGE_TAKEN,
         UNITHOOK_ON_AFTER_ROLL_MELEE_OUTCOME_AGAINST
     }) { }
 
-    void OnDamage(Unit* attacker, Unit* victim, uint128& damage) override
+    void OnDamage(Unit* attacker, Unit* victim, uint256& damage) override
     {
-        if (!attacker || !victim || damage == 0 || s_applyingFeatureDamage)
+        if (!attacker || !victim || damage == 0 || s_applyingFeatureDamage || Player::IsTriggeringDamageTriggeredArtifactItemProcSpell())
             return;
 
         if (Player* player = attacker->GetCharmerOrOwnerPlayerOrPlayerItself())
+        {
+            if (!IsFeaturePlayerActive(player))
+                return;
+
             if (player != victim)
-                HandleOutgoingDamage(player, victim, damage);
+            {
+                PlayerFeatureState& state = GetState(player);
+                if (ConsumeGenericDamageTriggerHandled(state, victim))
+                    return;
+
+                HandleFeatureHit(player, victim, damage);
+            }
+        }
 
         if (Player* player = victim->ToPlayer())
         {
@@ -2012,27 +2266,67 @@ public:
         }
     }
 
-    void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint128& /*damage*/, SpellInfo const* spellInfo) override
+    void ModifySpellDamageTaken(Unit* target, Unit* attacker, uint256& damage, SpellInfo const* spellInfo) override
+    {
+        if (!target || !attacker || damage == 0 || !spellInfo || s_applyingFeatureDamage)
+            return;
+
+        if (IsSetSpell(spellInfo->Id) || IsArtifactSpell(spellInfo->Id))
+            return;
+
+        Player* player = attacker->GetCharmerOrOwnerPlayerOrPlayerItself();
+        if (!IsFeaturePlayerActive(player) || player == target)
+            return;
+
+        HandleFeatureHit(player, target, damage);
+    }
+
+    void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint256& damage, SpellInfo const* spellInfo) override
     {
         if (!target || !attacker || !spellInfo || s_applyingFeatureDamage)
             return;
 
         Player* player = attacker->GetCharmerOrOwnerPlayerOrPlayerItself();
-        if (!player || !CanUseArtifactSkill(player, 385042) || !IsValidFeatureTarget(player, target))
+        if (!IsFeaturePlayerActive(player))
             return;
 
         PlayerFeatureState& state = GetState(player);
+
+        if (damage != 0 && IsCultivationScriptedPeriodicSource(spellInfo->Id) && player != target && IsValidFeatureTarget(player, target) && HasAnyFeatureAura(player))
+        {
+            HandleFeatureHit(player, target, damage);
+
+            if (CanUseArtifactSkill(player, 385042))
+            {
+                ProcDecision proc = RollChanceProc(player, state, 385042, 25.0f, 3000);
+                if (proc.triggered)
+                {
+                    int32 const percent = GetFeatureCoeff(385042, 180);
+                    DealScaledDamage(player, target, state, 385042, percent, SPELL_SCHOOL_MASK_FIRE, false, true);
+                    if (proc.tianjiBounces)
+                        DealExtraBounces(player, target, state, 385042, percent, SPELL_SCHOOL_MASK_FIRE, proc.tianjiBounces, 100);
+                }
+            }
+
+            MarkGenericDamageTriggerHandled(state, target);
+            return;
+        }
+
+        if (!CanUseArtifactSkill(player, 385042) || !IsValidFeatureTarget(player, target))
+            return;
+
         ProcDecision proc = RollChanceProc(player, state, 385042, 25.0f, 3000);
         if (proc.triggered)
         {
             int32 const percent = GetFeatureCoeff(385042, 180);
             DealScaledDamage(player, target, state, 385042, percent, SPELL_SCHOOL_MASK_FIRE, false, true);
+
             if (proc.tianjiBounces)
                 DealExtraBounces(player, target, state, 385042, percent, SPELL_SCHOOL_MASK_FIRE, proc.tianjiBounces, 100);
         }
     }
 
-    void ModifyMeleeDamage(Unit* target, Unit* attacker, uint128& damage) override
+    void ModifyMeleeDamage(Unit* target, Unit* attacker, uint256& damage) override
     {
         if (!target || !attacker || damage == 0 || s_applyingFeatureDamage)
             return;
@@ -2070,7 +2364,7 @@ public:
             return;
 
         Player* player = killer->GetCharmerOrOwnerPlayerOrPlayerItself();
-        if (!player)
+        if (!IsFeaturePlayerActive(player))
             return;
 
         HandleKillTriggers(player, unit);

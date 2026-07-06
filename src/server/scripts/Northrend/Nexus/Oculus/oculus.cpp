@@ -635,7 +635,7 @@ class spell_oculus_temporal_rift_aura : public AuraScript
             return;
         }
 
-        int32 amount = aurEff->GetAmount() + Acore::Number::ToInt32Saturated(Acore::Number::ToInt128Saturated(damageInfo->GetDamage()));
+        int32 amount = aurEff->GetAmount() + Acore::Number::ToInt32Saturated(Acore::Number::ToInt256Saturated(damageInfo->GetDamage()));
 
         uint8 num = amount / 15000;
         if (amount >= 15000)
@@ -679,9 +679,9 @@ class spell_oculus_dream_funnel_aura : public AuraScript
     {
         if (Unit* caster = GetCaster())
         {
-            uint128 combatAmount = caster->CountPctFromMaxHealth128(5);
+            uint256 combatAmount = caster->CountPctFromMaxHealth256(5);
             aurEff->SetScriptAmountForCombat(combatAmount);
-            amount = combatAmount > static_cast<uint128>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(combatAmount);
+            amount = combatAmount > static_cast<uint256>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(combatAmount);
         }
 
         canBeRecalculated = false;

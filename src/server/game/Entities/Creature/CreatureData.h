@@ -302,27 +302,27 @@ typedef std::unordered_map<uint32, CreatureTemplate> CreatureTemplateContainer;
 // Defines base stats for creatures (used to calculate HP/mana/armor/attackpower/rangedattackpower/all damage).
 struct CreatureBaseStats
 {
-    uint128 BaseHealth[MAX_EXPANSIONS];
-    uint128 BaseMana;
+    uint256 BaseHealth[MAX_EXPANSIONS];
+    uint256 BaseMana;
     double BaseArmor;
-    uint128 AttackPower;
-    uint128 RangedAttackPower;
+    uint256 AttackPower;
+    uint256 RangedAttackPower;
     double BaseDamage[MAX_EXPANSIONS];
 
     // Helpers
 
-    uint128 GenerateHealth(CreatureTemplate const* info) const
+    uint256 GenerateHealth(CreatureTemplate const* info) const
     {
-        return Acore::Number::ToUInt128Saturated(std::ceil(Acore::Number::ToLongDouble(BaseHealth[info->expansion]) * static_cast<long double>(info->ModHealth)));
+        return Acore::Number::ToUInt256Saturated(std::ceil(Acore::Number::ToLongDouble(BaseHealth[info->expansion]) * static_cast<long double>(info->ModHealth)));
     }
 
-    uint128 GenerateMana(CreatureTemplate const* info) const
+    uint256 GenerateMana(CreatureTemplate const* info) const
     {
         // Mana can be 0.
         if (BaseMana == 0)
             return 0;
 
-        return Acore::Number::ToUInt128Saturated(std::ceil(Acore::Number::ToLongDouble(BaseMana) * static_cast<long double>(info->ModMana)));
+        return Acore::Number::ToUInt256Saturated(std::ceil(Acore::Number::ToLongDouble(BaseMana) * static_cast<long double>(info->ModMana)));
     }
 
     double GenerateArmor(CreatureTemplate const* info) const
@@ -384,8 +384,8 @@ struct CreatureData
     uint32 spawntimesecs{0};
     float wander_distance{0.0f};
     uint32 currentwaypoint{0};
-    uint128 curhealth{0};
-    uint128 curmana{0};
+    uint256 curhealth{0};
+    uint256 curmana{0};
     uint8 movementType{0};
     uint8 spawnMask{0};
     uint32 npcflag{0};

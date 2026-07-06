@@ -7,6 +7,10 @@ include_directories(
   ${CMAKE_SOURCE_DIR}/modules/mod-requirement-template/src
 )
 
+if(EXISTS "${CMAKE_SOURCE_DIR}/modules/mod-wear-control/src/WearControl.h")
+  include_directories(${CMAKE_SOURCE_DIR}/modules/mod-wear-control/src)
+endif()
+
 AC_ADD_SCRIPT("${CMAKE_CURRENT_SOURCE_DIR}/src/AscensionSystem.cpp")
 AC_ADD_SCRIPT("${CMAKE_CURRENT_SOURCE_DIR}/src/AscensionSystem.h")
 AC_ADD_SCRIPT_LOADER("AscensionSystem" "${CMAKE_CURRENT_SOURCE_DIR}/src/loader.h")

@@ -25,6 +25,7 @@
 #include "BanMgr.h"
 #include "CharacterPackets.h"
 #include "Common.h"
+#include "Config.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
 #include "Group.h"
@@ -53,12 +54,248 @@
 #include "WorldPacket.h"
 #include "WorldSocket.h"
 #include "WorldState.h"
+#include <algorithm>
 #include <chrono>
+#include <sstream>
+#include <unordered_map>
+#include <vector>
 #include <zlib.h>
 
 namespace
 {
     std::string const DefaultPlayerName = "<none>";
+
+    struct OutgoingPacketOpcodeStats
+    {
+        uint32 count = 0;
+        uint64 bytes = 0;
+    };
+
+    struct OutgoingPacketWindowStats
+    {
+        uint32 windowStartMs = 0;
+        uint32 totalCount = 0;
+        uint64 totalBytes = 0;
+        std::unordered_map<uint16, OutgoingPacketOpcodeStats> opcodes;
+    };
+
+    void TrackOutgoingPacketStatsForDebug(WorldSession const* session, WorldPacket const* packet)
+    {
+        if (!session || !packet || !sConfigMgr->GetOption<bool>("Debug.OutgoingPacketStats", false))
+            return;
+
+        Player* player = session->GetPlayer();
+        if (!player)
+            return;
+
+        static thread_local std::unordered_map<uint64, OutgoingPacketWindowStats> statsByPlayer;
+        if (statsByPlayer.size() > 1024)
+            statsByPlayer.clear();
+
+        uint64 const playerGuid = player->GetGUID().GetRawValue();
+        OutgoingPacketWindowStats& stats = statsByPlayer[playerGuid];
+
+        uint32 const now = getMSTime();
+        if (!stats.windowStartMs)
+            stats.windowStartMs = now;
+
+        uint16 const opcode = packet->GetOpcode();
+        uint64 const bytes = packet->wpos();
+
+        ++stats.totalCount;
+        stats.totalBytes += bytes;
+        OutgoingPacketOpcodeStats& opcodeStats = stats.opcodes[opcode];
+        ++opcodeStats.count;
+        opcodeStats.bytes += bytes;
+
+        uint32 const logIntervalMs = std::max<uint32>(sConfigMgr->GetOption<uint32>("Debug.OutgoingPacketStats.LogIntervalMs", 1000), 100);
+        uint32 const elapsedMs = getMSTimeDiff(stats.windowStartMs, now);
+        if (elapsedMs < logIntervalMs)
+            return;
+
+        std::vector<std::pair<uint16, OutgoingPacketOpcodeStats>> ordered;
+        ordered.reserve(stats.opcodes.size());
+        for (auto const& entry : stats.opcodes)
+            ordered.emplace_back(entry.first, entry.second);
+
+        std::sort(ordered.begin(), ordered.end(), [](auto const& left, auto const& right)
+        {
+            if (left.second.count != right.second.count)
+                return left.second.count > right.second.count;
+
+            return left.second.bytes > right.second.bytes;
+        });
+
+        std::string topOpcodes;
+        uint32 const limit = std::min<uint32>(ordered.size(), 8);
+        for (uint32 i = 0; i < limit; ++i)
+        {
+            if (!topOpcodes.empty())
+                topOpcodes += " | ";
+
+            topOpcodes += GetOpcodeNameForLogging(static_cast<OpcodeServer>(ordered[i].first));
+            topOpcodes += " count=" + std::to_string(ordered[i].second.count);
+            topOpcodes += " bytes=" + std::to_string(ordered[i].second.bytes);
+        }
+
+        LOG_INFO("server.loading", "[OutgoingPacketStats] player={} elapsedMs={} totalPackets={} totalBytes={} top={}",
+            player->GetName(), elapsedMs, stats.totalCount, stats.totalBytes, topOpcodes);
+
+        stats = OutgoingPacketWindowStats{};
+        stats.windowStartMs = now;
+    }
+
+    struct CombatClientFeedbackThrottleOpcodeStats
+    {
+        uint32 kept = 0;
+        uint32 suppressed = 0;
+        uint64 keptBytes = 0;
+        uint64 suppressedBytes = 0;
+    };
+
+    struct CombatClientFeedbackThrottleWindow
+    {
+        uint32 windowStartMs = 0;
+        uint32 lastKeptMs = 0;
+        uint32 kept = 0;
+        uint64 keptBytes = 0;
+        uint32 suppressed = 0;
+        std::unordered_map<uint16, uint32> keptByOpcode;
+        std::unordered_map<uint16, uint32> lastKeptByOpcode;
+        std::unordered_map<uint16, CombatClientFeedbackThrottleOpcodeStats> opcodes;
+    };
+
+    uint32 CombatClientFeedbackMinIntervalMs(uint32 maxPerSecond)
+    {
+        return maxPerSecond ? std::max<uint32>((1000 + maxPerSecond - 1) / maxPerSecond, 1) : 0;
+    }
+
+    bool IsCombatClientFeedbackThrottleOpcode(uint16 opcode)
+    {
+        switch (opcode)
+        {
+            case SMSG_ATTACKERSTATEUPDATE:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    bool ShouldThrottleCombatClientFeedbackPacket(WorldSession const* session, WorldPacket const* packet)
+    {
+        if (!session || !packet)
+            return false;
+
+        uint32 const maxPerSecond = sConfigMgr->GetOption<uint32>("Debug.CombatClientFeedbackThrottle.MaxPerSecond", 0);
+        uint32 const maxPerOpcodePerSecond = sConfigMgr->GetOption<uint32>("Debug.CombatClientFeedbackThrottle.MaxPerOpcodePerSecond", 0);
+        uint32 const maxBytesPerSecond = sConfigMgr->GetOption<uint32>("Debug.CombatClientFeedbackThrottle.MaxBytesPerSecond", 0);
+        uint32 const maxPacketBytes = sConfigMgr->GetOption<uint32>("Debug.CombatClientFeedbackThrottle.MaxPacketBytes", 0);
+        uint32 const spellGoMaxPerSecond = sConfigMgr->GetOption<uint32>("Debug.CombatClientFeedbackThrottle.SpellGoMaxPerSecond", 0);
+        if (!maxPerSecond && !maxPerOpcodePerSecond && !maxBytesPerSecond && !maxPacketBytes && !spellGoMaxPerSecond)
+            return false;
+
+        Player* player = session->GetPlayer();
+        if (!player || !player->IsInCombat())
+            return false;
+
+        uint16 const opcode = packet->GetOpcode();
+        if (!IsCombatClientFeedbackThrottleOpcode(opcode))
+            return false;
+
+        static thread_local std::unordered_map<uint64, CombatClientFeedbackThrottleWindow> statsByPlayer;
+        if (statsByPlayer.size() > 1024)
+            statsByPlayer.clear();
+
+        uint32 const now = getMSTime();
+        uint64 const playerGuid = player->GetGUID().GetRawValue();
+        CombatClientFeedbackThrottleWindow& stats = statsByPlayer[playerGuid];
+        if (!stats.windowStartMs)
+            stats.windowStartMs = now;
+
+        if (getMSTimeDiff(stats.windowStartMs, now) >= 1000)
+        {
+            uint32 const lastKeptMs = stats.lastKeptMs;
+            std::unordered_map<uint16, uint32> lastKeptByOpcode = std::move(stats.lastKeptByOpcode);
+
+            stats = CombatClientFeedbackThrottleWindow{};
+            stats.windowStartMs = now;
+            stats.lastKeptMs = lastKeptMs;
+            stats.lastKeptByOpcode = std::move(lastKeptByOpcode);
+        }
+
+        uint64 const bytes = packet->wpos();
+        CombatClientFeedbackThrottleOpcodeStats& opcodeStats = stats.opcodes[opcode];
+        uint32 const effectiveMaxPerOpcode = opcode == SMSG_SPELL_GO && spellGoMaxPerSecond
+            ? spellGoMaxPerSecond
+            : maxPerOpcodePerSecond;
+        uint32 const minTotalIntervalMs = CombatClientFeedbackMinIntervalMs(maxPerSecond);
+        uint32 const minOpcodeIntervalMs = CombatClientFeedbackMinIntervalMs(effectiveMaxPerOpcode);
+        bool const suppressByTotal = maxPerSecond && stats.kept >= maxPerSecond;
+        bool const suppressByOpcode = effectiveMaxPerOpcode && stats.keptByOpcode[opcode] >= effectiveMaxPerOpcode;
+        bool const suppressByTotalPace = minTotalIntervalMs && stats.lastKeptMs && getMSTimeDiff(stats.lastKeptMs, now) < minTotalIntervalMs;
+        bool const suppressByOpcodePace = minOpcodeIntervalMs && stats.lastKeptByOpcode[opcode] && getMSTimeDiff(stats.lastKeptByOpcode[opcode], now) < minOpcodeIntervalMs;
+        bool const suppressByBytes = maxBytesPerSecond && stats.keptBytes + bytes > maxBytesPerSecond;
+        bool const suppressByPacketBytes = maxPacketBytes && bytes > maxPacketBytes;
+        bool const suppress = suppressByTotal || suppressByOpcode || suppressByTotalPace || suppressByOpcodePace || suppressByBytes || suppressByPacketBytes;
+
+        if (suppress)
+        {
+            ++stats.suppressed;
+            ++opcodeStats.suppressed;
+            opcodeStats.suppressedBytes += bytes;
+        }
+        else
+        {
+            ++stats.kept;
+            stats.keptBytes += bytes;
+            ++stats.keptByOpcode[opcode];
+            stats.lastKeptMs = now;
+            stats.lastKeptByOpcode[opcode] = now;
+            ++opcodeStats.kept;
+            opcodeStats.keptBytes += bytes;
+        }
+
+        uint32 const elapsedMs = getMSTimeDiff(stats.windowStartMs, now);
+        bool const logStats = sConfigMgr->GetOption<bool>("Debug.CombatClientFeedbackThrottle.LogStats", false);
+        uint32 const logIntervalMs = std::max<uint32>(sConfigMgr->GetOption<uint32>("Debug.CombatClientFeedbackThrottle.LogIntervalMs", 1000), 100);
+        if (logStats && elapsedMs >= logIntervalMs)
+        {
+            std::vector<std::pair<uint16, CombatClientFeedbackThrottleOpcodeStats>> ordered;
+            ordered.reserve(stats.opcodes.size());
+            for (auto const& entry : stats.opcodes)
+                ordered.emplace_back(entry.first, entry.second);
+
+            std::sort(ordered.begin(), ordered.end(), [](auto const& left, auto const& right)
+            {
+                if (left.second.suppressed != right.second.suppressed)
+                    return left.second.suppressed > right.second.suppressed;
+
+                return left.second.kept > right.second.kept;
+            });
+
+            std::ostringstream top;
+            uint32 const limit = std::min<uint32>(ordered.size(), 8);
+            for (uint32 i = 0; i < limit; ++i)
+            {
+                if (i)
+                    top << " | ";
+
+                top << GetOpcodeNameForLogging(static_cast<OpcodeServer>(ordered[i].first))
+                    << " kept=" << ordered[i].second.kept
+                    << " suppressed=" << ordered[i].second.suppressed
+                    << " keptBytes=" << ordered[i].second.keptBytes
+                    << " suppressedBytes=" << ordered[i].second.suppressedBytes;
+            }
+
+            LOG_INFO("server.loading", "[CombatClientFeedbackThrottle] player={} elapsedMs={} kept={} suppressed={} top={}",
+                player->GetName(), elapsedMs, stats.kept, stats.suppressed, top.str());
+
+            stats = CombatClientFeedbackThrottleWindow{};
+            stats.windowStartMs = now;
+        }
+
+        return suppress;
+    }
 }
 
 bool MapSessionFilter::Process(WorldPacket* packet)
@@ -270,6 +507,12 @@ void WorldSession::SendPacket(WorldPacket const* packet)
         return;
     }
 
+    if (ShouldThrottleCombatClientFeedbackPacket(this, packet))
+    {
+        return;
+    }
+
+    TrackOutgoingPacketStatsForDebug(this, packet);
     m_Socket->SendPacket(*packet);
 }
 

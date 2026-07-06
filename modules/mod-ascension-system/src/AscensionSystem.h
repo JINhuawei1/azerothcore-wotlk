@@ -17,7 +17,6 @@
 #include "SpellMgr.h"
 #include "SpellInfo.h"
 #include <unordered_map>
-#include <unordered_set>
 #include <map>
 #include <vector>
 #include <set>
@@ -79,7 +78,7 @@ struct AscensionSlotData
 struct AppliedStatEffect
 {
     uint32 statType;
-    int128 statValue;
+    int256 statValue;
 };
 
 // 玩家飞升状态
@@ -131,7 +130,6 @@ public:
 
     bool Initialize();
     void LoadSlotControls();
-    void LoadRestrictedItems();
 
     // 玩家数据管理
     void LoadPlayerData(Player* player);
@@ -181,13 +179,12 @@ private:
     void RemoveAscensionItemSets(Player* player);
     bool ApplyAscensionItemSet(Player* player, uint32 itemSetId, uint32 itemCount);
     void RemoveAscensionItemSet(Player* player, uint32 itemSetId, uint32 itemCount);
-    void ApplyEnchantStatMod(Player* player, uint32 statType, int128 const& amount, bool apply);
-    void RemoveStatEffect(Player* player, uint32 statType, int128 statValue);
+    void ApplyEnchantStatMod(Player* player, uint32 statType, int256 const& amount, bool apply);
+    void RemoveStatEffect(Player* player, uint32 statType, int256 statValue);
     void UpdatePlayerStats(Player* player);
 
     std::map<uint8, AscensionSlotControl> _slotControls;
     std::map<uint32, PlayerAscensionStatus> _playerStatus;
-    std::unordered_set<uint32> _restrictedItemIds;
 };
 
 #define sAscensionManager AscensionManager::instance()
@@ -217,6 +214,7 @@ public:
     void OnPlayerLogin(Player* player) override;
     void OnPlayerLogout(Player* player) override;
     void OnPlayerDelete(ObjectGuid guid, uint32 accountId) override;
+    void OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg, Player* receiver) override;
     bool OnPlayerCanEquipItem(Player* player, uint8 slot, uint16& dest, Item* pItem, bool swap, bool not_loading) override;
     bool OnPlayerCanCastItemCombatSpell(Player* player, Unit* target, WeaponAttackType attType, uint32 procVictim, uint32 procEx, Item* item, ItemTemplate const* proto) override;
 };

@@ -170,7 +170,7 @@ class spell_rog_cheat_death : public AuraScript
     void Absorb(AuraEffect* /*aurEff*/, DamageInfo& dmgInfo, uint32& absorbAmount)
     {
         Player* target = GetTarget()->ToPlayer();
-        uint128 targetHealth = target->GetHealthForCombat128();
+        uint256 targetHealth = target->GetHealthForCombat256();
         if (dmgInfo.GetDamage() < targetHealth || target->HasSpellCooldown(SPELL_ROGUE_CHEAT_DEATH_COOLDOWN) || !roll_chance_i(absorbChance))
             return;
 
@@ -178,9 +178,9 @@ class spell_rog_cheat_death : public AuraScript
         target->CastSpell(target, SPELL_ROGUE_CHEATING_DEATH, true);
         target->AddSpellCooldown(SPELL_ROGUE_CHEAT_DEATH_COOLDOWN, 0, MINUTE * IN_MILLISECONDS);
 
-        uint128 health10 = target->CountPctFromMaxHealth128(10);
+        uint256 health10 = target->CountPctFromMaxHealth256(10);
 
-        uint128 amountToAbsorb = targetHealth > health10 ? dmgInfo.GetDamage() - targetHealth + health10 : dmgInfo.GetDamage();
+        uint256 amountToAbsorb = targetHealth > health10 ? dmgInfo.GetDamage() - targetHealth + health10 : dmgInfo.GetDamage();
         dmgInfo.AbsorbDamage(amountToAbsorb);
         absorbAmount = 0;
     }

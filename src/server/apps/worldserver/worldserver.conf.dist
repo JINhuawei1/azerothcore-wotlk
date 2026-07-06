@@ -4525,6 +4525,27 @@ MunchingBlizzlike.Enabled = 1
 Daze.Enabled = 1
 
 #
+#    Combat.PlayerExtraAttacks.MaxPerSecond
+#        Description: Limits player proc-generated extra melee attacks per second.
+#                     0 disables the limit. Useful to prevent recursive extra-attack proc storms.
+#        Default:     0 - (Disabled)
+
+Combat.PlayerExtraAttacks.MaxPerSecond = 0
+
+#
+###################################################################################################
+
+###################################################################################################
+# SKILL MASTER SETTINGS
+#
+#    SkillMaster.Enable
+#        Description: Enable or disable the Skill Master module.
+#        Default:     1 - (Enabled)
+#
+
+SkillMaster.Enable = 1
+
+#
 ###################################################################################################
 
 ###################################################################################################
@@ -4544,6 +4565,193 @@ Debug.Battleground = 0
 #                 1 - (Enabled)
 
 Debug.Arena = 0
+
+#
+#    Debug.SuppressPlayerMeleeWhiteDamagePackets
+#        Description: Suppress player melee white SMSG_ATTACKERSTATEUPDATE packets for client FPS diagnostics.
+#                     Server-side damage, threat, proc handling, and kill logic still run.
+#        Default: 0 - (Disabled)
+#                 1 - (Enabled)
+
+Debug.SuppressPlayerMeleeWhiteDamagePackets = 0
+
+#
+#    Debug.SuppressPlayerMeleeWhiteDamagePackets.LogIntervalMs
+#        Description: Console log interval for suppressed player melee white packet counters.
+#                     Only used when Debug.SuppressPlayerMeleeWhiteDamagePackets is enabled.
+#        Default: 1000
+
+Debug.SuppressPlayerMeleeWhiteDamagePackets.LogIntervalMs = 1000
+
+#
+#    Debug.SuppressPlayerProcClientFeedback
+#        Description: Suppress player custom proc client feedback for FPS diagnostics.
+#                     This hides proc visuals, proc combat logs, and PATTRPANEL damage messages while server-side damage still runs.
+#        Default: 0 - (Disabled)
+#                 1 - (Enabled)
+
+Debug.SuppressPlayerProcClientFeedback = 0
+
+#
+#    Debug.SuppressPlayerProcClientFeedback.LogIntervalMs
+#        Description: Console log interval for suppressed custom proc feedback counters.
+#                     Only used when Debug.SuppressPlayerProcClientFeedback is enabled.
+#        Default: 1000
+
+Debug.SuppressPlayerProcClientFeedback.LogIntervalMs = 1000
+
+#
+#    Debug.OutgoingPacketStats
+#        Description: Log outgoing server packet counts per player and opcode for FPS diagnostics.
+#        Default: 0 - (Disabled)
+#                 1 - (Enabled)
+
+Debug.OutgoingPacketStats = 0
+
+#
+#    Debug.OutgoingPacketStats.LogIntervalMs
+#        Description: Console log interval for outgoing packet stats.
+#        Default: 1000
+
+Debug.OutgoingPacketStats.LogIntervalMs = 1000
+
+#
+#    Debug.CombatClientFeedbackThrottle.MaxPerSecond
+#        Description: Limits player melee white-hit SMSG_ATTACKERSTATEUPDATE packets per player while in combat.
+#                     Spell state, spell go, spell visuals, aura, power, and speed updates are not throttled.
+#                     0 disables the limit. Server-side combat is unaffected.
+#        Default: 0 - (Disabled)
+
+Debug.CombatClientFeedbackThrottle.MaxPerSecond = 0
+
+#
+#    Debug.CombatClientFeedbackThrottle.MaxPerOpcodePerSecond
+#        Description: Limits each throttled melee white-hit opcode per player while in combat.
+#                     0 disables the per-opcode limit.
+#        Default: 0 - (Disabled)
+
+Debug.CombatClientFeedbackThrottle.MaxPerOpcodePerSecond = 0
+
+#
+#    Debug.CombatClientFeedbackThrottle.MaxBytesPerSecond
+#        Description: Limits total bytes for throttled melee white-hit packets per player while in combat.
+#                     0 disables the byte limit.
+#        Default: 0 - (Disabled)
+
+Debug.CombatClientFeedbackThrottle.MaxBytesPerSecond = 0
+
+#
+#    Debug.CombatClientFeedbackThrottle.MaxPacketBytes
+#        Description: Drops a single throttled melee white-hit packet when it is larger than this value.
+#                     0 disables the single-packet byte limit.
+#        Default: 0 - (Disabled)
+
+Debug.CombatClientFeedbackThrottle.MaxPacketBytes = 0
+
+#
+#    Debug.CombatClientFeedbackThrottle.SpellGoMaxPerSecond
+#        Description: Limits SMSG_SPELL_GO per player while in combat.
+#                     Use a higher value than visual/log packets because action bars and cast confirmation depend on it.
+#                     0 disables the dedicated SMSG_SPELL_GO limit.
+#        Default: 0 - (Disabled)
+
+Debug.CombatClientFeedbackThrottle.SpellGoMaxPerSecond = 0
+
+#
+#    Debug.CombatClientFeedbackThrottle.LogStats
+#        Description: Log combat feedback throttle counters.
+#        Default: 0 - (Disabled)
+#                 1 - (Enabled)
+
+Debug.CombatClientFeedbackThrottle.LogStats = 0
+
+#
+#    Debug.CombatClientFeedbackThrottle.LogIntervalMs
+#        Description: Console log interval for combat client feedback throttling.
+#        Default: 1000
+
+Debug.CombatClientFeedbackThrottle.LogIntervalMs = 1000
+
+#
+###################################################################################################
+
+###################################################################################################
+# HERMES BRIDGE DIAGNOSTICS
+#
+#    HermesBridge.AddonBridge.Enabled
+#        Description: Enable HermesBridge takeover of outgoing AddOn whisper messages.
+#                     Disable only for diagnostics; legacy AddOn messages will be sent normally.
+#        Default: 1 - (Enabled)
+
+HermesBridge.AddonBridge.Enabled = 1
+
+#
+#    HermesBridge.DebugOutboundStats
+#        Description: Log HermesBridge outgoing frame counts by method/schema/lane/type.
+#        Default: 0 - (Disabled)
+#                 1 - (Enabled)
+
+HermesBridge.DebugOutboundStats = 0
+
+#
+#    HermesBridge.DebugOutboundStats.LogIntervalMs
+#        Description: Console log interval for HermesBridge outgoing frame stats.
+#        Default: 1000
+
+HermesBridge.DebugOutboundStats.LogIntervalMs = 1000
+
+#
+#    HermesBridge.SuppressOutbound
+#        Description: Suppress all HermesBridge outgoing frames for client FPS diagnostics.
+#                     This will break HermesBridge-driven UI while enabled.
+#        Default: 0 - (Disabled)
+#                 1 - (Enabled)
+
+HermesBridge.SuppressOutbound = 0
+
+#
+#    HermesBridge.SuppressOutboundInCombat
+#        Description: Suppress all HermesBridge outgoing frames while the receiving player is in combat.
+#                     This will break HermesBridge-driven combat UI while enabled.
+#        Default: 0 - (Disabled)
+#                 1 - (Enabled)
+
+HermesBridge.SuppressOutboundInCombat = 0
+
+#
+#    HermesBridge.SuppressAddonMessageEventsInCombat
+#        Description: Suppress HermesBridge AddOn message events while the receiving player is in combat.
+#                     Useful to verify whether AddOn message mirroring is the FPS bottleneck.
+#        Default: 0 - (Disabled)
+#                 1 - (Enabled)
+
+HermesBridge.SuppressAddonMessageEventsInCombat = 0
+
+#
+#    HermesBridge.Outbound.MaxPacketsPerSecond
+#        Description: Per-account limit for HermesBridge outgoing frames.
+#                     0 disables the limit. Useful for short FPS diagnostics.
+#        Default: 0 - (Disabled)
+
+HermesBridge.Outbound.MaxPacketsPerSecond = 0
+
+#
+#    HermesBridge.Outbound.MaxBytesPerSecond
+#        Description: Limits non-priority HermesBridge outbound payload bytes per account per second.
+#                     Priority vitals messages bypass this limit.
+#                     0 disables the byte limit.
+#        Default: 0 - (Disabled)
+
+HermesBridge.Outbound.MaxBytesPerSecond = 0
+
+#
+#    HermesBridge.Outbound.MaxFrameBytes
+#        Description: Drops a single non-priority HermesBridge outbound frame when its payload is larger than this value.
+#                     Priority vitals messages bypass this limit.
+#                     0 disables the single-frame byte limit.
+#        Default: 0 - (Disabled)
+
+HermesBridge.Outbound.MaxFrameBytes = 0
 
 #
 ###################################################################################################

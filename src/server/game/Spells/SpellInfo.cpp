@@ -32,32 +32,32 @@
 
 namespace
 {
-    int128 ToPowerCostSaturated(long double value)
+    int256 ToPowerCostSaturated(long double value)
     {
-        return Acore::Number::ToInt128Saturated(value);
+        return Acore::Number::ToInt256Saturated(value);
     }
 
-    int128 CalculatePctPowerCost(uint128 const& base, float pct)
+    int256 CalculatePctPowerCost(uint256 const& base, float pct)
     {
         if (base == 0 || pct <= 0.0f)
             return 0;
 
-        return Acore::Number::ToInt128Saturated(Acore::Number::CalculatePct(base, pct));
+        return Acore::Number::ToInt256Saturated(Acore::Number::CalculatePct(base, pct));
     }
 
-    void AddPowerCostPct(int128& powerCost, uint128 const& base, float pct)
+    void AddPowerCostPct(int256& powerCost, uint256 const& base, float pct)
     {
         powerCost += CalculatePctPowerCost(base, pct);
     }
 
-    void ApplySpellCostMod(Player* modOwner, uint32 spellId, int128& powerCost, Spell* spell)
+    void ApplySpellCostMod(Player* modOwner, uint32 spellId, int256& powerCost, Spell* spell)
     {
         if (!modOwner)
             return;
 
         long double modValue = Acore::Number::ToLongDouble(powerCost);
         modOwner->ApplySpellMod(spellId, SPELLMOD_COST, modValue, spell);
-        powerCost = Acore::Number::ToInt128Saturated(modValue);
+        powerCost = Acore::Number::ToInt256Saturated(modValue);
 
         if (powerCost < 0)
             powerCost = 0;
@@ -2460,23 +2460,23 @@ uint32 SpellInfo::GetRecoveryTime() const
     return RecoveryTime > CategoryRecoveryTime ? RecoveryTime : CategoryRecoveryTime;
 }
 
-int128 SpellInfo::CalcPowerCost(Unit const* caster, SpellSchoolMask schoolMask, Spell* spell) const
+int256 SpellInfo::CalcPowerCost(Unit const* caster, SpellSchoolMask schoolMask, Spell* spell) const
 {
     // Spell drain all exist power on cast (Only paladin lay of Hands)
     if (AttributesEx & SPELL_ATTR1_USE_ALL_MANA)
     {
         // If power type - health drain all
         if (PowerType == POWER_HEALTH)
-            return Acore::Number::ToInt128Saturated(caster->GetHealthForCombat128());
+            return Acore::Number::ToInt256Saturated(caster->GetHealthForCombat256());
         // Else drain all power
         if (PowerType < MAX_POWERS)
-            return Acore::Number::ToInt128Saturated(caster->GetPowerForCombat128(Powers(PowerType)));
+            return Acore::Number::ToInt256Saturated(caster->GetPowerForCombat256(Powers(PowerType)));
         LOG_ERROR("spells", "SpellInfo::CalcPowerCost: Unknown power type '{}' in spell {}", PowerType, Id);
         return 0;
     }
 
     // Base powerCost
-    int128 powerCost = ManaCost;
+    int256 powerCost = ManaCost;
     // PCT cost from total amount
     if (ManaCostPercentage)
     {
@@ -2484,16 +2484,16 @@ int128 SpellInfo::CalcPowerCost(Unit const* caster, SpellSchoolMask schoolMask, 
         {
             // health as power used
             case POWER_HEALTH:
-                AddPowerCostPct(powerCost, caster->GetCreateHealthForCombat128(), ManaCostPercentage);
+                AddPowerCostPct(powerCost, caster->GetCreateHealthForCombat256(), ManaCostPercentage);
                 break;
             case POWER_MANA:
-                AddPowerCostPct(powerCost, caster->GetCreatePowerForCombat128(POWER_MANA), ManaCostPercentage);
+                AddPowerCostPct(powerCost, caster->GetCreatePowerForCombat256(POWER_MANA), ManaCostPercentage);
                 break;
             case POWER_RAGE:
             case POWER_FOCUS:
             case POWER_ENERGY:
             case POWER_HAPPINESS:
-                AddPowerCostPct(powerCost, caster->GetMaxPowerForCombat128(Powers(PowerType)), ManaCostPercentage);
+                AddPowerCostPct(powerCost, caster->GetMaxPowerForCombat256(Powers(PowerType)), ManaCostPercentage);
                 break;
             case POWER_RUNE:
             case POWER_RUNIC_POWER:

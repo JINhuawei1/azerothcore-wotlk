@@ -652,11 +652,11 @@ struct ItemTemplate
     uint32 ContainerSlots;
     uint32 StatsCount;
     _ItemStat ItemStat[MAX_ITEM_PROTO_STATS];
-    std::array<int128, MAX_ITEM_PROTO_STATS> ItemStatValue128 = {};
+    std::array<int256, MAX_ITEM_PROTO_STATS> ItemStatValue256 = {};
     uint32 ScalingStatDistribution;                         // id from ScalingStatDistribution.dbc
     uint64 ScalingStatValue;                                // mask for selecting column in ScalingStatValues.dbc
     _Damage Damage[MAX_ITEM_PROTO_DAMAGES];
-    uint128 Armor128;
+    uint256 Armor256;
     uint64 Armor;
     int32 HolyRes;
     int32 FireRes;

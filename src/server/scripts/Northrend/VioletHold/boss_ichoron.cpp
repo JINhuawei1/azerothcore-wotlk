@@ -109,7 +109,7 @@ public:
                 case ACTION_WATER_ELEMENT_HIT:
                     if (pInstance)
                         pInstance->SetData(DATA_ACHIEV, 0);
-                    Unit::DealHeal(me, me, me->CountPctFromMaxHealth128(1));
+                    Unit::DealHeal(me, me, me->CountPctFromMaxHealth256(1));
                     if (bIsExploded)
                         DoExplodeCompleted();
                     break;

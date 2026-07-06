@@ -1,7 +1,10 @@
 #include "PluginManager.h"
 #include "AddonThrottle.h"
+#include "HermesBridgeAddonApi.h"
+#include "ObjectAccessor.h"
 #include "World.h"
 #include <algorithm>
+#include <chrono>
 #include <limits>
 #include <sstream>
 
@@ -15,6 +18,7 @@ constexpr char PLUGIN_MANAGER_REQUEST_ALL[] = "REQ_ALL";
 constexpr char PLUGIN_MANAGER_SAVE_POS_PREFIX[] = "SAVE_POS:";
 constexpr char PLUGIN_MANAGER_SYNC_START[] = ".plugincfg_start";
 constexpr char PLUGIN_MANAGER_SYNC_END[] = ".plugincfg_end";
+constexpr uint8 PLUGIN_MANAGER_LOGIN_RESEND_EVENT_GROUP = 77;
 
 std::vector<std::string> SplitFields(std::string const& text, char delimiter)
 {
@@ -70,6 +74,27 @@ bool TryParseUInt32(std::string const& text, uint32& value)
         return false;
     }
 }
+
+bool ShouldThrottlePluginManagerPayload(std::string const& payload)
+{
+    return payload.rfind(PLUGIN_MANAGER_SAVE_POS_PREFIX, 0) == 0;
+}
+
+void ScheduleLoginConfigResend(Player* player, uint32 delayMs)
+{
+    if (!player)
+        return;
+
+    ObjectGuid playerGuid = player->GetGUID();
+    player->m_Events.AddEventAtOffset([playerGuid, delayMs]()
+    {
+        Player* owner = ObjectAccessor::FindPlayer(playerGuid);
+        if (!owner || !owner->IsInWorld() || !sPluginManager->IsSystemEnabled())
+            return;
+
+        sPluginManager->SendAllPluginConfigsToPlayer(owner);
+    }, std::chrono::milliseconds(delayMs), PLUGIN_MANAGER_LOGIN_RESEND_EVENT_GROUP);
+}
 }
 
 PluginManager* PluginManager::_instance = nullptr;
@@ -83,6 +108,7 @@ PluginManager* PluginManager::instance()
 
 PluginManager::PluginManager()
     : _enabled(sConfigMgr->GetOption<bool>("PluginManager.Enabled", true)),
+      _pluginsLoaded(false),
       _loadPlayerConfig(sConfigMgr->GetOption<bool>("PluginManager.LoadPlayerConfig", true)),
       _autoSavePlayerConfig(sConfigMgr->GetOption<bool>("PluginManager.AutoSavePlayerConfig", true)),
       _allowCustomPositioning(sConfigMgr->GetOption<bool>("PluginManager.AllowCustomPositioning", true)),
@@ -103,9 +129,20 @@ void PluginManager::Initialize()
 
 void PluginManager::LoadAllPlugins()
 {
+    _pluginsLoaded = false;
     _plugins.clear();
     _nextPluginId = 1;
     LoadPluginsFromDatabase();
+    _pluginsLoaded = true;
+}
+
+void PluginManager::EnsurePluginsLoaded()
+{
+    if (!_enabled)
+        return;
+
+    if (!_pluginsLoaded || _plugins.empty())
+        LoadAllPlugins();
 }
 
 void PluginManager::LoadPluginsFromDatabase()
@@ -559,6 +596,9 @@ void PluginManager::SendAddonPayload(Player* player, std::string const& payload)
     if (!player || payload.empty())
         return;
 
+    if (HermesBridge_SendAddonMessage(player, PLUGIN_MANAGER_ADDON_PREFIX, payload))
+        return;
+
     std::string fullMessage = std::string(PLUGIN_MANAGER_ADDON_PREFIX) + '\t' + payload;
     WorldPacket data;
     ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
@@ -570,6 +610,8 @@ void PluginManager::SendPluginConfigToPlayer(Player* player, const std::string& 
 {
     if (!player || !_enabled)
         return;
+
+    EnsurePluginsLoaded();
 
     PluginEntry const* plugin = GetPluginByName(pluginName);
     if (!plugin)
@@ -617,6 +659,8 @@ void PluginManager::SendAllPluginConfigsToPlayer(Player* player)
     if (!player || !_enabled)
         return;
 
+    EnsurePluginsLoaded();
+
     uint32 playerGuid = player->GetGUID().GetCounter();
     if (_loadPlayerConfig && _loadedPlayerLayouts.find(playerGuid) == _loadedPlayerLayouts.end())
         LoadPlayerLayouts(playerGuid);
@@ -644,6 +688,8 @@ bool PluginManager::HandleAddonMessage(Player* player, std::string const& payloa
     {
         if (!_allowCustomPositioning)
             return true;
+
+        EnsurePluginsLoaded();
 
         std::vector<std::string> fields = SplitFields(payload, ':');
         if (fields.size() < 4)
@@ -800,8 +846,12 @@ void PluginManagerPlayerScript::OnPlayerLogin(Player* player)
     if (!player || !sPluginManager->IsSystemEnabled())
         return;
 
+    player->m_Events.CancelEventGroup(PLUGIN_MANAGER_LOGIN_RESEND_EVENT_GROUP);
     sPluginManager->LoadPlayerLayouts(player->GetGUID().GetCounter());
     sPluginManager->SendAllPluginConfigsToPlayer(player);
+    ScheduleLoginConfigResend(player, 2000);
+    ScheduleLoginConfigResend(player, 5000);
+    ScheduleLoginConfigResend(player, 10000);
 }
 
 void PluginManagerPlayerScript::OnPlayerLogout(Player* player)
@@ -809,6 +859,7 @@ void PluginManagerPlayerScript::OnPlayerLogout(Player* player)
     if (!player || !sPluginManager->IsSystemEnabled())
         return;
 
+    player->m_Events.CancelEventGroup(PLUGIN_MANAGER_LOGIN_RESEND_EVENT_GROUP);
     sPluginManager->UnloadPlayerLayouts(player->GetGUID().GetCounter());
 }
 
@@ -839,11 +890,11 @@ void PluginManagerPlayerScript::OnPlayerChat(Player* player, uint32 type, uint32
     if (prefix != PLUGIN_MANAGER_ADDON_PREFIX)
         return;
 
-    // 【防刷】统一令牌桶节流：默认 500ms/突发4，超频静默丢弃（modules/AddonThrottle.h）
-    if (!ModuleAddon::Throttle::Allow(player->GetGUID(), "PLUGINMGR"))
+    std::string payload = msg.substr(tabPos + 1);
+
+    if (ShouldThrottlePluginManagerPayload(payload) && !ModuleAddon::Throttle::Allow(player->GetGUID(), "PLUGINMGR_SAVE_POS"))
         return;
 
-    std::string payload = msg.substr(tabPos + 1);
     sPluginManager->HandleAddonMessage(player, payload);
 }
 

@@ -176,7 +176,7 @@ namespace
         return value > MaxClientSpellPowerValue ? MaxClientSpellPowerValue : value;
     }
 
-    uint32 ScalePowerToClient(uint128 const& currentValue, uint128 const& maxValue, uint32 clientMaxValue)
+    uint32 ScalePowerToClient(uint256 const& currentValue, uint256 const& maxValue, uint32 clientMaxValue)
     {
         if (currentValue == 0 || maxValue == 0)
             return 0;
@@ -204,8 +204,8 @@ namespace
             return 0;
 
         uint32 clientMaxPower = ToClientSpellPowerMax(caster->GetMaxPower(power));
-        uint128 maxPower = caster->GetMaxPowerForCombat128(power);
-        uint128 currentPower = caster->GetPowerForCombat128(power);
+        uint256 maxPower = caster->GetMaxPowerForCombat256(power);
+        uint256 currentPower = caster->GetPowerForCombat256(power);
         uint32 clientPower = ScalePowerToClient(currentPower, maxPower, clientMaxPower);
 
         if (power == POWER_MANA && maxPower > clientMaxPower && clientPower >= clientMaxPower && clientMaxPower > 1)
@@ -214,7 +214,7 @@ namespace
         return clientPower;
     }
 
-    float ToThreatValue(uint128 const& amount)
+    float ToThreatValue(uint256 const& amount)
     {
         long double value = Acore::Number::ToLongDouble(amount);
         if (value >= static_cast<long double>(std::numeric_limits<float>::max()))
@@ -2456,14 +2456,14 @@ void Spell::SearchChainTargets(std::list<WorldObject*>& targets, uint32 chainTar
         // get unit with highest hp deficit in dist
         if (isChainHeal)
         {
-            uint128 maxHPDeficit = 0;
+            uint256 maxHPDeficit = 0;
             for (std::list<WorldObject*>::iterator itr = tempTargets.begin(); itr != tempTargets.end(); ++itr)
             {
                 if (Unit* unit = (*itr)->ToUnit())
                 {
-                    uint128 const maxHealth = unit->GetMaxHealthForCombat128();
-                    uint128 const curHealth = unit->GetHealthForCombat128();
-                    uint128 deficit = maxHealth > curHealth ? maxHealth - curHealth : 0;
+                    uint256 const maxHealth = unit->GetMaxHealthForCombat256();
+                    uint256 const curHealth = unit->GetHealthForCombat256();
+                    uint256 deficit = maxHealth > curHealth ? maxHealth - curHealth : 0;
                     if (deficit > maxHPDeficit && target->IsWithinDist(unit, jumpRadius) && target->IsWithinLOSInMap(unit, VMAP::ModelIgnoreFlags::M2))
                     {
                         foundItr = itr;
@@ -2988,7 +2988,7 @@ void Spell::DoAllEffectOnTarget(TargetInfo* target)
     if (m_healing > 0)
     {
         bool crit = target->crit;
-        uint128 addhealth = m_healing;
+        uint256 addhealth = m_healing;
 
         if (crit)
         {
@@ -3007,7 +3007,7 @@ void Spell::DoAllEffectOnTarget(TargetInfo* target)
             procEx |= PROC_EX_CRITICAL_HIT;
         }
 
-        uint128 gain = caster->HealBySpell(healInfo, crit);
+        uint256 gain = caster->HealBySpell(healInfo, crit);
         unitTarget->getHostileRefMgr().threatAssist(caster, ToThreatValue(gain) * 0.5f, m_spellInfo);
         m_healing = gain;
 
@@ -3066,8 +3066,8 @@ void Spell::DoAllEffectOnTarget(TargetInfo* target)
             float healMultiplier = m_spellInfo->Effects[effIndex].CalcValueMultiplier(m_originalCaster, this);
 
             // get max possible damage, don't count overkill for heal
-            uint128 effectiveLeechDamage = std::min<uint128>(damageInfo.damage, unitTarget->GetHealthForCombat128());
-            uint128 healthGain = ToUInt128Damage(Acore::Number::ToLongDouble(effectiveLeechDamage) * static_cast<long double>(healMultiplier));
+            uint256 effectiveLeechDamage = std::min<uint256>(damageInfo.damage, unitTarget->GetHealthForCombat256());
+            uint256 healthGain = ToUInt256Damage(Acore::Number::ToLongDouble(effectiveLeechDamage) * static_cast<long double>(healMultiplier));
 
             if (m_caster->IsAlive())
             {
@@ -5610,7 +5610,7 @@ void Spell::TakePower()
                             {
                                 long double powerCost = Acore::Number::ToLongDouble(m_powerCost);
                                 modOwner->ApplySpellMod(m_spellInfo->Id, SPELLMOD_SPELL_COST_REFUND_ON_FAIL, powerCost, this);
-                                m_powerCost = Acore::Number::ToInt128Saturated(powerCost);
+                                m_powerCost = Acore::Number::ToInt256Saturated(powerCost);
                             }
                         }
                         break;
@@ -5629,9 +5629,9 @@ void Spell::TakePower()
     // health as power used
     if (PowerType == POWER_HEALTH)
     {
-        uint128 cost = Acore::Number::ToUInt128Saturated(m_powerCost);
-        uint128 currentHealth = m_caster->GetHealthForCombat128();
-        m_caster->SetHealthForCombat128(cost >= currentHealth ? 0 : currentHealth - cost);
+        uint256 cost = Acore::Number::ToUInt256Saturated(m_powerCost);
+        uint256 currentHealth = m_caster->GetHealthForCombat256();
+        m_caster->SetHealthForCombat256(cost >= currentHealth ? 0 : currentHealth - cost);
         return;
     }
 
@@ -5642,18 +5642,18 @@ void Spell::TakePower()
     }
 
     if (hit)
-        m_caster->ModifyPower128(PowerType, -m_powerCost);
+        m_caster->ModifyPower256(PowerType, -m_powerCost);
     else
     {
-        uint128 partialCost = Acore::Number::ToUInt128Saturated(m_powerCost) / 4;
-        m_caster->ModifyPower128(PowerType, -static_cast<int128>(urand64(0, Acore::Number::ToUInt64Saturated(partialCost))));
+        uint256 partialCost = Acore::Number::ToUInt256Saturated(m_powerCost) / 4;
+        m_caster->ModifyPower256(PowerType, -static_cast<int256>(urand64(0, Acore::Number::ToUInt64Saturated(partialCost))));
     }
 
     // Set the five second timer
     if (PowerType == POWER_MANA && m_powerCost > 0)
     {
         if (Player* player = m_caster->ToPlayer())
-            if (player->HasExtendedPowerForCombat(POWER_MANA) || player->GetExtendedMaxPower128(POWER_MANA) > ToClientSpellPowerMax(player->GetMaxPower(POWER_MANA)))
+            if (player->HasExtendedPowerForCombat(POWER_MANA) || player->GetExtendedMaxPower256(POWER_MANA) > ToClientSpellPowerMax(player->GetMaxPower(POWER_MANA)))
                 player->SyncClientPowerFromExtended(POWER_MANA, true, true);
 
         m_caster->SetLastManaUse(GameTime::GetGameTimeMS().count());
@@ -7436,7 +7436,7 @@ SpellCastResult Spell::CheckPower()
     // health as power used - need check health amount
     if (m_spellInfo->PowerType == POWER_HEALTH)
     {
-        if (m_caster->GetHealthForCombat128() <= static_cast<uint128>(m_powerCost > 0 ? m_powerCost : 0))
+        if (m_caster->GetHealthForCombat256() <= static_cast<uint256>(m_powerCost > 0 ? m_powerCost : 0))
             return SPELL_FAILED_CASTER_AURASTATE;
         return SPELL_CAST_OK;
     }
@@ -7457,7 +7457,7 @@ SpellCastResult Spell::CheckPower()
 
     // Check power amount
     Powers PowerType = Powers(m_spellInfo->PowerType);
-    if (m_powerCost > 0 && m_caster->GetPowerForCombat128(PowerType) < static_cast<uint128>(m_powerCost))
+    if (m_powerCost > 0 && m_caster->GetPowerForCombat256(PowerType) < static_cast<uint256>(m_powerCost))
         return SPELL_FAILED_NO_POWER;
     else
         return SPELL_CAST_OK;
@@ -8638,13 +8638,13 @@ void Spell::DoAllEffectOnLaunchTarget(TargetInfo& targetInfo, float* multiplier)
             if (m_applyMultiplierMask & (1 << i))
             {
                 long double scaledDamage = static_cast<long double>(Acore::Number::ToLongDouble(m_damage)) * static_cast<long double>(m_damageMultipliers[i]);
-                m_damage = ToUInt128Damage(scaledDamage);
+                m_damage = ToUInt256Damage(scaledDamage);
                 long double scaledHealing = static_cast<long double>(Acore::Number::ToLongDouble(m_healing)) * static_cast<long double>(m_damageMultipliers[i]);
-                m_healing = ToUInt128Damage(scaledHealing);
+                m_healing = ToUInt256Damage(scaledHealing);
                 m_damageMultipliers[i] *= multiplier[i];
             }
-            targetInfo.damage = AddUInt128Damage(targetInfo.damage, m_damage);
-            targetInfo.healing = AddUInt128Damage(targetInfo.healing, m_healing);
+            targetInfo.damage = AddUInt256Damage(targetInfo.damage, m_damage);
+            targetInfo.healing = AddUInt256Damage(targetInfo.healing, m_healing);
         }
     }
 

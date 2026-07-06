@@ -726,8 +726,8 @@ class spell_illidari_council_circle_of_healing : public SpellScript
 
         Creature* target = instance->GetCreature(DATA_ILLIDARI_COUNCIL);
 
-        uint128 heal = GetHitHeal128();
-        int32 healBp = heal > static_cast<uint128>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(heal);
+        uint256 heal = GetHitHeal256();
+        int32 healBp = heal > static_cast<uint256>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(heal);
         target->CastCustomSpell(target, SPELL_SHARED_RULE_HEAL, &healBp, &healBp, &healBp, true, nullptr, nullptr, target->GetGUID());
     }
 

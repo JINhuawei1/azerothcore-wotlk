@@ -295,8 +295,8 @@ typedef std::list<PlayerCreateInfoItem> PlayerCreateInfoItems;
 struct PlayerClassLevelInfo
 {
     PlayerClassLevelInfo()  = default;
-    uint128 basehealth{0};
-    uint128 basemana{0};
+    uint256 basehealth{0};
+    uint256 basemana{0};
 };
 
 struct PlayerClassInfo
@@ -457,6 +457,7 @@ struct EnchantDuration
 
 typedef std::list<EnchantDuration> EnchantDurationList;
 typedef std::list<Item*> ItemDurationList;
+typedef std::list<ObjectGuid::LowType> SoulboundTradeableItemList;
 
 enum PlayerMovementType
 {
@@ -1632,27 +1633,27 @@ public:
     void setWeaponChangeTimer(uint32 time) {m_weaponChangeTimer = time;}
 
     // 金币系统 - 使用 m_money 存储实际金额，客户端显示截断到 uint32 最大值
-    [[nodiscard]] int128 const& GetMoney() const { return m_money; }
+    [[nodiscard]] int256 const& GetMoney() const { return m_money; }
     [[nodiscard]] uint64 GetMoneyAsUInt64Saturated() const
     {
-        return m_money <= 0 ? 0 : Acore::Number::ToUInt64Saturated(static_cast<uint128>(m_money));
+        return m_money <= 0 ? 0 : Acore::Number::ToUInt64Saturated(static_cast<uint256>(m_money));
     }
 
     [[nodiscard]] uint32 GetMoneyForClient() const
     {
-        return m_money <= 0 ? 0 : Acore::Number::ToUInt32Saturated(static_cast<uint128>(m_money));
+        return m_money <= 0 ? 0 : Acore::Number::ToUInt32Saturated(static_cast<uint256>(m_money));
     }
 
     bool ModifyMoney(int64 amount, bool sendError = true);
-    [[nodiscard]] bool HasEnoughMoney(int128 const& amount) const { return amount <= 0 || GetMoney() >= amount; }
+    [[nodiscard]] bool HasEnoughMoney(int256 const& amount) const { return amount <= 0 || GetMoney() >= amount; }
 
-    void SetMoney(int128 const& value)
+    void SetMoney(int256 const& value)
     {
         if (value <= 0)
             m_money = 0;
         else
         {
-            int128 const maxMoney = Acore::Number::GetDecimal65SignedMax();
+            int256 const maxMoney = Acore::Number::GetDecimal65SignedMax();
             m_money = value > maxMoney ? maxMoney : value;
         }
 
@@ -1852,7 +1853,7 @@ public:
     void SetLastPotionId(uint32 item_id) { m_lastPotionId = item_id; }
     void UpdatePotionCooldown(Spell* spell = nullptr);
 
-    void setResurrectRequestData(ObjectGuid guid, uint32 mapId, float X, float Y, float Z, uint128 const& health, uint128 const& mana)
+    void setResurrectRequestData(ObjectGuid guid, uint32 mapId, float X, float Y, float Z, uint256 const& health, uint256 const& mana)
     {
         m_resurrectGUID = guid;
         m_resurrectMap = mapId;
@@ -1989,13 +1990,13 @@ public:
     void ApplyFeralAPBonus(int32 amount, bool apply);
     void UpdateAttackPowerAndDamage(bool ranged = false) override;
     void UpdateShieldBlockValue();
-    void ApplySpellPowerBonus(int128 amount, bool apply);
+    void ApplySpellPowerBonus(int256 amount, bool apply);
     void ApplyTrueDamageBonus(int64 amount, bool apply);
     void ApplyCuttingDamageBonus(int64 amount, bool apply);
     void ApplyCooldownReductionBonus(int64 amount, bool apply);
     void ApplySkillDamageBonus(int64 amount, bool apply);
     void UpdateSpellDamageAndHealingBonus();
-    void ApplyRatingMod(CombatRating cr, int128 const& value, bool apply);
+    void ApplyRatingMod(CombatRating cr, int256 const& value, bool apply);
     void UpdateRating(CombatRating cr);
     void UpdateAllRatings();
 
@@ -2011,7 +2012,7 @@ public:
     float OCTRegenMPPerSpirit();
     [[nodiscard]] float GetRatingMultiplier(CombatRating cr) const;
     [[nodiscard]] float GetRatingBonusValue(CombatRating cr) const;
-    uint128 GetBaseSpellPowerBonus128() const { return m_baseSpellPower; }
+    uint256 GetBaseSpellPowerBonus256() const { return m_baseSpellPower; }
     uint64 GetBaseSpellPowerBonus() const { return Acore::Number::ToUInt64Saturated(m_baseSpellPower); }
     [[nodiscard]] uint32 GetBaseManaRegenBonus() const { return m_baseManaRegen; }
     [[nodiscard]] uint32 GetBaseHealthRegenBonus() const { return m_baseHealthRegen; }
@@ -2210,10 +2211,10 @@ public:
     void SetArenaPoints(uint32 value);
 
     // duel health and mana reset methods
-    void SaveHealthBeforeDuel()     { healthBeforeDuel = GetExtendedHealth128(); }
-    void SaveManaBeforeDuel()       { manaBeforeDuel = GetPowerForCombat128(POWER_MANA); }
-    void RestoreHealthAfterDuel()   { SetHealthForCombat128(healthBeforeDuel); }
-    void RestoreManaAfterDuel()     { SetPowerForCombat128(POWER_MANA, manaBeforeDuel); }
+    void SaveHealthBeforeDuel()     { healthBeforeDuel = GetExtendedHealth256(); }
+    void SaveManaBeforeDuel()       { manaBeforeDuel = GetPowerForCombat256(POWER_MANA); }
+    void RestoreHealthAfterDuel()   { SetHealthForCombat256(healthBeforeDuel); }
+    void RestoreManaAfterDuel()     { SetPowerForCombat256(POWER_MANA, manaBeforeDuel); }
 
     //End of PvP System
 
@@ -2233,9 +2234,9 @@ public:
 
     [[nodiscard]] uint32 GetShieldBlockValue() const override;                 // overwrite Unit version (virtual)
     [[nodiscard]] int64 GetExtendedStat(Stats stat) const { return Acore::Number::ToInt64Saturated(_extendedStats[stat]); }
-    [[nodiscard]] int128 GetExtendedStat128(Stats stat) const { return _extendedStats[stat]; }
+    [[nodiscard]] int256 GetExtendedStat256(Stats stat) const { return _extendedStats[stat]; }
     void SetExtendedStat(Stats stat, int64 value) { _extendedStats[stat] = value; }
-    void SetExtendedStat128(Stats stat, int128 const& value) { _extendedStats[stat] = value; }
+    void SetExtendedStat256(Stats stat, int256 const& value) { _extendedStats[stat] = value; }
     [[nodiscard]] int64 GetExtendedStrength() const { return GetExtendedStat(STAT_STRENGTH); }
     [[nodiscard]] double GetExtendedAttackPowerValue(WeaponAttackType attType) const { return _extendedAttackPower[attType]; }
     [[nodiscard]] double GetExtendedTotalAttackPowerValue(WeaponAttackType attType) const
@@ -2256,55 +2257,55 @@ public:
         double result = extendedValue * multiplier;
         return result > 0.0 ? result : 0.0;
     }
-    [[nodiscard]] uint128 GetExtendedHealth128() const;
-    [[nodiscard]] uint64 GetExtendedHealth() const { return Acore::Number::ToUInt64Saturated(GetExtendedHealth128()); }
-    [[nodiscard]] uint128 GetExtendedMaxHealth128() const { return _extendedMaxHealth != 0 ? _extendedMaxHealth : GetMaxHealth(); }
-    [[nodiscard]] uint64 GetExtendedMaxHealth() const { return Acore::Number::ToUInt64Saturated(GetExtendedMaxHealth128()); }
-    [[nodiscard]] bool HasExtendedHealthForCombat() const { return _extendedMaxHealth >= static_cast<uint128>(2000000000ULL); }
-    [[nodiscard]] uint128 GetHealthForCombat128() const override { return GetExtendedHealth128(); }
-    [[nodiscard]] uint128 GetMaxHealthForCombat128() const override { return GetExtendedMaxHealth128(); }
+    [[nodiscard]] uint256 GetExtendedHealth256() const;
+    [[nodiscard]] uint64 GetExtendedHealth() const { return Acore::Number::ToUInt64Saturated(GetExtendedHealth256()); }
+    [[nodiscard]] uint256 GetExtendedMaxHealth256() const { return _extendedMaxHealth != 0 ? _extendedMaxHealth : GetMaxHealth(); }
+    [[nodiscard]] uint64 GetExtendedMaxHealth() const { return Acore::Number::ToUInt64Saturated(GetExtendedMaxHealth256()); }
+    [[nodiscard]] bool HasExtendedHealthForCombat() const { return _extendedMaxHealth >= static_cast<uint256>(2000000000ULL); }
+    [[nodiscard]] uint256 GetHealthForCombat256() const override { return GetExtendedHealth256(); }
+    [[nodiscard]] uint256 GetMaxHealthForCombat256() const override { return GetExtendedMaxHealth256(); }
     [[nodiscard]] uint64 GetHealthForCombat() const override { return GetExtendedHealth(); }
     [[nodiscard]] uint64 GetMaxHealthForCombat() const override { return GetExtendedMaxHealth(); }
-    [[nodiscard]] uint128 GetCreateHealthForCombat128() const override { return _extendedCreateHealth != 0 ? _extendedCreateHealth : GetCreateHealth(); }
-    [[nodiscard]] uint64 GetCreateHealthForCombat() const override { return Acore::Number::ToUInt64Saturated(GetCreateHealthForCombat128()); }
-    void SetExtendedHealth(uint128 value);
+    [[nodiscard]] uint256 GetCreateHealthForCombat256() const override { return _extendedCreateHealth != 0 ? _extendedCreateHealth : GetCreateHealth(); }
+    [[nodiscard]] uint64 GetCreateHealthForCombat() const override { return Acore::Number::ToUInt64Saturated(GetCreateHealthForCombat256()); }
+    void SetExtendedHealth(uint256 value);
     void SetExtendedHealthFromClientHealth(uint32 clientHealth);
     void SyncClientHealthFromExtended();
     void ApplyPendingClientHealthSync();
     [[nodiscard]] bool IsSyncingClientHealthFromExtended() const { return _syncingClientHealthFromExtended; }
-    [[nodiscard]] uint128 GetExtendedPower128(Powers power) const;
-    [[nodiscard]] uint64 GetExtendedPower(Powers power) const { return Acore::Number::ToUInt64Saturated(GetExtendedPower128(power)); }
-    [[nodiscard]] uint128 GetExtendedMaxPower128(Powers power) const { return _extendedMaxPowers[power] != 0 ? _extendedMaxPowers[power] : GetMaxPower(power); }
-    [[nodiscard]] uint64 GetExtendedMaxPower(Powers power) const { return Acore::Number::ToUInt64Saturated(GetExtendedMaxPower128(power)); }
+    [[nodiscard]] uint256 GetExtendedPower256(Powers power) const;
+    [[nodiscard]] uint64 GetExtendedPower(Powers power) const { return Acore::Number::ToUInt64Saturated(GetExtendedPower256(power)); }
+    [[nodiscard]] uint256 GetExtendedMaxPower256(Powers power) const { return _extendedMaxPowers[power] != 0 ? _extendedMaxPowers[power] : GetMaxPower(power); }
+    [[nodiscard]] uint64 GetExtendedMaxPower(Powers power) const { return Acore::Number::ToUInt64Saturated(GetExtendedMaxPower256(power)); }
     [[nodiscard]] bool HasExtendedPowerForCombat(Powers power) const { return power >= POWER_MANA && power < MAX_POWERS && _extendedMaxPowers[power] != 0; }
-    [[nodiscard]] uint128 GetPowerForCombat128(Powers power) const override { return GetExtendedPower128(power); }
-    [[nodiscard]] uint128 GetMaxPowerForCombat128(Powers power) const override { return GetExtendedMaxPower128(power); }
+    [[nodiscard]] uint256 GetPowerForCombat256(Powers power) const override { return GetExtendedPower256(power); }
+    [[nodiscard]] uint256 GetMaxPowerForCombat256(Powers power) const override { return GetExtendedMaxPower256(power); }
     [[nodiscard]] uint64 GetPowerForCombat(Powers power) const override { return GetExtendedPower(power); }
     [[nodiscard]] uint64 GetMaxPowerForCombat(Powers power) const override { return GetExtendedMaxPower(power); }
-    [[nodiscard]] uint128 GetCreateManaForCombat128() const override { return _extendedCreateMana != 0 ? _extendedCreateMana : GetCreateMana(); }
-    [[nodiscard]] uint64 GetCreateManaForCombat() const override { return Acore::Number::ToUInt64Saturated(GetCreateManaForCombat128()); }
-    [[nodiscard]] uint128 GetCreatePowerForCombat128(Powers power) const override { return power == POWER_MANA ? GetCreateManaForCombat128() : GetCreatePowers(power); }
-    [[nodiscard]] uint64 GetCreatePowerForCombat(Powers power) const override { return Acore::Number::ToUInt64Saturated(GetCreatePowerForCombat128(power)); }
-    void SetExtendedMaxPower(Powers power, uint128 value);
-    void SetExtendedPower(Powers power, uint128 value);
+    [[nodiscard]] uint256 GetCreateManaForCombat256() const override { return _extendedCreateMana != 0 ? _extendedCreateMana : GetCreateMana(); }
+    [[nodiscard]] uint64 GetCreateManaForCombat() const override { return Acore::Number::ToUInt64Saturated(GetCreateManaForCombat256()); }
+    [[nodiscard]] uint256 GetCreatePowerForCombat256(Powers power) const override { return power == POWER_MANA ? GetCreateManaForCombat256() : GetCreatePowers(power); }
+    [[nodiscard]] uint64 GetCreatePowerForCombat(Powers power) const override { return Acore::Number::ToUInt64Saturated(GetCreatePowerForCombat256(power)); }
+    void SetExtendedMaxPower(Powers power, uint256 value);
+    void SetExtendedPower(Powers power, uint256 value);
     void SetExtendedPowerFromClientPower(Powers power, uint32 clientPower);
     void SyncClientPowerFromExtended(Powers power, bool forceUpdate = false, bool withPowerUpdate = true);
     [[nodiscard]] bool IsSyncingClientPowerFromExtended(Powers power) const { return power >= POWER_MANA && power < MAX_POWERS && _syncingClientPowerFromExtended[power]; }
-    [[nodiscard]] int128 GetExtendedCombatRating(CombatRating cr) const { return _extendedCombatRatings[cr]; }
-    void SetExtendedCombatRating(CombatRating cr, int128 const& value) { _extendedCombatRatings[cr] = value; }
+    [[nodiscard]] int256 GetExtendedCombatRating(CombatRating cr) const { return _extendedCombatRatings[cr]; }
+    void SetExtendedCombatRating(CombatRating cr, int256 const& value) { _extendedCombatRatings[cr] = value; }
     [[nodiscard]] double GetExtendedRatingBonusValue(CombatRating cr) const
     {
-        int128 extendedValue = GetExtendedCombatRating(cr);
+        int256 extendedValue = GetExtendedCombatRating(cr);
         if (extendedValue > 0)
             return Acore::Number::ToDouble(extendedValue) * static_cast<double>(GetRatingMultiplier(cr));
 
         int32 displayValue = GetInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + cr);
         return displayValue > 0 ? static_cast<double>(displayValue) * static_cast<double>(GetRatingMultiplier(cr)) : 0.0;
     }
-    [[nodiscard]] int128 GetExtendedArmor128() const { return _extendedArmor != 0 ? _extendedArmor : GetArmor(); }
-    [[nodiscard]] int64 GetExtendedArmor() const { return Acore::Number::ToInt64Saturated(GetExtendedArmor128()); }
+    [[nodiscard]] int256 GetExtendedArmor256() const { return _extendedArmor != 0 ? _extendedArmor : GetArmor(); }
+    [[nodiscard]] int64 GetExtendedArmor() const { return Acore::Number::ToInt64Saturated(GetExtendedArmor256()); }
     void SetExtendedArmor(int64 value) { _extendedArmor = value; }
-    void SetExtendedArmor128(int128 const& value) { _extendedArmor = value; }
+    void SetExtendedArmor256(int256 const& value) { _extendedArmor = value; }
     [[nodiscard]] uint64 GetExtendedDefenseSkillValue(Unit const* target = nullptr) const
     {
         uint64 value = (target && target->IsPlayer()) ? GetMaxSkillValue(SKILL_DEFENSE) : GetSkillValue(SKILL_DEFENSE);
@@ -2314,43 +2315,43 @@ public:
 
         return value;
     }
-    [[nodiscard]] int128 GetExtendedDamageMin(WeaponAttackType attType) const
+    [[nodiscard]] int256 GetExtendedDamageMin(WeaponAttackType attType) const
     {
-        return GetExtendedWeaponDamageRange128(attType, MINDAMAGE);
+        return GetExtendedWeaponDamageRange256(attType, MINDAMAGE);
     }
-    [[nodiscard]] int128 GetExtendedDamageMax(WeaponAttackType attType) const
+    [[nodiscard]] int256 GetExtendedDamageMax(WeaponAttackType attType) const
     {
-        return GetExtendedWeaponDamageRange128(attType, MAXDAMAGE);
+        return GetExtendedWeaponDamageRange256(attType, MAXDAMAGE);
     }
-    [[nodiscard]] int128 GetExtendedHealingBonus128() const { return _extendedHealingBonus; }
-    [[nodiscard]] int64 GetExtendedHealingBonus() const { return Acore::Number::ToInt64Saturated(GetExtendedHealingBonus128()); }
-    void SetExtendedHealingBonus(int128 const& value) { _extendedHealingBonus = value; }
-    void SetExtendedSpellDamageBonus(SpellSchools school, int128 const& value) { _extendedSpellDamageBonuses[school] = value; }
-    [[nodiscard]] int128 GetExtendedSpellDamageBonus128(SpellSchools school) const
+    [[nodiscard]] int256 GetExtendedHealingBonus256() const { return _extendedHealingBonus; }
+    [[nodiscard]] int64 GetExtendedHealingBonus() const { return Acore::Number::ToInt64Saturated(GetExtendedHealingBonus256()); }
+    void SetExtendedHealingBonus(int256 const& value) { _extendedHealingBonus = value; }
+    void SetExtendedSpellDamageBonus(SpellSchools school, int256 const& value) { _extendedSpellDamageBonuses[school] = value; }
+    [[nodiscard]] int256 GetExtendedSpellDamageBonus256(SpellSchools school) const
     {
         if (school <= SPELL_SCHOOL_NORMAL || school >= MAX_SPELL_SCHOOL)
             return 0;
 
-        int128 bonus = _extendedSpellDamageBonuses[school];
+        int256 bonus = _extendedSpellDamageBonuses[school];
         if (bonus > 0)
             return bonus;
 
         int32 fallback = GetInt32Value(PLAYER_FIELD_MOD_DAMAGE_DONE_POS + school);
-        return fallback > 0 ? static_cast<int128>(fallback) : 0;
+        return fallback > 0 ? static_cast<int256>(fallback) : 0;
     }
     [[nodiscard]] int64 GetExtendedSpellDamageBonus(SpellSchools school) const
     {
-        return Acore::Number::ToInt64Saturated(GetExtendedSpellDamageBonus128(school));
+        return Acore::Number::ToInt64Saturated(GetExtendedSpellDamageBonus256(school));
     }
-    [[nodiscard]] int128 GetExtendedSpellDamageBonus128(SpellSchoolMask schoolMask) const
+    [[nodiscard]] int256 GetExtendedSpellDamageBonus256(SpellSchoolMask schoolMask) const
     {
-        int128 maxBonus = 0;
+        int256 maxBonus = 0;
         for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
         {
             if (!(schoolMask & SpellSchoolMask(1 << i)))
                 continue;
 
-            int128 schoolBonus = GetExtendedSpellDamageBonus128(SpellSchools(i));
+            int256 schoolBonus = GetExtendedSpellDamageBonus256(SpellSchools(i));
             if (schoolBonus > maxBonus)
                 maxBonus = schoolBonus;
         }
@@ -2359,11 +2360,11 @@ public:
     }
     [[nodiscard]] int64 GetExtendedSpellDamageBonus(SpellSchoolMask schoolMask) const
     {
-        return Acore::Number::ToInt64Saturated(GetExtendedSpellDamageBonus128(schoolMask));
+        return Acore::Number::ToInt64Saturated(GetExtendedSpellDamageBonus256(schoolMask));
     }
-    [[nodiscard]] int128 GetExtendedSpellDamageBonus128() const
+    [[nodiscard]] int256 GetExtendedSpellDamageBonus256() const
     {
-        int128 maxBonus = 0;
+        int256 maxBonus = 0;
         for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
             if (_extendedSpellDamageBonuses[i] > maxBonus)
                 maxBonus = _extendedSpellDamageBonuses[i];
@@ -2379,15 +2380,15 @@ public:
                 fallback = schoolBonus;
         }
 
-        return fallback > 0 ? static_cast<int128>(fallback) : 0;
+        return fallback > 0 ? static_cast<int256>(fallback) : 0;
     }
     [[nodiscard]] int64 GetExtendedSpellDamageBonus() const
     {
-        return Acore::Number::ToInt64Saturated(GetExtendedSpellDamageBonus128());
+        return Acore::Number::ToInt64Saturated(GetExtendedSpellDamageBonus256());
     }
-    [[nodiscard]] int128 GetExtendedSpellPowerBonus128() const
+    [[nodiscard]] int256 GetExtendedSpellPowerBonus256() const
     {
-        int128 maxBonus = _extendedHealingBonus;
+        int256 maxBonus = _extendedHealingBonus;
         for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
             if (_extendedSpellDamageBonuses[i] > maxBonus)
                 maxBonus = _extendedSpellDamageBonuses[i];
@@ -2406,11 +2407,11 @@ public:
                 fallback = schoolBonus;
         }
 
-        return fallback > 0 ? static_cast<int128>(fallback) : 0;
+        return fallback > 0 ? static_cast<int256>(fallback) : 0;
     }
     [[nodiscard]] int64 GetExtendedSpellPowerBonus() const
     {
-        return Acore::Number::ToInt64Saturated(GetExtendedSpellPowerBonus128());
+        return Acore::Number::ToInt64Saturated(GetExtendedSpellPowerBonus256());
     }
     [[nodiscard]] bool CanParry() const { return m_canParry; }
     void SetCanParry(bool value);
@@ -2458,6 +2459,17 @@ public:
     void FlushDamageTriggeredArtifactItemProcBatches(bool force = false);
     bool ShouldSendCustomProcClientFeedback(Unit* target, SpellInfo const* spellInfo, char const* source);
     static bool IsTriggeringDamageTriggeredArtifactItemProcSpell();
+    class DamageTriggeredArtifactItemProcGuard
+    {
+    public:
+        DamageTriggeredArtifactItemProcGuard();
+        ~DamageTriggeredArtifactItemProcGuard();
+        DamageTriggeredArtifactItemProcGuard(DamageTriggeredArtifactItemProcGuard const&) = delete;
+        DamageTriggeredArtifactItemProcGuard& operator=(DamageTriggeredArtifactItemProcGuard const&) = delete;
+
+    private:
+        bool _previous;
+    };
     void CastItemUseSpell(Item* item, SpellCastTargets const& targets, uint8 cast_count, uint32 glyphIndex);
     void CastItemCombatSpell(Unit* target, WeaponAttackType attType, uint32 procVictim, uint32 procEx, Item* item, ItemTemplate const* proto);
 
@@ -2898,7 +2910,7 @@ protected:
     uint32 m_charmAISpells[NUM_CAI_SPELLS];
 
     uint32 m_AreaID;
-    int128 m_money;  // 扩展金币存储，支持 int128 真实余额
+    int256 m_money;  // 扩展金币存储，支持 int256 真实余额
     uint32 m_regenTimerCount;
     uint32 m_itemRegenTimerCount;
     uint32 m_foodEmoteTimerCount;
@@ -3062,8 +3074,8 @@ protected:
     ActionButtonList m_actionButtons;
 
     float m_auraBaseMod[BASEMOD_END][MOD_END];
-    int128 m_baseRatingValue[MAX_COMBAT_RATING];
-    uint128 m_baseSpellPower;
+    int256 m_baseRatingValue[MAX_COMBAT_RATING];
+    uint256 m_baseSpellPower;
     uint32 m_baseFeralAP;
     uint32 m_baseManaRegen;
     uint32 m_baseHealthRegen;
@@ -3079,14 +3091,14 @@ protected:
 
     EnchantDurationList m_enchantDuration;
     ItemDurationList m_itemDuration;
-    ItemDurationList m_itemSoulboundTradeable;
+    SoulboundTradeableItemList m_itemSoulboundTradeable;
     std::mutex m_soulboundTradableLock;
 
     ObjectGuid m_resurrectGUID;
     uint32 m_resurrectMap;
     float m_resurrectX, m_resurrectY, m_resurrectZ;
-    uint128 m_resurrectHealth;
-    uint128 m_resurrectMana;
+    uint256 m_resurrectHealth;
+    uint256 m_resurrectMana;
 
     WorldSession* m_session;
 
@@ -3245,8 +3257,8 @@ private:
     uint32 _activeCheats;
 
     // duel health and mana reset attributes
-    uint128 healthBeforeDuel;
-    uint128 manaBeforeDuel;
+    uint256 healthBeforeDuel;
+    uint256 manaBeforeDuel;
 
     bool m_isInstantFlightOn;
 
@@ -3257,22 +3269,22 @@ private:
     Optional<float> _farSightDistance = { };
 
     bool _wasOutdoor;
-    std::array<int128, MAX_STATS> _extendedStats = { };
+    std::array<int256, MAX_STATS> _extendedStats = { };
     std::array<double, MAX_ATTACK> _extendedAttackPower = { };
-    uint128 _extendedCreateHealth = 0;
-    uint128 _extendedCreateMana = 0;
-    uint128 _extendedHealth = 0;
-    uint128 _extendedMaxHealth = 0;
+    uint256 _extendedCreateHealth = 0;
+    uint256 _extendedCreateMana = 0;
+    uint256 _extendedHealth = 0;
+    uint256 _extendedMaxHealth = 0;
     bool _syncingClientHealthFromExtended = false;
     uint8 _pendingClientHealthSyncTicks = 0;
-    std::array<uint128, MAX_POWERS> _extendedPowers = { };
-    std::array<uint128, MAX_POWERS> _extendedMaxPowers = { };
+    std::array<uint256, MAX_POWERS> _extendedPowers = { };
+    std::array<uint256, MAX_POWERS> _extendedMaxPowers = { };
     std::array<bool, MAX_POWERS> _syncingClientPowerFromExtended = { };
-    std::array<int128, MAX_COMBAT_RATING> _extendedBaseRatingValue = { };
-    std::array<int128, MAX_COMBAT_RATING> _extendedCombatRatings = { };
-    int128 _extendedArmor = 0;
-    std::array<int128, MAX_SPELL_SCHOOL> _extendedSpellDamageBonuses = { };
-    int128 _extendedHealingBonus = 0;
+    std::array<int256, MAX_COMBAT_RATING> _extendedBaseRatingValue = { };
+    std::array<int256, MAX_COMBAT_RATING> _extendedCombatRatings = { };
+    int256 _extendedArmor = 0;
+    std::array<int256, MAX_SPELL_SCHOOL> _extendedSpellDamageBonuses = { };
+    int256 _extendedHealingBonus = 0;
 
     PlayerSettingMap m_charSettingsMap;
 

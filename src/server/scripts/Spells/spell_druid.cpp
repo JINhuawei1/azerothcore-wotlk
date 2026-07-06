@@ -589,7 +589,7 @@ class spell_dru_lifebloom : public AuraScript
 
         // final heal
         int32 stack = GetStackAmount();
-        uint128 healAmountForCombat = aurEff->GetAmount() > 0 ? static_cast<uint128>(aurEff->GetAmount()) : 0;
+        uint256 healAmountForCombat = aurEff->GetAmount() > 0 ? static_cast<uint256>(aurEff->GetAmount()) : 0;
         int32 healAmount = aurEff->GetAmount();
         SpellInfo const* finalHeal = sSpellMgr->GetSpellInfo(SPELL_DRUID_LIFEBLOOM_FINAL_HEAL);
 
@@ -617,7 +617,7 @@ class spell_dru_lifebloom : public AuraScript
                 if (caster)
                 {
                     // healing with bonus
-                    uint128 healAmountForCombat = caster->SpellHealingBonusDone(target, finalHeal, std::max(healAmount, 0), HEAL, EFFECT_1, 0.0f, dispelInfo->GetRemovedCharges());
+                    uint256 healAmountForCombat = caster->SpellHealingBonusDone(target, finalHeal, std::max(healAmount, 0), HEAL, EFFECT_1, 0.0f, dispelInfo->GetRemovedCharges());
                     healAmountForCombat = target->SpellHealingBonusTaken(caster, finalHeal, healAmountForCombat, HEAL, dispelInfo->GetRemovedCharges());
                     healAmount = SpellScriptCombat::ToClientSpellValue(Acore::Number::ToLongDouble(healAmountForCombat));
 

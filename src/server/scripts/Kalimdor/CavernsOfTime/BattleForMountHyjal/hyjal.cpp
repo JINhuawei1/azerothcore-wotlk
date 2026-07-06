@@ -338,8 +338,8 @@ class spell_cannibalize_heal : public SpellScript
     {
         if (Unit* caster = GetCaster())
         {
-            uint128 heal = caster->CountPctFromMaxHealth128(7);
-            SetHitHeal128(heal);
+            uint256 heal = caster->CountPctFromMaxHealth256(7);
+            SetHitHeal256(heal);
         }
     }
 

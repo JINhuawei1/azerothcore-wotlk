@@ -158,7 +158,7 @@ public:
     TalentSoulUnitScript() : UnitScript("TalentSoulUnitScript") { }
 
     // 修改法术伤害
-    void ModifySpellDamageTaken(Unit* target, Unit* attacker, uint128& damage, SpellInfo const* spellInfo) override
+    void ModifySpellDamageTaken(Unit* target, Unit* attacker, uint256& damage, SpellInfo const* spellInfo) override
     {
         if (!attacker || !spellInfo || damage <= 0)
             return;
@@ -171,7 +171,7 @@ public:
             return;
 
         uint32 spellId = spellInfo->Id;
-        uint128 originalDamage = damage;
+        uint256 originalDamage = damage;
 
         // 应用伤害加成
         sTalentSoulMgr->ApplyDamageBonus(attacker, spellId, damage);
@@ -186,7 +186,7 @@ public:
     }
 
     // 修改近战伤害
-    void ModifyMeleeDamage(Unit* target, Unit* attacker, uint128& damage) override
+    void ModifyMeleeDamage(Unit* target, Unit* attacker, uint256& damage) override
     {
         // 近战伤害不在此系统处理范围内
     }
@@ -219,10 +219,10 @@ public:
             return;
 
         // 应用消耗减少
-        int128 currentCost = spell->GetPowerCost128();
+        int256 currentCost = spell->GetPowerCost256();
         if (currentCost > 0)
         {
-            int128 newCost = currentCost;
+            int256 newCost = currentCost;
             sTalentSoulMgr->ApplyCostReduction(player, spellId, newCost);
 
             if (newCost != currentCost)

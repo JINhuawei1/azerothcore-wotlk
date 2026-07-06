@@ -149,9 +149,9 @@ namespace Acore::Impl::StringConvertImpl
     }
 
     template <>
-    struct For<uint128, void>
+    struct For<uint256, void>
     {
-        static Optional<uint128> FromString(std::string_view str, int base = 10)
+        static Optional<uint256> FromString(std::string_view str, int base = 10)
         {
             if (str.empty())
                 return std::nullopt;
@@ -166,24 +166,24 @@ namespace Acore::Impl::StringConvertImpl
                     return std::nullopt;
             }
 
-            boost::multiprecision::cpp_int const maxValue = (boost::multiprecision::cpp_int(1) << std::numeric_limits<uint128>::digits) - 1;
+            boost::multiprecision::cpp_int const maxValue = (boost::multiprecision::cpp_int(1) << std::numeric_limits<uint256>::digits) - 1;
             Optional<boost::multiprecision::cpp_int> value = StringToUnsignedMagnitude(str, base, maxValue);
             if (!value)
                 return std::nullopt;
 
-            return static_cast<uint128>(*value);
+            return static_cast<uint256>(*value);
         }
 
-        static std::string ToString(uint128 val)
+        static std::string ToString(uint256 val)
         {
             return val.convert_to<std::string>();
         }
     };
 
     template <>
-    struct For<int128, void>
+    struct For<int256, void>
     {
-        static Optional<int128> FromString(std::string_view str, int base = 10)
+        static Optional<int256> FromString(std::string_view str, int base = 10)
         {
             if (str.empty())
                 return std::nullopt;
@@ -198,18 +198,18 @@ namespace Acore::Impl::StringConvertImpl
             }
 
             boost::multiprecision::cpp_int const maxMagnitude = negative
-                ? (boost::multiprecision::cpp_int(1) << std::numeric_limits<int128>::digits)
-                : ((boost::multiprecision::cpp_int(1) << std::numeric_limits<int128>::digits) - 1);
+                ? (boost::multiprecision::cpp_int(1) << std::numeric_limits<int256>::digits)
+                : ((boost::multiprecision::cpp_int(1) << std::numeric_limits<int256>::digits) - 1);
 
             Optional<boost::multiprecision::cpp_int> magnitude = StringToUnsignedMagnitude(str, base, maxMagnitude);
             if (!magnitude)
                 return std::nullopt;
 
             boost::multiprecision::cpp_int value = negative ? -*magnitude : *magnitude;
-            return static_cast<int128>(value);
+            return static_cast<int256>(value);
         }
 
-        static std::string ToString(int128 val)
+        static std::string ToString(int256 val)
         {
             return val.convert_to<std::string>();
         }

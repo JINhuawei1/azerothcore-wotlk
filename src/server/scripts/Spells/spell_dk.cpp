@@ -314,7 +314,7 @@ class spell_dk_death_and_decay : public SpellScript
     {
         Unit* caster = GetCaster();
         Unit* target = GetHitUnit();
-        uint128 damage = GetHitDamage128();
+        uint256 damage = GetHitDamage256();
 
         // T10P2 bonus
         if (AuraEffect* aurEff = caster->GetAuraEffectDummy(70650))
@@ -327,7 +327,7 @@ class spell_dk_death_and_decay : public SpellScript
         if (target)
             damage = target->CalculateAOEDamageReduction(damage, GetSpellInfo()->SchoolMask, false);
 
-        SetHitDamage128(damage);
+        SetHitDamage256(damage);
     }
 
     void Register() override
@@ -681,7 +681,7 @@ class spell_dk_dancing_rune_weapon : public AuraScript
             for (uint8 i = 0; i < MAX_ITEM_PROTO_DAMAGES; ++i)
             {
                 Unit::DealDamageMods(target, damageInfo.damages[i].damage, &damageInfo.damages[i].absorb);
-                damageInfo.damages[i].damage = ToUInt128Damage(Acore::Number::ToLongDouble(damageInfo.damages[i].damage) / 2.0L);
+                damageInfo.damages[i].damage = ToUInt256Damage(Acore::Number::ToLongDouble(damageInfo.damages[i].damage) / 2.0L);
             }
             damageInfo.attacker = dancingRuneWeapon;
             dancingRuneWeapon->SendAttackStateUpdate(&damageInfo);
@@ -842,15 +842,15 @@ class spell_dk_pet_scaling : public AuraScript
             {
                 if (aurEff->GetMiscValue() == STAT_STAMINA)
                 {
-                    uint128 actStat = GetUnitOwner()->GetHealthForCombat128();
+                    uint256 actStat = GetUnitOwner()->GetHealthForCombat256();
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetHealthForCombat128(std::min<uint128>(GetUnitOwner()->GetMaxHealthForCombat128(), actStat));
+                    GetUnitOwner()->SetHealthForCombat256(std::min<uint256>(GetUnitOwner()->GetMaxHealthForCombat256(), actStat));
                 }
                 else
                 {
-                    uint128 actStat = GetUnitOwner()->GetPowerForCombat128(POWER_MANA);
+                    uint256 actStat = GetUnitOwner()->GetPowerForCombat256(POWER_MANA);
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetPowerForCombat128(POWER_MANA, std::min<uint128>(GetUnitOwner()->GetMaxPowerForCombat128(POWER_MANA), actStat));
+                    GetUnitOwner()->SetPowerForCombat256(POWER_MANA, std::min<uint256>(GetUnitOwner()->GetMaxPowerForCombat256(POWER_MANA), actStat));
                 }
             }
         }
@@ -2201,9 +2201,9 @@ class spell_dk_will_of_the_necropolis : public AuraScript
         uint8 rank = GetSpellInfo()->GetRank();
         SpellInfo const* talentProto = sSpellMgr->AssertSpellInfo(sSpellMgr->GetSpellWithRank(SPELL_DK_WILL_OF_THE_NECROPOLIS_TALENT_R1, rank));
 
-        uint128 targetHealth = GetTarget()->GetHealthForCombat128();
-        uint128 remainingHp = targetHealth > dmgInfo.GetDamage() ? targetHealth - dmgInfo.GetDamage() : uint128(0);
-        uint128 minHp = GetTarget()->CountPctFromMaxHealth128(talentProto->Effects[EFFECT_0].CalcValue(GetCaster()));
+        uint256 targetHealth = GetTarget()->GetHealthForCombat256();
+        uint256 remainingHp = targetHealth > dmgInfo.GetDamage() ? targetHealth - dmgInfo.GetDamage() : uint256(0);
+        uint256 minHp = GetTarget()->CountPctFromMaxHealth256(talentProto->Effects[EFFECT_0].CalcValue(GetCaster()));
 
         // Damage that would take you below [effect0] health or taken while you are at [effect0]
         if (remainingHp < minHp)

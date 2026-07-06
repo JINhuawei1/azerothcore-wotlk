@@ -228,7 +228,7 @@ struct npc_voidtraveler : public ScriptedAI
                                 {
                                     DoCastAOE(SPELL_SHADOW_NOVA, true);
                                     me->CastSpell(vorpil, SPELL_EMPOWERING_SHADOWS, true, nullptr, nullptr, vorpil->GetGUID());
-                                    Unit::DealHeal(vorpil, vorpil, vorpil->CountPctFromMaxHealth128(4));
+                                    Unit::DealHeal(vorpil, vorpil, vorpil->CountPctFromMaxHealth256(4));
                                 }
                             }
 

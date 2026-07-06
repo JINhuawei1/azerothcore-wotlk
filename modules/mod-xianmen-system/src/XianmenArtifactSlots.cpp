@@ -9,7 +9,7 @@
  * 机制参考 mod-ascension-system：物品实体借核心 character_inventory 表以
  * 虚拟背包 bag=202 存放（核心 PlayerStorage::_LoadInventory 跳过该 bag），
  * 运行期 Item* 由本模块持有（OwnerGUID 置空 + ITEM_UNCHANGED，核心存档忽略）。
- * 属性应用为 int128 逐项 stat-mod + 按槽位记账精确回滚。
+ * 属性应用为 int256 逐项 stat-mod + 按槽位记账精确回滚。
  */
 
 #include "AllItemScript.h"
@@ -19,6 +19,7 @@
 #include "Config.h"
 #include "DBCStores.h"
 #include "DatabaseEnv.h"
+#include "HermesBridgeAddonApi.h"
 #include "Item.h"
 #include "ItemTemplate.h"
 #include "Log.h"
@@ -33,6 +34,12 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "Util.h"
+#if __has_include("WearControl.h")
+    #ifndef MODULE_WEAR_CONTROL
+        #define MODULE_WEAR_CONTROL
+    #endif
+    #include "WearControl.h"
+#endif
 #include "WorldSession.h"
 #include "XianmenArtifactSlots.h"
 
@@ -105,7 +112,7 @@ struct XianqiSlotData
 struct XianqiAppliedStat
 {
     uint32 statType = 0;
-    int128 statValue = 0;
+    int256 statValue = 0;
 };
 
 struct PlayerXianqiStatus
@@ -124,9 +131,25 @@ RequirementInterface* GetXianqiRequirementModule()
     return mgr ? mgr->GetRequirementModule() : nullptr;
 }
 
+bool CanEquipByWearControl(Player* player, uint32 itemId, uint8 slot, std::string& error)
+{
+#ifdef MODULE_WEAR_CONTROL
+    return WearControl::CanEquipItem(player, itemId, WEAR_LIMIT_XIANQI, slot, &error, true);
+#else
+    (void)player;
+    (void)itemId;
+    (void)slot;
+    (void)error;
+    return true;
+#endif
+}
+
 void NotifyXianqiAttributePanelRefresh(Player* player)
 {
     if (!player || !player->GetSession())
+        return;
+
+    if (HermesBridge_SendAddonMessage(player, XIANQI_PATTR_PANEL_PREFIX, "REFRESH"))
         return;
 
     WorldPacket data;
@@ -135,7 +158,7 @@ void NotifyXianqiAttributePanelRefresh(Player* player)
     player->SendDirectMessage(&data);
 }
 
-int32 ClampXianqiInt128ToInt32(int128 const& value)
+int32 ClampXianqiInt256ToInt32(int256 const& value)
 {
     int64 v = Acore::Number::ToInt64Saturated(value);
     if (v > std::numeric_limits<int32>::max())
@@ -250,6 +273,27 @@ bool IsXianqiDamageTriggeredCombatSpellId(uint32 spellId)
     return spellId >= 383001 && spellId <= 383084;
 }
 
+bool IsXianqiFeatureSpellId(uint32 spellId)
+{
+    return spellId >= 385001 && spellId <= 385050;
+}
+
+bool HasXianqiFeatureSpell(ItemTemplate const* proto)
+{
+    if (!proto)
+        return false;
+
+    for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+    {
+        _Spell const& spellData = proto->Spells[i];
+        if (spellData.SpellTrigger == ITEM_SPELLTRIGGER_CHANCE_ON_HIT
+            && IsXianqiFeatureSpellId(spellData.SpellId))
+            return true;
+    }
+
+    return false;
+}
+
 bool HasXianqiDamageTriggeredCombatSpell(ItemTemplate const* proto)
 {
     if (!proto)
@@ -266,13 +310,13 @@ bool HasXianqiDamageTriggeredCombatSpell(ItemTemplate const* proto)
     return false;
 }
 
-bool CastXianqiDamageTriggeredCombatSpell(Player* player, Unit* target, Item* item, SpellInfo const* spellInfo)
-{
-    if (!player || !target || !target->IsAlive() || target == player)
-        return false;
+    bool CastXianqiDamageTriggeredCombatSpell(Player* player, Unit* target, Item* item, SpellInfo const* spellInfo)
+    {
+        if (!player || !target || !target->IsAlive() || target == player || !spellInfo)
+            return false;
 
-    return player->TriggerDamageTriggeredArtifactItemProcSpell(target, item, spellInfo);
-}
+        return player->TriggerDamageTriggeredArtifactItemProcSpell(target, item, spellInfo);
+    }
 
 bool CastXianqiDamageTriggeredCombatSpells(Player* player, Unit* target, Item* item, ItemTemplate const* proto)
 {
@@ -300,6 +344,11 @@ bool CastXianqiDamageTriggeredCombatSpells(Player* player, Unit* target, Item* i
 bool CanXianqiItemProcForAttack(XianqiSlotConfig const* config, ItemTemplate const* proto, WeaponAttackType attType)
 {
     if (!config || !proto)
+        return false;
+
+    // 385001-385050 是仙器特色技能配置，由 XianqiFeatureSpells 统一按玩家伤害事件结算。
+    // 如果也走普通物品 CastItemCombatSpell，会只播放 DBC dummy 法术视觉，不会产生特色伤害和仇恨。
+    if (HasXianqiFeatureSpell(proto))
         return false;
 
     // 383001-383084 按“任意玩家伤害触发”处理，避免依赖射击/武器命中入口并防止重复触发。
@@ -606,6 +655,15 @@ public:
                 slotData.itemPtr = nullptr;
                 LOG_WARN("module", "仙器系统: 玩家 {} 槽位 {} 的物品(GUID:{}) 已不存在，将移除记录",
                     player->GetName(), slot, slotData.itemGuid);
+                continue;
+            }
+
+            std::string wearControlError;
+            if (!CanEquipByWearControl(player, slotData.itemId, slot, wearControlError))
+            {
+                slotsToRemove.push_back(slot);
+                LOG_WARN("module", "仙器系统: 玩家 {} 槽位 {} 的物品 itemId={} 不满足穿戴控制 reason={}，将移除记录",
+                    player->GetName(), slot, slotData.itemId, wearControlError);
             }
         }
 
@@ -833,6 +891,9 @@ public:
             error = "物品模板不存在。";
             return false;
         }
+
+        if (!CanEquipByWearControl(player, itemId, slot, error))
+            return false;
 
         if (proto->RequiredLevel > player->GetLevel())
         {
@@ -1500,11 +1561,11 @@ public:
             if (i >= proto->StatsCount)
                 break;
 
-            int128 val = proto->ItemStatValue128[i];
+            int256 val = proto->ItemStatValue256[i];
             if (val == 0)
                 continue;
 
-            val = Acore::Number::ToInt128Saturated(Acore::Number::ToLongDouble(val) * static_cast<long double>(totalMultiplier));
+            val = Acore::Number::ToInt256Saturated(Acore::Number::ToLongDouble(val) * static_cast<long double>(totalMultiplier));
             uint32 statType = proto->ItemStat[i].ItemStatType;
 
             ApplyStatByType(player, statType, val, apply);
@@ -1513,9 +1574,9 @@ public:
                 status->slotStats[slot].push_back({ statType, val });
         }
 
-        if (proto->Armor128 > 0)
+        if (proto->Armor256 > 0)
         {
-            int128 armorVal = Acore::Number::ToInt128Saturated(Acore::Number::ToLongDouble(proto->Armor128) * static_cast<long double>(totalMultiplier));
+            int256 armorVal = Acore::Number::ToInt256Saturated(Acore::Number::ToLongDouble(proto->Armor256) * static_cast<long double>(totalMultiplier));
             player->HandleStatModifier(UNIT_MOD_ARMOR, BASE_VALUE, Acore::Number::ToFloat(armorVal), apply);
             if (apply)
                 status->slotStats[slot].push_back({ 1000, armorVal });
@@ -1610,14 +1671,14 @@ public:
             }
         }
 
-        // ON_EQUIP 物品法术
         for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
         {
             if (proto->Spells[i].SpellId <= 0)
                 continue;
 
+            uint32 const spellId = uint32(proto->Spells[i].SpellId);
             if (proto->Spells[i].SpellTrigger == ITEM_SPELLTRIGGER_ON_EQUIP)
-                ApplySlotSpell(player, status, slot, uint32(proto->Spells[i].SpellId), apply);
+                ApplySlotSpell(player, status, slot, spellId, apply);
         }
 
         if (updateStats)
@@ -1644,7 +1705,12 @@ public:
         {
             if (!first)
                 equipStr << ",";
-            equipStr << uint32(pair.first) << ":" << pair.second.itemId << ":" << pair.second.itemGuid;
+
+            uint32 itemSet = 0;
+            if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(pair.second.itemId))
+                itemSet = proto->ItemSet;
+
+            equipStr << uint32(pair.first) << ":" << pair.second.itemId << ":" << pair.second.itemGuid << ":" << itemSet;
             first = false;
         }
 
@@ -1655,6 +1721,9 @@ public:
 
         auto sendMessage = [&](std::string const& message)
         {
+            if (message.rfind(prefix, 0) == 0 && HermesBridge_SendAddonMessage(player, XIANQI_ADDON_PREFIX, message.substr(prefix.length())))
+                return;
+
             WorldPacket data;
             ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, message, 0);
             player->SendDirectMessage(&data);
@@ -1756,10 +1825,10 @@ private:
     }
 
     // 物品属性/附魔属性统一按类型应用（apply=false 时反向应用，与 RemoveStatEffect 等价）
-    void ApplyStatByType(Player* player, uint32 statType, int128 const& value, bool apply)
+    void ApplyStatByType(Player* player, uint32 statType, int256 const& value, bool apply)
     {
         float statModValue = Acore::Number::ToFloat(value);
-        int128 legacyVal = value;
+        int256 legacyVal = value;
 
         switch (statType)
         {
@@ -1883,7 +1952,7 @@ private:
                 player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, statModValue, apply);
                 break;
             case ITEM_MOD_MANA_REGENERATION:
-                player->ApplyManaRegenBonus(ClampXianqiInt128ToInt32(value), apply);
+                player->ApplyManaRegenBonus(ClampXianqiInt256ToInt32(value), apply);
                 break;
             case ITEM_MOD_ARMOR_PENETRATION_RATING:
                 player->ApplyRatingMod(CR_ARMOR_PENETRATION, legacyVal, apply);
@@ -1892,10 +1961,10 @@ private:
                 player->ApplySpellPowerBonus(value, apply);
                 break;
             case ITEM_MOD_HEALTH_REGEN:
-                player->ApplyHealthRegenBonus(ClampXianqiInt128ToInt32(value), apply);
+                player->ApplyHealthRegenBonus(ClampXianqiInt256ToInt32(value), apply);
                 break;
             case ITEM_MOD_SPELL_PENETRATION:
-                player->ApplySpellPenetrationBonus(ClampXianqiInt128ToInt32(value), apply);
+                player->ApplySpellPenetrationBonus(ClampXianqiInt256ToInt32(value), apply);
                 break;
             case ITEM_MOD_BLOCK_VALUE:
                 player->HandleBaseModValue(SHIELD_BLOCK_VALUE, FLAT_MOD, statModValue, apply);
@@ -1930,7 +1999,7 @@ private:
         }
     }
 
-    void RemoveStatEffect(Player* player, uint32 statType, int128 const& statValue)
+    void RemoveStatEffect(Player* player, uint32 statType, int256 const& statValue)
     {
         if (!player || statValue == 0)
             return;
@@ -2049,6 +2118,21 @@ public:
         if (!sXianqiSlotMgr->IsEnabled() || !player || !pItem || !not_loading)
             return true;
 
+#ifdef MODULE_WEAR_CONTROL
+        if (WearControl::HasExclusiveLimit(pItem->GetEntry()))
+        {
+            if (player->GetSession())
+            {
+                if (WearControl::IsLimitedTo(pItem->GetEntry(), WEAR_LIMIT_XIANQI))
+                    ChatHandler(player->GetSession()).SendSysMessage("|cffffcc00[仙器系统]|r 仙器系统装备只能放入仙器/扩展槽位，不能装备到官方装备栏。");
+                else
+                    ChatHandler(player->GetSession()).SendSysMessage("|cffffcc00[穿戴控制]|r 该物品只能放入对应专属系统槽位，不能装备到官方装备栏。");
+            }
+
+            return false;
+        }
+#endif
+
         if (!sXianqiSlotMgr->IsArtifactItem(pItem->GetEntry()))
             return true;
 
@@ -2142,13 +2226,13 @@ public:
         UNITHOOK_ON_DAMAGE
     }) { }
 
-    void OnDamage(Unit* attacker, Unit* victim, uint128& damage) override
+    void OnDamage(Unit* attacker, Unit* victim, uint256& damage) override
     {
         TriggerDamageProcs(victim, attacker, damage);
     }
 
 private:
-    static void TriggerDamageProcs(Unit* target, Unit* attacker, uint128& damage)
+    static void TriggerDamageProcs(Unit* target, Unit* attacker, uint256& damage)
     {
         if (!sXianqiSlotMgr->IsEnabled() || !target || !attacker)
             return;
@@ -2473,6 +2557,42 @@ private:
 
 namespace XianmenArtifactSlots
 {
+bool IsRegisteredArtifactItem(uint32 itemId)
+{
+    return sXianqiSlotMgr->IsEnabled() && sXianqiSlotMgr->IsArtifactItem(itemId);
+}
+
+bool HasEquippedArtifactFeatureSpell(Player* player, uint32 spellId)
+{
+    if (!player || !sXianqiSlotMgr->IsEnabled() || !IsXianqiFeatureSpellId(spellId))
+        return false;
+
+    PlayerXianqiStatus* status = sXianqiSlotMgr->GetPlayerStatus(player->GetGUID().GetCounter());
+    if (!status || status->slots.empty())
+        return false;
+
+    for (auto const& slotPair : status->slots)
+    {
+        Item* item = slotPair.second.itemPtr;
+        if (!item || item->IsBroken())
+            continue;
+
+        ItemTemplate const* proto = item->GetTemplate();
+        if (!proto)
+            continue;
+
+        for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+        {
+            _Spell const& spellData = proto->Spells[i];
+            if (spellData.SpellId == static_cast<int32>(spellId)
+                && spellData.SpellTrigger == ITEM_SPELLTRIGGER_CHANCE_ON_HIT)
+                return true;
+        }
+    }
+
+    return false;
+}
+
 void ForEachEquippedWeaponItem(Player* player, std::function<void(Item*)> const& visitor)
 {
     if (!player || !visitor || !sXianqiSlotMgr->IsEnabled())

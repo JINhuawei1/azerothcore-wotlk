@@ -646,7 +646,7 @@ class spell_reliquary_of_souls_aura_of_desire_aura : public AuraScript
     void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
     {
         PreventDefaultAction();
-        eventInfo.GetActionTarget()->CastCustomSpell(SPELL_AURA_OF_DESIRE_DAMAGE, SPELLVALUE_BASE_POINT0, Acore::Number::ToInt32Saturated(Acore::Number::ToInt128Saturated(eventInfo.GetDamageInfo()->GetDamage())) / 2, eventInfo.GetActor(), true);
+        eventInfo.GetActionTarget()->CastCustomSpell(SPELL_AURA_OF_DESIRE_DAMAGE, SPELLVALUE_BASE_POINT0, Acore::Number::ToInt32Saturated(Acore::Number::ToInt256Saturated(eventInfo.GetDamageInfo()->GetDamage())) / 2, eventInfo.GetActor(), true);
     }
 
     void CalculateAmount(AuraEffect const* /*aurEff*/, int32& amount, bool& /*canBeRecalculated*/)

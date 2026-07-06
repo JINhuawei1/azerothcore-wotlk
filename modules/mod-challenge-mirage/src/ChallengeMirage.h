@@ -66,8 +66,11 @@ public:
     uint32 GetPlayerLevel(Player const* player) const;
     bool SetPlayerLevel(Player* player, uint32 level, bool saveNow = true);
     bool Enter(Player* player, uint32 level, std::string& reason);
+    bool EnterFromLocationTeleport(Player* player, uint32 level, uint32 targetMapId, std::string& reason);
     bool Leave(Player* player);
-    void SpawnCreaturesForPlayer(Player* player);
+    bool IsLocationTeleportActive(Player const* player) const;
+    void UpdateLocationTeleportState(Player* player);
+    void SpawnCreaturesForPlayer(Player* player, char const* reason = "manual");
 
     void SetCreatureLayer(Creature* creature, uint32 layer);
     uint32 GetCreatureLayer(Creature const* creature) const;
@@ -78,6 +81,12 @@ public:
     std::unordered_map<uint32, ChallengeMirageLevelTemplate> const& GetLevelTemplates() const { return _levelTemplates; }
 
 private:
+    struct LocationTeleportState
+    {
+        uint32 targetMapId = 0;
+        bool reachedDungeon = false;
+    };
+
     ChallengeMirageLevelTemplate const* GetLevelTemplate(uint32 level) const;
 
     bool _enabled = true;
@@ -90,9 +99,10 @@ private:
     std::unordered_map<uint32, uint32> _creatureEntryLayers;
     std::unordered_map<uint32, uint32> _playerLevels;
     std::unordered_map<uint32, uint32> _playerSpawnTimers;
-    std::unordered_map<ObjectGuid, uint32> _creatureLayers;
-    std::unordered_map<ObjectGuid, uint64> _spawnKeysByCreature;
-    std::unordered_set<uint64> _activeSpawnKeys;
+    std::unordered_map<std::string, uint32> _creatureLayers;
+    std::unordered_map<std::string, std::string> _spawnKeysByCreature;
+    std::unordered_set<std::string> _activeSpawnKeys;
+    std::unordered_map<uint32, LocationTeleportState> _locationTeleportStates;
 };
 
 #define sChallengeMirageMgr ChallengeMirageMgr::instance()

@@ -45,14 +45,14 @@ int32 ToClientInt32(int64 value)
     return static_cast<int32>(value);
 }
 
-int32 ToClientInt32(int128 const& value)
+int32 ToClientInt32(int256 const& value)
 {
     constexpr int32 MaxClientIntValue = 2000000000;
 
-    if (value > static_cast<int128>(MaxClientIntValue))
+    if (value > static_cast<int256>(MaxClientIntValue))
         return MaxClientIntValue;
 
-    if (value < static_cast<int128>(-MaxClientIntValue))
+    if (value < static_cast<int256>(-MaxClientIntValue))
         return -MaxClientIntValue;
 
     return static_cast<int32>(value);
@@ -481,7 +481,7 @@ void ItemTemplate::InitializeQueryData()
     for (uint32 i = 0; i < StatsCount; ++i)
     {
         queryData << ItemStat[i].ItemStatType;
-        queryData << ToClientInt32(ItemStatValue128[i]);
+        queryData << ToClientInt32(ItemStatValue256[i]);
     }
     queryData << ScalingStatDistribution;            // scaling stats distribution
     queryData << ToClientUInt32(ScalingStatValue);   // some kind of flags used to determine stat values column
@@ -632,7 +632,7 @@ void WorldSession::HandleItemQuerySingleOpcode(WorldPacket& recvData)
         for (uint32 i = 0; i < pProto->StatsCount; ++i)
         {
             queryData << pProto->ItemStat[i].ItemStatType;
-            queryData << ToClientInt32(pProto->ItemStatValue128[i]);
+            queryData << ToClientInt32(pProto->ItemStatValue256[i]);
         }
         queryData << pProto->ScalingStatDistribution;            // scaling stats distribution
         queryData << ToClientUInt32(pProto->ScalingStatValue);   // some kind of flags used to determine stat values column

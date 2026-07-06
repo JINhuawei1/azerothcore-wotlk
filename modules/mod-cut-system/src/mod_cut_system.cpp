@@ -15,6 +15,7 @@
 #include "ChatCommand.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
+#include "HermesBridgeAddonApi.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
@@ -37,6 +38,8 @@ namespace
 {
 constexpr char const* CONF_ENABLE = "CutSystem.Enable";
 constexpr char const* CONF_DEBUG = "CutSystem.Debug";
+constexpr char const* CONF_CLIENT_HIT_NOTIFY_INTERVAL_MS = "CutSystem.ClientHitNotifyIntervalMs";
+constexpr char const* CONF_CLIENT_HIT_NOTIFY_AGGREGATE = "CutSystem.ClientHitNotifyAggregate";
 constexpr char CUT_SYSTEM_ADDON_PREFIX[] = "CUT_SYS";
 constexpr size_t MAX_ADDON_PAYLOAD = 220;
 constexpr size_t MAX_CLIENT_HIT_NOTIFICATIONS = 10;
@@ -58,14 +61,14 @@ long double ParseCutDamageValue(std::string const& text)
     }
 }
 
-uint128 ParseFixedCutDamageValue(std::string const& text)
+uint256 ParseFixedCutDamageValue(std::string const& text)
 {
-    uint128 value = 0;
+    uint256 value = 0;
     bool hasDigit = false;
     bool inFraction = false;
     bool hasFractionValue = false;
     bool saturated = false;
-    uint128 const maxValue = std::numeric_limits<uint128>::max();
+    uint256 const maxValue = std::numeric_limits<uint256>::max();
 
     for (char ch : text)
     {
@@ -143,7 +146,7 @@ struct CutEntry
     std::string requirementText;
     uint8 damageType = CUT_DAMAGE_FIXED;
     long double cutDamage = 0.0L;
-    uint128 fixedCutDamage = 0;
+    uint256 fixedCutDamage = 0;
     std::string cutDamageText;
     float chance = 0.0f;
 };
@@ -502,7 +505,13 @@ public:
 
         std::vector<uint64>& pendingDamages = _pendingHitNotifications[playerGuid];
         if (pendingDamages.size() >= MAX_CLIENT_HIT_NOTIFICATIONS)
+        {
+            uint64& lastDamage = pendingDamages.back();
+            lastDamage = std::numeric_limits<uint64>::max() - lastDamage < damage
+                ? std::numeric_limits<uint64>::max()
+                : lastDamage + damage;
             return;
+        }
 
         pendingDamages.push_back(damage);
     }
@@ -528,21 +537,21 @@ public:
         }
     }
 
-    uint128 CalculateCutDamage(Unit* attacker, Unit* victim, CutEntry const& entry) const
+    uint256 CalculateCutDamage(Unit* attacker, Unit* victim, CutEntry const& entry) const
     {
         if (!attacker || !victim)
             return 0;
 
         if (entry.damageType == CUT_DAMAGE_FIXED)
-            return std::max<uint128>(uint128(1), entry.fixedCutDamage);
+            return std::max<uint256>(uint256(1), entry.fixedCutDamage);
 
         long double percent = std::min(entry.cutDamage, 100.0L);
-        long double rawDamage = std::ceil(Acore::Number::ToLongDouble(victim->GetHealthForCombat128()) * percent / 100.0L);
-        uint128 finalDamage = Acore::Number::ToUInt128Saturated(rawDamage);
-        return std::max<uint128>(uint128(1), finalDamage);
+        long double rawDamage = std::ceil(Acore::Number::ToLongDouble(victim->GetHealthForCombat256()) * percent / 100.0L);
+        uint256 finalDamage = Acore::Number::ToUInt256Saturated(rawDamage);
+        return std::max<uint256>(uint256(1), finalDamage);
     }
 
-    bool TryPrepareCutDamage(Unit* attacker, Unit* victim, uint128& cutDamage) const
+    bool TryPrepareCutDamage(Unit* attacker, Unit* victim, uint256& cutDamage) const
     {
         cutDamage = 0;
 
@@ -585,20 +594,20 @@ public:
         return true;
     }
 
-    bool TryApplyCutDamage(Unit* attacker, Unit* victim, uint128& damage, uint128& appliedDamage) const
+    bool TryApplyCutDamage(Unit* attacker, Unit* victim, uint256& damage, uint256& appliedDamage) const
     {
         appliedDamage = 0;
 
         if (!attacker || !victim || !victim->IsAlive())
             return false;
 
-        uint128 cutDamage = 0;
+        uint256 cutDamage = 0;
         if (!TryPrepareCutDamage(attacker, victim, cutDamage))
             return false;
 
-        uint128 const maxV = std::numeric_limits<uint128>::max();
-        uint128 remainingSpace = damage >= maxV ? uint128(0) : (maxV - damage);
-        appliedDamage = std::min<uint128>(cutDamage, remainingSpace);
+        uint256 const maxV = std::numeric_limits<uint256>::max();
+        uint256 remainingSpace = damage >= maxV ? uint256(0) : (maxV - damage);
+        appliedDamage = std::min<uint256>(cutDamage, remainingSpace);
         if (appliedDamage == 0)
             return false;
 
@@ -613,7 +622,7 @@ public:
         if (!attacker || !victim || !victim->IsAlive() || damage < 0)
             return false;
 
-        uint128 cutDamage = 0;
+        uint256 cutDamage = 0;
         if (!TryPrepareCutDamage(attacker, victim, cutDamage))
             return false;
 
@@ -621,7 +630,7 @@ public:
         if (remainingSpace <= 0)
             return false;
 
-        uint128 appliedWideDamage = std::min(cutDamage, static_cast<uint128>(remainingSpace));
+        uint256 appliedWideDamage = std::min(cutDamage, static_cast<uint256>(remainingSpace));
         if (appliedWideDamage == 0)
             return false;
 
@@ -643,6 +652,9 @@ void SendCutSystemPayload(Player* player, std::string const& payload)
 
     if (payload.length() <= MAX_ADDON_PAYLOAD)
     {
+        if (HermesBridge_SendAddonMessage(player, CUT_SYSTEM_ADDON_PREFIX, payload))
+            return;
+
         std::string fullMessage = std::string(CUT_SYSTEM_ADDON_PREFIX) + '\t' + payload;
         WorldPacket data;
         ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
@@ -659,6 +671,8 @@ void SendCutSystemPayload(Player* player, std::string const& payload)
 
         std::ostringstream chunkMessage;
         chunkMessage << "CHUNK:" << (i + 1) << ":" << totalChunks << ":" << chunk;
+        if (HermesBridge_SendAddonMessage(player, CUT_SYSTEM_ADDON_PREFIX, chunkMessage.str()))
+            continue;
 
         std::string fullMessage = std::string(CUT_SYSTEM_ADDON_PREFIX) + '\t' + chunkMessage.str();
         WorldPacket data;
@@ -780,6 +794,28 @@ void SendCutSystemHitNotification(Player* player, std::vector<uint64> const& dam
     std::ostringstream payload;
     payload << "CT_HITS:";
 
+    if (sConfigMgr->GetOption<bool>(CONF_CLIENT_HIT_NOTIFY_AGGREGATE, true))
+    {
+        uint64 totalDamage = 0;
+        for (uint64 damage : damages)
+        {
+            if (damage == 0)
+                continue;
+
+            totalDamage = std::numeric_limits<uint64>::max() - totalDamage < damage
+                ? std::numeric_limits<uint64>::max()
+                : totalDamage + damage;
+        }
+
+        if (totalDamage > 0)
+        {
+            payload << totalDamage;
+            SendCutSystemPayload(player, payload.str());
+        }
+
+        return;
+    }
+
     bool first = true;
     size_t sentCount = 0;
     for (uint64 damage : damages)
@@ -855,7 +891,8 @@ public:
         }
 
         _hitFlushTime += diff;
-        if (_initialized && _hitFlushTime >= 50)
+        uint32 const hitNotifyInterval = std::max<uint32>(50, std::min<uint32>(sConfigMgr->GetOption<uint32>(CONF_CLIENT_HIT_NOTIFY_INTERVAL_MS, 180), 1000));
+        if (_initialized && _hitFlushTime >= hitNotifyInterval)
         {
             CutSystemMgr::Instance()->FlushHitNotifications();
             _hitFlushTime = 0;
@@ -990,30 +1027,30 @@ public:
         UNITHOOK_MODIFY_SPELL_DAMAGE_TAKEN
     }) { }
 
-    void ModifyPeriodicDamageAurasTick(Unit* victim, Unit* attacker, uint128& damage, SpellInfo const* spellInfo) override
+    void ModifyPeriodicDamageAurasTick(Unit* victim, Unit* attacker, uint256& damage, SpellInfo const* spellInfo) override
     {
         if (!spellInfo || spellInfo->IsPositive())
             return;
 
-        uint128 appliedDamage = 0;
+        uint256 appliedDamage = 0;
         if (!CutSystemMgr::Instance()->TryApplyCutDamage(attacker, victim, damage, appliedDamage))
             return;
 
         QueueCutHitNotification(attacker, Acore::Number::ToUInt64Saturated(appliedDamage));
     }
 
-    void ModifyMeleeDamage(Unit* victim, Unit* attacker, uint128& damage) override
+    void ModifyMeleeDamage(Unit* victim, Unit* attacker, uint256& damage) override
     {
-        uint128 appliedDamage = 0;
+        uint256 appliedDamage = 0;
         if (!CutSystemMgr::Instance()->TryApplyCutDamage(attacker, victim, damage, appliedDamage))
             return;
 
         QueueCutHitNotification(attacker, Acore::Number::ToUInt64Saturated(appliedDamage));
     }
 
-    void ModifySpellDamageTaken(Unit* victim, Unit* attacker, uint128& damage, SpellInfo const* /*spellInfo*/) override
+    void ModifySpellDamageTaken(Unit* victim, Unit* attacker, uint256& damage, SpellInfo const* /*spellInfo*/) override
     {
-        uint128 appliedDamage = 0;
+        uint256 appliedDamage = 0;
         if (!CutSystemMgr::Instance()->TryApplyCutDamage(attacker, victim, damage, appliedDamage))
             return;
 

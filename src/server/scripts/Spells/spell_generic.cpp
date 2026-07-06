@@ -49,14 +49,14 @@ namespace
         return value > static_cast<uint64>(MaxClientSpellValue) ? MaxClientSpellValue : static_cast<int32>(value);
     }
 
-    int32 ToInt32Saturated(uint128 const& value)
+    int32 ToInt32Saturated(uint256 const& value)
     {
-        return value > static_cast<uint128>(MaxClientSpellValue) ? MaxClientSpellValue : static_cast<int32>(value);
+        return value > static_cast<uint256>(MaxClientSpellValue) ? MaxClientSpellValue : static_cast<int32>(value);
     }
 
-    uint128 AddUInt128Saturated(uint128 const& left, uint128 const& right)
+    uint256 AddUInt256Saturated(uint256 const& left, uint256 const& right)
     {
-        uint128 const maxValue = std::numeric_limits<uint128>::max();
+        uint256 const maxValue = std::numeric_limits<uint256>::max();
         return left > maxValue - right ? maxValue : left + right;
     }
 }
@@ -310,7 +310,7 @@ class spell_gen_reduced_above_60 : public SpellScript
             if (target->GetLevel() > 60)
             {
                 int32 damagePct = 100 - 4 * int8(std::min(target->GetLevel(), uint8(85)) - 60); // prevents reduce by more than 100%
-                SetHitDamage128(Acore::Number::CalculatePct(GetHitDamage128(), damagePct));
+                SetHitDamage256(Acore::Number::CalculatePct(GetHitDamage256(), damagePct));
             }
     }
 
@@ -2442,9 +2442,9 @@ class spell_gen_lifeblood : public AuraScript
         if (Unit* owner = GetUnitOwner())
         {
             long double pct = 1.5L / static_cast<long double>(aurEff->GetTotalTicks());
-            uint128 heal = Acore::Number::ToUInt128Saturated(Acore::Number::ToLongDouble(owner->GetMaxHealthForCombat128()) * pct / 100.0L);
-            uint128 amountForCombat = amount > 0 ? static_cast<uint128>(amount) : 0;
-            aurEff->SetScriptAmountForCombat(AddUInt128Saturated(amountForCombat, heal));
+            uint256 heal = Acore::Number::ToUInt256Saturated(Acore::Number::ToLongDouble(owner->GetMaxHealthForCombat256()) * pct / 100.0L);
+            uint256 amountForCombat = amount > 0 ? static_cast<uint256>(amount) : 0;
+            aurEff->SetScriptAmountForCombat(AddUInt256Saturated(amountForCombat, heal));
             int32 healAmount = ToInt32Saturated(heal);
             amount = amount > MaxClientSpellValue - healAmount ? MaxClientSpellValue : amount + healAmount;
         }
@@ -4264,9 +4264,9 @@ class spell_gen_gift_of_naaru : public AuraScript
         }
 
         long double healTick = std::floor(heal / static_cast<long double>(aurEff->GetTotalTicks()));
-        uint128 amountForCombat = amount > 0 ? static_cast<uint128>(amount) : 0;
+        uint256 amountForCombat = amount > 0 ? static_cast<uint256>(amount) : 0;
         if (healTick > 0.0L)
-            amountForCombat = AddUInt128Saturated(amountForCombat, Acore::Number::ToUInt128Saturated(healTick));
+            amountForCombat = AddUInt256Saturated(amountForCombat, Acore::Number::ToUInt256Saturated(healTick));
         aurEff->SetScriptAmountForCombat(amountForCombat);
         amount = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(amount) + std::max(healTick, 0.0L));
     }
@@ -4330,7 +4330,7 @@ class spell_gen_replenishment_aura : public AuraScript
 
     bool Load() override
     {
-        return GetUnitOwner()->GetPowerForCombat128(POWER_MANA) > 0;
+        return GetUnitOwner()->GetPowerForCombat256(POWER_MANA) > 0;
     }
 
     void CalculateAmount(AuraEffect const* /*aurEff*/, int32& amount, bool& /*canBeRecalculated*/)
@@ -4338,10 +4338,10 @@ class spell_gen_replenishment_aura : public AuraScript
         switch (GetSpellInfo()->Id)
         {
             case SPELL_REPLENISHMENT:
-                amount = ToInt32Saturated(Acore::Number::ToLongDouble(GetUnitOwner()->GetMaxPowerForCombat128(POWER_MANA)) * 0.002L);
+                amount = ToInt32Saturated(Acore::Number::ToLongDouble(GetUnitOwner()->GetMaxPowerForCombat256(POWER_MANA)) * 0.002L);
                 break;
             case SPELL_INFINITE_REPLENISHMENT:
-                amount = ToInt32Saturated(Acore::Number::ToLongDouble(GetUnitOwner()->GetMaxPowerForCombat128(POWER_MANA)) * 0.0025L);
+                amount = ToInt32Saturated(Acore::Number::ToLongDouble(GetUnitOwner()->GetMaxPowerForCombat256(POWER_MANA)) * 0.0025L);
                 break;
             default:
                 break;
@@ -5346,7 +5346,7 @@ class spell_gen_set_health : public SpellScript
         if (Unit* target = GetHitUnit())
         {
             uint32 value = GetSpellInfo()->Effects[EFFECT_0].CalcValue();
-            target->SetHealthForCombat128(target->CountPctFromMaxHealth128(value));
+            target->SetHealthForCombat256(target->CountPctFromMaxHealth256(value));
         }
     }
 

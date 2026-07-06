@@ -99,18 +99,18 @@ public:
             if (result)
             {
                 Field* fields = result->Fetch();
-                auto toString = [](uint128 const& value) { return Acore::ToString(value); };
+                auto toString = [](uint256 const& value) { return Acore::ToString(value); };
 
-                uint128 MaxHealth = fields[0].GetUInt128();
-                uint128 Strength = fields[1].GetUInt128();
-                uint128 Agility = fields[2].GetUInt128();
-                uint128 Stamina = fields[3].GetUInt128();
-                uint128 Intellect = fields[4].GetUInt128();
-                uint128 Spirit = fields[5].GetUInt128();
-                uint128 Armor = fields[6].GetUInt128();
-                uint128 AttackPower = fields[7].GetUInt128();
-                uint128 SpellPower = fields[8].GetUInt128();
-                uint128 Resilience = fields[9].GetUInt128();
+                uint256 MaxHealth = fields[0].GetUInt256();
+                uint256 Strength = fields[1].GetUInt256();
+                uint256 Agility = fields[2].GetUInt256();
+                uint256 Stamina = fields[3].GetUInt256();
+                uint256 Intellect = fields[4].GetUInt256();
+                uint256 Spirit = fields[5].GetUInt256();
+                uint256 Armor = fields[6].GetUInt256();
+                uint256 AttackPower = fields[7].GetUInt256();
+                uint256 SpellPower = fields[8].GetUInt256();
+                uint256 Resilience = fields[9].GetUInt256();
 
                 handler->PSendSysMessage("Health: |cff00ffff{}|r - Stamina: |cff00ffff{}|r", toString(MaxHealth), toString(Stamina));
                 handler->PSendSysMessage("Strength: |cff00ffff{}|r - Agility: |cff00ffff{}|r", toString(Strength), toString(Agility));

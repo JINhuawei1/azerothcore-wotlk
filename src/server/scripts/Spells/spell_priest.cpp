@@ -306,15 +306,15 @@ class spell_pri_guardian_spirit : public AuraScript
         if (dmgInfo.GetDamage() < target->GetHealthForCombat())
             return;
 
-        uint128 healAmount128 = target->CountPctFromMaxHealth128(healPct);
-        int32 healAmount = SpellScriptCombat::ToClientSpellValue(Acore::Number::ToLongDouble(healAmount128));
+        uint256 healAmount256 = target->CountPctFromMaxHealth256(healPct);
+        int32 healAmount = SpellScriptCombat::ToClientSpellValue(Acore::Number::ToLongDouble(healAmount256));
         // remove the aura now, we don't want 40% healing bonus
         Remove(AURA_REMOVE_BY_ENEMY_SPELL);
         target->CastCustomSpell(target, SPELL_PRIEST_GUARDIAN_SPIRIT_HEAL, &healAmount, nullptr, nullptr, true);
         if (Player* player = target->ToPlayer())
-            if (player->GetExtendedMaxHealth128() > player->GetMaxHealth() && player->GetExtendedHealth128() < healAmount128)
+            if (player->GetExtendedMaxHealth256() > player->GetMaxHealth() && player->GetExtendedHealth256() < healAmount256)
             {
-                player->SetExtendedHealth(healAmount128);
+                player->SetExtendedHealth(healAmount256);
                 player->SyncClientHealthFromExtended();
             }
         dmgInfo.AbsorbDamage(dmgInfo.GetDamage());
@@ -810,7 +810,7 @@ class spell_pri_renew : public AuraScript
             // Empowered Renew
             if (AuraEffect const* empoweredRenewAurEff = caster->GetDummyAuraEffect(SPELLFAMILY_PRIEST, PRIEST_ICON_ID_EMPOWERED_RENEW_TALENT, EFFECT_1))
             {
-                uint128 heal = GetEffect(EFFECT_0)->GetAmountForCombat();
+                uint256 heal = GetEffect(EFFECT_0)->GetAmountForCombat();
                 heal = GetTarget()->SpellHealingBonusTaken(caster, GetSpellInfo(), heal, DOT);
 
                 int32 basepoints0 = SpellScriptCombat::ToClientSpellValue(

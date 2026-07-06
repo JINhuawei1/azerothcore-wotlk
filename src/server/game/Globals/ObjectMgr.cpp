@@ -87,12 +87,12 @@ uint64 ApplyRateToUInt64(uint64 value, float rate)
     return static_cast<uint64>(scaled);
 }
 
-int64 ToInt64Saturated(int128 const& value)
+int64 ToInt64Saturated(int256 const& value)
 {
-    if (value > static_cast<int128>(std::numeric_limits<int64>::max()))
+    if (value > static_cast<int256>(std::numeric_limits<int64>::max()))
         return std::numeric_limits<int64>::max();
 
-    if (value < static_cast<int128>(std::numeric_limits<int64>::min()))
+    if (value < static_cast<int256>(std::numeric_limits<int64>::min()))
         return std::numeric_limits<int64>::min();
 
     return static_cast<int64>(value);
@@ -2218,8 +2218,8 @@ void ObjectMgr::LoadCreatures()
         data.spawntimesecs      = fields[10].Get<uint32>();
         data.wander_distance    = fields[11].Get<float>();
         data.currentwaypoint    = fields[12].Get<uint32>();
-        data.curhealth          = fields[13].GetUInt128();
-        data.curmana            = fields[14].GetUInt128();
+        data.curhealth          = fields[13].GetUInt256();
+        data.curmana            = fields[14].GetUInt256();
         data.movementType       = fields[15].Get<uint8>();
         data.spawnMask          = fields[16].Get<uint8>();
         data.phaseMask          = fields[17].Get<uint32>();
@@ -2821,8 +2821,8 @@ void ObjectMgr::LoadItemTemplates()
         for (uint8 i = 0; i < itemTemplate.StatsCount; ++i)
         {
             itemTemplate.ItemStat[i].ItemStatType  = uint32(fields[28 + i * 2].Get<uint8>());
-            itemTemplate.ItemStatValue128[i] = fields[29 + i * 2].GetInt128();
-            itemTemplate.ItemStat[i].ItemStatValue = ToInt64Saturated(itemTemplate.ItemStatValue128[i]);
+            itemTemplate.ItemStatValue256[i] = fields[29 + i * 2].GetInt256();
+            itemTemplate.ItemStat[i].ItemStatValue = ToInt64Saturated(itemTemplate.ItemStatValue256[i]);
         }
 
         itemTemplate.ScalingStatDistribution = uint32(fields[48].Get<uint16>());
@@ -2835,8 +2835,8 @@ void ObjectMgr::LoadItemTemplates()
             itemTemplate.Damage[i].DamageType = uint32(fields[52 + i * 3].Get<uint8>());
         }
 
-        itemTemplate.Armor128       = fields[56].GetUInt128();
-        itemTemplate.Armor          = Acore::Number::ToUInt64Saturated(itemTemplate.Armor128);
+        itemTemplate.Armor256       = fields[56].GetUInt256();
+        itemTemplate.Armor          = Acore::Number::ToUInt64Saturated(itemTemplate.Armor256);
         itemTemplate.HolyRes        = fields[57].Get<int32>();
         itemTemplate.FireRes        = fields[58].Get<int32>();
         itemTemplate.NatureRes      = fields[59].Get<int32>();
@@ -3058,7 +3058,7 @@ void ObjectMgr::LoadItemTemplates()
         for (uint8 j = 0; j < itemTemplate.StatsCount; ++j)
         {
             // for ItemStatValue != 0
-            if (itemTemplate.ItemStatValue128[j] && itemTemplate.ItemStat[j].ItemStatType >= MAX_ITEM_MOD)
+            if (itemTemplate.ItemStatValue256[j] && itemTemplate.ItemStat[j].ItemStatType >= MAX_ITEM_MOD)
             {
                 LOG_ERROR("sql.sql", "Item (Entry: {}) has wrong (non-existing?) stat_type{} ({})", entry, j + 1, itemTemplate.ItemStat[j].ItemStatType);
                 itemTemplate.ItemStat[j].ItemStatType = 0;
@@ -3671,8 +3671,8 @@ void ObjectMgr::LoadPetLevelInfo()
         // data for level 1 stored in [0] array element, ...
         PetLevelInfo* pLevelInfo = &pInfoMapEntry[current_level - 1];
 
-        pLevelInfo->health = fields[2].GetUInt128();
-        pLevelInfo->mana   = fields[3].GetUInt128();
+        pLevelInfo->health = fields[2].GetUInt256();
+        pLevelInfo->mana   = fields[3].GetUInt256();
         pLevelInfo->armor  = fields[9].Get<uint32>();
         pLevelInfo->min_dmg = fields[10].Get<uint32>();
         pLevelInfo->max_dmg = fields[11].Get<uint32>();
@@ -4247,8 +4247,8 @@ void ObjectMgr::LoadPlayerInfo()
 
             PlayerClassLevelInfo& levelInfo = info->levelInfo[current_level - 1];
 
-            levelInfo.basehealth = fields[7].GetUInt128();
-            levelInfo.basemana = fields[8].GetUInt128();
+            levelInfo.basehealth = fields[7].GetUInt256();
+            levelInfo.basemana = fields[8].GetUInt256();
 
             ++count;
         } while (result->NextRow());
@@ -9873,7 +9873,7 @@ void ObjectMgr::LoadCreatureClassLevelStats()
 
         for (uint8 i = 0; i < MAX_EXPANSIONS; ++i)
         {
-            stats.BaseHealth[i] = fields[2 + i].GetUInt128();
+            stats.BaseHealth[i] = fields[2 + i].GetUInt256();
 
             if (stats.BaseHealth[i] == 0)
             {
@@ -9903,11 +9903,11 @@ void ObjectMgr::LoadCreatureClassLevelStats()
             }
         }
 
-        stats.BaseMana = fields[5].GetUInt128();
+        stats.BaseMana = fields[5].GetUInt256();
         stats.BaseArmor = fields[6].Get<double>();
 
-        stats.AttackPower = fields[7].GetUInt128();
-        stats.RangedAttackPower = fields[8].GetUInt128();
+        stats.AttackPower = fields[7].GetUInt256();
+        stats.RangedAttackPower = fields[8].GetUInt256();
 
         _creatureBaseStatsStore[MAKE_PAIR16(Level, Class)] = stats;
 

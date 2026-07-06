@@ -10,11 +10,14 @@
 #include "Config.h"
 #include "Creature.h"
 #include "DatabaseEnv.h"
+#include "HermesBridgeAddonApi.h"
 #include "Log.h"
+#include "Map.h"
 #include "ObjectAccessor.h"
 #include "Opcodes.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "TemporarySummon.h"
 #include "WorldPacket.h"
 
 #include <algorithm>
@@ -36,12 +39,63 @@ uint32 GetPlayerGuidLow(Player const* player)
     return player ? player->GetGUID().GetCounter() : 0;
 }
 
-uint64 BuildCreatureSpawnKey(uint32 mapId, uint32 instanceId, uint32 spawnId, uint32 index)
+std::string BuildCreatureSpawnKey(uint32 mapId, uint32 instanceId, uint32 spawnId, uint32 index)
 {
-    return (uint64(mapId & 0xFFFF) << 48)
-        | (uint64(instanceId & 0xFFFF) << 32)
-        | (uint64(spawnId & 0xFFFFFF) << 8)
-        | uint64(index & 0xFF);
+    return std::to_string(mapId) + ':' + std::to_string(instanceId) + ':' + std::to_string(spawnId) + ':' + std::to_string(index);
+}
+
+char const* BoolText(bool value)
+{
+    return value ? "true" : "false";
+}
+
+uint32 GetMapInstanceId(Map const* map)
+{
+    return map ? map->GetInstanceId() : 0;
+}
+
+uint32 GetCreatureInstanceId(Creature const* creature)
+{
+    if (!creature)
+        return 0;
+
+    if (Map const* map = creature->FindMap())
+        return map->GetInstanceId();
+
+    return creature->GetInstanceId();
+}
+
+std::string BuildCreatureRuntimeKey(Creature const* creature)
+{
+    if (!creature)
+        return "";
+
+    return std::to_string(creature->GetMapId()) + ':' + std::to_string(GetCreatureInstanceId(creature)) + ':' +
+        std::to_string(creature->GetGUID().GetRawValue());
+}
+
+bool IsChallengeMirageDebugEntry(uint32 entry)
+{
+    return entry >= 800000 && entry <= 800099;
+}
+
+char const* GetCreatureSpawnReleaseReason(Creature const* creature)
+{
+    if (!creature)
+        return "missing_creature";
+
+    TempSummon const* summon = creature->ToTempSummon();
+    if (!summon)
+        return "non_temp_summon";
+
+    if (summon->GetSummonType() == TEMPSUMMON_DESPAWNED)
+        return "despawned";
+
+    Map const* map = creature->FindMap();
+    if (!map || (map->IsDungeon() && !map->HavePlayers()))
+        return "empty_instance";
+
+    return nullptr;
 }
 
 ObjectGuid GetCreatureLinkedPlayerGuid(Creature const* creature)
@@ -105,6 +159,9 @@ bool TryParseUInt(std::string const& value, uint32& out)
 void SendChallengeMirageAddonMessage(Player* player, std::string const& payload)
 {
     if (!player || payload.empty())
+        return;
+
+    if (HermesBridge_SendAddonMessage(player, CHALLENGE_MIRAGE_ADDON_PREFIX, payload))
         return;
 
     std::string fullMessage = std::string(CHALLENGE_MIRAGE_ADDON_PREFIX) + '\t' + payload;
@@ -310,6 +367,7 @@ void ChallengeMirageMgr::RemovePlayer(Player* player)
     uint32 guid = GetPlayerGuidLow(player);
     _playerLevels.erase(guid);
     _playerSpawnTimers.erase(guid);
+    _locationTeleportStates.erase(guid);
 }
 
 void ChallengeMirageMgr::UpdatePlayer(Player* player, uint32 diff)
@@ -325,7 +383,7 @@ void ChallengeMirageMgr::UpdatePlayer(Player* player, uint32 diff)
         return;
 
     timer = 0;
-    SpawnCreaturesForPlayer(player);
+    SpawnCreaturesForPlayer(player, "UpdatePlayer");
 }
 
 uint32 ChallengeMirageMgr::GetPlayerLayer(Player const* player) const
@@ -345,12 +403,19 @@ bool ChallengeMirageMgr::SetPlayerLevel(Player* player, uint32 level, bool saveN
     if (!player || level > _maxLevel)
         return false;
 
+    uint32 oldLevel = GetPlayerLevel(player);
+    Map* map = player->GetMap();
+    LOG_DEBUG("module.challenge_mirage",
+        "[ChallengeMirageDebug] SET_LEVEL player={} guid={} oldLevel={} newLevel={} saveNow={} map={} playerInst={} mapInst={} inDungeon={} pos={:.2f},{:.2f},{:.2f}",
+        player->GetName(), GetPlayerGuidLow(player), oldLevel, level, BoolText(saveNow), player->GetMapId(), player->GetInstanceId(),
+        GetMapInstanceId(map), BoolText(map && map->IsDungeon()), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
+
     _playerLevels[GetPlayerGuidLow(player)] = level;
 
     if (saveNow)
         SavePlayer(player);
 
-    SpawnCreaturesForPlayer(player);
+    SpawnCreaturesForPlayer(player, "SetPlayerLevel");
     player->UpdateObjectVisibility(true);
     return true;
 }
@@ -390,6 +455,12 @@ bool ChallengeMirageMgr::Enter(Player* player, uint32 level, std::string& reason
         return false;
     }
 
+    Map* map = player->GetMap();
+    LOG_DEBUG("module.challenge_mirage",
+        "[ChallengeMirageDebug] ENTER_REQUEST player={} guid={} level={} creatureSet={} map={} playerInst={} mapInst={} inDungeon={} pos={:.2f},{:.2f},{:.2f}",
+        player->GetName(), GetPlayerGuidLow(player), level, tpl->creatureSet, player->GetMapId(), player->GetInstanceId(),
+        GetMapInstanceId(map), BoolText(map && map->IsDungeon()), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
+
     SetPlayerLevel(player, level, true);
 
     CharacterDatabase.Execute(
@@ -397,6 +468,26 @@ bool ChallengeMirageMgr::Enter(Player* player, uint32 level, std::string& reason
         "`最后进入时间` = UNIX_TIMESTAMP() WHERE `玩家GUID` = {}",
         GetPlayerGuidLow(player));
 
+    map = player->GetMap();
+    LOG_DEBUG("module.challenge_mirage",
+        "[ChallengeMirageDebug] ENTER_OK player={} guid={} level={} map={} playerInst={} mapInst={} inDungeon={} pos={:.2f},{:.2f},{:.2f}",
+        player->GetName(), GetPlayerGuidLow(player), level, player->GetMapId(), player->GetInstanceId(), GetMapInstanceId(map),
+        BoolText(map && map->IsDungeon()), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
+
+    return true;
+}
+
+bool ChallengeMirageMgr::EnterFromLocationTeleport(Player* player, uint32 level, uint32 targetMapId, std::string& reason)
+{
+    if (!Enter(player, level, reason))
+        return false;
+
+    _locationTeleportStates[GetPlayerGuidLow(player)] = { targetMapId, false };
+    Map* map = player->GetMap();
+    LOG_DEBUG("module.challenge_mirage",
+        "[ChallengeMirageDebug] LOCATION_TELEPORT_SET player={} guid={} level={} targetMap={} currentMap={} playerInst={} mapInst={} inDungeon={}",
+        player->GetName(), GetPlayerGuidLow(player), level, targetMapId, player->GetMapId(), player->GetInstanceId(),
+        GetMapInstanceId(map), BoolText(map && map->IsDungeon()));
     return true;
 }
 
@@ -405,7 +496,59 @@ bool ChallengeMirageMgr::Leave(Player* player)
     if (!player)
         return false;
 
+    Map* map = player->GetMap();
+    LOG_DEBUG("module.challenge_mirage",
+        "[ChallengeMirageDebug] LEAVE player={} guid={} oldLevel={} map={} playerInst={} mapInst={} inDungeon={} pos={:.2f},{:.2f},{:.2f}",
+        player->GetName(), GetPlayerGuidLow(player), GetPlayerLevel(player), player->GetMapId(), player->GetInstanceId(),
+        GetMapInstanceId(map), BoolText(map && map->IsDungeon()), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
+
+    _locationTeleportStates.erase(GetPlayerGuidLow(player));
     return SetPlayerLevel(player, _defaultLayer, true);
+}
+
+bool ChallengeMirageMgr::IsLocationTeleportActive(Player const* player) const
+{
+    if (!player)
+        return false;
+
+    return _locationTeleportStates.find(GetPlayerGuidLow(player)) != _locationTeleportStates.end();
+}
+
+void ChallengeMirageMgr::UpdateLocationTeleportState(Player* player)
+{
+    if (!player)
+        return;
+
+    uint32 guid = GetPlayerGuidLow(player);
+    auto itr = _locationTeleportStates.find(guid);
+    if (itr == _locationTeleportStates.end())
+        return;
+
+    Map* map = player->GetMap();
+    bool inDungeon = map && map->IsDungeon();
+
+    if (!itr->second.reachedDungeon)
+    {
+        if (inDungeon && player->GetMapId() == itr->second.targetMapId)
+        {
+            itr->second.reachedDungeon = true;
+            LOG_DEBUG("module.challenge_mirage",
+                "[ChallengeMirageDebug] LOCATION_REACHED player={} guid={} targetMap={} map={} playerInst={} mapInst={} inDungeon={} pos={:.2f},{:.2f},{:.2f}",
+                player->GetName(), guid, itr->second.targetMapId, player->GetMapId(), player->GetInstanceId(), GetMapInstanceId(map),
+                BoolText(inDungeon), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
+        }
+
+        return;
+    }
+
+    if (!inDungeon || player->GetMapId() != itr->second.targetMapId)
+    {
+        LOG_DEBUG("module.challenge_mirage",
+            "[ChallengeMirageDebug] LOCATION_LEAVE_TRIGGER player={} guid={} targetMap={} map={} playerInst={} mapInst={} inDungeon={} pos={:.2f},{:.2f},{:.2f}",
+            player->GetName(), guid, itr->second.targetMapId, player->GetMapId(), player->GetInstanceId(), GetMapInstanceId(map),
+            BoolText(inDungeon), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
+        Leave(player);
+    }
 }
 
 void ChallengeMirageMgr::SetCreatureLayer(Creature* creature, uint32 layer)
@@ -413,7 +556,7 @@ void ChallengeMirageMgr::SetCreatureLayer(Creature* creature, uint32 layer)
     if (!creature)
         return;
 
-    _creatureLayers[creature->GetGUID()] = layer;
+    _creatureLayers[BuildCreatureRuntimeKey(creature)] = layer;
 }
 
 uint32 ChallengeMirageMgr::GetCreatureLayer(Creature const* creature) const
@@ -421,7 +564,7 @@ uint32 ChallengeMirageMgr::GetCreatureLayer(Creature const* creature) const
     if (!creature)
         return _defaultLayer;
 
-    auto itr = _creatureLayers.find(creature->GetGUID());
+    auto itr = _creatureLayers.find(BuildCreatureRuntimeKey(creature));
     if (itr != _creatureLayers.end())
         return itr->second;
 
@@ -437,11 +580,11 @@ bool ChallengeMirageMgr::IsCreatureVisibleForPlayer(Creature const* creature, Pl
     if (!_enabled || !creature || !player)
         return true;
 
-    if (GetCreatureLinkedPlayer(creature))
-        return GetCreatureLayer(creature) == GetPlayerLayer(player);
-
     if (creature->IsPet() || creature->IsControlledByPlayer())
         return true;
+
+    if (GetCreatureLinkedPlayer(creature))
+        return GetCreatureLayer(creature) == GetPlayerLayer(player);
 
     return GetCreatureLayer(creature) == GetPlayerLayer(player);
 }
@@ -451,17 +594,56 @@ void ChallengeMirageMgr::RemoveCreature(Creature const* creature)
     if (!creature)
         return;
 
-    _creatureLayers.erase(creature->GetGUID());
+    std::string runtimeKey = BuildCreatureRuntimeKey(creature);
+    auto spawnItr = _spawnKeysByCreature.find(runtimeKey);
+    bool trackedSpawn = spawnItr != _spawnKeysByCreature.end();
+    bool debugEntry = IsChallengeMirageDebugEntry(creature->GetEntry());
+    std::string spawnKey = trackedSpawn ? spawnItr->second : "";
+    char const* releaseReason = GetCreatureSpawnReleaseReason(creature);
 
-    auto spawnItr = _spawnKeysByCreature.find(creature->GetGUID());
+    // RemoveWorld also happens on grid/object unload. Only release dynamic spawn state
+    // on real despawn or when an instance has no players left. While players are
+    // still in the instance, keep the key so grid unload cannot duplicate spawns.
+    if (!releaseReason)
+    {
+        if (trackedSpawn || debugEntry)
+        {
+            TempSummon const* summon = creature->ToTempSummon();
+            Map const* map = creature->FindMap();
+            LOG_DEBUG("module.challenge_mirage",
+                "[ChallengeMirageDebug] REMOVE_IGNORE entry={} guid={} rawGuid={} runtimeKey={} key={} summonType={} map={} inst={} mapPlayers={} health={} maxHealth={} activeKeys={}",
+                creature->GetEntry(), creature->GetGUID().GetCounter(), creature->GetGUID().GetRawValue(), runtimeKey, spawnKey,
+                summon ? uint32(summon->GetSummonType()) : 0, creature->GetMapId(), GetCreatureInstanceId(creature),
+                map ? map->GetPlayers().getSize() : 0, creature->GetHealth(), creature->GetMaxHealth(), _activeSpawnKeys.size());
+        }
+        return;
+    }
+
+    _creatureLayers.erase(runtimeKey);
+
     if (spawnItr != _spawnKeysByCreature.end())
     {
+        Map const* map = creature->FindMap();
+        LOG_DEBUG("module.challenge_mirage",
+            "[ChallengeMirageDebug] REMOVE_RELEASE entry={} guid={} rawGuid={} runtimeKey={} key={} reason={} map={} inst={} mapPlayers={} health={} maxHealth={} activeKeysBefore={}",
+            creature->GetEntry(), creature->GetGUID().GetCounter(), creature->GetGUID().GetRawValue(), runtimeKey, spawnItr->second,
+            releaseReason, creature->GetMapId(), GetCreatureInstanceId(creature), map ? map->GetPlayers().getSize() : 0,
+            creature->GetHealth(), creature->GetMaxHealth(), _activeSpawnKeys.size());
         _activeSpawnKeys.erase(spawnItr->second);
         _spawnKeysByCreature.erase(spawnItr);
     }
+    else if (debugEntry)
+    {
+        Map const* map = creature->FindMap();
+        LOG_DEBUG("module.challenge_mirage",
+            "[ChallengeMirageDebug] REMOVE_NO_KEY entry={} guid={} rawGuid={} runtimeKey={} reason={} map={} inst={} mapPlayers={} health={} maxHealth={} activeKeys={}",
+            creature->GetEntry(), creature->GetGUID().GetCounter(), creature->GetGUID().GetRawValue(), runtimeKey, releaseReason,
+            creature->GetMapId(), GetCreatureInstanceId(creature), map ? map->GetPlayers().getSize() : 0,
+            creature->GetHealth(), creature->GetMaxHealth(), _activeSpawnKeys.size());
+    }
 }
 
-void ChallengeMirageMgr::SpawnCreaturesForPlayer(Player* player)
+void ChallengeMirageMgr::SpawnCreaturesForPlayer(Player* player, char const* reason)
 {
     if (!_enabled || !player)
         return;
@@ -476,7 +658,14 @@ void ChallengeMirageMgr::SpawnCreaturesForPlayer(Player* player)
 
     uint32 creatureSet = levelTemplate->creatureSet ? levelTemplate->creatureSet : level;
     uint32 mapId = player->GetMapId();
-    uint32 instanceId = player->GetInstanceId();
+    Map* map = player->GetMap();
+    uint32 instanceId = map ? map->GetInstanceId() : player->GetInstanceId();
+    bool inDungeon = map && map->IsDungeon();
+    uint32 candidateCount = 0;
+    uint32 skippedExisting = 0;
+    uint32 summonAttempts = 0;
+    uint32 summonOk = 0;
+    uint32 summonFailed = 0;
 
     for (ChallengeMirageCreatureTemplate const& creatureTemplate : _creatureTemplates)
     {
@@ -485,36 +674,64 @@ void ChallengeMirageMgr::SpawnCreaturesForPlayer(Player* player)
 
         for (uint32 i = 0; i < creatureTemplate.count; ++i)
         {
-            uint64 spawnKey = BuildCreatureSpawnKey(mapId, instanceId, creatureTemplate.id, i);
+            ++candidateCount;
+            std::string spawnKey = BuildCreatureSpawnKey(mapId, instanceId, creatureTemplate.id, i);
             if (!_activeSpawnKeys.insert(spawnKey).second)
+            {
+                ++skippedExisting;
                 continue;
+            }
 
             float offset = static_cast<float>(i) * 1.5f;
-            // 【孤儿怪修复】原 TEMPSUMMON_CORPSE_TIMED_DESPAWN 只对尸体计时，存活召唤怪
-            // 永不消失——玩家离开/换层后活怪与 _creatureLayers 等状态无限累积。
-            // 改脱战存活计时：战斗中不消失；玩家离开后 respawnSec 秒自动 despawn
-            //（OnCreatureRemoveWorld 清理状态并释放 spawnKey，玩家在层内则 3 秒 tick 重新召唤）
-            Creature* creature = player->SummonCreature(
-                creatureTemplate.entry,
-                creatureTemplate.x + offset,
-                creatureTemplate.y + offset,
-                creatureTemplate.z,
-                creatureTemplate.o,
-                TEMPSUMMON_TIMED_DESPAWN_OOC_ALIVE,
-                creatureTemplate.respawnSec * 1000U);
+            TempSummonType summonType = inDungeon ? TEMPSUMMON_MANUAL_DESPAWN : TEMPSUMMON_TIMED_DESPAWN_OOC_ALIVE;
+            uint32 despawnTime = inDungeon ? 0 : creatureTemplate.respawnSec * 1000U;
+            ++summonAttempts;
+
+            LOG_DEBUG("module.challenge_mirage",
+                "[ChallengeMirageDebug] SPAWN_ATTEMPT reason={} player={} guid={} level={} set={} key={} templateId={} entry={} index={} map={} playerInst={} mapInst={} inDungeon={} summonType={} despawnMs={} pos={:.2f},{:.2f},{:.2f}",
+                reason ? reason : "unknown", player->GetName(), GetPlayerGuidLow(player), level, creatureSet, spawnKey, creatureTemplate.id,
+                creatureTemplate.entry, i, mapId, player->GetInstanceId(), instanceId, BoolText(inDungeon), uint32(summonType), despawnTime,
+                creatureTemplate.x + offset, creatureTemplate.y + offset, creatureTemplate.z);
+
+            Position spawnPos(creatureTemplate.x + offset, creatureTemplate.y + offset, creatureTemplate.z, creatureTemplate.o);
+            TempSummon* creature = map ? map->SummonCreature(creatureTemplate.entry, spawnPos, nullptr, despawnTime) : nullptr;
+            if (creature)
+            {
+                creature->SetTempSummonType(summonType);
+                creature->SetRegeneratingHealth(false);
+            }
 
             if (!creature)
             {
                 _activeSpawnKeys.erase(spawnKey);
+                ++summonFailed;
+                LOG_DEBUG("module.challenge_mirage",
+                    "[ChallengeMirageDebug] SUMMON_FAIL reason={} player={} guid={} level={} key={} entry={} map={} playerInst={} mapInst={} activeKeys={}",
+                    reason ? reason : "unknown", player->GetName(), GetPlayerGuidLow(player), level, spawnKey, creatureTemplate.entry,
+                    mapId, player->GetInstanceId(), instanceId, _activeSpawnKeys.size());
                 continue;
             }
 
             SetCreatureLayer(creature, level);
-            _spawnKeysByCreature[creature->GetGUID()] = spawnKey;
+            std::string runtimeKey = BuildCreatureRuntimeKey(creature);
+            _spawnKeysByCreature[runtimeKey] = spawnKey;
             creature->SetHomePosition(creatureTemplate.x, creatureTemplate.y, creatureTemplate.z, creatureTemplate.o);
             creature->UpdateObjectVisibility(true);
+            ++summonOk;
+            LOG_DEBUG("module.challenge_mirage",
+                "[ChallengeMirageDebug] SUMMON_OK reason={} player={} guid={} level={} key={} entry={} creatureGuid={} rawGuid={} runtimeKey={} creatureMap={} creatureInst={} layer={} canThreat={} summonType={} summonerGuid={} health={} maxHealth={} activeKeys={}",
+                reason ? reason : "unknown", player->GetName(), GetPlayerGuidLow(player), level, spawnKey, creature->GetEntry(),
+                creature->GetGUID().GetCounter(), creature->GetGUID().GetRawValue(), runtimeKey, creature->GetMapId(), GetCreatureInstanceId(creature),
+                GetCreatureLayer(creature), BoolText(creature->CanHaveThreatList()), uint32(creature->GetSummonType()),
+                creature->GetSummonerGUID().GetCounter(), creature->GetHealth(), creature->GetMaxHealth(), _activeSpawnKeys.size());
         }
     }
+
+    LOG_DEBUG("module.challenge_mirage",
+        "[ChallengeMirageDebug] SPAWN_SUMMARY reason={} player={} guid={} level={} set={} map={} playerInst={} mapInst={} inDungeon={} candidates={} attempts={} ok={} skippedExisting={} failed={} activeKeys={} pos={:.2f},{:.2f},{:.2f}",
+        reason ? reason : "unknown", player->GetName(), GetPlayerGuidLow(player), level, creatureSet, mapId, player->GetInstanceId(),
+        instanceId, BoolText(inDungeon), candidateCount, summonAttempts, summonOk, skippedExisting, summonFailed, _activeSpawnKeys.size(),
+        player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
 }
 
 class ChallengeMirageWorldScript : public WorldScript
@@ -572,11 +789,14 @@ public:
     void OnPlayerLogin(Player* player) override
     {
         sChallengeMirageMgr->LoadPlayer(player);
-        sChallengeMirageMgr->SpawnCreaturesForPlayer(player);
+        sChallengeMirageMgr->SpawnCreaturesForPlayer(player, "Login");
     }
 
     void OnPlayerLogout(Player* player) override
     {
+        if (sChallengeMirageMgr->IsLocationTeleportActive(player))
+            sChallengeMirageMgr->Leave(player);
+
         sChallengeMirageMgr->SavePlayer(player);
         sChallengeMirageMgr->RemovePlayer(player);
     }
@@ -584,17 +804,39 @@ public:
     void OnPlayerUpdate(Player* player, uint32 diff) override
     {
         sChallengeMirageMgr->UpdatePlayer(player, diff);
+        sChallengeMirageMgr->UpdateLocationTeleportState(player);
     }
 
     void OnPlayerMapChanged(Player* player) override
     {
-        sChallengeMirageMgr->SpawnCreaturesForPlayer(player);
+        Map* map = player ? player->GetMap() : nullptr;
+        if (player)
+        {
+            LOG_DEBUG("module.challenge_mirage",
+                "[ChallengeMirageDebug] HOOK_MAP_CHANGED player={} guid={} level={} map={} playerInst={} mapInst={} inDungeon={} pos={:.2f},{:.2f},{:.2f}",
+                player->GetName(), GetPlayerGuidLow(player), sChallengeMirageMgr->GetPlayerLevel(player), player->GetMapId(),
+                player->GetInstanceId(), GetMapInstanceId(map), BoolText(map && map->IsDungeon()), player->GetPositionX(),
+                player->GetPositionY(), player->GetPositionZ());
+        }
+
+        sChallengeMirageMgr->UpdateLocationTeleportState(player);
+        sChallengeMirageMgr->SpawnCreaturesForPlayer(player, "MapChanged");
         player->UpdateObjectVisibility(true);
     }
 
-    void OnPlayerUpdateZone(Player* player, uint32 /*newZone*/, uint32 /*newArea*/) override
+    void OnPlayerUpdateZone(Player* player, uint32 newZone, uint32 newArea) override
     {
-        sChallengeMirageMgr->SpawnCreaturesForPlayer(player);
+        Map* map = player ? player->GetMap() : nullptr;
+        if (player)
+        {
+            LOG_DEBUG("module.challenge_mirage",
+                "[ChallengeMirageDebug] HOOK_UPDATE_ZONE player={} guid={} level={} newZone={} newArea={} map={} playerInst={} mapInst={} inDungeon={} pos={:.2f},{:.2f},{:.2f}",
+                player->GetName(), GetPlayerGuidLow(player), sChallengeMirageMgr->GetPlayerLevel(player), newZone, newArea,
+                player->GetMapId(), player->GetInstanceId(), GetMapInstanceId(map), BoolText(map && map->IsDungeon()),
+                player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
+        }
+
+        sChallengeMirageMgr->SpawnCreaturesForPlayer(player, "UpdateZone");
         player->UpdateObjectVisibility(true);
     }
 

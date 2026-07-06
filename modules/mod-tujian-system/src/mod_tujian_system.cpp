@@ -8,6 +8,7 @@
 #include "ObjectMgr.h"
 #include "Item.h"
 #include "SpellMgr.h"
+#include "HermesBridgeAddonApi.h"
 #include "Util.h"
 
 #if __has_include("RequirementSystem.h")
@@ -62,39 +63,39 @@ namespace
         return static_cast<int32>(value);
     }
 
-    int64 ToInt64Saturated(uint128 const& value)
+    int64 ToInt64Saturated(uint256 const& value)
     {
-        return Acore::Number::ToInt64Saturated(Acore::Number::ToInt128Saturated(value));
+        return Acore::Number::ToInt64Saturated(Acore::Number::ToInt256Saturated(value));
     }
 
-    int64 ToInt64Saturated(int128 const& value)
+    int64 ToInt64Saturated(int256 const& value)
     {
         return Acore::Number::ToInt64Saturated(value);
     }
 
-    int32 ToInt32ForLegacyStatPath(int128 const& value)
+    int32 ToInt32ForLegacyStatPath(int256 const& value)
     {
         return ToInt32ForLegacyStatPath(ToInt64Saturated(value));
     }
 
-    int128 AddInt128Saturated(int128 const& left, int128 const& right)
+    int256 AddInt256Saturated(int256 const& left, int256 const& right)
     {
-        if (right > 0 && left > std::numeric_limits<int128>::max() - right)
-            return std::numeric_limits<int128>::max();
-        if (right < 0 && left < std::numeric_limits<int128>::min() - right)
-            return std::numeric_limits<int128>::min();
+        if (right > 0 && left > std::numeric_limits<int256>::max() - right)
+            return std::numeric_limits<int256>::max();
+        if (right < 0 && left < std::numeric_limits<int256>::min() - right)
+            return std::numeric_limits<int256>::min();
         return left + right;
     }
 
-    int128 MultiplyInt128Saturated(int128 const& value, uint32 multiplier)
+    int256 MultiplyInt256Saturated(int256 const& value, uint32 multiplier)
     {
         if (value == 0 || multiplier == 0)
             return 0;
-        if (value > 0 && value > std::numeric_limits<int128>::max() / static_cast<int128>(multiplier))
-            return std::numeric_limits<int128>::max();
-        if (value < 0 && value < std::numeric_limits<int128>::min() / static_cast<int128>(multiplier))
-            return std::numeric_limits<int128>::min();
-        return value * static_cast<int128>(multiplier);
+        if (value > 0 && value > std::numeric_limits<int256>::max() / static_cast<int256>(multiplier))
+            return std::numeric_limits<int256>::max();
+        if (value < 0 && value < std::numeric_limits<int256>::min() / static_cast<int256>(multiplier))
+            return std::numeric_limits<int256>::min();
+        return value * static_cast<int256>(multiplier);
     }
 
     struct TuJianEntry
@@ -115,7 +116,7 @@ namespace
         uint32 activationRequirement = 0;
         std::string activationCommand;
         uint8 attributeEffectMode = TUJIAN_ATTR_MODE_EQUIP;
-        int128 fixedAllStatsValue = 0;
+        int256 fixedAllStatsValue = 0;
     };
 
     struct TuJianSetEntry
@@ -168,11 +169,11 @@ namespace
 
     struct AggregatedItemBonusCache
     {
-        std::unordered_map<uint32, int128> itemStatTotals;
+        std::unordered_map<uint32, int256> itemStatTotals;
         std::array<int64, MAX_SPELL_SCHOOL> resistanceTotals = {};
-        int128 armorBase = 0;
-        int128 armorTotal = 0;
-        int128 armorDamageModifierTotal = 0;
+        int256 armorBase = 0;
+        int256 armorTotal = 0;
+        int256 armorDamageModifierTotal = 0;
         int64 blockFromTemplate = 0;
         int64 feralApBonus = 0;
 
@@ -219,7 +220,7 @@ namespace
     std::unordered_map<uint32, AggregatedItemBonusCache> playerAggregatedItemBonuses;
     std::unordered_map<uint32, std::vector<AggregatedItemSetContribution>> playerItemSetContributions;
     std::unordered_map<uint32, PlayerWeaponDamageBonusCache> playerWeaponDamageBonuses;
-    std::unordered_map<uint32, int128> playerFixedAllStatsBonus;
+    std::unordered_map<uint32, int256> playerFixedAllStatsBonus;
     std::unordered_set<uint32> blockedVirtualEquipSpellItemGuids;
 
     uint8 GetAttackSlotForVirtualItem(ItemTemplate const* proto);
@@ -317,7 +318,7 @@ namespace
         return applyCount;
     }
 
-    void ApplyFixedAllStatsBonus(Player* player, int128 const& amount, bool apply)
+    void ApplyFixedAllStatsBonus(Player* player, int256 const& amount, bool apply)
     {
         if (!player || amount == 0)
             return;
@@ -330,14 +331,14 @@ namespace
         }
     }
 
-    void ApplyAggregatedItemStat(Player* player, uint32 statType, int128 const& value, bool apply)
+    void ApplyAggregatedItemStat(Player* player, uint32 statType, int256 const& value, bool apply)
     {
         if (!player || value == 0)
             return;
 
-        int128 val = value;
+        int256 val = value;
         float statModValue = Acore::Number::ToFloat(val);
-        int128 legacyVal64 = val;
+        int256 legacyVal64 = val;
         int32 legacyVal = ToInt32ForLegacyStatPath(value);
         switch (statType)
         {
@@ -534,16 +535,16 @@ namespace
         for (uint8 i = 0; i < MAX_ITEM_PROTO_STATS && i < proto->StatsCount; ++i)
         {
             uint32 statType = proto->ItemStat[i].ItemStatType;
-            int128 val = proto->ItemStatValue128[i];
+            int256 val = proto->ItemStatValue256[i];
             if (val == 0)
                 continue;
 
-            cache.itemStatTotals[statType] = AddInt128Saturated(cache.itemStatTotals[statType], MultiplyInt128Saturated(val, applyCount));
+            cache.itemStatTotals[statType] = AddInt256Saturated(cache.itemStatTotals[statType], MultiplyInt256Saturated(val, applyCount));
         }
 
-        uint128 armor = proto->Armor128;
+        uint256 armor = proto->Armor256;
         if (armor != 0 && proto->ArmorDamageModifier)
-            armor = proto->ArmorDamageModifier >= Acore::Number::ToDouble(armor) ? 0 : armor - Acore::Number::ToUInt128Saturated(static_cast<long double>(proto->ArmorDamageModifier));
+            armor = proto->ArmorDamageModifier >= Acore::Number::ToDouble(armor) ? 0 : armor - Acore::Number::ToUInt256Saturated(static_cast<long double>(proto->ArmorDamageModifier));
 
         if (armor != 0)
         {
@@ -555,17 +556,17 @@ namespace
                  proto->SubClass == ITEM_SUBCLASS_ARMOR_PLATE ||
                  proto->SubClass == ITEM_SUBCLASS_ARMOR_SHIELD);
 
-            int128 armorAmount = MultiplyInt128Saturated(Acore::Number::ToInt128Saturated(armor), applyCount);
+            int256 armorAmount = MultiplyInt256Saturated(Acore::Number::ToInt256Saturated(armor), applyCount);
             if (isBaseArmor)
-                cache.armorBase = AddInt128Saturated(cache.armorBase, armorAmount);
+                cache.armorBase = AddInt256Saturated(cache.armorBase, armorAmount);
             else
-                cache.armorTotal = AddInt128Saturated(cache.armorTotal, armorAmount);
+                cache.armorTotal = AddInt256Saturated(cache.armorTotal, armorAmount);
         }
 
         if (proto->ArmorDamageModifier > 0 && sScriptMgr->OnPlayerCanArmorDamageModifier(player))
         {
-            int128 armorDamageModifier = Acore::Number::ToInt128Saturated(static_cast<long double>(proto->ArmorDamageModifier) * static_cast<long double>(applyCount));
-            cache.armorDamageModifierTotal = AddInt128Saturated(cache.armorDamageModifierTotal, armorDamageModifier);
+            int256 armorDamageModifier = Acore::Number::ToInt256Saturated(static_cast<long double>(proto->ArmorDamageModifier) * static_cast<long double>(applyCount));
+            cache.armorDamageModifierTotal = AddInt256Saturated(cache.armorDamageModifierTotal, armorDamageModifier);
         }
 
         if (proto->Block)
@@ -937,6 +938,9 @@ namespace
 
         if (payload.length() <= MAX_ADDON_PAYLOAD)
         {
+            if (HermesBridge_SendAddonMessage(player, TUJIAN_SYSTEM_ADDON_PREFIX, payload))
+                return;
+
             std::string fullMessage = std::string(TUJIAN_SYSTEM_ADDON_PREFIX) + '\t' + payload;
             WorldPacket data;
             ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
@@ -953,6 +957,8 @@ namespace
 
             std::ostringstream chunkMessage;
             chunkMessage << "CHUNK:" << (i + 1) << ":" << totalChunks << ":" << chunk;
+            if (HermesBridge_SendAddonMessage(player, TUJIAN_SYSTEM_ADDON_PREFIX, chunkMessage.str()))
+                continue;
 
             std::string fullMessage = std::string(TUJIAN_SYSTEM_ADDON_PREFIX) + '\t' + chunkMessage.str();
             WorldPacket data;
@@ -1439,7 +1445,7 @@ namespace
 
             uint8 nextFieldIndex = 15;
             entry.attributeEffectMode = hasAttributeEffectModeColumn ? fields[nextFieldIndex++].Get<uint8>() : TUJIAN_ATTR_MODE_EQUIP;
-            entry.fixedAllStatsValue = hasFixedAllStatsValueColumn ? fields[nextFieldIndex++].Get<int128>() : 0;
+            entry.fixedAllStatsValue = hasFixedAllStatsValueColumn ? fields[nextFieldIndex++].Get<int256>() : 0;
 
             if (entry.attributeEffectMode != TUJIAN_ATTR_MODE_FIXED)
                 entry.attributeEffectMode = TUJIAN_ATTR_MODE_EQUIP;
@@ -1678,7 +1684,7 @@ namespace
         std::unordered_map<uint32, uint32> aggregatedItemSetCounts;
         aggregatedItemSetCounts.reserve(activationRecordCount);
         PlayerWeaponDamageBonusCache weaponDamageBonuses;
-        int128 totalFixedAllStatsBonus = 0;
+        int256 totalFixedAllStatsBonus = 0;
 
 #ifdef MODULE_ITEM_SKILLS
         std::unordered_map<uint32, std::unordered_set<uint32>> activatedTuJianIdsByGroup;
@@ -1712,7 +1718,7 @@ namespace
             TuJianEntry const& tuJian = tuJianItr->second;
             if (tuJian.attributeEffectMode == TUJIAN_ATTR_MODE_FIXED)
             {
-                totalFixedAllStatsBonus = AddInt128Saturated(totalFixedAllStatsBonus, tuJian.fixedAllStatsValue);
+                totalFixedAllStatsBonus = AddInt256Saturated(totalFixedAllStatsBonus, tuJian.fixedAllStatsValue);
                 continue;
             }
 

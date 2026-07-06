@@ -41,7 +41,7 @@ namespace
         return static_cast<int32>(value);
     }
 
-    int32 CalculatePctInt32Saturated(uint128 const& base, int32 pct)
+    int32 CalculatePctInt32Saturated(uint256 const& base, int32 pct)
     {
         if (base == 0 || pct <= 0)
             return 0;
@@ -387,15 +387,15 @@ class spell_warl_generic_scaling : public AuraScript
             {
                 if (aurEff->GetMiscValue() == STAT_STAMINA)
                 {
-                    uint128 actStat = GetUnitOwner()->GetHealthForCombat128();
+                    uint256 actStat = GetUnitOwner()->GetHealthForCombat256();
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetHealthForCombat128(std::min<uint128>(GetUnitOwner()->GetMaxHealthForCombat128(), actStat));
+                    GetUnitOwner()->SetHealthForCombat256(std::min<uint256>(GetUnitOwner()->GetMaxHealthForCombat256(), actStat));
                 }
                 else
                 {
-                    uint128 actStat = GetUnitOwner()->GetPowerForCombat128(POWER_MANA);
+                    uint256 actStat = GetUnitOwner()->GetPowerForCombat256(POWER_MANA);
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetPowerForCombat128(POWER_MANA, std::min<uint128>(GetUnitOwner()->GetMaxPowerForCombat128(POWER_MANA), actStat));
+                    GetUnitOwner()->SetPowerForCombat256(POWER_MANA, std::min<uint256>(GetUnitOwner()->GetMaxPowerForCombat256(POWER_MANA), actStat));
                 }
             }
         }
@@ -751,7 +751,7 @@ class spell_warl_seed_of_corruption_aura: public AuraScript
             return;
 
         // effect 1 scales with 14% of caster's SP (DBC data)
-        amount = Acore::Number::ToInt32Saturated(Acore::Number::ToInt128Saturated(GetCaster()->SpellDamageBonusDone(GetUnitOwner(), GetSpellInfo(), amount, DOT, aurEff->GetEffIndex(), aurEff->GetPctMods())));
+        amount = Acore::Number::ToInt32Saturated(Acore::Number::ToInt256Saturated(GetCaster()->SpellDamageBonusDone(GetUnitOwner(), GetSpellInfo(), amount, DOT, aurEff->GetEffIndex(), aurEff->GetPctMods())));
     }
 
     void Detonate(AuraEffect const* aurEff)
@@ -1341,7 +1341,7 @@ class spell_warl_drain_soul : public AuraScript
             // Improved Drain Soul.
             if (Aura const* impDrainSoul = caster->GetAuraOfRankedSpell(SPELL_WARLOCK_IMPROVED_DRAIN_SOUL_R1, caster->GetGUID()))
             {
-                int32 amount = CalculatePctInt32Saturated(caster->GetMaxPowerForCombat128(POWER_MANA), impDrainSoul->GetSpellInfo()->Effects[EFFECT_2].CalcValue());
+                int32 amount = CalculatePctInt32Saturated(caster->GetMaxPowerForCombat256(POWER_MANA), impDrainSoul->GetSpellInfo()->Effects[EFFECT_2].CalcValue());
                 caster->CastCustomSpell(SPELL_WARLOCK_IMPROVED_DRAIN_SOUL_PROC, SPELLVALUE_BASE_POINT0, amount, caster, true, nullptr, aurEff, caster->GetGUID());
             }
         }

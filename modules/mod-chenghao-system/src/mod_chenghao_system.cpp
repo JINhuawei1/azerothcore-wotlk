@@ -14,6 +14,7 @@
 #include "ChatCommand.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
+#include "HermesBridgeAddonApi.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "World.h"
@@ -590,6 +591,9 @@ void SendAddonPayload(Player* player, std::string const& payload)
 
     if (payload.length() <= MAX_ADDON_PAYLOAD)
     {
+        if (HermesBridge_SendAddonMessage(player, CHENGHAO_SYSTEM_ADDON_PREFIX, payload))
+            return;
+
         std::string fullMessage = std::string(CHENGHAO_SYSTEM_ADDON_PREFIX) + '\t' + payload;
         WorldPacket data;
         ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
@@ -606,6 +610,8 @@ void SendAddonPayload(Player* player, std::string const& payload)
 
         std::ostringstream chunkMessage;
         chunkMessage << "CHUNK:" << (i + 1) << ":" << totalChunks << ":" << chunk;
+        if (HermesBridge_SendAddonMessage(player, CHENGHAO_SYSTEM_ADDON_PREFIX, chunkMessage.str()))
+            continue;
 
         std::string fullMessage = std::string(CHENGHAO_SYSTEM_ADDON_PREFIX) + '\t' + chunkMessage.str();
         WorldPacket data;
@@ -895,7 +901,7 @@ class ChenghaoSystemUnitScript : public UnitScript
 public:
     ChenghaoSystemUnitScript() : UnitScript("ChenghaoSystemUnitScript", true, { UNITHOOK_ON_DAMAGE }) { }
 
-    void OnDamage(Unit* /*attacker*/, Unit* victim, uint128& damage) override
+    void OnDamage(Unit* /*attacker*/, Unit* victim, uint256& damage) override
     {
         if (!victim || damage == 0 || !ChenghaoSystemMgr::Instance()->IsEnabled())
             return;
@@ -914,7 +920,7 @@ public:
             return;
         }
 
-        damage = damage * static_cast<uint128>(100 - reductionPct) / 100;
+        damage = damage * static_cast<uint256>(100 - reductionPct) / 100;
     }
 };
 

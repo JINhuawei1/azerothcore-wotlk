@@ -3,6 +3,7 @@
 #include "Log.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
+#include "HermesBridgeAddonApi.h"
 #include "QuestDef.h"
 #include "WorldPacket.h"
 #include "Opcodes.h"
@@ -22,7 +23,7 @@ namespace
             return;
         }
 
-        player->SetMoney(player->GetMoney() + static_cast<int128>(amount));
+        player->SetMoney(player->GetMoney() + static_cast<int256>(amount));
     }
 
     std::set<uint32> const& GetProtectedQuestItems()
@@ -182,6 +183,9 @@ private:
     static void SendAddonMessage(Player* player, std::string const& payload)
     {
         if (!player || payload.empty())
+            return;
+
+        if (HermesBridge_SendAddonMessage(player, ITEM_RECYCLE_ADDON_PREFIX, payload))
             return;
 
         // 构造 "前缀\t消息" 格式，兼容 AzerothCore Addon 通道
@@ -499,6 +503,9 @@ bool ItemRecycleScript::CanRecycleItem(Player* player, Item* item, const PlayerR
     if (!itemTemplate)
         return false;
 
+    if (item->IsBOPTradable())
+        return false;
+
     if (IsReservedByMaterialWarehouse(player, item->GetEntry()))
         return false;
 
@@ -747,7 +754,7 @@ void ItemRecycleScript::PerformAutoRecycle(Player* player)
 
     // 自动回收逻辑由定时器控制，这里直接执行
 
-    std::vector<Item*> itemsToRecycle;
+    std::vector<ObjectGuid::LowType> itemsToRecycle;
     uint32 totalReward = 0;
     uint32 totalCount = 0;
 
@@ -757,7 +764,7 @@ void ItemRecycleScript::PerformAutoRecycle(Player* player)
         Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i);
         if (item && CanRecycleItem(player, item, settings))
         {
-            itemsToRecycle.push_back(item);
+            itemsToRecycle.push_back(item->GetGUID().GetCounter());
         }
     }
 
@@ -772,7 +779,7 @@ void ItemRecycleScript::PerformAutoRecycle(Player* player)
                 Item* item = bag->GetItemByPos(j);
                 if (item && CanRecycleItem(player, item, settings))
                 {
-                    itemsToRecycle.push_back(item);
+                    itemsToRecycle.push_back(item->GetGUID().GetCounter());
                 }
             }
         }
@@ -790,9 +797,13 @@ void ItemRecycleScript::PerformAutoRecycle(Player* player)
     uint64 totalCopperReward = 0; // 总铜币奖励
     uint32 destroyedCount = 0; // 摧毁的物品数量
 
-    for (Item* item : itemsToRecycle)
+    for (ObjectGuid::LowType itemGuid : itemsToRecycle)
     {
+        Item* item = player->GetItemByGuid(ObjectGuid::Create<HighGuid::Item>(itemGuid));
         if (!item || requirementExhausted)
+            continue;
+
+        if (!CanRecycleItem(player, item, settings))
             continue;
 
         ItemTemplate const* itemTemplate = item->GetTemplate();
@@ -1321,4 +1332,3 @@ void ItemRecycle_Worldscript::OnUpdate(uint32 diff)
         _initialized = true; // 防止继续尝试
     }
 }
-

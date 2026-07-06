@@ -4124,16 +4124,24 @@ void Player::UpdateSoulboundTradeItems()
     if (m_itemSoulboundTradeable.empty())
         return;
 
-    // also checks for garbage data
-    for (ItemDurationList::iterator itr = m_itemSoulboundTradeable.begin(); itr != m_itemSoulboundTradeable.end();)
+    for (SoulboundTradeableItemList::iterator itr = m_itemSoulboundTradeable.begin(); itr != m_itemSoulboundTradeable.end();)
     {
-        ASSERT(*itr);
-        if ((*itr)->GetOwnerGUID() != GetGUID())
+        ObjectGuid::LowType itemGuid = *itr;
+        Item* item = GetItemByGuid(ObjectGuid::Create<HighGuid::Item>(itemGuid));
+        if (!item)
+        {
+            LOG_INFO("server.loading", "[BOP可交易物品修复] 玩家GUID={} 移除失效物品GUID={}", GetGUID().GetCounter(), itemGuid);
+            m_itemSoulboundTradeable.erase(itr++);
+            continue;
+        }
+
+        if (item->GetOwnerGUID() != GetGUID())
         {
             m_itemSoulboundTradeable.erase(itr++);
             continue;
         }
-        if ((*itr)->CheckSoulboundTradeExpire())
+
+        if (item->CheckSoulboundTradeExpire())
         {
             m_itemSoulboundTradeable.erase(itr++);
             continue;
@@ -4144,15 +4152,22 @@ void Player::UpdateSoulboundTradeItems()
 
 void Player::AddTradeableItem(Item* item)
 {
+    if (!item)
+        return;
+
     std::lock_guard<std::mutex> guard(m_soulboundTradableLock);
-    m_itemSoulboundTradeable.push_back(item);
+    ObjectGuid::LowType itemGuid = item->GetGUID().GetCounter();
+    m_itemSoulboundTradeable.remove(itemGuid);
+    m_itemSoulboundTradeable.push_back(itemGuid);
 }
 
-//TODO: should never allow an item to be added to m_itemSoulboundTradeable twice
 void Player::RemoveTradeableItem(Item* item)
 {
+    if (!item)
+        return;
+
     std::lock_guard<std::mutex> guard(m_soulboundTradableLock);
-    m_itemSoulboundTradeable.remove(item);
+    m_itemSoulboundTradeable.remove(item->GetGUID().GetCounter());
 }
 
 void Player::UpdateItemDuration(uint32 time, bool realtimeonly)
@@ -5064,7 +5079,7 @@ bool Player::LoadFromDB(ObjectGuid playerGuid, CharacterDatabaseQueryHolder cons
     m_achievementMgr->LoadFromDB(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACHIEVEMENTS), holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_CRITERIA_PROGRESS), holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_OFFLINE_ACHIEVEMENTS_UPDATES));
 
 
-    SetMoney(static_cast<int128>(fields[8].Get<uint128>()));
+    SetMoney(static_cast<int256>(fields[8].Get<uint256>()));
 
     SetByteValue(PLAYER_BYTES, 0, fields[9].Get<uint8>());
     SetByteValue(PLAYER_BYTES, 1, fields[10].Get<uint8>());
@@ -5555,22 +5570,22 @@ bool Player::LoadFromDB(ObjectGuid playerGuid, CharacterDatabaseQueryHolder cons
     UpdateAllStats();
 
     // restore remembered power/health values (but not more max values)
-    uint128 savedHealth = fields[55].GetUInt128();
-    uint128 maxHealth = GetMaxHealthForCombat128();
+    uint256 savedHealth = fields[55].GetUInt256();
+    uint256 maxHealth = GetMaxHealthForCombat256();
     if (maxHealth != 0 && savedHealth > maxHealth)
         savedHealth = maxHealth;
 
-    SetHealthForCombat128(savedHealth);
+    SetHealthForCombat256(savedHealth);
 
     for (uint8 i = 0; i < MAX_POWERS; ++i)
     {
         Powers power = Powers(i);
-        uint128 savedPower = fields[56 + i].GetUInt128();
-        uint128 maxPower = GetMaxPowerForCombat128(power);
+        uint256 savedPower = fields[56 + i].GetUInt256();
+        uint256 maxPower = GetMaxPowerForCombat256(power);
         if (maxPower != 0 && savedPower > maxPower)
             savedPower = maxPower;
 
-        SetPowerForCombat128(power, savedPower);
+        SetPowerForCombat256(power, savedPower);
     }
 
 
@@ -7896,27 +7911,27 @@ void Player::_SaveStats(CharacterDatabaseTransaction trans)
     stmt->SetData(0, GetGUID().GetCounter());
     trans->Append(stmt);
 
-    auto toUInt128Stat = [](double value) -> uint128
+    auto toUInt256Stat = [](double value) -> uint256
     {
         if (value <= 0.0)
             return 0;
 
-        return Acore::Number::ToUInt128Saturated(static_cast<long double>(value));
+        return Acore::Number::ToUInt256Saturated(static_cast<long double>(value));
     };
 
     uint8 index = 0;
 
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHAR_STATS);
     stmt->SetData(index++, GetGUID().GetCounter());
-    stmt->SetData(index++, GetExtendedMaxHealth128());
+    stmt->SetData(index++, GetExtendedMaxHealth256());
 
     for (uint8 i = 0; i < MAX_POWERS; ++i)
-        stmt->SetData(index++, GetExtendedMaxPower128(Powers(i)));
+        stmt->SetData(index++, GetExtendedMaxPower256(Powers(i)));
 
     for (uint8 i = 0; i < MAX_STATS; ++i)
-        stmt->SetData(index++, GetExtendedStat128(Stats(i)));
+        stmt->SetData(index++, GetExtendedStat256(Stats(i)));
 
-    stmt->SetData(index++, GetExtendedArmor128());
+    stmt->SetData(index++, GetExtendedArmor256());
     for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
         stmt->SetData(index++, GetResistance(SpellSchools(i)));
 
@@ -7926,9 +7941,9 @@ void Player::_SaveStats(CharacterDatabaseTransaction trans)
     stmt->SetData(index++, GetFloatValue(PLAYER_CRIT_PERCENTAGE));
     stmt->SetData(index++, GetFloatValue(PLAYER_RANGED_CRIT_PERCENTAGE));
     stmt->SetData(index++, GetFloatValue(PLAYER_SPELL_CRIT_PERCENTAGE1));
-    stmt->SetData(index++, toUInt128Stat(GetExtendedTotalAttackPowerValue(BASE_ATTACK)));
-    stmt->SetData(index++, toUInt128Stat(GetExtendedTotalAttackPowerValue(RANGED_ATTACK)));
-    stmt->SetData(index++, GetBaseSpellPowerBonus128());
+    stmt->SetData(index++, toUInt256Stat(GetExtendedTotalAttackPowerValue(BASE_ATTACK)));
+    stmt->SetData(index++, toUInt256Stat(GetExtendedTotalAttackPowerValue(RANGED_ATTACK)));
+    stmt->SetData(index++, GetBaseSpellPowerBonus256());
     stmt->SetData(index++, GetExtendedCombatRating(CR_CRIT_TAKEN_SPELL));
 
     trans->Append(stmt);

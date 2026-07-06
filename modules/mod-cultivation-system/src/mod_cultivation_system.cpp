@@ -31,6 +31,7 @@
 #include "Object/Updates/UpdateFields.h"
 #include "ModuleManager.h"
 #include "RequirementInterface.h"
+#include "HermesBridgeAddonApi.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -42,83 +43,101 @@
 
 using namespace Acore::ChatCommands;
 
+bool HuanJingPrepareExternalCreatureForPlayerDamage(Unit* attacker, Creature* creature);
+void HuanJingEnterExternalPlayerDamageNoInitialAdjust();
+void HuanJingLeaveExternalPlayerDamageNoInitialAdjust();
+
 namespace
 {
-int128 ScaleRatingForCultivation(int128 const& amount, float bonusPercent)
+int256 ScaleRatingForCultivation(int256 const& amount, float bonusPercent)
 {
     long double scaled = Acore::Number::ToLongDouble(amount) * (1.0L + static_cast<long double>(bonusPercent) / 100.0L);
     if (scaled <= 0.0L)
         return 0;
 
-    return Acore::Number::ToInt128Saturated(scaled);
+    return Acore::Number::ToInt256Saturated(scaled);
 }
 
-int128 ScaleSpellPowerForCultivation(int128 const& amount, long double multiplier)
+int256 ScaleSpellPowerForCultivation(int256 const& amount, long double multiplier)
 {
     long double scaled = Acore::Number::ToLongDouble(amount) * multiplier;
     if (scaled <= 0.0L)
         return 0;
 
-    return Acore::Number::ToInt128Saturated(scaled);
+    return Acore::Number::ToInt256Saturated(scaled);
 }
 
-int128 ToPositiveInt128ForCultivation(long double value)
+int256 ToPositiveInt256ForCultivation(long double value)
 {
     if (value <= 0.0L)
         return 0;
 
     if (!std::isfinite(value))
-        return std::numeric_limits<int128>::max();
+        return std::numeric_limits<int256>::max();
 
     if (value < 1.0L)
         return 1;
 
-    return Acore::Number::ToInt128Saturated(value);
+    return Acore::Number::ToInt256Saturated(value);
 }
 
-int128 ScaleDamageForCultivation(long double value, long double multiplier)
+int256 ScaleDamageForCultivation(long double value, long double multiplier)
 {
-    return ToPositiveInt128ForCultivation(value * multiplier);
+    return ToPositiveInt256ForCultivation(value * multiplier);
 }
 
-int128 AddPositiveInt128Saturated(int128 const& value, int128 const& add)
+int256 AddPositiveInt256Saturated(int256 const& value, int256 const& add)
 {
     if (add <= 0)
         return value;
 
-    int128 const maxValue = std::numeric_limits<int128>::max();
+    int256 const maxValue = std::numeric_limits<int256>::max();
     if (value > maxValue - add)
         return maxValue;
 
     return value + add;
 }
 
-std::string FormatCultivationInt128(int128 const& value)
+std::string FormatCultivationInt256(int256 const& value)
 {
     return value.convert_to<std::string>();
 }
 
-int128 CountPctFromMaxHealthForCultivation(Unit* unit, int32 pct)
+class HuanJingExternalDamageNoInitialAdjustGuard
+{
+public:
+    HuanJingExternalDamageNoInitialAdjustGuard()
+    {
+        HuanJingEnterExternalPlayerDamageNoInitialAdjust();
+    }
+
+    ~HuanJingExternalDamageNoInitialAdjustGuard()
+    {
+        HuanJingLeaveExternalPlayerDamageNoInitialAdjust();
+    }
+};
+
+int256 CountPctFromMaxHealthForCultivation(Unit* unit, int32 pct)
 {
     if (!unit)
         return 0;
 
-    return Acore::Number::ToInt128Saturated(unit->CountPctFromMaxHealth128(pct));
+    return Acore::Number::ToInt256Saturated(unit->CountPctFromMaxHealth256(pct));
 }
 
-uint128 ApplyHealthGainForCultivation(Unit* unit, int128 const& amount)
+uint256 ApplyHealthGainForCultivation(Unit* unit, int256 const& amount)
 {
     if (!unit || amount <= 0)
         return 0;
 
-    uint128 currentHealth = unit->GetHealthForCombat128();
-    uint128 maxHealth = unit->GetMaxHealthForCombat128();
+    uint256 currentHealth = unit->GetHealthForCombat256();
+    uint256 maxHealth = unit->GetMaxHealthForCombat256();
     if (currentHealth >= maxHealth)
         return 0;
 
-    uint128 gain = std::min<uint128>(Acore::Number::ToUInt128Saturated(amount), maxHealth - currentHealth);
+    uint256 gain = std::min<uint256>(Acore::Number::ToUInt256Saturated(amount), maxHealth - currentHealth);
     if (gain)
-        unit->SetHealthForCombat128(currentHealth + gain);
+        unit->SetHealthForCombat256(currentHealth + gain);
 
     return gain;
 }
@@ -137,7 +156,7 @@ static uint32 ToCultivationClientHealth(uint64 value)
     return value > CULTIVATION_CLIENT_VISIBLE_HEALTH_LIMIT ? static_cast<uint32>(CULTIVATION_CLIENT_VISIBLE_HEALTH_LIMIT) : static_cast<uint32>(value);
 }
 
-static uint32 ToCultivationClientHealth(uint128 const& value)
+static uint32 ToCultivationClientHealth(uint256 const& value)
 {
     return value > CULTIVATION_CLIENT_VISIBLE_HEALTH_LIMIT ? static_cast<uint32>(CULTIVATION_CLIENT_VISIBLE_HEALTH_LIMIT) : Acore::Number::ToUInt32Saturated(value);
 }
@@ -751,6 +770,9 @@ void SendCultivationPayload(Player* player, std::string const& payload)
 
     if (payload.length() <= CULTIVATION_MAX_ADDON_PAYLOAD)
     {
+        if (HermesBridge_SendAddonMessage(player, CULTIVATION_ADDON_PREFIX, payload))
+            return;
+
         std::string fullMessage = std::string(CULTIVATION_ADDON_PREFIX) + '\t' + payload;
         WorldPacket data;
         ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
@@ -768,6 +790,8 @@ void SendCultivationPayload(Player* player, std::string const& payload)
 
         std::ostringstream chunkMessage;
         chunkMessage << "CHUNK:" << (i + 1) << ":" << totalChunks << ":" << chunk;
+        if (HermesBridge_SendAddonMessage(player, CULTIVATION_ADDON_PREFIX, chunkMessage.str()))
+            continue;
 
         std::string fullMessage = std::string(CULTIVATION_ADDON_PREFIX) + '\t' + chunkMessage.str();
         WorldPacket data;
@@ -1228,7 +1252,7 @@ public:
     }
 
     // 法术强度和治疗强度
-    void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int128& healingBonus, int128 spellDamage[7]) override
+    void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int256& healingBonus, int256 spellDamage[7]) override
     {
         if (!player || !s_cultivationEnabled)
             return;
@@ -1276,7 +1300,7 @@ public:
     }
 
     // 评级属性（命中、急速、精准等）
-    void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int128& amount) override
+    void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int256& amount) override
     {
         if (!player || !s_cultivationEnabled)
             return;
@@ -1588,7 +1612,7 @@ static long double GetPlayerHighestDamageValue(Unit* caster)
         long double rangedAP = static_cast<long double>(player->GetExtendedTotalAttackPowerValue(RANGED_ATTACK));
         if (rangedAP > ap) ap = rangedAP;
 
-        sp = Acore::Number::ToLongDouble(player->GetExtendedSpellDamageBonus128());
+        sp = Acore::Number::ToLongDouble(player->GetExtendedSpellDamageBonus256());
     }
 
     return std::max(ap, sp);
@@ -1605,7 +1629,7 @@ static long double GetCultivationAttackPower(Unit* caster)
     return static_cast<long double>(caster->GetTotalAttackPowerValue(BASE_ATTACK));
 }
 
-static float ToCultivationThreat(uint128 const& damage)
+static float ToCultivationThreat(uint256 const& damage)
 {
     if (damage == 0)
         return 0.0f;
@@ -1621,7 +1645,7 @@ static float ToCultivationThreat(uint128 const& damage)
     return static_cast<float>(threat);
 }
 
-static void PrepareCultivationCreatureDamageCredit(Unit* attacker, Unit* victim, uint128 const& appliedDamage)
+static void PrepareCultivationCreatureDamageCredit(Unit* attacker, Unit* victim, uint256 const& appliedDamage)
 {
     Creature* creature = victim ? victim->ToCreature() : nullptr;
     if (!creature || (victim->IsControlledByPlayer() && !victim->IsVehicle()))
@@ -1637,7 +1661,7 @@ static void PrepareCultivationCreatureDamageCredit(Unit* attacker, Unit* victim,
     }
 }
 
-static void StartCultivationDamageCombat(Unit* attacker, Unit* victim, uint128 const& threatDamage, SpellSchoolMask schoolMask, SpellInfo const* spellInfo)
+static void StartCultivationDamageCombat(Unit* attacker, Unit* victim, uint256 const& threatDamage, SpellSchoolMask schoolMask, SpellInfo const* spellInfo)
 {
     if (!attacker || !victim || victim->IsPlayer() || threatDamage == 0)
         return;
@@ -1648,7 +1672,7 @@ static void StartCultivationDamageCombat(Unit* attacker, Unit* victim, uint128 c
     victim->AddThreat(attacker, ToCultivationThreat(threatDamage), schoolMask, spellInfo);
 }
 
-static uint128 ApplyCultivationExtendedDamage(Unit* attacker, Unit* victim, uint128 const& damage, CleanDamage const* cleanDamage, DamageEffectType damageType, SpellSchoolMask schoolMask, SpellInfo const* spellInfo, bool durabilityLoss)
+static uint256 ApplyCultivationExtendedDamage(Unit* attacker, Unit* victim, uint256 const& damage, CleanDamage const* cleanDamage, DamageEffectType damageType, SpellSchoolMask schoolMask, SpellInfo const* spellInfo, bool durabilityLoss)
 {
     if (!victim || victim->isDead() || damage == 0)
         return 0;
@@ -1656,25 +1680,28 @@ static uint128 ApplyCultivationExtendedDamage(Unit* attacker, Unit* victim, uint
     if (victim->IsPlayer() && victim->ToPlayer()->GetCommandStatus(CHEAT_GOD))
         return 0;
 
-    uint128 healthBefore = victim->GetHealthForCombat128();
+    if (Creature* creatureVictim = victim->ToCreature())
+        HuanJingPrepareExternalCreatureForPlayerDamage(attacker, creatureVictim);
+
+    uint256 healthBefore = victim->GetHealthForCombat256();
     if (healthBefore == 0)
         return 0;
 
-    uint128 initialCredit = std::min<uint128>(damage, healthBefore);
+    uint256 initialCredit = std::min<uint256>(damage, healthBefore);
     PrepareCultivationCreatureDamageCredit(attacker, victim, initialCredit);
     StartCultivationDamageCombat(attacker, victim, damage, schoolMask, spellInfo);
 
-    uint128 resolvedDamage = damage;
+    uint256 resolvedDamage = damage;
     sScriptMgr->OnDamage(attacker, victim, resolvedDamage);
 
     if (resolvedDamage == 0)
         return 0;
 
-    healthBefore = victim->GetHealthForCombat128();
+    healthBefore = victim->GetHealthForCombat256();
     if (healthBefore == 0)
         return 0;
 
-    uint128 appliedDamage = std::min<uint128>(resolvedDamage, healthBefore);
+    uint256 appliedDamage = std::min<uint256>(resolvedDamage, healthBefore);
     if (appliedDamage == 0)
         return 0;
 
@@ -1684,7 +1711,7 @@ static uint128 ApplyCultivationExtendedDamage(Unit* attacker, Unit* victim, uint
         return appliedDamage;
     }
 
-    victim->SetHealthForCombat128(healthBefore - appliedDamage);
+    victim->SetHealthForCombat256(healthBefore - appliedDamage);
 
     if (damageType == DIRECT_DAMAGE || damageType == SPELL_DIRECT_DAMAGE)
         victim->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_DIRECT_DAMAGE, spellInfo ? spellInfo->Id : 0);
@@ -1692,12 +1719,12 @@ static uint128 ApplyCultivationExtendedDamage(Unit* attacker, Unit* victim, uint
     return appliedDamage;
 }
 
-static void DealCultivationDirectSpellDamage(Unit* caster, Unit* target, uint32 spellId, int128 const& damage, SpellSchoolMask schoolMask)
+static void DealCultivationDirectSpellDamage(Unit* caster, Unit* target, uint32 spellId, int256 const& damage, SpellSchoolMask schoolMask)
 {
     if (!caster || !target || !target->IsAlive() || damage <= 0)
         return;
 
-    uint128 rawDamage = Acore::Number::ToUInt128Saturated(damage);
+    uint256 rawDamage = Acore::Number::ToUInt256Saturated(damage);
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
     if (!spellInfo)
     {
@@ -1714,13 +1741,17 @@ static void DealCultivationDirectSpellDamage(Unit* caster, Unit* target, uint32 
     caster->DealSpellDamage(&damageInfo, true);
 }
 
-static void DealCultivationPeriodicAuraDamage(Unit* caster, Unit* target, AuraEffect const* aurEff, uint32 spellId, int128 const& damage, SpellSchoolMask schoolMask)
+static void DealCultivationPeriodicAuraDamage(Unit* caster, Unit* target, AuraEffect const* aurEff, uint32 spellId, int256 const& damage, SpellSchoolMask schoolMask)
 {
     if (!caster || !target || !target->IsAlive() || damage <= 0)
         return;
 
-    uint128 rawDamage = Acore::Number::ToUInt128Saturated(damage);
-    uint128 healthBefore = target->GetHealthForCombat128();
+    HuanJingExternalDamageNoInitialAdjustGuard noInitialHuanJingAdjust;
+
+    if (Creature* creatureTarget = target->ToCreature())
+        HuanJingPrepareExternalCreatureForPlayerDamage(caster, creatureTarget);
+
+    uint256 rawDamage = Acore::Number::ToUInt256Saturated(damage);
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
     if (!spellInfo)
     {
@@ -1731,14 +1762,14 @@ static void DealCultivationPeriodicAuraDamage(Unit* caster, Unit* target, AuraEf
     caster->SetLastDamagedTargetGuid(target->GetGUID());
 
     CleanDamage cleanDamage(0, 0, BASE_ATTACK, MELEE_HIT_NORMAL);
-    uint128 tickDamage = rawDamage;
+    uint256 tickDamage = rawDamage;
 
-    uint128 scriptDamage = tickDamage;
+    uint256 scriptDamage = tickDamage;
     sScriptMgr->ModifyPeriodicDamageAurasTick(target, caster, scriptDamage, spellInfo);
     if (scriptDamage != tickDamage)
         tickDamage = scriptDamage;
 
-    if (target->GetAI() && tickDamage <= static_cast<uint128>(std::numeric_limits<uint32>::max()))
+    if (target->GetAI() && tickDamage <= static_cast<uint256>(std::numeric_limits<uint32>::max()))
     {
         uint32 aiDamage = Acore::Number::ToUInt32Saturated(tickDamage);
         uint32 originalAiDamage = aiDamage;
@@ -1750,24 +1781,24 @@ static void DealCultivationPeriodicAuraDamage(Unit* caster, Unit* target, AuraEf
     uint8 effIndex = aurEff ? aurEff->GetEffIndex() : EFFECT_0;
     if (Unit::IsDamageReducedByArmor(schoolMask, spellInfo, effIndex))
     {
-        uint128 damageReducedArmor = Unit::CalcArmorReducedDamage(caster, target, tickDamage, spellInfo);
-        cleanDamage.mitigated_damage = AddUInt128Damage(cleanDamage.mitigated_damage, tickDamage > damageReducedArmor ? tickDamage - damageReducedArmor : uint128(0));
+        uint256 damageReducedArmor = Unit::CalcArmorReducedDamage(caster, target, tickDamage, spellInfo);
+        cleanDamage.mitigated_damage = AddUInt256Damage(cleanDamage.mitigated_damage, tickDamage > damageReducedArmor ? tickDamage - damageReducedArmor : uint256(0));
         tickDamage = damageReducedArmor;
     }
 
     DamageInfo dmgInfo(caster, target, tickDamage, spellInfo, schoolMask, DOT, cleanDamage.mitigated_damage);
     Unit::CalcAbsorbResist(dmgInfo);
 
-    uint128 absorb = dmgInfo.GetAbsorb();
-    uint128 resist = dmgInfo.GetResist();
+    uint256 absorb = dmgInfo.GetAbsorb();
+    uint256 resist = dmgInfo.GetResist();
     tickDamage = dmgInfo.GetDamage();
 
-    uint128 originalTickDamage = tickDamage;
-    tickDamage = AddUInt128Damage(AddUInt128Damage(tickDamage, caster->GetCustomTrueDamageBonus()), caster->GetCustomCuttingDamageBonus());
+    uint256 originalTickDamage = tickDamage;
+    tickDamage = AddUInt256Damage(AddUInt256Damage(tickDamage, caster->GetCustomTrueDamageBonus()), caster->GetCustomCuttingDamageBonus());
     if (tickDamage > originalTickDamage)
     {
-        uint128 bonusDamage = tickDamage - originalTickDamage;
-        dmgInfo.ModifyDamage(bonusDamage > static_cast<uint128>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(Acore::Number::ToUInt64Saturated(bonusDamage)));
+        uint256 bonusDamage = tickDamage - originalTickDamage;
+        dmgInfo.ModifyDamage(bonusDamage > static_cast<uint256>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(Acore::Number::ToUInt64Saturated(bonusDamage)));
     }
 
     Unit::DealDamageMods(target, tickDamage, &absorb);
@@ -1839,8 +1870,8 @@ class spell_cultivation_lingren : public SpellScript
             return;
 
         long double highValue = GetPlayerHighestDamageValue(caster);
-        int128 damage = ScaleDamageForCultivation(highValue, 1.5L);
-        SetHitDamage128(Acore::Number::ToUInt128Saturated(damage));
+        int256 damage = ScaleDamageForCultivation(highValue, 1.5L);
+        SetHitDamage256(Acore::Number::ToUInt256Saturated(damage));
     }
 
     void HandleAfterHit()
@@ -1852,7 +1883,7 @@ class spell_cultivation_lingren : public SpellScript
 
         float angle = caster->GetAngle(target);
         long double highValue = GetPlayerHighestDamageValue(caster);
-        int128 damage = ScaleDamageForCultivation(highValue, 1.5L);
+        int256 damage = ScaleDamageForCultivation(highValue, 1.5L);
 
         std::list<Unit*> targets;
         GetHostileUnitsInRange(caster, targets, 30.0f);
@@ -1898,8 +1929,8 @@ class spell_cultivation_jindanbao : public SpellScript
             return;
 
         long double ap = GetCultivationAttackPower(caster);
-        int128 damage = ScaleDamageForCultivation(ap, 2.0L);
-        SetHitDamage128(Acore::Number::ToUInt128Saturated(damage));
+        int256 damage = ScaleDamageForCultivation(ap, 2.0L);
+        SetHitDamage256(Acore::Number::ToUInt256Saturated(damage));
 
         // 击退
         float x = caster->GetPositionX();
@@ -1930,8 +1961,8 @@ class spell_cultivation_tianlei : public SpellScript
             return;
 
         long double highValue = GetPlayerHighestDamageValue(caster);
-        int128 damage = ScaleDamageForCultivation(highValue, 2.5L);
-        SetHitDamage128(Acore::Number::ToUInt128Saturated(damage));
+        int256 damage = ScaleDamageForCultivation(highValue, 2.5L);
+        SetHitDamage256(Acore::Number::ToUInt256Saturated(damage));
 
     }
 
@@ -1994,7 +2025,7 @@ class spell_cultivation_wanjian_aura : public AuraScript
             return;
 
         long double ap = GetCultivationAttackPower(caster);
-        int128 damage = ScaleDamageForCultivation(ap, 1.2L);
+        int256 damage = ScaleDamageForCultivation(ap, 1.2L);
 
         std::list<Unit*> targets;
         GetHostileUnitsInRange(caster, targets, 15.0f);
@@ -2021,7 +2052,7 @@ class spell_cultivation_tuntian : public SpellScript
 {
     PrepareSpellScript(spell_cultivation_tuntian);
 
-    int128 _totalDamage = 0;
+    int256 _totalDamage = 0;
 
     void FilterTargets(std::list<WorldObject*>& targets)
     {
@@ -2049,9 +2080,9 @@ class spell_cultivation_tuntian : public SpellScript
         }
 
         long double highValue = GetPlayerHighestDamageValue(caster);
-        int128 damage = ScaleDamageForCultivation(highValue, 3.5L);
-        SetHitDamage128(Acore::Number::ToUInt128Saturated(damage));
-        _totalDamage = AddPositiveInt128Saturated(_totalDamage, damage);
+        int256 damage = ScaleDamageForCultivation(highValue, 3.5L);
+        SetHitDamage256(Acore::Number::ToUInt256Saturated(damage));
+        _totalDamage = AddPositiveInt256Saturated(_totalDamage, damage);
 
     }
 
@@ -2062,7 +2093,7 @@ class spell_cultivation_tuntian : public SpellScript
             return;
 
         // 吸血20%
-        int128 healAmount = _totalDamage / 5;
+        int256 healAmount = _totalDamage / 5;
         if (healAmount > 0)
         {
             ApplyHealthGainForCultivation(caster, healAmount);
@@ -2070,7 +2101,7 @@ class spell_cultivation_tuntian : public SpellScript
             if (Player* player = caster->ToPlayer())
             {
                 ChatHandler(player->GetSession()).PSendSysMessage(
-                    "|cff00ff00[吞天噬地]|r 吸取生命力，回复 |cff00ff00{}|r 点生命值", FormatCultivationInt128(healAmount));
+                    "|cff00ff00[吞天噬地]|r 吸取生命力，回复 |cff00ff00{}|r 点生命值", FormatCultivationInt256(healAmount));
             }
         }
     }
@@ -2099,7 +2130,7 @@ class spell_cultivation_jiutian_aura : public AuraScript
             return;
 
         long double highValue = GetPlayerHighestDamageValue(caster);
-        int128 damage = ScaleDamageForCultivation(highValue, 2.0L);
+        int256 damage = ScaleDamageForCultivation(highValue, 2.0L);
 
         std::list<Unit*> targets;
         GetHostileUnitsInRange(caster, targets, 50.0f);
@@ -2133,7 +2164,7 @@ class spell_cultivation_xianshen_aura : public AuraScript
             return;
 
         // 每秒回复5%最大生命值
-        int128 healAmount = CountPctFromMaxHealthForCultivation(target, 5);
+        int256 healAmount = CountPctFromMaxHealthForCultivation(target, 5);
         if (healAmount > 0)
             ApplyHealthGainForCultivation(target, healAmount);
     }

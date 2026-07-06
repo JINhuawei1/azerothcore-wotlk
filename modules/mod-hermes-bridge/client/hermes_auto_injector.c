@@ -231,8 +231,8 @@ static void PrintUsage(void)
     printf("  --state <path>         Active-state file path. Default: injector-dir\\hermes_auto_injector.state\n");
     printf("  --log <path>           Auto injector log path. Default: injector-dir\\hermes_auto_injector.log\n");
     printf("  --wait-ms <number>     Max wait in --once mode. Default: 120000.\n");
-    printf("  --poll-ms <number>     Process scan interval. Default: 1000.\n");
-    printf("  --settle-ms <number>   Extra wait after the WoW window appears. Default: 5000.\n");
+    printf("  --poll-ms <number>     Process scan interval. Default/max: 250.\n");
+    printf("  --settle-ms <number>   Extra wait after the WoW window appears. Default: 250, max: 1000.\n");
     printf("  --help                 Show this help.\n");
 }
 
@@ -268,8 +268,8 @@ static int ParseArguments(int argc, char** argv, AutoInjectConfig* config)
     ZeroMemory(config, sizeof(*config));
     config->once = 0;
     config->waitMs = 120000;
-    config->pollMs = 1000;
-    config->settleMs = 5000;
+    config->pollMs = 250;
+    config->settleMs = 250;
     config->anyWow = 1;
     config->targetPid = 0;
     CopyString(config->wowExe, sizeof(config->wowExe), DEFAULT_WOW_EXE);
@@ -351,8 +351,11 @@ static int ParseArguments(int argc, char** argv, AutoInjectConfig* config)
         }
     }
 
-    if (config->pollMs == 0)
-        config->pollMs = 1000;
+    if (config->pollMs == 0 || config->pollMs > 250)
+        config->pollMs = 250;
+
+    if (config->settleMs > 1000)
+        config->settleMs = 1000;
 
     if (config->targetDllName[0] == '\0' ||
         strchr(config->targetDllName, '\\') ||
@@ -912,11 +915,13 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    LogMessage(&config, "Hermes Auto Injector start mode=%s wow=%s sourceDll=%s targetDllName=%s",
+    LogMessage(&config, "Hermes Auto Injector start mode=%s wow=%s sourceDll=%s targetDllName=%s pollMs=%lu settleMs=%lu",
         config.once ? "once" : "monitor",
         config.anyWow ? "<any>" : config.wowExe,
         config.dllPath,
-        config.targetDllName);
+        config.targetDllName,
+        (unsigned long)config.pollMs,
+        (unsigned long)config.settleMs);
 
     if (GetFileAttributesA(config.dllPath) == INVALID_FILE_ATTRIBUTES)
     {

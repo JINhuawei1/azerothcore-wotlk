@@ -116,7 +116,7 @@ struct boss_shade_of_aran : public BossAI
         BossAI::Reset();
         // Reset the mana of the boss fully before resetting drinking
         // If this was omitted, the boss would start drinking on reset if the mana was low on a wipe
-        me->SetPowerForCombat128(POWER_MANA, me->GetMaxPowerForCombat128(POWER_MANA));
+        me->SetPowerForCombat256(POWER_MANA, me->GetMaxPowerForCombat256(POWER_MANA));
         _drinkScheduler.CancelAll();
 
         _lastSuperSpell = 0;
@@ -203,8 +203,8 @@ struct boss_shade_of_aran : public BossAI
             me->RemoveAurasDueToSpell(SPELL_DRINK);
             me->SetStandState(UNIT_STAND_STATE_STAND);
             me->SetReactState(REACT_AGGRESSIVE);
-            uint128 maxMana = me->GetMaxPowerForCombat128(POWER_MANA);
-            me->SetPowerForCombat128(POWER_MANA, maxMana > 32000 ? maxMana - 32000 : 0);
+            uint256 maxMana = me->GetMaxPowerForCombat256(POWER_MANA);
+            me->SetPowerForCombat256(POWER_MANA, maxMana > 32000 ? maxMana - 32000 : 0);
             _drinkScheduler.CancelGroup(GROUP_DRINKING);
             _drinkScheduler.Schedule(1s, [this](TaskContext)
             {
@@ -217,8 +217,8 @@ struct boss_shade_of_aran : public BossAI
     void OnPowerUpdate(Powers /*power*/, int32 /*gain*/, int32 /*updateVal*/, uint32 /*currentPower*/) override
     {
         // Should drink at 10%, need 10% mana for mass polymorph
-        uint128 maxMana = me->GetMaxPowerForCombat128(POWER_MANA);
-        if (!_hasDrunk && maxMana && (Acore::Number::ToLongDouble(me->GetPowerForCombat128(POWER_MANA)) * 100.0L / Acore::Number::ToLongDouble(maxMana)) < 13.5L)
+        uint256 maxMana = me->GetMaxPowerForCombat256(POWER_MANA);
+        if (!_hasDrunk && maxMana && (Acore::Number::ToLongDouble(me->GetPowerForCombat256(POWER_MANA)) * 100.0L / Acore::Number::ToLongDouble(maxMana)) < 13.5L)
         {
             _hasDrunk = true;
             me->SetReactState(REACT_PASSIVE);
@@ -243,8 +243,8 @@ struct boss_shade_of_aran : public BossAI
             {
                 me->SetStandState(UNIT_STAND_STATE_STAND);
                 me->SetReactState(REACT_AGGRESSIVE);
-                uint128 maxMana = me->GetMaxPowerForCombat128(POWER_MANA);
-                me->SetPowerForCombat128(POWER_MANA, maxMana > 32000 ? maxMana - 32000 : 0);
+                uint256 maxMana = me->GetMaxPowerForCombat256(POWER_MANA);
+                me->SetPowerForCombat256(POWER_MANA, maxMana > 32000 ? maxMana - 32000 : 0);
                 DoCastSelf(SPELL_AOE_PYROBLAST);
                 _drinkScheduler.CancelGroup(GROUP_DRINKING);
                 _drinking = false;
@@ -296,8 +296,8 @@ struct boss_shade_of_aran : public BossAI
 
                     if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(_currentNormalSpell))
                     {
-                        int128 powerCost = spellInfo->CalcPowerCost(me, (SpellSchoolMask)spellInfo->SchoolMask);
-                        if (powerCost > 0 && me->GetPowerForCombat128(POWER_MANA) < Acore::Number::ToUInt128Saturated(powerCost))
+                        int256 powerCost = spellInfo->CalcPowerCost(me, (SpellSchoolMask)spellInfo->SchoolMask);
+                        if (powerCost > 0 && me->GetPowerForCombat256(POWER_MANA) < Acore::Number::ToUInt256Saturated(powerCost))
                         {
                             DoCastSelf(SPELL_POTION);
                         }

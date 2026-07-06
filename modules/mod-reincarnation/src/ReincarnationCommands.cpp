@@ -12,6 +12,7 @@
 #include "Reincarnation.h"
 #include "ScriptMgr.h"
 #include "Chat.h"
+#include "HermesBridgeAddonApi.h"
 #include "Player.h"
 #include "Configuration/Config.h"
 #include "Log.h"
@@ -223,6 +224,9 @@ public:
             return false;
 
         // 发送打开UI界面的Addon消息
+        if (HermesBridge_SendAddonMessage(player, REINCARNATION_ADDON_PREFIX, "OPEN_UI"))
+            return true;
+
         std::string fullMessage = std::string(REINCARNATION_ADDON_PREFIX) + "\tOPEN_UI";
         WorldPacket data;
         ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
@@ -274,6 +278,9 @@ private:
         {
             return;
         }
+
+        if (HermesBridge_SendAddonMessage(player, REINCARNATION_ADDON_PREFIX, payload))
+            return;
 
         std::string fullMessage = std::string(REINCARNATION_ADDON_PREFIX) + '\t' + payload;
 

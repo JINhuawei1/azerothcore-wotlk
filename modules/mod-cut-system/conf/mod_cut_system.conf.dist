@@ -11,3 +11,13 @@ CutSystem.Enable = 1
 # 是否输出切割系统调试日志
 # 默认: 0
 CutSystem.Debug = 0
+
+# 切割命中飘字通知刷新间隔，单位毫秒。
+# 只影响客户端显示频率，不影响实际伤害结算。
+# 默认: 180
+CutSystem.ClientHitNotifyIntervalMs = 180
+
+# 是否将同一刷新窗口内的切割命中合并成一个飘字。
+# 0 = 逐条显示；1 = 合并显示
+# 默认: 1
+CutSystem.ClientHitNotifyAggregate = 1

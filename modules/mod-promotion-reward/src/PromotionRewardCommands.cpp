@@ -169,7 +169,7 @@ bool PromotionReward_CommandScript::HandleQueryCommand(ChatHandler* handler, Opt
         return true;
     }
 
-    int128 attr = sPromotionRewardMgr->CalcTotalAttr(d->days);
+    int256 attr = sPromotionRewardMgr->CalcTotalAttr(d->days);
     bool held = online ? sPromotionRewardMgr->IsWeaponHeld(online) : false;
 
     handler->PSendSysMessage("========================================");

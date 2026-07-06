@@ -11,6 +11,7 @@
 #include "DBCStores.h"
 #include "Item.h"
 #include "ItemTemplate.h"
+#include "HermesBridgeAddonApi.h"
 #include "Log.h"
 #include "MaterialWarehouseSystem.h"
 #include "ObjectMgr.h"
@@ -32,7 +33,11 @@ namespace
 {
 char constexpr MATERIAL_WAREHOUSE_ADDON_PREFIX[] = "MATWH";
 size_t constexpr MATERIAL_WAREHOUSE_MAX_ADDON_PAYLOAD = 230;
-uint32 constexpr MATERIAL_WAREHOUSE_AUTO_STORE_BATCH_SIZE = 500;
+// 每次 OnPlayerUpdate 最多处理的“待自动存储物品种类数”。
+// 旧实现这里是按“数量”限速(每 tick 最多存 500 个)，玩家一次获得千万级材料时
+// 需要几万个 tick 才能存完，且每 tick 都 SendWarehouse 刷屏客户端造成严重卡顿。
+// 现改为按“物品种类数”限速：每个种类一次性全量存入，正常一个 tick 即可存完所有材料。
+uint32 constexpr MATERIAL_WAREHOUSE_AUTO_STORE_MAX_ITEMS_PER_TICK = 256;
 uint32 constexpr MATERIAL_WAREHOUSE_PAGE_SIZE = 200;
 
 struct MaterialWarehouseType
@@ -46,14 +51,14 @@ struct MaterialWarehouseType
 
 struct MaterialWarehouseStoredItem
 {
-    uint128 count = 0;
+    uint256 count = 0;
     bool autoStore = true;
 };
 
-uint128 SaturatingAddUInt128(uint128 const& left, uint128 const& right)
+uint256 SaturatingAddUInt256(uint256 const& left, uint256 const& right)
 {
-    if (right > std::numeric_limits<uint128>::max() - left)
-        return std::numeric_limits<uint128>::max();
+    if (right > std::numeric_limits<uint256>::max() - left)
+        return std::numeric_limits<uint256>::max();
 
     return left + right;
 }
@@ -69,26 +74,30 @@ std::string SanitizeAddonField(std::string value)
 
 std::string BuildAddonIconPath(char const* inventoryIcon)
 {
+    // 图标路径统一使用正斜杠：该字段经 Hermes 桥的 JSON 通道下发，客户端 DLL 的
+    // 轻量 JSON 解析不做反转义，反斜杠会以 "\\" 字面形式到达插件导致 SetTexture
+    // 失效(图标空白)。WoW 的纹理路径接受正斜杠，且 '/' 在 JSON 中无需转义。
     if (!inventoryIcon || !*inventoryIcon)
-        return "Interface\\Icons\\INV_Misc_QuestionMark";
+        return "Interface/Icons/INV_Misc_QuestionMark";
 
     std::string icon(inventoryIcon);
-    if (icon.find("Interface\\") == 0 || icon.find("interface\\") == 0)
+    std::replace(icon.begin(), icon.end(), '\\', '/');
+    if (icon.find("Interface/") == 0 || icon.find("interface/") == 0)
         return icon;
 
-    return "Interface\\Icons\\" + icon;
+    return "Interface/Icons/" + icon;
 }
 
 std::string GetItemIconPath(uint32 itemId)
 {
     ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(itemId);
     if (!itemTemplate || !itemTemplate->DisplayInfoID)
-        return "Interface\\Icons\\INV_Misc_QuestionMark";
+        return "Interface/Icons/INV_Misc_QuestionMark";
 
     if (ItemDisplayInfoEntry const* displayInfo = sItemDisplayInfoStore.LookupEntry(itemTemplate->DisplayInfoID))
         return BuildAddonIconPath(displayInfo->inventoryIcon);
 
-    return "Interface\\Icons\\INV_Misc_QuestionMark";
+    return "Interface/Icons/INV_Misc_QuestionMark";
 }
 
 std::string BuildPlainItemText(ItemTemplate const* itemTemplate, uint32 itemId)
@@ -130,9 +139,9 @@ bool TryParseUInt32(std::string const& text, uint32& value)
     }
 }
 
-bool TryParseUInt128(std::string const& text, uint128& value)
+bool TryParseUInt256(std::string const& text, uint256& value)
 {
-    if (Optional<uint128> parsed = Acore::StringTo<uint128>(text))
+    if (Optional<uint256> parsed = Acore::StringTo<uint256>(text))
     {
         value = *parsed;
         return true;
@@ -222,7 +231,7 @@ public:
         if (!state || state->count == 0)
             return 0;
 
-        uint128 amount = std::min<uint128>(uint128(count), state->count);
+        uint256 amount = std::min<uint256>(uint256(count), state->count);
         uint32 amount32 = Acore::Number::ToUInt32Saturated(amount);
         if (!amount32)
             return 0;
@@ -288,7 +297,7 @@ public:
             Field* fields = result->Fetch();
             MaterialWarehouseStoredItem state;
             uint32 itemId = fields[0].Get<uint32>();
-            state.count = fields[1].Get<uint128>();
+            state.count = fields[1].Get<uint256>();
             state.autoStore = fields[2].Get<uint8>() != 0;
             items[itemId] = state;
         }
@@ -343,7 +352,7 @@ public:
             "ON DUPLICATE KEY UPDATE `自动存储` = 1",
             playerGuid, itemId, Acore::Number::ToDecimal65String(state.count));
 
-        uint128 deposited = 0;
+        uint256 deposited = 0;
         if (_depositExistingOnAdd)
             deposited = DepositFromInventory(player, itemId, 0, false);
 
@@ -425,7 +434,7 @@ public:
         return true;
     }
 
-    uint128 DepositFromInventory(Player* player, uint32 itemId, uint128 const& requestedCount, bool notify = true)
+    uint256 DepositFromInventory(Player* player, uint32 itemId, uint256 const& requestedCount, bool notify = true)
     {
         if (!player || !_enabled)
             return 0;
@@ -446,7 +455,7 @@ public:
             return 0;
         }
 
-        uint128 amount = requestedCount != 0 ? std::min<uint128>(requestedCount, uint128(available)) : uint128(available);
+        uint256 amount = requestedCount != 0 ? std::min<uint256>(requestedCount, uint256(available)) : uint256(available);
         if (!amount)
             return 0;
 
@@ -470,7 +479,7 @@ public:
         return destroyCount;
     }
 
-    uint128 DepositAllTracked(Player* player)
+    uint256 DepositAllTracked(Player* player)
     {
         if (!player || !_enabled)
             return 0;
@@ -491,16 +500,16 @@ public:
                 itemIds.push_back(itemId);
         }
 
-        uint128 total = 0;
+        uint256 total = 0;
         for (uint32 itemId : itemIds)
-            total = SaturatingAddUInt128(total, DepositFromInventory(player, itemId, 0, false));
+            total = SaturatingAddUInt256(total, DepositFromInventory(player, itemId, 0, false));
 
         SendResult(player, "DEPOSIT_ALL", total > 0, total > 0 ? "已存入所有已开启自动存储的物品" : "没有可存入的物品");
         SendWarehouse(player);
         return total;
     }
 
-    bool Withdraw(Player* player, uint32 itemId, uint128 const& requestedCount)
+    bool Withdraw(Player* player, uint32 itemId, uint256 const& requestedCount)
     {
         if (!player || !_enabled)
             return false;
@@ -513,9 +522,9 @@ public:
             return false;
         }
 
-        uint128 amount = requestedCount != 0 ? std::min<uint128>(requestedCount, state->count) : state->count;
-        amount = std::min<uint128>(amount, uint128(_maxWithdrawPerRequest));
-        amount = std::min<uint128>(amount, uint128(std::numeric_limits<uint32>::max()));
+        uint256 amount = requestedCount != 0 ? std::min<uint256>(requestedCount, state->count) : state->count;
+        amount = std::min<uint256>(amount, uint256(_maxWithdrawPerRequest));
+        amount = std::min<uint256>(amount, uint256(std::numeric_limits<uint32>::max()));
         uint32 amount32 = Acore::Number::ToUInt32Saturated(amount);
         if (!amount32)
         {
@@ -579,8 +588,8 @@ public:
         if (!IsItemAllowed(itemId))
             return;
 
-        uint128& pendingCount = _pendingAutoStore[playerGuid][itemId];
-        pendingCount = SaturatingAddUInt128(pendingCount, count);
+        uint256& pendingCount = _pendingAutoStore[playerGuid][itemId];
+        pendingCount = SaturatingAddUInt256(pendingCount, count);
         RememberStoreNewEvent(playerGuid, item, count);
         RefreshAutoStoreSnapshot(player, itemId);
     }
@@ -602,12 +611,12 @@ public:
         if (!IsItemAllowed(itemId))
             return;
 
-        uint128 uncoveredCount = ConsumeRecentStoreNewEvent(playerGuid, item, count);
+        uint256 uncoveredCount = ConsumeRecentStoreNewEvent(playerGuid, item, count);
         if (!uncoveredCount)
             return;
 
-        uint128& pendingCount = _pendingAutoStore[playerGuid][itemId];
-        pendingCount = SaturatingAddUInt128(pendingCount, uncoveredCount);
+        uint256& pendingCount = _pendingAutoStore[playerGuid][itemId];
+        pendingCount = SaturatingAddUInt256(pendingCount, uncoveredCount);
         RefreshAutoStoreSnapshot(player, itemId);
     }
 
@@ -617,7 +626,7 @@ public:
             return;
 
         ReconcileAutoStoreInventory(player);
-        ProcessPendingAutoStore(player, MATERIAL_WAREHOUSE_AUTO_STORE_BATCH_SIZE);
+        ProcessPendingAutoStore(player, MATERIAL_WAREHOUSE_AUTO_STORE_MAX_ITEMS_PER_TICK);
         RefreshAutoStoreSnapshot(player);
         _recentStoreNewAutoStore.erase(player->GetGUID().GetCounter());
     }
@@ -757,7 +766,7 @@ public:
         }
 
         uint32 itemId = 0;
-        uint128 count = 0;
+        uint256 count = 0;
 
         if ((parts[0] == "ADD" || parts[0] == "添加" || parts[0] == "提交" || parts[0] == "提交存储") && parts.size() >= 2 && TryParseUInt32(parts[1], itemId))
         {
@@ -774,7 +783,7 @@ public:
         if ((parts[0] == "STORE" || parts[0] == "DEPOSIT" || parts[0] == "存储" || parts[0] == "存入") && parts.size() >= 2 && TryParseUInt32(parts[1], itemId))
         {
             if (parts.size() >= 3)
-                TryParseUInt128(parts[2], count);
+                TryParseUInt256(parts[2], count);
             DepositFromInventory(player, itemId, count);
             return;
         }
@@ -782,7 +791,7 @@ public:
         if ((parts[0] == "WITHDRAW" || parts[0] == "EXTRACT" || parts[0] == "取出" || parts[0] == "提取") && parts.size() >= 2 && TryParseUInt32(parts[1], itemId))
         {
             if (parts.size() >= 3)
-                TryParseUInt128(parts[2], count);
+                TryParseUInt256(parts[2], count);
             Withdraw(player, itemId, count);
             return;
         }
@@ -824,10 +833,10 @@ private:
             playerGuid, itemId, Acore::Number::ToDecimal65String(state.count));
     }
 
-    void AddStoredCount(uint32 playerGuid, uint32 itemId, uint128 const& count)
+    void AddStoredCount(uint32 playerGuid, uint32 itemId, uint256 const& count)
     {
         MaterialWarehouseStoredItem& state = _players[playerGuid][itemId];
-        state.count = SaturatingAddUInt128(state.count, count);
+        state.count = SaturatingAddUInt256(state.count, count);
 
         CharacterDatabase.Execute(
             "INSERT INTO `_材料仓库玩家` (`玩家GUID`, `物品ID`, `数量`, `自动存储`) "
@@ -836,9 +845,9 @@ private:
             playerGuid, itemId, Acore::Number::ToDecimal65String(state.count), state.autoStore ? 1 : 0);
     }
 
-    void ProcessPendingAutoStore(Player* player, uint32 budget)
+    void ProcessPendingAutoStore(Player* player, uint32 maxItems)
     {
-        if (!player || !budget)
+        if (!player || !maxItems)
             return;
 
         uint32 playerGuid = player->GetGUID().GetCounter();
@@ -846,14 +855,14 @@ private:
         if (pendingPlayerItr == _pendingAutoStore.end())
             return;
 
-        uint32 remainingBudget = budget;
-        uint128 storedTotal = 0;
+        uint32 remainingItems = maxItems;
+        uint256 storedTotal = 0;
         auto& pendingItems = pendingPlayerItr->second;
 
-        for (auto itr = pendingItems.begin(); itr != pendingItems.end() && remainingBudget > 0; )
+        for (auto itr = pendingItems.begin(); itr != pendingItems.end() && remainingItems > 0; )
         {
             uint32 itemId = itr->first;
-            uint128 pendingCount = itr->second;
+            uint256 pendingCount = itr->second;
 
             MaterialWarehouseStoredItem* state = GetStoredState(playerGuid, itemId);
             if (!state || !state->autoStore || !IsItemAllowed(itemId))
@@ -869,18 +878,20 @@ private:
                 continue;
             }
 
-            uint128 storeCountWide = std::min<uint128>(pendingCount, uint128(std::min<uint32>(available, remainingBudget)));
+            // 一次性存入该物品当前背包中的全部可存数量，不再按 500/tick 分批。
+            // available 为 uint32，storeCount = min(pending, available) 不会因饱和而丢失精度。
+            uint256 storeCountWide = std::min<uint256>(pendingCount, uint256(available));
             uint32 storeCount = Acore::Number::ToUInt32Saturated(storeCountWide);
             if (!storeCount)
             {
-                ++itr;
+                itr = pendingItems.erase(itr);
                 continue;
             }
 
             player->DestroyItemCount(itemId, storeCount, true, false);
             AddStoredCount(playerGuid, itemId, storeCount);
-            storedTotal = SaturatingAddUInt128(storedTotal, storeCount);
-            remainingBudget -= storeCount;
+            storedTotal = SaturatingAddUInt256(storedTotal, storeCount);
+            --remainingItems;
 
             if (available <= storeCount || pendingCount <= storeCount)
                 itr = pendingItems.erase(itr);
@@ -898,16 +909,16 @@ private:
             SendWarehouse(player);
     }
 
-    void RememberStoreNewEvent(uint32 playerGuid, Item* item, uint128 const& count)
+    void RememberStoreNewEvent(uint32 playerGuid, Item* item, uint256 const& count)
     {
         if (!item || !count)
             return;
 
         _recentStoreNewAutoStore[playerGuid][item->GetGUID().GetCounter()] =
-            SaturatingAddUInt128(_recentStoreNewAutoStore[playerGuid][item->GetGUID().GetCounter()], count);
+            SaturatingAddUInt256(_recentStoreNewAutoStore[playerGuid][item->GetGUID().GetCounter()], count);
     }
 
-    uint128 ConsumeRecentStoreNewEvent(uint32 playerGuid, Item* item, uint128 const& count)
+    uint256 ConsumeRecentStoreNewEvent(uint32 playerGuid, Item* item, uint256 const& count)
     {
         if (!item || !count)
             return 0;
@@ -920,7 +931,7 @@ private:
         if (itemItr == playerItr->second.end())
             return count;
 
-        uint128 coveredCount = std::min<uint128>(itemItr->second, count);
+        uint256 coveredCount = std::min<uint256>(itemItr->second, count);
         if (itemItr->second <= coveredCount)
             playerItr->second.erase(itemItr);
         else
@@ -959,8 +970,8 @@ private:
 
             if (currentCount > previousCount)
             {
-                uint128& pendingCount = _pendingAutoStore[playerGuid][itemId];
-                pendingCount = SaturatingAddUInt128(pendingCount, uint128(currentCount - previousCount));
+                uint256& pendingCount = _pendingAutoStore[playerGuid][itemId];
+                pendingCount = SaturatingAddUInt256(pendingCount, uint256(currentCount - previousCount));
             }
 
             lastCounts[itemId] = currentCount;
@@ -1018,14 +1029,14 @@ private:
             if (!currentCount)
                 continue;
 
-            uint128& pendingCount = _pendingAutoStore[playerGuid][itemId];
-            pendingCount = SaturatingAddUInt128(pendingCount, currentCount);
+            uint256& pendingCount = _pendingAutoStore[playerGuid][itemId];
+            pendingCount = SaturatingAddUInt256(pendingCount, currentCount);
         }
 
         RefreshAutoStoreSnapshot(player, onlyItemId);
     }
 
-    void SubtractStoredCount(uint32 playerGuid, uint32 itemId, uint128 const& count)
+    void SubtractStoredCount(uint32 playerGuid, uint32 itemId, uint256 const& count)
     {
         MaterialWarehouseStoredItem* state = GetStoredState(playerGuid, itemId);
         if (!state)
@@ -1062,6 +1073,9 @@ private:
 
     void SendRawPayload(Player* player, std::string const& payload)
     {
+        if (HermesBridge_SendAddonMessage(player, MATERIAL_WAREHOUSE_ADDON_PREFIX, payload))
+            return;
+
         std::string fullMessage = std::string(MATERIAL_WAREHOUSE_ADDON_PREFIX) + '\t' + payload;
         WorldPacket data;
         ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
@@ -1073,8 +1087,8 @@ private:
     uint32 _maxWithdrawPerRequest = 100000;
     std::vector<MaterialWarehouseType> _allowedTypes;
     std::unordered_map<uint32, std::unordered_map<uint32, MaterialWarehouseStoredItem>> _players;
-    std::unordered_map<uint32, std::unordered_map<uint32, uint128>> _pendingAutoStore;
-    std::unordered_map<uint32, std::unordered_map<uint64, uint128>> _recentStoreNewAutoStore;
+    std::unordered_map<uint32, std::unordered_map<uint32, uint256>> _pendingAutoStore;
+    std::unordered_map<uint32, std::unordered_map<uint64, uint256>> _recentStoreNewAutoStore;
     std::unordered_map<uint32, std::unordered_map<uint32, uint32>> _inventoryAutoStoreCounts;
     std::unordered_map<uint32, uint32> _playerPages;
     std::unordered_set<uint32> _withdrawGuard;
@@ -1269,7 +1283,7 @@ private:
         Player* player = GetPlayer(handler);
         std::string first;
         std::string countText;
-        uint128 count = 0;
+        uint256 count = 0;
         std::istringstream stream(args ? args : "");
         stream >> first;
         stream >> countText;
@@ -1294,7 +1308,7 @@ private:
         }
 
         if (!countText.empty())
-            TryParseUInt128(countText, count);
+            TryParseUInt256(countText, count);
 
         sMaterialWarehouseMgr->DepositFromInventory(player, itemId, count);
         return true;
@@ -1324,7 +1338,7 @@ private:
         Player* player = GetPlayer(handler);
         uint32 itemId = 0;
         std::string countText;
-        uint128 count = 0;
+        uint256 count = 0;
         std::istringstream stream(args ? args : "");
         stream >> itemId;
         stream >> countText;
@@ -1336,7 +1350,7 @@ private:
         }
 
         if (!countText.empty() && countText != "all" && countText != "全部")
-            TryParseUInt128(countText, count);
+            TryParseUInt256(countText, count);
 
         sMaterialWarehouseMgr->Withdraw(player, itemId, count);
         return true;

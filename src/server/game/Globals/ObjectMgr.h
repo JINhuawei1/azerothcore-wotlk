@@ -532,8 +532,8 @@ struct PetLevelInfo
     }
 
     std::array<uint32, MAX_STATS> stats = { };
-    uint128 health{0};
-    uint128 mana{0};
+    uint256 health{0};
+    uint256 mana{0};
     uint32 armor{0};
     uint32 min_dmg{0};
     uint32 max_dmg{0};

@@ -264,8 +264,8 @@ struct TargetInfo
     bool   alive:1;
     bool   crit:1;
     bool   scaleAura:1;
-    uint128 damage;
-    uint128 healing;
+    uint256 damage;
+    uint256 healing;
 };
 
 static const uint32 SPELL_INTERRUPT_NONPLAYER = 32747;
@@ -579,9 +579,9 @@ public:
     Unit* GetOriginalCaster() const { return m_originalCaster; }
     SpellInfo const* GetSpellInfo() const { return m_spellInfo; }
     int64 GetPowerCost() const { return Acore::Number::ToInt64Saturated(m_powerCost); }
-    int128 const& GetPowerCost128() const { return m_powerCost; }
+    int256 const& GetPowerCost256() const { return m_powerCost; }
     void SetPowerCost(int64 cost) { m_powerCost = cost; }  // 模块支持：允许修改技能消耗
-    void SetPowerCost(int128 const& cost) { m_powerCost = cost; }
+    void SetPowerCost(int256 const& cost) { m_powerCost = cost; }
 
     bool UpdatePointers();                              // must be used at call Spell code after time delay (non triggered spell cast/update spell call/etc)
 
@@ -622,7 +622,7 @@ public:
     //Spell data
     SpellSchoolMask m_spellSchoolMask;                  // Spell school (can be overwrite for some spells (wand shoot for example)
     WeaponAttackType m_attackType;                      // For weapon based attack
-    int128 m_powerCost;                                 // Calculated spell cost     initialized only in Spell::prepare
+    int256 m_powerCost;                                 // Calculated spell cost     initialized only in Spell::prepare
     int32 m_casttime;                                   // Calculated spell cast time initialized only in Spell::prepare
     int32 m_channeledDuration;                          // Calculated channeled spell duration in order to calculate correct pushback.
     bool m_canReflect;                                  // can reflect this spell?
@@ -673,8 +673,8 @@ public:
     GameObject* focusObject;
 
     // Damage and healing in effects need just calculate
-    uint128 m_damage;          // Damage  in effects count here
-    uint128 m_healing;         // Healing in effects count here
+    uint256 m_damage;          // Damage  in effects count here
+    uint256 m_healing;         // Healing in effects count here
 
     // ******************************************
     // Spell trigger system

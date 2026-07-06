@@ -670,7 +670,7 @@ public:
 
             if (restoremana_timer <= diff)
             {
-                me->SetPowerForCombat128(POWER_MANA, me->GetMaxPowerForCombat128(POWER_MANA));
+                me->SetPowerForCombat256(POWER_MANA, me->GetMaxPowerForCombat256(POWER_MANA));
                 restoremana_timer = 10000;
             }
             else

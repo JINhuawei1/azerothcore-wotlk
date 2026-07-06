@@ -23,8 +23,8 @@ DROP TABLE IF EXISTS `player_class_stats`;
 CREATE TABLE `player_class_stats` (
   `Class` tinyint unsigned NOT NULL,
   `Level` tinyint unsigned NOT NULL,
-  `BaseHP` decimal(39,0) unsigned NOT NULL DEFAULT '1',
-  `BaseMana` decimal(39,0) unsigned NOT NULL DEFAULT '1',
+  `BaseHP` decimal(65,0) unsigned NOT NULL DEFAULT '1',
+  `BaseMana` decimal(65,0) unsigned NOT NULL DEFAULT '1',
   `Strength` int unsigned NOT NULL DEFAULT '0',
   `Agility` int unsigned NOT NULL DEFAULT '0',
   `Stamina` int unsigned NOT NULL DEFAULT '0',

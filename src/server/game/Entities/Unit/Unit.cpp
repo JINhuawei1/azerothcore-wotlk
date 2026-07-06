@@ -172,6 +172,86 @@ namespace
         uint32 used = 0;
     };
 
+    struct PlayerExtraAttackBudget
+    {
+        uint32 windowStartMs = 0;
+        uint32 used = 0;
+        uint32 suppressed = 0;
+    };
+
+    bool ConsumePlayerExtraAttackBudgetForDebug(Unit const* attacker, Unit const* victim)
+    {
+        uint32 const maxPerSecond = sConfigMgr->GetOption<uint32>("Combat.PlayerExtraAttacks.MaxPerSecond", 0);
+        if (!maxPerSecond || !attacker || !attacker->IsPlayer())
+            return true;
+
+        static thread_local std::unordered_map<uint64, PlayerExtraAttackBudget> budgets;
+        if (budgets.size() > 1024)
+            budgets.clear();
+
+        uint32 const now = getMSTime();
+        PlayerExtraAttackBudget& budget = budgets[attacker->GetGUID().GetRawValue()];
+        if (!budget.windowStartMs || getMSTimeDiff(budget.windowStartMs, now) >= 1000)
+        {
+            if (budget.suppressed)
+            {
+                LOG_INFO("server.loading", "[ExtraAttackThrottle] Suppressed {} player extra attacks in {} ms. attacker={} victim={} used={} maxPerSecond={}",
+                    budget.suppressed, getMSTimeDiff(budget.windowStartMs, now), attacker->GetGUID().ToString(), victim ? victim->GetGUID().ToString() : "none", budget.used, maxPerSecond);
+            }
+
+            budget.windowStartMs = now;
+            budget.used = 0;
+            budget.suppressed = 0;
+        }
+
+        if (budget.used >= maxPerSecond)
+        {
+            ++budget.suppressed;
+            return false;
+        }
+
+        ++budget.used;
+        return true;
+    }
+
+    bool ShouldSuppressPlayerMeleeWhiteDamagePacket(CalcDamageInfo const& damageInfo)
+    {
+        if (!sConfigMgr->GetOption<bool>("Debug.SuppressPlayerMeleeWhiteDamagePackets", false))
+            return false;
+
+        Unit* attacker = damageInfo.attacker;
+        Unit* target = damageInfo.target;
+        if (!attacker || !target)
+            return false;
+
+        if (!attacker->IsPlayer())
+            return false;
+
+        if (damageInfo.attackType != BASE_ATTACK && damageInfo.attackType != OFF_ATTACK)
+            return false;
+
+        static thread_local uint32 suppressedPackets = 0;
+        static thread_local uint32 windowStartMs = 0;
+
+        uint32 const now = getMSTime();
+        if (!windowStartMs)
+            windowStartMs = now;
+
+        ++suppressedPackets;
+
+        uint32 const logIntervalMs = std::max<uint32>(sConfigMgr->GetOption<uint32>("Debug.SuppressPlayerMeleeWhiteDamagePackets.LogIntervalMs", 1000), 100);
+        uint32 const elapsedMs = getMSTimeDiff(windowStartMs, now);
+        if (elapsedMs >= logIntervalMs)
+        {
+            LOG_INFO("server.loading", "[MeleeWhitePacketTest] Suppressed {} player melee white SMSG_ATTACKERSTATEUPDATE packets in {} ms. last attacker={} target={} attackType={} attackTime={}ms",
+                suppressedPackets, elapsedMs, attacker->GetGUID().ToString(), target->GetGUID().ToString(), uint32(damageInfo.attackType), attacker->GetAttackTime(damageInfo.attackType));
+            suppressedPackets = 0;
+            windowStartMs = now;
+        }
+
+        return true;
+    }
+
     bool ShouldSendFastMeleeClientFeedback(CalcDamageInfo const& damageInfo)
     {
         Unit* attacker = damageInfo.attacker;
@@ -189,8 +269,8 @@ namespace
         if (attackTime > FastMeleeFeedbackAttackTimeThresholdMs)
             return true;
 
-        uint128 const totalDamage = damageInfo.damages[0].damage + damageInfo.damages[1].damage;
-        if (totalDamage >= target->GetHealthForCombat128())
+        uint256 const totalDamage = damageInfo.damages[0].damage + damageInfo.damages[1].damage;
+        if (totalDamage >= target->GetHealthForCombat256())
             return true;
 
         static thread_local std::unordered_map<FastMeleeFeedbackKey, uint32, FastMeleeFeedbackKeyHash> lastFeedbackMs;
@@ -224,15 +304,34 @@ namespace
     uint64 GetProcDamageForCombat(uint32 legacyDamage, ProcEventInfo const& eventInfo)
     {
         if (DamageInfo* damageInfo = eventInfo.GetDamageInfo())
-            if (uint128 damage = damageInfo->GetDamage())
+            if (uint256 damage = damageInfo->GetDamage())
                 return Acore::Number::ToUInt64Saturated(damage);
 
         return legacyDamage;
     }
 
+    bool IsXianqiFeatureProcSpellInfo(SpellInfo const* spellInfo)
+    {
+        if (!spellInfo)
+            return false;
+
+        uint32 const spellId = spellInfo->Id;
+        if (spellId >= 385001 && spellId <= 385050)
+            return true;
+
+        for (uint32 tier = 0; tier < 9; ++tier)
+        {
+            uint32 const first = 384001 + tier * 100;
+            if (spellId >= first && spellId <= first + 15)
+                return true;
+        }
+
+        return false;
+    }
+
     bool IsDamageTriggeredArtifactItemProcSpellInfo(SpellInfo const* spellInfo)
     {
-        return spellInfo && spellInfo->Id >= 383001 && spellInfo->Id <= 383084;
+        return spellInfo && ((spellInfo->Id >= 383001 && spellInfo->Id <= 383084) || IsXianqiFeatureProcSpellInfo(spellInfo));
     }
 
     struct ArtifactProcPanelKey
@@ -266,7 +365,7 @@ namespace
 
     struct ArtifactProcPanelPending
     {
-        uint128 damage = 0;
+        uint256 damage = 0;
         bool critical = false;
     };
 
@@ -274,7 +373,7 @@ namespace
     constexpr uint32 ArtifactProcPanelMaxPerSecond = 10;
     constexpr uint32 ArtifactProcPanelStateClearSize = 8192;
 
-    bool PrepareArtifactProcPanelFeedback(Player* player, Unit* target, SpellInfo const* spellInfo, uint128 const& damage, bool critical, uint128& displayDamage, bool& displayCritical)
+    bool PrepareArtifactProcPanelFeedback(Player* player, Unit* target, SpellInfo const* spellInfo, uint256 const& damage, bool critical, uint256& displayDamage, bool& displayCritical)
     {
         displayDamage = damage;
         displayCritical = critical;
@@ -305,7 +404,7 @@ namespace
         if (lastItr != lastPanelMs.end() && getMSTimeDiff(lastItr->second, now) < ArtifactProcPanelMinIntervalMs)
         {
             ArtifactProcPanelPending& pending = pendingByKey[key];
-            pending.damage = AddUInt128Damage(pending.damage, damage);
+            pending.damage = AddUInt256Damage(pending.damage, damage);
             pending.critical = pending.critical || critical;
             return false;
         }
@@ -320,7 +419,7 @@ namespace
         if (budget.used >= ArtifactProcPanelMaxPerSecond)
         {
             ArtifactProcPanelPending& pending = pendingByKey[key];
-            pending.damage = AddUInt128Damage(pending.damage, damage);
+            pending.damage = AddUInt256Damage(pending.damage, damage);
             pending.critical = pending.critical || critical;
             return false;
         }
@@ -331,7 +430,7 @@ namespace
         auto pendingItr = pendingByKey.find(key);
         if (pendingItr != pendingByKey.end())
         {
-            displayDamage = AddUInt128Damage(pendingItr->second.damage, damage);
+            displayDamage = AddUInt256Damage(pendingItr->second.damage, damage);
             displayCritical = displayCritical || pendingItr->second.critical;
             pendingByKey.erase(pendingItr);
         }
@@ -343,6 +442,33 @@ namespace
     {
         (void)log;
         return false;
+    }
+
+    bool ShouldSuppressPlayerProcPanelFeedbackForDebug(Player const* player, SpellInfo const* spellInfo)
+    {
+        if (!sConfigMgr->GetOption<bool>("Debug.SuppressPlayerProcClientFeedback", false))
+            return false;
+
+        static thread_local uint32 suppressedPanelMessages = 0;
+        static thread_local uint32 windowStartMs = 0;
+
+        uint32 const now = getMSTime();
+        if (!windowStartMs)
+            windowStartMs = now;
+
+        ++suppressedPanelMessages;
+
+        uint32 const logIntervalMs = std::max<uint32>(sConfigMgr->GetOption<uint32>("Debug.SuppressPlayerProcClientFeedback.LogIntervalMs", 1000), 100);
+        uint32 const elapsedMs = getMSTimeDiff(windowStartMs, now);
+        if (elapsedMs >= logIntervalMs)
+        {
+            LOG_INFO("server.loading", "[ProcClientFeedbackTest] Suppressed {} PATTRPANEL damage messages in {} ms. last player={} spell={}",
+                suppressedPanelMessages, elapsedMs, player ? player->GetGUID().ToString() : "none", spellInfo ? spellInfo->Id : 0);
+            suppressedPanelMessages = 0;
+            windowStartMs = now;
+        }
+
+        return true;
     }
 
     uint32 ToSafeClientResourceValue(uint32 value)
@@ -367,7 +493,7 @@ namespace
     {
         if (IsManaRegenPredictionField(index))
             if (Player const* player = unit ? unit->ToPlayer() : nullptr)
-                if (player->HasExtendedPowerForCombat(POWER_MANA) || player->GetExtendedMaxPower128(POWER_MANA) > MaxClientResourceValue)
+                if (player->HasExtendedPowerForCombat(POWER_MANA) || player->GetExtendedMaxPower256(POWER_MANA) > MaxClientResourceValue)
                     return 0.0f;
 
         if (std::isnan(rawValue) || rawValue < 0.0f)
@@ -381,9 +507,9 @@ namespace
         return damage > static_cast<uint64>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(damage);
     }
 
-    int32 ToInt32Damage(uint128 const& damage)
+    int32 ToInt32Damage(uint256 const& damage)
     {
-        return damage > static_cast<uint128>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(damage);
+        return damage > static_cast<uint256>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(damage);
     }
 
     int32 ToInt32Saturated(long double value)
@@ -445,7 +571,7 @@ namespace
         return damage > MaxClientCombatLogValue ? MaxClientCombatLogValue : static_cast<uint32>(damage);
     }
 
-    uint32 ToClientDamage(uint128 const& damage)
+    uint32 ToClientDamage(uint256 const& damage)
     {
         return damage > MaxClientCombatLogValue ? MaxClientCombatLogValue : Acore::Number::ToUInt32Saturated(damage);
     }
@@ -455,12 +581,12 @@ namespace
         return power > MaxClientResourceValue ? MaxClientResourceValue : static_cast<uint32>(power);
     }
 
-    uint32 ToClientPowerValue(uint128 const& power)
+    uint32 ToClientPowerValue(uint256 const& power)
     {
         return power > MaxClientResourceValue ? MaxClientResourceValue : Acore::Number::ToUInt32Saturated(power);
     }
 
-    uint128 ScaleClientValueToExtended(uint32 clientValue, uint32 clientMaxValue, uint128 const& extendedMaxValue)
+    uint256 ScaleClientValueToExtended(uint32 clientValue, uint32 clientMaxValue, uint256 const& extendedMaxValue)
     {
         if (!clientValue || !clientMaxValue || extendedMaxValue == 0)
             return 0;
@@ -472,14 +598,14 @@ namespace
             return extendedMaxValue;
 
         long double scaled = (Acore::Number::ToLongDouble(extendedMaxValue) * static_cast<long double>(clientValue)) / static_cast<long double>(clientMaxValue);
-        uint128 extendedValue = Acore::Number::ToUInt128Saturated(scaled + 0.5L);
+        uint256 extendedValue = Acore::Number::ToUInt256Saturated(scaled + 0.5L);
         if (extendedValue == 0)
             return 1;
 
         return extendedValue > extendedMaxValue ? extendedMaxValue : extendedValue;
     }
 
-    uint32 ScaleExtendedValueToClient(uint128 const& currentValue, uint128 const& maxValue, uint32 clientMaxValue)
+    uint32 ScaleExtendedValueToClient(uint256 const& currentValue, uint256 const& maxValue, uint32 clientMaxValue)
     {
         if (currentValue == 0 || maxValue == 0)
             return 0;
@@ -507,11 +633,11 @@ namespace
             return 0;
 
         if (Player const* player = unit->ToPlayer())
-            if (player->GetExtendedMaxHealth128() > MaxClientResourceValue)
+            if (player->GetExtendedMaxHealth256() > MaxClientResourceValue)
                 return MaxClientResourceValue;
 
         if (Creature const* creature = unit->ToCreature())
-            if (creature->GetExtendedMaxHealth128() > MaxClientResourceValue)
+            if (creature->GetExtendedMaxHealth256() > MaxClientResourceValue)
                 return MaxClientResourceValue;
 
         return ToSafeClientResourceValue(unit->GetMaxHealth());
@@ -523,17 +649,17 @@ namespace
             return 0;
 
         if (Player const* player = unit->ToPlayer())
-            if (player->GetExtendedMaxPower128(power) > MaxClientResourceValue)
+            if (player->GetExtendedMaxPower256(power) > MaxClientResourceValue)
                 return MaxClientResourceValue;
 
         if (Creature const* creature = unit->ToCreature())
-            if (creature->GetExtendedMaxPower128(power) > MaxClientResourceValue)
+            if (creature->GetExtendedMaxPower256(power) > MaxClientResourceValue)
                 return MaxClientResourceValue;
 
         return ToSafeClientResourceValue(unit->GetMaxPower(power));
     }
 
-    uint32 GetClientCurrentPowerForUpdate(Powers power, uint128 const& currentPower, uint128 const& maxPower, uint32 clientMaxPower)
+    uint32 GetClientCurrentPowerForUpdate(Powers power, uint256 const& currentPower, uint256 const& maxPower, uint32 clientMaxPower)
     {
         uint32 clientPower = ScaleExtendedValueToClient(currentPower, maxPower, clientMaxPower);
         if (power == POWER_MANA && maxPower > clientMaxPower && clientPower >= clientMaxPower && clientMaxPower > 1)
@@ -554,12 +680,12 @@ namespace
 
             uint32 clientMaxHealth = GetClientMaxHealthForUpdate(unit);
             if (Player const* player = unit->ToPlayer())
-                if (player->HasExtendedHealthForCombat() || player->GetExtendedMaxHealth128() > clientMaxHealth)
-                    return ScaleExtendedValueToClient(player->GetExtendedHealth128(), player->GetExtendedMaxHealth128(), clientMaxHealth);
+                if (player->HasExtendedHealthForCombat() || player->GetExtendedMaxHealth256() > clientMaxHealth)
+                    return ScaleExtendedValueToClient(player->GetExtendedHealth256(), player->GetExtendedMaxHealth256(), clientMaxHealth);
 
             if (Creature const* creature = unit->ToCreature())
-                if (creature->GetExtendedMaxHealth128() > clientMaxHealth)
-                    return ScaleExtendedValueToClient(creature->GetExtendedHealth128(), creature->GetExtendedMaxHealth128(), clientMaxHealth);
+                if (creature->GetExtendedMaxHealth256() > clientMaxHealth)
+                    return ScaleExtendedValueToClient(creature->GetExtendedHealth256(), creature->GetExtendedMaxHealth256(), clientMaxHealth);
 
             return ToSafeClientResourceValue(rawValue);
         }
@@ -567,11 +693,11 @@ namespace
         if (index == UNIT_FIELD_MAXHEALTH)
         {
             if (Player const* player = unit->ToPlayer())
-                if (player->GetExtendedMaxHealth128() > MaxClientResourceValue)
+                if (player->GetExtendedMaxHealth256() > MaxClientResourceValue)
                     return MaxClientResourceValue;
 
             if (Creature const* creature = unit->ToCreature())
-                if (creature->GetExtendedMaxHealth128() > MaxClientResourceValue)
+                if (creature->GetExtendedMaxHealth256() > MaxClientResourceValue)
                     return MaxClientResourceValue;
 
             return ToSafeClientResourceValue(rawValue);
@@ -585,12 +711,12 @@ namespace
             Powers power = Powers(index - UNIT_FIELD_POWER1);
             uint32 clientMaxPower = GetClientMaxPowerForUpdate(unit, power);
             if (Player const* player = unit->ToPlayer())
-                if (player->HasExtendedPowerForCombat(power) || player->GetExtendedMaxPower128(power) > clientMaxPower)
-                    return GetClientCurrentPowerForUpdate(power, player->GetExtendedPower128(power), player->GetExtendedMaxPower128(power), clientMaxPower);
+                if (player->HasExtendedPowerForCombat(power) || player->GetExtendedMaxPower256(power) > clientMaxPower)
+                    return GetClientCurrentPowerForUpdate(power, player->GetExtendedPower256(power), player->GetExtendedMaxPower256(power), clientMaxPower);
 
             if (Creature const* creature = unit->ToCreature())
-                if (creature->GetExtendedMaxPower128(power) > clientMaxPower)
-                    return GetClientCurrentPowerForUpdate(power, creature->GetExtendedPower128(power), creature->GetExtendedMaxPower128(power), clientMaxPower);
+                if (creature->GetExtendedMaxPower256(power) > clientMaxPower)
+                    return GetClientCurrentPowerForUpdate(power, creature->GetExtendedPower256(power), creature->GetExtendedMaxPower256(power), clientMaxPower);
 
             return ToSafeClientResourceValue(rawValue);
         }
@@ -599,11 +725,11 @@ namespace
         {
             Powers power = Powers(index - UNIT_FIELD_MAXPOWER1);
             if (Player const* player = unit->ToPlayer())
-                if (player->GetExtendedMaxPower128(power) > MaxClientResourceValue)
+                if (player->GetExtendedMaxPower256(power) > MaxClientResourceValue)
                     return MaxClientResourceValue;
 
             if (Creature const* creature = unit->ToCreature())
-                if (creature->GetExtendedMaxPower128(power) > MaxClientResourceValue)
+                if (creature->GetExtendedMaxPower256(power) > MaxClientResourceValue)
                     return MaxClientResourceValue;
 
             return ToSafeClientResourceValue(rawValue);
@@ -612,7 +738,7 @@ namespace
         return ToSafeClientResourceValue(rawValue);
     }
 
-    uint32 ToClientDamageForTarget(uint128 const& damage, Unit const* target)
+    uint32 ToClientDamageForTarget(uint256 const& damage, Unit const* target)
     {
         if (damage == 0)
             return 0;
@@ -620,7 +746,7 @@ namespace
         if (!target)
             return ToClientDamage(damage);
 
-        uint128 targetMaxHealth = target->GetMaxHealthForCombat128();
+        uint256 targetMaxHealth = target->GetMaxHealthForCombat256();
         uint32 clientMaxHealth = ToSafeClientResourceValue(target->GetMaxHealth());
         if (targetMaxHealth > clientMaxHealth && clientMaxHealth > 0)
             return ToClientDamage(ScaleExtendedValueToClient(damage, targetMaxHealth, clientMaxHealth));
@@ -630,27 +756,27 @@ namespace
 
     uint32 ToClientDamageForTarget(uint64 damage, Unit const* target)
     {
-        return ToClientDamageForTarget(static_cast<uint128>(damage), target);
+        return ToClientDamageForTarget(static_cast<uint256>(damage), target);
     }
 
     void GetClientHealLogValues(HealInfo const& healInfo, uint32& clientHeal, uint32& clientOverheal)
     {
         clientHeal = ToClientDamage(healInfo.GetHeal());
-        uint128 rawOverheal = healInfo.GetHeal() > healInfo.GetEffectiveHeal() ? healInfo.GetHeal() - healInfo.GetEffectiveHeal() : 0;
+        uint256 rawOverheal = healInfo.GetHeal() > healInfo.GetEffectiveHeal() ? healInfo.GetHeal() - healInfo.GetEffectiveHeal() : 0;
         clientOverheal = ToClientDamage(rawOverheal);
 
         Unit const* target = healInfo.GetTarget();
         if (!target)
             return;
 
-        uint128 maxHealth = target->GetMaxHealthForCombat128();
+        uint256 maxHealth = target->GetMaxHealthForCombat256();
         uint32 clientMaxHealth = GetClientMaxHealthForUpdate(target);
         if (maxHealth == 0 || !clientMaxHealth)
             return;
 
-        uint128 effectiveHeal = healInfo.GetEffectiveHeal();
-        uint128 afterHealth = target->GetHealthForCombat128();
-        uint128 beforeHealth = afterHealth > effectiveHeal ? afterHealth - effectiveHeal : 0;
+        uint256 effectiveHeal = healInfo.GetEffectiveHeal();
+        uint256 afterHealth = target->GetHealthForCombat256();
+        uint256 beforeHealth = afterHealth > effectiveHeal ? afterHealth - effectiveHeal : 0;
 
         uint32 clientBefore = ScaleExtendedValueToClient(beforeHealth, maxHealth, clientMaxHealth);
         uint32 clientAfter = ScaleExtendedValueToClient(afterHealth, maxHealth, clientMaxHealth);
@@ -662,20 +788,20 @@ namespace
         clientOverheal = clientHeal > clientEffectiveHeal ? clientHeal - clientEffectiveHeal : 0;
     }
 
-    uint32 GetClientEnergizeLogValue(Unit const* target, Powers power, uint128 const& requestedPower, uint128 const& effectiveGain)
+    uint32 GetClientEnergizeLogValue(Unit const* target, Powers power, uint256 const& requestedPower, uint256 const& effectiveGain)
     {
         if (!target || power < POWER_MANA || power >= MAX_POWERS)
             return ToClientPowerValue(effectiveGain ? effectiveGain : requestedPower);
 
-        uint128 maxPower = target->GetMaxPowerForCombat128(power);
+        uint256 maxPower = target->GetMaxPowerForCombat256(power);
         uint32 clientMaxPower = GetClientMaxPowerForUpdate(target, power);
         if (maxPower == 0 || !clientMaxPower)
             return 0;
 
-        uint128 afterPower128 = target->GetPowerForCombat128(power);
-        uint128 beforePower = afterPower128 > effectiveGain ? afterPower128 - effectiveGain : 0;
+        uint256 afterPower256 = target->GetPowerForCombat256(power);
+        uint256 beforePower = afterPower256 > effectiveGain ? afterPower256 - effectiveGain : 0;
         uint32 clientBefore = ScaleExtendedValueToClient(beforePower, maxPower, clientMaxPower);
-        uint32 clientAfter = ScaleExtendedValueToClient(afterPower128, maxPower, clientMaxPower);
+        uint32 clientAfter = ScaleExtendedValueToClient(afterPower256, maxPower, clientMaxPower);
         uint32 clientEffectiveGain = clientAfter > clientBefore ? clientAfter - clientBefore : 0;
         uint32 clientHeadroom = clientMaxPower > clientBefore ? clientMaxPower - clientBefore : 0;
 
@@ -692,10 +818,10 @@ namespace
             return false;
 
         if (Player const* player = unit->ToPlayer())
-            return player->HasExtendedPowerForCombat(power) || player->GetExtendedMaxPower128(power) > clientMaxPower;
+            return player->HasExtendedPowerForCombat(power) || player->GetExtendedMaxPower256(power) > clientMaxPower;
 
         if (Creature const* creature = unit->ToCreature())
-            return creature->GetExtendedMaxPower128(power) > clientMaxPower;
+            return creature->GetExtendedMaxPower256(power) > clientMaxPower;
 
         return false;
     }
@@ -718,10 +844,10 @@ namespace
     void ForceResyncExtendedManaForClient(Unit* unit)
     {
         Player* player = unit ? unit->ToPlayer() : nullptr;
-        if (!player || !player->IsInWorld() || !player->IsAlive() || player->getPowerType() != POWER_MANA || player->GetPowerForCombat128(POWER_MANA) == 0)
+        if (!player || !player->IsInWorld() || !player->IsAlive() || player->getPowerType() != POWER_MANA || player->GetPowerForCombat256(POWER_MANA) == 0)
             return;
 
-        if (player->HasExtendedPowerForCombat(POWER_MANA) || player->GetExtendedMaxPower128(POWER_MANA) > ToSafeClientResourceValue(player->GetMaxPower(POWER_MANA)))
+        if (player->HasExtendedPowerForCombat(POWER_MANA) || player->GetExtendedMaxPower256(POWER_MANA) > ToSafeClientResourceValue(player->GetMaxPower(POWER_MANA)))
             player->SyncClientPowerFromExtended(POWER_MANA, true);
     }
 
@@ -743,23 +869,23 @@ namespace
         return static_cast<int32>(value);
     }
 
-    int32 ToInt32SignedDelta(int128 const& value)
+    int32 ToInt32SignedDelta(int256 const& value)
     {
-        if (value > static_cast<int128>(std::numeric_limits<int32>::max()))
+        if (value > static_cast<int256>(std::numeric_limits<int32>::max()))
             return std::numeric_limits<int32>::max();
 
-        if (value < static_cast<int128>(std::numeric_limits<int32>::min()))
+        if (value < static_cast<int256>(std::numeric_limits<int32>::min()))
             return std::numeric_limits<int32>::min();
 
         return static_cast<int32>(value);
     }
 
-    uint128 GetCustomBypassDamageBonus(Unit const* attacker)
+    uint256 GetCustomBypassDamageBonus(Unit const* attacker)
     {
         if (!attacker)
             return 0;
 
-        return AddUInt128Damage(attacker->GetCustomTrueDamageBonus(), attacker->GetCustomCuttingDamageBonus());
+        return AddUInt256Damage(attacker->GetCustomTrueDamageBonus(), attacker->GetCustomCuttingDamageBonus());
     }
 
     bool IsWuhunAvatar(Unit const* unit)
@@ -800,7 +926,7 @@ namespace
     {
         if (Player* player = caster ? caster->ToPlayer() : nullptr)
         {
-            int128 extendedBonus = player->GetExtendedSpellDamageBonus128(schoolMask);
+            int256 extendedBonus = player->GetExtendedSpellDamageBonus256(schoolMask);
             if (extendedBonus > 0)
                 return Acore::Number::ToLongDouble(extendedBonus);
         }
@@ -812,7 +938,7 @@ namespace
     {
         if (Player* player = caster ? caster->ToPlayer() : nullptr)
         {
-            int128 extendedBonus = player->GetExtendedHealingBonus128();
+            int256 extendedBonus = player->GetExtendedHealingBonus256();
             if (extendedBonus > 0)
                 return Acore::Number::ToLongDouble(extendedBonus);
         }
@@ -844,7 +970,7 @@ namespace
         return attackPower > 0.0L ? attackPower : 0.0L;
     }
 
-    void SendPlayerAttributePanelDamagePayload(Unit* attacker, Unit* victim, uint128 const& damage, bool critical, SpellSchoolMask schoolMask, SpellInfo const* spellInfo, DamageEffectType damageType)
+    void SendPlayerAttributePanelDamagePayload(Unit* attacker, Unit* victim, uint256 const& damage, bool critical, SpellSchoolMask schoolMask, SpellInfo const* spellInfo, DamageEffectType damageType)
     {
         if (!attacker || !victim || attacker == victim || !damage || damageType == NODAMAGE || damageType == SELF_DAMAGE)
             return;
@@ -853,7 +979,10 @@ namespace
         if (!player || !player->GetSession() || !player->GetSession()->HasEnabledAddon("LargeDamageText"))
             return;
 
-        uint128 displayDamage = damage;
+        if (ShouldSuppressPlayerProcPanelFeedbackForDebug(player, spellInfo))
+            return;
+
+        uint256 displayDamage = damage;
         bool displayCritical = critical;
         if (!PrepareArtifactProcPanelFeedback(player, victim, spellInfo, damage, critical, displayDamage, displayCritical))
             return;
@@ -870,7 +999,7 @@ namespace
         player->SendDirectMessage(&data);
     }
 
-    void SendPlayerAttributePanelDamage(Unit* attacker, Unit* victim, uint128 const& damage, DamageEffectType damageType, SpellSchoolMask schoolMask, SpellInfo const* spellInfo, CleanDamage const* cleanDamage)
+    void SendPlayerAttributePanelDamage(Unit* attacker, Unit* victim, uint256 const& damage, DamageEffectType damageType, SpellSchoolMask schoolMask, SpellInfo const* spellInfo, CleanDamage const* cleanDamage)
     {
         if (!cleanDamage || damageType != DIRECT_DAMAGE)
             return;
@@ -880,7 +1009,7 @@ namespace
 
 }
 
-DamageInfo::DamageInfo(Unit* _attacker, Unit* _victim, uint128 const& _damage, SpellInfo const* _spellInfo, SpellSchoolMask _schoolMask, DamageEffectType _damageType, uint128 const& cleanDamage)
+DamageInfo::DamageInfo(Unit* _attacker, Unit* _victim, uint256 const& _damage, SpellInfo const* _spellInfo, SpellSchoolMask _schoolMask, DamageEffectType _damageType, uint256 const& cleanDamage)
     : m_attacker(_attacker), m_victim(_victim), m_damage(_damage), m_spellInfo(_spellInfo), m_schoolMask(_schoolMask),
       m_damageType(_damageType), m_attackType(BASE_ATTACK), m_cleanDamage(cleanDamage)
 {
@@ -895,12 +1024,12 @@ DamageInfo::DamageInfo(CalcDamageInfo const& dmgInfo) : DamageInfo(DamageInfo(dm
 
 DamageInfo::DamageInfo(DamageInfo const& dmg1, DamageInfo const& dmg2)
     : m_attacker(dmg1.m_attacker), m_victim(dmg1.m_victim),
-    m_damage(AddUInt128Damage(dmg1.m_damage, dmg2.m_damage)),
+    m_damage(AddUInt256Damage(dmg1.m_damage, dmg2.m_damage)),
     m_spellInfo(dmg1.m_spellInfo), m_schoolMask(SpellSchoolMask(dmg1.m_schoolMask | dmg2.m_schoolMask)),
     m_damageType(dmg1.m_damageType), m_attackType(dmg1.m_attackType),
-    m_absorb(AddUInt128Damage(dmg1.m_absorb, dmg2.m_absorb)),
-    m_resist(AddUInt128Damage(dmg1.m_resist, dmg2.m_resist)), m_block(dmg1.m_block),
-    m_cleanDamage(AddUInt128Damage(dmg1.m_cleanDamage, dmg2.m_cleanDamage))
+    m_absorb(AddUInt256Damage(dmg1.m_absorb, dmg2.m_absorb)),
+    m_resist(AddUInt256Damage(dmg1.m_resist, dmg2.m_resist)), m_block(dmg1.m_block),
+    m_cleanDamage(AddUInt256Damage(dmg1.m_cleanDamage, dmg2.m_cleanDamage))
 {
 }
 
@@ -923,42 +1052,42 @@ void DamageInfo::ModifyDamage(int64 amount)
 {
     if (amount < 0)
     {
-        uint128 reduction = amount == std::numeric_limits<int64>::min() ? (static_cast<uint128>(std::numeric_limits<int64>::max()) + 1) : static_cast<uint128>(static_cast<uint64>(-amount));
-        m_damage = reduction > m_damage ? uint128(0) : m_damage - reduction;
+        uint256 reduction = amount == std::numeric_limits<int64>::min() ? (static_cast<uint256>(std::numeric_limits<int64>::max()) + 1) : static_cast<uint256>(static_cast<uint64>(-amount));
+        m_damage = reduction > m_damage ? uint256(0) : m_damage - reduction;
         return;
     }
 
-    uint128 addAmount = static_cast<uint128>(static_cast<uint64>(amount));
-    m_damage = AddUInt128Damage(m_damage, addAmount);
+    uint256 addAmount = static_cast<uint256>(static_cast<uint64>(amount));
+    m_damage = AddUInt256Damage(m_damage, addAmount);
 }
 
-void DamageInfo::AbsorbDamage(uint128 const& amountIn)
+void DamageInfo::AbsorbDamage(uint256 const& amountIn)
 {
-    uint128 amount = std::min<uint128>(amountIn, GetDamage());
-    m_absorb = AddUInt128Damage(m_absorb, amount);
+    uint256 amount = std::min<uint256>(amountIn, GetDamage());
+    m_absorb = AddUInt256Damage(m_absorb, amount);
     m_damage -= amount;
 }
 
-void DamageInfo::ResistDamage(uint128 const& amountIn)
+void DamageInfo::ResistDamage(uint256 const& amountIn)
 {
-    uint128 amount = std::min<uint128>(amountIn, GetDamage());
-    m_resist = AddUInt128Damage(m_resist, amount);
+    uint256 amount = std::min<uint256>(amountIn, GetDamage());
+    m_resist = AddUInt256Damage(m_resist, amount);
     m_damage -= amount;
 }
 
-void DamageInfo::BlockDamage(uint128 const& amountIn)
+void DamageInfo::BlockDamage(uint256 const& amountIn)
 {
-    uint128 amount = std::min<uint128>(amountIn, GetDamage());
-    m_block = AddUInt128Damage(m_block, amount);
+    uint256 amount = std::min<uint256>(amountIn, GetDamage());
+    m_block = AddUInt256Damage(m_block, amount);
     m_damage -= amount;
 }
 
-uint128 DamageInfo::GetUnmitigatedDamage() const
+uint256 DamageInfo::GetUnmitigatedDamage() const
 {
-    uint128 value = m_damage;
-    value = AddUInt128Damage(value, m_cleanDamage);
-    value = AddUInt128Damage(value, m_absorb);
-    return AddUInt128Damage(value, m_resist);
+    uint256 value = m_damage;
+    value = AddUInt256Damage(value, m_cleanDamage);
+    value = AddUInt256Damage(value, m_absorb);
+    return AddUInt256Damage(value, m_resist);
 }
 
 ProcEventInfo::ProcEventInfo(Unit* actor, Unit* actionTarget, Unit* procTarget, uint32 typeMask, uint32 spellTypeMask, uint32 spellPhaseMask, uint32 hitMask, Spell const* spell, DamageInfo* damageInfo, HealInfo* healInfo, SpellInfo const* triggeredByAuraSpell, int8 procAuraEffectIndex)
@@ -1587,7 +1716,7 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
                || HasBreakableByDamageAuraType(SPELL_AURA_TRANSFORM, excludeAura));
 }
 
-void Unit::DealDamageMods(Unit const* victim, uint128& damage, uint128* absorb)
+void Unit::DealDamageMods(Unit const* victim, uint256& damage, uint256* absorb)
 {
     if (!victim || !victim->IsAlive() || victim->IsInFlight() || (victim->IsCreature() && victim->ToCreature()->IsEvadingAttacks()))
     {
@@ -1599,8 +1728,8 @@ void Unit::DealDamageMods(Unit const* victim, uint128& damage, uint128* absorb)
 
 void Unit::DealDamageMods(Unit const* victim, uint64& damage, uint64* absorb)
 {
-    uint128 wideDamage = damage;
-    uint128 wideAbsorb = absorb ? *absorb : 0;
+    uint256 wideDamage = damage;
+    uint256 wideAbsorb = absorb ? *absorb : 0;
     Unit::DealDamageMods(victim, wideDamage, absorb ? &wideAbsorb : nullptr);
     damage = Acore::Number::ToUInt64Saturated(wideDamage);
     if (absorb)
@@ -1609,49 +1738,49 @@ void Unit::DealDamageMods(Unit const* victim, uint64& damage, uint64* absorb)
 
 void Unit::DealDamageMods(Unit const* victim, uint32& damage, uint32* absorb)
 {
-    uint128 wideDamage = damage;
-    uint128 wideAbsorb = absorb ? *absorb : 0;
+    uint256 wideDamage = damage;
+    uint256 wideAbsorb = absorb ? *absorb : 0;
     Unit::DealDamageMods(victim, wideDamage, absorb ? &wideAbsorb : nullptr);
     damage = ToUInt32Damage(wideDamage);
     if (absorb)
         *absorb = ToUInt32Damage(wideAbsorb);
 }
 
-uint128 Unit::GetCustomTrueDamageBonus() const
+uint256 Unit::GetCustomTrueDamageBonus() const
 {
     if (IsWuhunAvatar(this))
         return 0;
 
     Player* player = GetSpellModOwner();
-    return player ? static_cast<uint128>(player->GetTrueDamageBonus()) : uint128(0);
+    return player ? static_cast<uint256>(player->GetTrueDamageBonus()) : uint256(0);
 }
 
-uint128 Unit::GetCustomCuttingDamageBonus() const
+uint256 Unit::GetCustomCuttingDamageBonus() const
 {
     if (IsWuhunAvatar(this))
         return 0;
 
     Player* player = GetSpellModOwner();
-    return player ? static_cast<uint128>(player->GetCuttingDamageBonus()) : uint128(0);
+    return player ? static_cast<uint256>(player->GetCuttingDamageBonus()) : uint256(0);
 }
 
-uint128 Unit::GetCustomSkillDamageBonus() const
+uint256 Unit::GetCustomSkillDamageBonus() const
 {
     if (IsWuhunAvatar(this))
         return 0;
 
     Player* player = GetSpellModOwner();
-    return player ? static_cast<uint128>(player->GetSkillDamageBonus()) : uint128(0);
+    return player ? static_cast<uint256>(player->GetSkillDamageBonus()) : uint256(0);
 }
 
-uint128 Unit::DealDamage(Unit* attacker, Unit* victim, uint128 const& damageIn, CleanDamage const* cleanDamage, DamageEffectType damagetype, SpellSchoolMask damageSchoolMask, SpellInfo const* spellProto, bool durabilityLoss, bool /*allowGM*/, Spell const* damageSpell /*= nullptr*/)
+uint256 Unit::DealDamage(Unit* attacker, Unit* victim, uint256 const& damageIn, CleanDamage const* cleanDamage, DamageEffectType damagetype, SpellSchoolMask damageSchoolMask, SpellInfo const* spellProto, bool durabilityLoss, bool /*allowGM*/, Spell const* damageSpell /*= nullptr*/)
 {
-    uint128 damage = damageIn;
+    uint256 damage = damageIn;
     // Xinef: initialize damage done for rage calculations
     // Xinef: its rare to modify damage in hooks, however training dummy's sets damage to 0
-    uint128 addonDisplayDamage = damage;
-    uint128 absorbedDamage = cleanDamage ? cleanDamage->absorbed_damage : uint128(0);
-    uint128 rage_damage = AddUInt128Damage(damage, absorbedDamage);
+    uint256 addonDisplayDamage = damage;
+    uint256 absorbedDamage = cleanDamage ? cleanDamage->absorbed_damage : uint256(0);
+    uint256 rage_damage = AddUInt256Damage(damage, absorbedDamage);
     uint32 aiDamage = ToUInt32Damage(damage);
     uint32 originalAiDamage = aiDamage;
 
@@ -1667,10 +1796,9 @@ uint128 Unit::DealDamage(Unit* attacker, Unit* victim, uint128 const& damageIn, 
     if (aiDamage != originalAiDamage)
         damage = aiDamage;
 
-    if (!IsDamageTriggeredArtifactItemProcSpellInfo(spellProto))
     {
         // Hook for OnDamage Event
-        uint128 scriptDamage = damage;
+        uint256 scriptDamage = damage;
         sScriptMgr->OnDamage(attacker, victim, scriptDamage);
         if (scriptDamage != damage)
             damage = scriptDamage;
@@ -1746,10 +1874,10 @@ uint128 Unit::DealDamage(Unit* attacker, Unit* victim, uint128 const& damageIn, 
                 continue;
             SpellInfo const* spell = (*i)->GetSpellInfo();
 
-            uint128 shareDamage = CalculatePct(damage, (*i)->GetAmount());
+            uint256 shareDamage = CalculatePct(damage, (*i)->GetAmount());
 
-            uint128 shareAbsorb = 0;
-            uint128 shareResist = 0;
+            uint256 shareAbsorb = 0;
+            uint256 shareResist = 0;
 
             if (shareDamageTarget->IsImmunedToDamageOrSchool(damageSchoolMask))
             {
@@ -1821,10 +1949,10 @@ uint128 Unit::DealDamage(Unit* attacker, Unit* victim, uint128 const& damageIn, 
     uint32 health = victim->GetHealth();
     Player* victimPlayer = victim->ToPlayer();
     Creature* victimCreature = victim->ToCreature();
-    bool victimUsesExtendedHealth = victim->GetMaxHealthForCombat128() > victim->GetMaxHealth();
+    bool victimUsesExtendedHealth = victim->GetMaxHealthForCombat256() > victim->GetMaxHealth();
     if (victimPlayer)
         victimUsesExtendedHealth = victimUsesExtendedHealth || victimPlayer->HasExtendedHealthForCombat();
-    uint128 effectiveHealth = victimUsesExtendedHealth ? victim->GetHealthForCombat128() : health;
+    uint256 effectiveHealth = victimUsesExtendedHealth ? victim->GetHealthForCombat256() : health;
     LOG_DEBUG("entities.unit", "deal dmg:{} to health:{} ", damage, effectiveHealth.convert_to<std::string>());
 
     // duel ends when player has 1 or less hp
@@ -1885,7 +2013,7 @@ uint128 Unit::DealDamage(Unit* attacker, Unit* victim, uint128 const& damageIn, 
 
         if (!attacker || attacker->IsControlledByPlayer() || attacker->IsCreatedByPlayer())
         {
-            uint128 unDamage = std::min<uint128>(victim->GetHealthForCombat128(), damage);
+            uint256 unDamage = std::min<uint256>(victim->GetHealthForCombat256(), damage);
             bool damagedByPlayer = unDamage && attacker && (attacker->IsPlayer() || attacker->m_movedByPlayer != nullptr);
             victim->ToCreature()->LowerPlayerDamageReq(unDamage, damagedByPlayer);
         }
@@ -1894,11 +2022,11 @@ uint128 Unit::DealDamage(Unit* attacker, Unit* victim, uint128 const& damageIn, 
     // Sparring
     if (victim->CanSparringWith(attacker))
     {
-        if (damage >= victim->GetHealthForCombat128())
+        if (damage >= victim->GetHealthForCombat256())
             damage = 0;
 
-        uint128 sparringHealth = Acore::Number::CalculatePct(victim->GetMaxHealthForCombat128(), victim->ToCreature()->GetSparringPct());
-        if (victim->GetHealthForCombat128() <= static_cast<uint128>(damage) + sparringHealth)
+        uint256 sparringHealth = Acore::Number::CalculatePct(victim->GetMaxHealthForCombat256(), victim->ToCreature()->GetSparringPct());
+        if (victim->GetHealthForCombat256() <= static_cast<uint256>(damage) + sparringHealth)
             damage = 0;
     }
 
@@ -1930,10 +2058,10 @@ uint128 Unit::DealDamage(Unit* attacker, Unit* victim, uint128 const& damageIn, 
                 victimCreature->SyncClientHealthFromExtended();
             }
             else
-                victim->SetHealthForCombat128(effectiveHealth - damage);
+                victim->SetHealthForCombat256(effectiveHealth - damage);
         }
         else
-            victim->SetHealthForCombat128(effectiveHealth - damage);
+            victim->SetHealthForCombat256(effectiveHealth - damage);
 
         if (damagetype == DIRECT_DAMAGE || damagetype == SPELL_DIRECT_DAMAGE)
             victim->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_DIRECT_DAMAGE, spellProto ? spellProto->Id : 0);
@@ -1967,8 +2095,8 @@ uint128 Unit::DealDamage(Unit* attacker, Unit* victim, uint128 const& damageIn, 
         // Rage from damage received
         if (attacker != victim && victim->HasActivePowerType(POWER_RAGE))
         {
-            uint128 absorbed = cleanDamage ? cleanDamage->absorbed_damage : uint128(0);
-            uint128 rageDamageWide = AddUInt128Damage(damage, absorbed);
+            uint256 absorbed = cleanDamage ? cleanDamage->absorbed_damage : uint256(0);
+            uint256 rageDamageWide = AddUInt256Damage(damage, absorbed);
             uint32 rageDamage = ToUInt32Damage(rageDamageWide);
             victim->RewardRage(rageDamage, 0, false);
         }
@@ -2185,9 +2313,9 @@ SpellCastResult Unit::CastSpell(GameObject* go, uint32 spellId, bool triggered, 
     return CastSpell(targets, spellInfo, nullptr, triggered ? TRIGGERED_FULL_MASK : TRIGGERED_NONE, castItem, triggeredByAura, originalCaster);
 }
 
-void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, uint128 const& damageIn, SpellInfo const* spellInfo, WeaponAttackType attackType, bool crit)
+void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, uint256 const& damageIn, SpellInfo const* spellInfo, WeaponAttackType attackType, bool crit)
 {
-    uint128 damage = damageIn;
+    uint256 damage = damageIn;
     if (damage == 0)
         return;
 
@@ -2213,12 +2341,12 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, uint128 co
             damage = aiDamage > 0 ? static_cast<uint64>(aiDamage) : 0;
     }
 
-    uint128 cleanDamage = 0;
+    uint256 cleanDamage = 0;
     if (Unit::IsDamageReducedByArmor(damageSchoolMask, spellInfo))
     {
-        uint128 oldDamage = damage;
+        uint256 oldDamage = damage;
         damage = Unit::CalcArmorReducedDamage(this, victim, damage, spellInfo, 0, attackType);
-        cleanDamage = oldDamage > damage ? oldDamage - damage : uint128(0);
+        cleanDamage = oldDamage > damage ? oldDamage - damage : uint256(0);
     }
 
     bool blocked = false;
@@ -2245,7 +2373,7 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, uint128 co
                     // Apply crit_damage bonus for melee spells
                     if (Player* modOwner = GetSpellModOwner())
                         modOwner->ApplySpellMod(spellInfo->Id, SPELLMOD_CRIT_DAMAGE_BONUS, crit_bonus);
-                    damage = AddUInt128Damage(damage, ToUInt128Damage(crit_bonus));
+                    damage = AddUInt256Damage(damage, ToUInt256Damage(crit_bonus));
 
                     // Apply SPELL_AURA_MOD_ATTACKER_RANGED_CRIT_DAMAGE or SPELL_AURA_MOD_ATTACKER_MELEE_CRIT_DAMAGE
                     float critPctDamageMod = 0.0f;
@@ -2263,7 +2391,7 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, uint128 co
                     if (critPctDamageMod != 0)
                     {
                         long double pctDamage = Acore::Number::ToLongDouble(damage) * (1.0L + static_cast<long double>(critPctDamageMod) / 100.0L);
-                        damage = ToUInt128Damage(pctDamage);
+                        damage = ToUInt256Damage(pctDamage);
                     }
                 }
 
@@ -2278,7 +2406,7 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, uint128 co
                         damageInfo->blocked = Acore::Number::ToUInt64Saturated(damage);
 
                     damage -= damageInfo->blocked;
-                    cleanDamage = AddUInt128Damage(cleanDamage, damageInfo->blocked);
+                    cleanDamage = AddUInt256Damage(cleanDamage, damageInfo->blocked);
                 }
 
                 int32 resilienceDamage = ToInt32Damage(damage);
@@ -2298,11 +2426,11 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, uint128 co
                 if (originalResilienceDamage > 0)
                 {
                     long double reductionRatio = static_cast<long double>(originalResilienceDamage - resilienceDamage) / static_cast<long double>(originalResilienceDamage);
-                    uint128 resilienceReduction = ToUInt128Damage(Acore::Number::ToLongDouble(damage) * reductionRatio);
+                    uint256 resilienceReduction = ToUInt256Damage(Acore::Number::ToLongDouble(damage) * reductionRatio);
                     if (resilienceReduction > damage)
                         resilienceReduction = damage;
                     damage -= resilienceReduction;
-                    cleanDamage = AddUInt128Damage(cleanDamage, resilienceReduction);
+                    cleanDamage = AddUInt256Damage(cleanDamage, resilienceReduction);
                 }
                 break;
             }
@@ -2327,11 +2455,11 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, uint128 co
                 if (originalResilienceDamage > 0)
                 {
                     long double reductionRatio = static_cast<long double>(originalResilienceDamage - resilienceDamage) / static_cast<long double>(originalResilienceDamage);
-                    uint128 resilienceReduction = ToUInt128Damage(Acore::Number::ToLongDouble(damage) * reductionRatio);
+                    uint256 resilienceReduction = ToUInt256Damage(Acore::Number::ToLongDouble(damage) * reductionRatio);
                     if (resilienceReduction > damage)
                         resilienceReduction = damage;
                     damage -= resilienceReduction;
-                    cleanDamage = AddUInt128Damage(cleanDamage, resilienceReduction);
+                    cleanDamage = AddUInt256Damage(cleanDamage, resilienceReduction);
                 }
                 break;
             }
@@ -2352,8 +2480,8 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, uint128 co
         damageInfo->damage = dmgInfo.GetDamage();
     }
 
-    if (uint128 bypassDamage = GetCustomBypassDamageBonus(this))
-        damageInfo->damage = AddUInt128Damage(damageInfo->damage, bypassDamage);
+    if (uint256 bypassDamage = GetCustomBypassDamageBonus(this))
+        damageInfo->damage = AddUInt256Damage(damageInfo->damage, bypassDamage);
 }
 
 void Unit::DealSpellDamage(SpellNonMeleeDamage* damageInfo, bool durabilityLoss, Spell const* spell /*= nullptr*/)
@@ -2472,7 +2600,7 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
         SpellSchoolMask schoolMask = SpellSchoolMask(damageInfo->damages[i].damageSchoolMask);
         bool const addPctMods = (schoolMask & SPELL_SCHOOL_MASK_NORMAL);
 
-        uint128 damage = 0;
+        uint256 damage = 0;
         uint8 itemDamagesMask = (IsPlayer()) ? (1 << i) : 0;
 
         damage += CalculateDamage(damageInfo->attackType, false, addPctMods, itemDamagesMask);
@@ -2481,7 +2609,7 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
         damage = damageInfo->target->MeleeDamageBonusTaken(this, damage, damageInfo->attackType, nullptr, schoolMask);
 
         // Script Hook For CalculateMeleeDamage -- Allow scripts to change the Damage pre class mitigation calculations
-        uint128 scriptDamage = damage;
+        uint256 scriptDamage = damage;
         sScriptMgr->ModifyMeleeDamage(damageInfo->target, damageInfo->attacker, scriptDamage);
         if (scriptDamage != damage)
             damage = scriptDamage;
@@ -2613,7 +2741,7 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
             if (damageInfo->target->isBlockCritical())
                 damageInfo->blocked_amount += damageInfo->blocked_amount;
 
-            uint128 remainingBlock = damageInfo->blocked_amount;
+            uint256 remainingBlock = damageInfo->blocked_amount;
             uint8 fullBlockMask = 0;
             for (uint8 i = 0; i < MAX_ITEM_PROTO_DAMAGES; ++i)
             {
@@ -2654,7 +2782,7 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
 
             for (uint8 i = 0; i < MAX_ITEM_PROTO_DAMAGES; ++i)
             {
-                uint128 reducedDamage = ToUInt128Damage(static_cast<long double>(reducePercent) * Acore::Number::ToLongDouble(damageInfo->damages[i].damage));
+                uint256 reducedDamage = ToUInt256Damage(static_cast<long double>(reducePercent) * Acore::Number::ToLongDouble(damageInfo->damages[i].damage));
                 damageInfo->cleanDamage += damageInfo->damages[i].damage - reducedDamage;
                 damageInfo->damages[i].damage = reducedDamage;
             }
@@ -2683,10 +2811,10 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
 
     for (uint8 i = 0; i < MAX_ITEM_PROTO_DAMAGES; ++i)
     {
-        // Keep middle values in int128 so we can subtract resilience without
+        // Keep middle values in int256 so we can subtract resilience without
         // truncating to int64::max (would cap melee output at ~922 京).
-        int128 dmg = static_cast<int128>(damageInfo->damages[i].damage);
-        int128 cleanDamage = static_cast<int128>(damageInfo->cleanDamage);
+        int256 dmg = static_cast<int256>(damageInfo->damages[i].damage);
+        int256 cleanDamage = static_cast<int256>(damageInfo->cleanDamage);
         // attackType is checked already for BASE_ATTACK or OFF_ATTACK so it can't be RANGED_ATTACK here
         if (CanApplyResilience())
         {
@@ -2697,7 +2825,7 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
             if (originalResilienceDamage > 0)
             {
                 long double reductionRatio = static_cast<long double>(originalResilienceDamage - resilienceDamage) / static_cast<long double>(originalResilienceDamage);
-                int128 resilienceReduction = Acore::Number::ToInt128Saturated(Acore::Number::ToLongDouble(dmg) * reductionRatio);
+                int256 resilienceReduction = Acore::Number::ToInt256Saturated(Acore::Number::ToLongDouble(dmg) * reductionRatio);
                 if (resilienceReduction < 0)
                     resilienceReduction = 0;
                 dmg -= resilienceReduction;
@@ -2705,8 +2833,8 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
             }
         }
 
-        damageInfo->damages[i].damage = dmg > 0 ? static_cast<uint128>(dmg) : uint128(0);
-        damageInfo->cleanDamage = cleanDamage > 0 ? static_cast<uint128>(cleanDamage) : uint128(0);
+        damageInfo->damages[i].damage = dmg > 0 ? static_cast<uint256>(dmg) : uint256(0);
+        damageInfo->cleanDamage = cleanDamage > 0 ? static_cast<uint256>(cleanDamage) : uint256(0);
 
         // Calculate absorb resist
         if (damageInfo->damages[i].damage > 0)
@@ -2735,9 +2863,9 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
 
     if (!(damageInfo->HitInfo & HITINFO_MISS) && damageInfo->TargetState != VICTIMSTATE_EVADES && damageInfo->TargetState != VICTIMSTATE_IS_IMMUNE)
     {
-        if (uint128 bypassDamage = GetCustomBypassDamageBonus(this))
+        if (uint256 bypassDamage = GetCustomBypassDamageBonus(this))
         {
-            damageInfo->damages[0].damage = AddUInt128Damage(damageInfo->damages[0].damage, bypassDamage);
+            damageInfo->damages[0].damage = AddUInt256Damage(damageInfo->damages[0].damage, bypassDamage);
             damageInfo->procVictim |= PROC_FLAG_TAKEN_DAMAGE;
         }
     }
@@ -2912,7 +3040,7 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
                 continue;
             }
 
-            uint128 damage = uint32(std::max(0, (*dmgShieldItr)->GetAmount())); // xinef: done calculated at amount calculation
+            uint256 damage = uint32(std::max(0, (*dmgShieldItr)->GetAmount())); // xinef: done calculated at amount calculation
 
             if (Unit* caster = (*dmgShieldItr)->GetCaster())
             {
@@ -2920,7 +3048,7 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
                 damage = this->SpellDamageBonusTaken(caster, i_spellProto, damage, SPELL_DIRECT_DAMAGE);
             }
 
-            uint128 absorb = 0;
+            uint256 absorb = 0;
 
             DamageInfo dmgInfo(victim, this, damage, i_spellProto, i_spellProto->GetSchoolMask(), SPELL_DIRECT_DAMAGE);
             Unit::CalcAbsorbResist(dmgInfo);
@@ -2936,7 +3064,7 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
             data << uint32(i_spellProto->Id);
             uint32 clientDamage = ToClientDamageForTarget(damage, this);
             data << uint32(clientDamage);  // Damage
-            uint128 overkill = damage > GetHealthForCombat128() ? damage - GetHealthForCombat128() : uint128(0);
+            uint256 overkill = damage > GetHealthForCombat256() ? damage - GetHealthForCombat256() : uint256(0);
             data << uint32(ToClientDamageForTarget(overkill, this)); // Overkill
             data << uint32(i_spellProto->GetSchoolMask());
             victim->SendMessageToSet(&data, true);
@@ -2977,9 +3105,9 @@ bool Unit::IsDamageReducedByArmor(SpellSchoolMask schoolMask, SpellInfo const* s
     return true;
 }
 
-uint128 Unit::CalcArmorReducedDamage(Unit const* attacker, Unit const* victim, uint128 const& damage, SpellInfo const* spellInfo, uint8 attackerLevel, WeaponAttackType /*attackType*/)
+uint256 Unit::CalcArmorReducedDamage(Unit const* attacker, Unit const* victim, uint256 const& damage, SpellInfo const* spellInfo, uint8 attackerLevel, WeaponAttackType /*attackType*/)
 {
-    double armor = victim->IsPlayer() ? Acore::Number::ToDouble(victim->ToPlayer()->GetExtendedArmor128()) : static_cast<double>(victim->GetArmor());
+    double armor = victim->IsPlayer() ? Acore::Number::ToDouble(victim->ToPlayer()->GetExtendedArmor256()) : static_cast<double>(victim->GetArmor());
 
     // Ignore enemy armor by SPELL_AURA_MOD_TARGET_RESISTANCE aura
     if (attacker)
@@ -3060,7 +3188,7 @@ uint128 Unit::CalcArmorReducedDamage(Unit const* attacker, Unit const* victim, u
     if (std::isinf(tmpvalue) || tmpvalue > 0.75)
         tmpvalue = 0.75;
 
-    return ToUInt128Damage(std::ceil(std::max(Acore::Number::ToLongDouble(damage) * (1.0L - static_cast<long double>(tmpvalue)), 0.0L)));
+    return ToUInt256Damage(std::ceil(std::max(Acore::Number::ToLongDouble(damage) * (1.0L - static_cast<long double>(tmpvalue)), 0.0L)));
 }
 
 float Unit::GetEffectiveResistChance(Unit const* owner, SpellSchoolMask schoolMask, Unit const* victim)
@@ -3101,7 +3229,7 @@ void Unit::CalcAbsorbResist(DamageInfo& dmgInfo, bool Splited)
 {
     Unit* victim = dmgInfo.GetVictim();
     Unit* attacker = dmgInfo.GetAttacker();
-    uint128 damage = dmgInfo.GetDamage();
+    uint256 damage = dmgInfo.GetDamage();
     SpellSchoolMask schoolMask = dmgInfo.GetSchoolMask();
     SpellInfo const* spellInfo = dmgInfo.GetSpellInfo();
 
@@ -3157,8 +3285,8 @@ void Unit::CalcAbsorbResist(DamageInfo& dmgInfo, bool Splited)
             // pussywizard:
             if (spellInfo && spellInfo->HasAttribute(SPELL_ATTR0_CU_SCHOOLMASK_NORMAL_WITH_MAGIC))
             {
-                uint128 damageAfterArmor = Unit::CalcArmorReducedDamage(attacker, victim, damage, spellInfo, 0, BASE_ATTACK);
-                uint128 armorReduction = damage > damageAfterArmor ? damage - damageAfterArmor : uint128(0);
+                uint256 damageAfterArmor = Unit::CalcArmorReducedDamage(attacker, victim, damage, spellInfo, 0, BASE_ATTACK);
+                uint256 armorReduction = damage > damageAfterArmor ? damage - damageAfterArmor : uint256(0);
                 if (Acore::Number::ToLongDouble(armorReduction) < damageResisted) // pick the lower one, the weakest resistance counts
                     damageResisted = Acore::Number::ToLongDouble(armorReduction);
             }
@@ -3224,7 +3352,7 @@ void Unit::CalcAbsorbResist(DamageInfo& dmgInfo, bool Splited)
             continue;
 
         // absorb must be smaller than the damage itself
-        currentAbsorb = Acore::Number::ToUInt64Saturated(std::min<uint128>(currentAbsorb, dmgInfo.GetDamage()));
+        currentAbsorb = Acore::Number::ToUInt64Saturated(std::min<uint256>(currentAbsorb, dmgInfo.GetDamage()));
 
         // xinef: do this after absorb is rounded to damage...
         AddPct(currentAbsorb, -auraAbsorbMod);
@@ -3340,9 +3468,9 @@ void Unit::CalcAbsorbResist(DamageInfo& dmgInfo, bool Splited)
 
             dmgInfo.AbsorbDamage(splitDamage);
 
-            uint128 splitted = splitDamage;
-            uint128 splitted_absorb = 0;
-            uint128 splitted_resist = 0;
+            uint256 splitted = splitDamage;
+            uint256 splitted_absorb = 0;
+            uint256 splitted_resist = 0;
 
             uint32 procAttacker = 0, procVictim = 0, procEx = PROC_EX_NORMAL_HIT;
             DamageInfo splittedDmgInfo(attacker, caster, splitted, spellInfo, schoolMask, dmgInfo.GetDamageType());
@@ -3400,7 +3528,7 @@ void Unit::CalcAbsorbResist(DamageInfo& dmgInfo, bool Splited)
                 if (!caster->IsWithinDist(victim, splitSpellInfo->GetMaxRange(splitSpellInfo->IsPositive(), caster)))
                     continue;
 
-            uint128 splitDamage = CalculatePct(dmgInfo.GetDamage(), (*itr)->GetAmount());
+            uint256 splitDamage = CalculatePct(dmgInfo.GetDamage(), (*itr)->GetAmount());
             SpellSchoolMask splitSchoolMask  = schoolMask;
 
             uint32 scriptSplitDamage = ToUInt32Damage(splitDamage);
@@ -3409,7 +3537,7 @@ void Unit::CalcAbsorbResist(DamageInfo& dmgInfo, bool Splited)
                 splitDamage = scriptSplitDamage;
 
             // absorb must be smaller than the damage itself
-            splitDamage = std::min<uint128>(splitDamage, dmgInfo.GetDamage());
+            splitDamage = std::min<uint256>(splitDamage, dmgInfo.GetDamage());
 
             // Roar of Sacrifice, dont absorb it
             if (splitSpellInfo->Id != 53480)
@@ -3417,9 +3545,9 @@ void Unit::CalcAbsorbResist(DamageInfo& dmgInfo, bool Splited)
             else
                 splitSchoolMask = SPELL_SCHOOL_MASK_NATURE;
 
-            uint128 splitted = splitDamage;
-            uint128 splitted_absorb = 0;
-            uint128 splitted_resist = 0;
+            uint256 splitted = splitDamage;
+            uint256 splitted_absorb = 0;
+            uint256 splitted_resist = 0;
 
             uint32 procAttacker = 0, procVictim = 0, procEx = PROC_EX_NORMAL_HIT;
             DamageInfo splittedDmgInfo(attacker, caster, splitted, spellInfo, splitSchoolMask, dmgInfo.GetDamageType());
@@ -3458,7 +3586,7 @@ void Unit::CalcHealAbsorb(HealInfo& healInfo)
     if (!healInfo.GetHeal())
         return;
 
-    int64 const healing = healInfo.GetHeal() > static_cast<uint128>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(healInfo.GetHeal());
+    int64 const healing = healInfo.GetHeal() > static_cast<uint256>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(healInfo.GetHeal());
     int64 absorbAmount = 0;
 
     // Need remove expired auras after
@@ -3513,7 +3641,7 @@ void Unit::CalcHealAbsorb(HealInfo& healInfo)
     }
 
     if (absorbAmount > 0)
-        healInfo.AbsorbHeal(static_cast<uint128>(absorbAmount));
+        healInfo.AbsorbHeal(static_cast<uint256>(absorbAmount));
 }
 
 void Unit::AttackerStateUpdate(Unit* victim, WeaponAttackType attType /*= BASE_ATTACK*/, bool extra /*= false*/, bool ignoreCasting /*= false*/)
@@ -3593,7 +3721,7 @@ void Unit::AttackerStateUpdate(Unit* victim, WeaponAttackType attType /*= BASE_A
         if (victim->CanSparringWith(damageInfo.attacker))
             damageInfo.HitInfo |= HITINFO_FAKE_DAMAGE;
 
-        if (ShouldSendFastMeleeClientFeedback(damageInfo))
+        if (!ShouldSuppressPlayerMeleeWhiteDamagePacket(damageInfo) && ShouldSendFastMeleeClientFeedback(damageInfo))
             SendAttackStateUpdate(&damageInfo);
 
         //TriggerAurasProcOnEvent(damageInfo);
@@ -3717,6 +3845,9 @@ void Unit::HandleProcExtraAttackFor(Unit* victim, uint32 count)
     while (count)
     {
         --count;
+        if (!ConsumePlayerExtraAttackBudgetForDebug(this, victim))
+            continue;
+
         AttackerStateUpdate(victim, BASE_ATTACK, true);
     }
 }
@@ -3958,15 +4089,15 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
     return finishOutcome(MELEE_HIT_NORMAL);
 }
 
-uint128 Unit::CalculateDamage(WeaponAttackType attType, bool normalized, bool addTotalPct, uint8 itemDamagesMask /*= 0*/)
+uint256 Unit::CalculateDamage(WeaponAttackType attType, bool normalized, bool addTotalPct, uint8 itemDamagesMask /*= 0*/)
 {
     long double minDamage = 0.0L;
     long double maxDamage = 0.0L;
 
     if (!normalized && addTotalPct && !itemDamagesMask)
     {
-        minDamage = Acore::Number::ToLongDouble(GetExtendedWeaponDamageRange128(attType, MINDAMAGE));
-        maxDamage = Acore::Number::ToLongDouble(GetExtendedWeaponDamageRange128(attType, MAXDAMAGE));
+        minDamage = Acore::Number::ToLongDouble(GetExtendedWeaponDamageRange256(attType, MINDAMAGE));
+        maxDamage = Acore::Number::ToLongDouble(GetExtendedWeaponDamageRange256(attType, MAXDAMAGE));
     }
     else if (normalized || !addTotalPct || itemDamagesMask || IsControlledByPlayer())
     {
@@ -4024,10 +4155,10 @@ uint128 Unit::CalculateDamage(WeaponAttackType attType, bool normalized, bool ad
         std::swap(minDamageValue, maxDamageValue);
 
     if (maxDamageValue <= minDamageValue)
-        return ToUInt128Damage(minDamageValue);
+        return ToUInt256Damage(minDamageValue);
 
     long double roll = minDamageValue + ((maxDamageValue - minDamageValue) * static_cast<long double>(rand_norm()));
-    return ToUInt128Damage(roll);
+    return ToUInt256Damage(roll);
 }
 
 float Unit::CalculateLevelPenalty(SpellInfo const* spellProto) const
@@ -7369,7 +7500,7 @@ void Unit::SendSpellNonMeleeReflectLog(SpellNonMeleeDamage* log, Unit* attacker)
     data << attacker->GetPackGUID();
     data << uint32(log->spellInfo->Id);
     data << uint32(damage);                                 // damage amount
-    uint128 overkill = static_cast<uint128>(log->damage) > log->target->GetHealthForCombat128() ? static_cast<uint128>(log->damage) - log->target->GetHealthForCombat128() : 0;
+    uint256 overkill = static_cast<uint256>(log->damage) > log->target->GetHealthForCombat256() ? static_cast<uint256>(log->damage) - log->target->GetHealthForCombat256() : 0;
     data << uint32(ToClientDamageForTarget(overkill, log->target)); // overkill
     data << uint8 (log->schoolMask);                        // damage school
     data << uint32(absorb);                                 // AbsorbedDamage
@@ -7404,7 +7535,7 @@ void Unit::SendSpellNonMeleeDamageLog(SpellNonMeleeDamage* log)
     data << log->attacker->GetPackGUID();
     data << uint32(log->spellInfo->Id);
     data << uint32(damage);                                 // damage amount
-    uint128 overkill = static_cast<uint128>(log->damage) > log->target->GetHealthForCombat128() ? static_cast<uint128>(log->damage) - log->target->GetHealthForCombat128() : 0;
+    uint256 overkill = static_cast<uint256>(log->damage) > log->target->GetHealthForCombat256() ? static_cast<uint256>(log->damage) - log->target->GetHealthForCombat256() : 0;
     data << uint32(ToClientDamageForTarget(overkill, log->target)); // overkill
     data << uint8 (log->schoolMask);                        // damage school
     data << uint32(absorb);                                 // AbsorbedDamage
@@ -7458,7 +7589,7 @@ void Unit::SendSpellNonMeleeDamageLog(Unit* target, SpellInfo const* spellInfo, 
     SendSpellNonMeleeDamageLog(&log);
 }
 
-void Unit::ProcDamageAndSpell(Unit* actor, Unit* victim, uint32 procAttacker, uint32 procVictim, uint32 procExtra, uint128 const& amount, WeaponAttackType attType, SpellInfo const* procSpellInfo, SpellInfo const* procAura, int8 procAuraEffectIndex, Spell const* procSpell, DamageInfo* damageInfo, HealInfo* healInfo, uint32 procPhase)
+void Unit::ProcDamageAndSpell(Unit* actor, Unit* victim, uint32 procAttacker, uint32 procVictim, uint32 procExtra, uint256 const& amount, WeaponAttackType attType, SpellInfo const* procSpellInfo, SpellInfo const* procAura, int8 procAuraEffectIndex, Spell const* procSpell, DamageInfo* damageInfo, HealInfo* healInfo, uint32 procPhase)
 {
     // Not much to do if no flags are set.
     if (procAttacker && actor)
@@ -7611,8 +7742,8 @@ void Unit::SendAttackStateUpdate(CalcDamageInfo* damageInfo)
     uint64 totalDamage = uint64(tmpDamage[0]) + uint64(tmpDamage[1]);
     uint32 clientTotalDamage = ToClientDamage(totalDamage);
     data << uint32(clientTotalDamage); // Full damage
-    uint128 rawTotalDamage = damageInfo->damages[0].damage > uint128(std::numeric_limits<uint64>::max()) - damageInfo->damages[1].damage ? uint128(std::numeric_limits<uint64>::max()) : damageInfo->damages[0].damage + damageInfo->damages[1].damage;
-    uint128 overkill = rawTotalDamage > damageInfo->target->GetHealthForCombat128() ? rawTotalDamage - damageInfo->target->GetHealthForCombat128() : uint128(0);
+    uint256 rawTotalDamage = damageInfo->damages[0].damage > uint256(std::numeric_limits<uint64>::max()) - damageInfo->damages[1].damage ? uint256(std::numeric_limits<uint64>::max()) : damageInfo->damages[0].damage + damageInfo->damages[1].damage;
+    uint256 overkill = rawTotalDamage > damageInfo->target->GetHealthForCombat256() ? rawTotalDamage - damageInfo->target->GetHealthForCombat256() : uint256(0);
     uint32 clientOverkill = ToClientDamageForTarget(overkill, damageInfo->target);
     data << uint32(clientOverkill); // Overkill
     data << uint8(count);                                           // Sub damage count
@@ -8169,7 +8300,7 @@ bool Unit::HandleDummyAuraProc(Unit* victim, uint32 damage, AuraEffect* triggere
                         return false;
 
                     // mana reward
-                    basepoints0 = ToInt32Damage(Acore::Number::CalculatePct(GetMaxPowerForCombat128(POWER_MANA), triggerAmount));
+                    basepoints0 = ToInt32Damage(Acore::Number::CalculatePct(GetMaxPowerForCombat256(POWER_MANA), triggerAmount));
                     target = this;
                     triggered_spell_id = 29442;
                     break;
@@ -8557,7 +8688,7 @@ bool Unit::HandleDummyAuraProc(Unit* victim, uint32 damage, AuraEffect* triggere
                             triggered_spell_id = 34299;
                             if (triggeredByAura->GetCasterGUID() != GetGUID())
                                 break;
-                            int32 basepoints1 = ToInt32Damage(Acore::Number::CalculatePct(GetMaxPowerForCombat128(POWER_MANA), triggerAmount * 2));
+                            int32 basepoints1 = ToInt32Damage(Acore::Number::CalculatePct(GetMaxPowerForCombat256(POWER_MANA), triggerAmount * 2));
                             // Improved Leader of the Pack
                             // Check cooldown of heal spell cooldown
                             if (IsPlayer() && !ToPlayer()->HasSpellCooldown(34299))
@@ -8568,8 +8699,8 @@ bool Unit::HandleDummyAuraProc(Unit* victim, uint32 damage, AuraEffect* triggere
                     case 28719:
                         {
                             // mana back
-                            int128 const& powerCost = spellProc->GetPowerCost128();
-                            basepoints0 = powerCost > 0 ? ToInt32Damage(Acore::Number::CalculatePct(Acore::Number::ToUInt128Saturated(powerCost), 30)) : 0;
+                            int256 const& powerCost = spellProc->GetPowerCost256();
+                            basepoints0 = powerCost > 0 ? ToInt32Damage(Acore::Number::CalculatePct(Acore::Number::ToUInt256Saturated(powerCost), 30)) : 0;
                             target = this;
                             triggered_spell_id = 28742;
                             break;
@@ -8767,14 +8898,14 @@ bool Unit::HandleDummyAuraProc(Unit* victim, uint32 damage, AuraEffect* triggere
                                     return false;
                                 if (AuraEffect const* pEff = victim->GetAuraEffect(SPELL_AURA_PERIODIC_DUMMY, SPELLFAMILY_HUNTER, 0x0, 0x80000000, 0x0, GetGUID()))
                                 {
-                                    int128 powerCost = pEff->GetSpellInfo()->CalcPowerCost(this, SpellSchoolMask(pEff->GetSpellInfo()->SchoolMask));
-                                    basepoints0 = powerCost > 0 ? ToInt32Damage(Acore::Number::CalculatePct(Acore::Number::ToUInt128Saturated(powerCost), 40) / 3) : 0;
+                                    int256 powerCost = pEff->GetSpellInfo()->CalcPowerCost(this, SpellSchoolMask(pEff->GetSpellInfo()->SchoolMask));
+                                    basepoints0 = powerCost > 0 ? ToInt32Damage(Acore::Number::CalculatePct(Acore::Number::ToUInt256Saturated(powerCost), 40) / 3) : 0;
                                 }
                             }
                             else
                             {
-                                int128 powerCost = procSpell->CalcPowerCost(this, SpellSchoolMask(procSpell->SchoolMask));
-                                basepoints0 = powerCost > 0 ? ToInt32Damage(Acore::Number::CalculatePct(Acore::Number::ToUInt128Saturated(powerCost), 40)) : 0;
+                                int256 powerCost = procSpell->CalcPowerCost(this, SpellSchoolMask(procSpell->SchoolMask));
+                                basepoints0 = powerCost > 0 ? ToInt32Damage(Acore::Number::CalculatePct(Acore::Number::ToUInt256Saturated(powerCost), 40)) : 0;
                             }
 
                             if (spell)
@@ -9028,11 +9159,11 @@ bool Unit::HandleDummyAuraProc(Unit* victim, uint32 damage, AuraEffect* triggere
                                 return false;
                             }
 
-                            uint128 effectiveHeal = healInfo->GetEffectiveHeal();
+                            uint256 effectiveHeal = healInfo->GetEffectiveHeal();
                             if (effectiveHeal)
                             {
                                 // heal amount
-                                uint128 triggeredHeal = Acore::Number::CalculatePct(effectiveHeal, triggerAmount);
+                                uint256 triggeredHeal = Acore::Number::CalculatePct(effectiveHeal, triggerAmount);
                                 basepoints0 = ToClientStatValue(Acore::Number::ToLongDouble(triggeredHeal));
                                 target = this;
 
@@ -9894,7 +10025,7 @@ bool Unit::HandleAuraProc(Unit* victim, uint32 damage, Aura* triggeredByAura, Sp
                 // Swift Hand of Justice
                 case 59906:
                     {
-                        uint128 healAmount = CountPctFromMaxHealth128(dummySpell->Effects[EFFECT_0].CalcValue());
+                        uint256 healAmount = CountPctFromMaxHealth256(dummySpell->Effects[EFFECT_0].CalcValue());
                         int32 bp0 = ToInt32Damage(healAmount);
                         CastCustomSpell(this, 59913, &bp0, nullptr, nullptr, true);
                         *handled = true;
@@ -9934,7 +10065,7 @@ bool Unit::HandleAuraProc(Unit* victim, uint32 damage, Aura* triggeredByAura, Sp
                             if (!spInfo)
                                 return false;
 
-                            int32 bp0 = ToInt32Damage(Acore::Number::CalculatePct(GetMaxPowerForCombat128(POWER_MANA), spInfo->Effects[0].CalcValue()));
+                            int32 bp0 = ToInt32Damage(Acore::Number::CalculatePct(GetMaxPowerForCombat256(POWER_MANA), spInfo->Effects[0].CalcValue()));
                             CastCustomSpell(this, 67545, &bp0, nullptr, nullptr, true, nullptr, triggeredByAura->GetEffect(EFFECT_0), GetGUID());
                             return true;
                         }
@@ -12079,14 +12210,14 @@ void Unit::SetCharm(Unit* charm, bool apply)
     }
 }
 
-uint128 Unit::DealHeal(Unit* healer, Unit* victim, uint128 const& addhealth)
+uint256 Unit::DealHeal(Unit* healer, Unit* victim, uint256 const& addhealth)
 {
-    uint128 gain = 0;
+    uint256 gain = 0;
 
     if (healer)
     {
-        uint128 receivedAiHeal = addhealth;
-        uint128 doneAiHeal = addhealth;
+        uint256 receivedAiHeal = addhealth;
+        uint256 doneAiHeal = addhealth;
 
         if (victim->IsAIEnabled)
             victim->GetAI()->HealReceived(healer, receivedAiHeal);
@@ -12097,16 +12228,16 @@ uint128 Unit::DealHeal(Unit* healer, Unit* victim, uint128 const& addhealth)
 
     if (addhealth)
     {
-        uint128 currentHealth = victim->GetHealthForCombat128();
-        uint128 maxHealth = victim->GetMaxHealthForCombat128();
-        uint128 headroom = currentHealth < maxHealth ? maxHealth - currentHealth : 0;
+        uint256 currentHealth = victim->GetHealthForCombat256();
+        uint256 maxHealth = victim->GetMaxHealthForCombat256();
+        uint256 headroom = currentHealth < maxHealth ? maxHealth - currentHealth : 0;
         gain = addhealth > headroom ? headroom : addhealth;
         if (gain)
-            victim->SetHealthForCombat128(currentHealth + gain);
+            victim->SetHealthForCombat256(currentHealth + gain);
     }
 
     // Hook for OnHeal Event
-    uint128 scriptGain = gain;
+    uint256 scriptGain = gain;
     sScriptMgr->OnHeal(healer, victim, scriptGain);
 
     Unit* unit = healer;
@@ -12385,23 +12516,23 @@ void Unit::SendHealSpellLog(HealInfo const& healInfo, bool critical)
     SendMessageToSet(&data, true);
 }
 
-uint128 Unit::HealBySpell(HealInfo& healInfo, bool critical)
+uint256 Unit::HealBySpell(HealInfo& healInfo, bool critical)
 {
-    uint128 scriptHeal = healInfo.GetHeal();
+    uint256 scriptHeal = healInfo.GetHeal();
     sScriptMgr->ModifyHealReceived(healInfo.GetTarget(), this, scriptHeal, healInfo.GetSpellInfo());
     healInfo.SetHeal(scriptHeal);
 
     // calculate heal absorb and reduce healing
     CalcHealAbsorb(healInfo);
 
-    uint128 gain = Unit::DealHeal(healInfo.GetHealer(), healInfo.GetTarget(), healInfo.GetHeal());
+    uint256 gain = Unit::DealHeal(healInfo.GetHealer(), healInfo.GetTarget(), healInfo.GetHeal());
     healInfo.SetEffectiveHeal(gain);
 
     SendHealSpellLog(healInfo, critical);
     return gain;
 }
 
-void Unit::SendEnergizeSpellLog(Unit* victim, uint32 spellID, uint128 const& damage, Powers powerType, uint128 const& effectiveGain)
+void Unit::SendEnergizeSpellLog(Unit* victim, uint32 spellID, uint256 const& damage, Powers powerType, uint256 const& effectiveGain)
 {
     if (UsesExtendedPowerClientMirror(victim, powerType))
     {
@@ -12418,17 +12549,17 @@ void Unit::SendEnergizeSpellLog(Unit* victim, uint32 spellID, uint128 const& dam
     SendMessageToSet(&data, true);
 }
 
-void Unit::EnergizeBySpell(Unit* victim, uint32 spellID, uint128 const& damage, Powers powerType)
+void Unit::EnergizeBySpell(Unit* victim, uint32 spellID, uint256 const& damage, Powers powerType)
 {
-    int128 gainedPower = victim->ModifyPower128(powerType, Acore::Number::ToInt128Saturated(damage), false);
+    int256 gainedPower = victim->ModifyPower256(powerType, Acore::Number::ToInt256Saturated(damage), false);
 
     if (powerType != POWER_HAPPINESS && gainedPower)
     {
         SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellID);
-        victim->getHostileRefMgr().threatAssist(this, Acore::Number::ToFloat(Acore::Number::ToUInt128Saturated(gainedPower)) * 0.5f, spellInfo);
+        victim->getHostileRefMgr().threatAssist(this, Acore::Number::ToFloat(Acore::Number::ToUInt256Saturated(gainedPower)) * 0.5f, spellInfo);
     }
 
-    SendEnergizeSpellLog(victim, spellID, damage, powerType, gainedPower > 0 ? Acore::Number::ToUInt128Saturated(gainedPower) : uint128(0));
+    SendEnergizeSpellLog(victim, spellID, damage, powerType, gainedPower > 0 ? Acore::Number::ToUInt256Saturated(gainedPower) : uint256(0));
 }
 
 float Unit::SpellPctDamageModsDone(Unit* victim, SpellInfo const* spellProto, DamageEffectType damagetype)
@@ -12762,7 +12893,7 @@ float Unit::SpellPctDamageModsDone(Unit* victim, SpellInfo const* spellProto, Da
     return DoneTotalMod;
 }
 
-uint128 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, uint128 const& pdamage, DamageEffectType damagetype, uint8 effIndex, float TotalMod, uint32 stack)
+uint256 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, uint256 const& pdamage, DamageEffectType damagetype, uint8 effIndex, float TotalMod, uint32 stack)
 {
     if (!spellProto || !victim || damagetype == DIRECT_DAMAGE)
         return pdamage;
@@ -12933,13 +13064,13 @@ uint128 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, ui
     if (Player* modOwner = GetSpellModOwner())
         modOwner->ApplySpellMod(spellProto->Id, damagetype == DOT ? SPELLMOD_DOT : SPELLMOD_DAMAGE, tmpDamage);
 
-    if (uint128 skillDamageBonus = GetCustomSkillDamageBonus())
+    if (uint256 skillDamageBonus = GetCustomSkillDamageBonus())
         tmpDamage += Acore::Number::ToLongDouble(skillDamageBonus);
 
-    return ToUInt128Damage(tmpDamage);
+    return ToUInt256Damage(tmpDamage);
 }
 
-uint128 Unit::SpellDamageBonusTaken(Unit* caster, SpellInfo const* spellProto, uint128 const& pdamage, DamageEffectType damagetype, uint32 stack)
+uint256 Unit::SpellDamageBonusTaken(Unit* caster, SpellInfo const* spellProto, uint256 const& pdamage, DamageEffectType damagetype, uint32 stack)
 {
     if (!spellProto || damagetype == DIRECT_DAMAGE)
         return pdamage;
@@ -13047,7 +13178,7 @@ uint128 Unit::SpellDamageBonusTaken(Unit* caster, SpellInfo const* spellProto, u
 
     long double tmpDamage = (static_cast<long double>(pdamage) + TakenTotal) * static_cast<long double>(TakenTotalMod);
 
-    return ToUInt128Damage(tmpDamage);
+    return ToUInt256Damage(tmpDamage);
 }
 
 float Unit::processDummyAuras(float TakenTotalMod) const
@@ -13089,7 +13220,7 @@ int32 Unit::SpellBaseDamageBonusDone(SpellSchoolMask schoolMask)
 {
     if (Player* player = ToPlayer())
     {
-        int128 extendedBonus = player->GetExtendedSpellDamageBonus128(schoolMask);
+        int256 extendedBonus = player->GetExtendedSpellDamageBonus256(schoolMask);
         if (extendedBonus > 0)
             return ToClientStatValue(Acore::Number::ToLongDouble(extendedBonus));
     }
@@ -13108,7 +13239,7 @@ int32 Unit::SpellBaseDamageBonusDone(SpellSchoolMask schoolMask)
     if (IsPlayer())
     {
         // Base value
-        DoneAdvertisedBenefit += Acore::Number::ToLongDouble(ToPlayer()->GetBaseSpellPowerBonus128());
+        DoneAdvertisedBenefit += Acore::Number::ToLongDouble(ToPlayer()->GetBaseSpellPowerBonus256());
 
         // Damage bonus from stats
         AuraEffectList const& mDamageDoneOfStatPercent = GetAuraEffectsByType(SPELL_AURA_MOD_SPELL_DAMAGE_OF_STAT_PERCENT);
@@ -13118,9 +13249,9 @@ int32 Unit::SpellBaseDamageBonusDone(SpellSchoolMask schoolMask)
             {
                 // stat used stored in miscValueB for this aura
                 Stats usedStat = Stats((*i)->GetMiscValueB());
-                int128 statValue = ToPlayer()->GetExtendedStat128(usedStat);
+                int256 statValue = ToPlayer()->GetExtendedStat256(usedStat);
                 if (statValue <= 0)
-                    statValue = Acore::Number::ToInt128Saturated(static_cast<long double>(GetStat(usedStat)));
+                    statValue = Acore::Number::ToInt256Saturated(static_cast<long double>(GetStat(usedStat)));
                 DoneAdvertisedBenefit += Acore::Number::ToLongDouble(statValue) * static_cast<long double>((*i)->GetAmount()) / 100.0L;
             }
         }
@@ -13457,7 +13588,7 @@ float Unit::SpellTakenCritChance(Unit const* caster, SpellInfo const* spellProto
     return crit_chance;
 }
 
-uint128 Unit::SpellCriticalDamageBonus(Unit const* caster, SpellInfo const* spellProto, uint128 const& damage, Unit const* victim)
+uint256 Unit::SpellCriticalDamageBonus(Unit const* caster, SpellInfo const* spellProto, uint256 const& damage, Unit const* victim)
 {
     // Calculate critical bonus
     long double crit_bonus = static_cast<long double>(damage);
@@ -13498,10 +13629,10 @@ uint128 Unit::SpellCriticalDamageBonus(Unit const* caster, SpellInfo const* spel
         crit_bonus += static_cast<long double>(damage);
     }
 
-    return ToUInt128Damage(crit_bonus);
+    return ToUInt256Damage(crit_bonus);
 }
 
-uint128 Unit::SpellCriticalHealingBonus(Unit const* caster, SpellInfo const* spellProto, uint128 const& damage, Unit const* victim)
+uint256 Unit::SpellCriticalHealingBonus(Unit const* caster, SpellInfo const* spellProto, uint256 const& damage, Unit const* victim)
 {
     // Calculate critical bonus
     long double crit_bonus;
@@ -13535,14 +13666,14 @@ uint128 Unit::SpellCriticalHealingBonus(Unit const* caster, SpellInfo const* spe
         }
     }
 
-    uint128 result = damage;
+    uint256 result = damage;
     if (crit_bonus > 0)
-        result = AddUInt128Damage(result, ToUInt128Damage(crit_bonus));
+        result = AddUInt256Damage(result, ToUInt256Damage(crit_bonus));
 
     if (caster)
     {
         long double scaledDamage = Acore::Number::ToLongDouble(result) * static_cast<long double>(caster->GetTotalAuraMultiplier(SPELL_AURA_MOD_CRITICAL_HEALING_AMOUNT));
-        result = ToUInt128Damage(scaledDamage);
+        result = ToUInt256Damage(scaledDamage);
     }
 
     return result;
@@ -13640,7 +13771,7 @@ float Unit::SpellPctHealingModsDone(Unit* victim, SpellInfo const* spellProto, D
     return DoneTotalMod;
 }
 
-uint128 Unit::SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, uint128 const& healamount, DamageEffectType damagetype, uint8 effIndex, float TotalMod, uint32 stack)
+uint256 Unit::SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, uint256 const& healamount, DamageEffectType damagetype, uint8 effIndex, float TotalMod, uint32 stack)
 {
     // For totems get healing bonus from owner (statue isn't totem in fact)
     if (IsCreature() && IsTotem())
@@ -13763,10 +13894,10 @@ uint128 Unit::SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, u
         heal = spellModHeal;
     }
 
-    return ToUInt128Damage(heal);
+    return ToUInt256Damage(heal);
 }
 
-uint128 Unit::SpellHealingBonusTaken(Unit* caster, SpellInfo const* spellProto, uint128 const& healamount, DamageEffectType damagetype, uint32 stack)
+uint256 Unit::SpellHealingBonusTaken(Unit* caster, SpellInfo const* spellProto, uint256 const& healamount, DamageEffectType damagetype, uint32 stack)
 {
     float TakenTotalMod = 1.0f;
     float minval = 0.0f;
@@ -13842,7 +13973,7 @@ uint128 Unit::SpellHealingBonusTaken(Unit* caster, SpellInfo const* spellProto, 
         if (spellProto->DmgClass == SPELL_DAMAGE_CLASS_NONE)
         {
             long double rawHeal = Acore::Number::ToLongDouble(healamount) * static_cast<long double>(TakenTotalMod);
-            return ToUInt128Damage(rawHeal);
+            return ToUInt256Damage(rawHeal);
         }
     }
 
@@ -13895,14 +14026,14 @@ uint128 Unit::SpellHealingBonusTaken(Unit* caster, SpellInfo const* spellProto, 
 
     long double heal = (Acore::Number::ToLongDouble(healamount) + static_cast<long double>(TakenTotal)) * static_cast<long double>(TakenTotalMod);
 
-    return ToUInt128Damage(heal);
+    return ToUInt256Damage(heal);
 }
 
 int32 Unit::SpellBaseHealingBonusDone(SpellSchoolMask schoolMask)
 {
     if (Player* player = ToPlayer())
     {
-        int128 extendedBonus = player->GetExtendedHealingBonus128();
+        int256 extendedBonus = player->GetExtendedHealingBonus256();
         if (extendedBonus > 0)
             return ToClientStatValue(Acore::Number::ToLongDouble(extendedBonus));
     }
@@ -13918,7 +14049,7 @@ int32 Unit::SpellBaseHealingBonusDone(SpellSchoolMask schoolMask)
     if (IsPlayer())
     {
         // Base value
-        AdvertisedBenefit += Acore::Number::ToLongDouble(ToPlayer()->GetBaseSpellPowerBonus128());
+        AdvertisedBenefit += Acore::Number::ToLongDouble(ToPlayer()->GetBaseSpellPowerBonus256());
 
         // Healing bonus from stats
         AuraEffectList const& mHealingDoneOfStatPercent = GetAuraEffectsByType(SPELL_AURA_MOD_SPELL_HEALING_OF_STAT_PERCENT);
@@ -13926,9 +14057,9 @@ int32 Unit::SpellBaseHealingBonusDone(SpellSchoolMask schoolMask)
         {
             // stat used dependent from misc value (stat index)
             Stats usedStat = Stats((*i)->GetSpellInfo()->Effects[(*i)->GetEffIndex()].MiscValue);
-            int128 statValue = ToPlayer()->GetExtendedStat128(usedStat);
+            int256 statValue = ToPlayer()->GetExtendedStat256(usedStat);
             if (statValue <= 0)
-                statValue = Acore::Number::ToInt128Saturated(static_cast<long double>(GetStat(usedStat)));
+                statValue = Acore::Number::ToInt256Saturated(static_cast<long double>(GetStat(usedStat)));
             AdvertisedBenefit += Acore::Number::ToLongDouble(statValue) * static_cast<long double>((*i)->GetAmount()) / 100.0L;
         }
 
@@ -14295,7 +14426,7 @@ bool Unit::IsImmunedToSpellEffect(SpellInfo const* spellInfo, uint32 index) cons
     return false;
 }
 
-uint128 Unit::MeleeDamageBonusDone(Unit* victim, uint128 const& pdamage, WeaponAttackType attType, SpellInfo const* spellProto, SpellSchoolMask damageSchoolMask /*= SPELL_SCHOOL_MASK_NORMAL*/)
+uint256 Unit::MeleeDamageBonusDone(Unit* victim, uint256 const& pdamage, WeaponAttackType attType, SpellInfo const* spellProto, SpellSchoolMask damageSchoolMask /*= SPELL_SCHOOL_MASK_NORMAL*/)
 {
     if (!victim || pdamage == 0)
         return 0;
@@ -14494,17 +14625,17 @@ uint128 Unit::MeleeDamageBonusDone(Unit* victim, uint128 const& pdamage, WeaponA
             modOwner->ApplySpellMod(spellProto->Id, SPELLMOD_DAMAGE, tmpDamage);
 
     if (spellProto)
-        if (uint128 skillDamageBonus = GetCustomSkillDamageBonus())
+        if (uint256 skillDamageBonus = GetCustomSkillDamageBonus())
             tmpDamage += Acore::Number::ToLongDouble(skillDamageBonus);
 
     // bonus result can be negative
     if (tmpDamage <= 0.0L || std::isnan(static_cast<double>(tmpDamage)))
         return 0;
 
-    return ToUInt128Damage(tmpDamage);
+    return ToUInt256Damage(tmpDamage);
 }
 
-uint128 Unit::MeleeDamageBonusTaken(Unit* attacker, uint128 const& pdamage, WeaponAttackType attType, SpellInfo const* spellProto/*= nullptr*/, SpellSchoolMask damageSchoolMask /*= SPELL_SCHOOL_MASK_NORMAL*/)
+uint256 Unit::MeleeDamageBonusTaken(Unit* attacker, uint256 const& pdamage, WeaponAttackType attType, SpellInfo const* spellProto/*= nullptr*/, SpellSchoolMask damageSchoolMask /*= SPELL_SCHOOL_MASK_NORMAL*/)
 {
     if (pdamage == 0)
         return 0;
@@ -14607,7 +14738,7 @@ uint128 Unit::MeleeDamageBonusTaken(Unit* attacker, uint128 const& pdamage, Weap
     if (tmpDamage <= 0.0L || std::isnan(static_cast<double>(tmpDamage)))
         return 0;
 
-    return ToUInt128Damage(tmpDamage);
+    return ToUInt256Damage(tmpDamage);
 }
 
 class spellIdImmunityPredicate
@@ -15343,24 +15474,24 @@ void Unit::SetFullHealth()
 {
     if (Player* player = ToPlayer())
     {
-        if (player->HasExtendedHealthForCombat() || player->GetExtendedMaxHealth128() > ToSafeClientResourceValue(GetMaxHealth()))
+        if (player->HasExtendedHealthForCombat() || player->GetExtendedMaxHealth256() > ToSafeClientResourceValue(GetMaxHealth()))
         {
-            player->SetExtendedHealth(player->GetExtendedMaxHealth128());
+            player->SetExtendedHealth(player->GetExtendedMaxHealth256());
             player->SyncClientHealthFromExtended();
             return;
         }
     }
     else if (Creature* creature = ToCreature())
     {
-        if (creature->GetExtendedMaxHealth128() > ToSafeClientResourceValue(GetMaxHealth()))
+        if (creature->GetExtendedMaxHealth256() > ToSafeClientResourceValue(GetMaxHealth()))
         {
-            creature->SetExtendedHealth(creature->GetExtendedMaxHealth128());
+            creature->SetExtendedHealth(creature->GetExtendedMaxHealth256());
             creature->SyncClientHealthFromExtended();
             return;
         }
     }
 
-    SetHealthForCombat128(GetMaxHealthForCombat128());
+    SetHealthForCombat256(GetMaxHealthForCombat256());
 }
 
 int64 Unit::ModifyHealth(int64 dVal)
@@ -15372,28 +15503,28 @@ int64 Unit::ModifyHealth(int64 dVal)
 
     if (Player* player = ToPlayer())
     {
-        if (player->HasExtendedHealthForCombat() || player->GetExtendedMaxHealth128() > ToSafeClientResourceValue(GetMaxHealth()))
+        if (player->HasExtendedHealthForCombat() || player->GetExtendedMaxHealth256() > ToSafeClientResourceValue(GetMaxHealth()))
         {
-            uint128 curHealth = player->GetExtendedHealth128();
-            uint128 maxHealth = player->GetExtendedMaxHealth128();
+            uint256 curHealth = player->GetExtendedHealth256();
+            uint256 maxHealth = player->GetExtendedMaxHealth256();
             if (dVal > 0)
             {
-                uint128 headroom = curHealth < maxHealth ? maxHealth - curHealth : 0;
-                uint128 applied = static_cast<uint64>(dVal) > headroom ? headroom : static_cast<uint64>(dVal);
+                uint256 headroom = curHealth < maxHealth ? maxHealth - curHealth : 0;
+                uint256 applied = static_cast<uint64>(dVal) > headroom ? headroom : static_cast<uint64>(dVal);
                 if (applied == 0)
                     return 0;
 
                 player->SetExtendedHealth(curHealth + applied);
                 player->SyncClientHealthFromExtended();
-                return applied > static_cast<uint128>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(applied);
+                return applied > static_cast<uint256>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(applied);
             }
 
-            uint128 damage = dVal == std::numeric_limits<int64>::min() ? (static_cast<uint128>(std::numeric_limits<int64>::max()) + 1) : static_cast<uint64>(-dVal);
+            uint256 damage = dVal == std::numeric_limits<int64>::min() ? (static_cast<uint256>(std::numeric_limits<int64>::max()) + 1) : static_cast<uint64>(-dVal);
             if (damage >= curHealth)
             {
                 player->SetExtendedHealth(0);
                 player->SyncClientHealthFromExtended();
-                return curHealth > static_cast<uint128>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::min() : -static_cast<int64>(curHealth);
+                return curHealth > static_cast<uint256>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::min() : -static_cast<int64>(curHealth);
             }
 
             player->SetExtendedHealth(curHealth - damage);
@@ -15404,28 +15535,28 @@ int64 Unit::ModifyHealth(int64 dVal)
 
     if (Creature* creature = ToCreature())
     {
-        if (creature->GetExtendedMaxHealth128() > ToSafeClientResourceValue(GetMaxHealth()))
+        if (creature->GetExtendedMaxHealth256() > ToSafeClientResourceValue(GetMaxHealth()))
         {
-            uint128 curHealth = creature->GetExtendedHealth128();
-            uint128 maxHealth = creature->GetExtendedMaxHealth128();
+            uint256 curHealth = creature->GetExtendedHealth256();
+            uint256 maxHealth = creature->GetExtendedMaxHealth256();
             if (dVal > 0)
             {
-                uint128 headroom = curHealth < maxHealth ? maxHealth - curHealth : 0;
-                uint128 applied = static_cast<uint64>(dVal) > headroom ? headroom : static_cast<uint64>(dVal);
+                uint256 headroom = curHealth < maxHealth ? maxHealth - curHealth : 0;
+                uint256 applied = static_cast<uint64>(dVal) > headroom ? headroom : static_cast<uint64>(dVal);
                 if (applied == 0)
                     return 0;
 
                 creature->SetExtendedHealth(curHealth + applied);
                 creature->SyncClientHealthFromExtended();
-                return applied > static_cast<uint128>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(applied);
+                return applied > static_cast<uint256>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(applied);
             }
 
-            uint128 damage = dVal == std::numeric_limits<int64>::min() ? (static_cast<uint128>(std::numeric_limits<int64>::max()) + 1) : static_cast<uint64>(-dVal);
+            uint256 damage = dVal == std::numeric_limits<int64>::min() ? (static_cast<uint256>(std::numeric_limits<int64>::max()) + 1) : static_cast<uint64>(-dVal);
             if (damage >= curHealth)
             {
                 creature->SetExtendedHealth(0);
                 creature->SyncClientHealthFromExtended();
-                return curHealth > static_cast<uint128>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::min() : -static_cast<int64>(curHealth);
+                return curHealth > static_cast<uint256>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::min() : -static_cast<int64>(curHealth);
             }
 
             creature->SetExtendedHealth(curHealth - damage);
@@ -15483,10 +15614,10 @@ int64 Unit::GetHealthGain(int64 dVal)
     if (dVal == 0)
         return 0;
 
-    uint128 curHealth128 = GetHealthForCombat128();
-    uint128 maxHealth128 = GetMaxHealthForCombat128();
-    int64 curHealth = curHealth128 > static_cast<uint128>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(curHealth128);
-    int64 maxHealth = maxHealth128 > static_cast<uint128>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(maxHealth128);
+    uint256 curHealth256 = GetHealthForCombat256();
+    uint256 maxHealth256 = GetMaxHealthForCombat256();
+    int64 curHealth = curHealth256 > static_cast<uint256>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(curHealth256);
+    int64 maxHealth = maxHealth256 > static_cast<uint256>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(maxHealth256);
 
     // 【溢出保护】防止治疗预估时整数溢出
     if (dVal > 0)
@@ -15522,10 +15653,10 @@ int32 Unit::ModifyPower(Powers power, int32 dVal, bool withPowerUpdate /*= true*
 
 int64 Unit::ModifyPower64(Powers power, int64 dVal, bool withPowerUpdate /*= true*/)
 {
-    return Acore::Number::ToInt64Saturated(ModifyPower128(power, dVal, withPowerUpdate));
+    return Acore::Number::ToInt64Saturated(ModifyPower256(power, dVal, withPowerUpdate));
 }
 
-int128 Unit::ModifyPower128(Powers power, int128 const& dVal, bool withPowerUpdate /*= true*/)
+int256 Unit::ModifyPower256(Powers power, int256 const& dVal, bool withPowerUpdate /*= true*/)
 {
     if (dVal == 0)
         return 0;
@@ -15533,32 +15664,32 @@ int128 Unit::ModifyPower128(Powers power, int128 const& dVal, bool withPowerUpda
     if (power < POWER_MANA || power >= MAX_POWERS)
         return 0;
 
-    uint128 curPower = GetPowerForCombat128(power);
-    uint128 maxPower = GetMaxPowerForCombat128(power);
-    int128 gain = 0;
+    uint256 curPower = GetPowerForCombat256(power);
+    uint256 maxPower = GetMaxPowerForCombat256(power);
+    int256 gain = 0;
 
     if (dVal > 0)
     {
-        uint128 headroom = curPower < maxPower ? maxPower - curPower : 0;
-        uint128 requested = Acore::Number::ToUInt128Saturated(dVal);
-        uint128 applied = requested > headroom ? headroom : requested;
+        uint256 headroom = curPower < maxPower ? maxPower - curPower : 0;
+        uint256 requested = Acore::Number::ToUInt256Saturated(dVal);
+        uint256 applied = requested > headroom ? headroom : requested;
         if (applied == 0)
             return 0;
 
-        SetPowerForCombat128(power, curPower + applied, withPowerUpdate);
-        gain = Acore::Number::ToInt128Saturated(applied);
+        SetPowerForCombat256(power, curPower + applied, withPowerUpdate);
+        gain = Acore::Number::ToInt256Saturated(applied);
     }
     else
     {
-        uint128 reduction = Acore::Number::ToUInt128Saturated(-dVal);
+        uint256 reduction = Acore::Number::ToUInt256Saturated(-dVal);
         if (reduction >= curPower)
         {
-            SetPowerForCombat128(power, 0, withPowerUpdate);
-            gain = -Acore::Number::ToInt128Saturated(curPower);
+            SetPowerForCombat256(power, 0, withPowerUpdate);
+            gain = -Acore::Number::ToInt256Saturated(curPower);
         }
         else
         {
-            SetPowerForCombat128(power, curPower - reduction, withPowerUpdate);
+            SetPowerForCombat256(power, curPower - reduction, withPowerUpdate);
             gain = dVal;
         }
     }
@@ -15574,15 +15705,15 @@ int128 Unit::ModifyPower128(Powers power, int128 const& dVal, bool withPowerUpda
 // returns negative amount on power reduction
 int32 Unit::ModifyPowerPct(Powers power, float pct, bool apply)
 {
-    long double amount = Acore::Number::ToLongDouble(GetMaxPowerForCombat128(power));
+    long double amount = Acore::Number::ToLongDouble(GetMaxPowerForCombat256(power));
     if (pct == -100.0f)
         pct = -99.99f;
 
     amount *= apply ? (100.0L + static_cast<long double>(pct)) / 100.0L : 100.0L / (100.0L + static_cast<long double>(pct));
 
-    int128 diff = Acore::Number::ToInt128Saturated(amount);
-    int128 currentMax = Acore::Number::ToInt128Saturated(GetMaxPowerForCombat128(power));
-    return ToInt32SignedDelta(ModifyPower128(power, diff - currentMax));
+    int256 diff = Acore::Number::ToInt256Saturated(amount);
+    int256 currentMax = Acore::Number::ToInt256Saturated(GetMaxPowerForCombat256(power));
+    return ToInt32SignedDelta(ModifyPower256(power, diff - currentMax));
 }
 
 bool Unit::IsAlwaysVisibleFor(WorldObject const* seer) const
@@ -16923,12 +17054,12 @@ float Unit::GetWeaponDamageRange(WeaponAttackType attType, WeaponDamageRange typ
     return m_weaponDamage[attType][type][damageIndex];
 }
 
-int128 Unit::GetExtendedWeaponDamageRange128(WeaponAttackType attType, WeaponDamageRange type) const
+int256 Unit::GetExtendedWeaponDamageRange256(WeaponAttackType attType, WeaponDamageRange type) const
 {
     if (attType == OFF_ATTACK && !HasOffhandWeaponForAttack())
         return 0;
 
-    int128 extendedValue = m_extendedWeaponDamage[attType][type];
+    int256 extendedValue = m_extendedWeaponDamage[attType][type];
     if (extendedValue > 0)
         return extendedValue;
 
@@ -16949,9 +17080,9 @@ int128 Unit::GetExtendedWeaponDamageRange128(WeaponAttackType attType, WeaponDam
     }
 
     if (fieldValue > 0.0f && std::isfinite(fieldValue))
-        return Acore::Number::ToInt128Saturated(static_cast<long double>(fieldValue));
+        return Acore::Number::ToInt256Saturated(static_cast<long double>(fieldValue));
 
-    return Acore::Number::ToInt128Saturated(static_cast<long double>(GetWeaponDamageRange(attType, type)));
+    return Acore::Number::ToInt256Saturated(static_cast<long double>(GetWeaponDamageRange(attType, type)));
 }
 
 void Unit::SetLevel(uint8 lvl, bool showLevelChange)
@@ -16988,7 +17119,7 @@ void Unit::SetHealth(uint32 val)
         if (maxHealth < val)
             val = maxHealth;
 
-        if (player && !player->IsSyncingClientHealthFromExtended() && (player->HasExtendedHealthForCombat() || player->GetExtendedMaxHealth128() > maxHealth) && player->GetExtendedHealth128() > maxHealth && val > 0)
+        if (player && !player->IsSyncingClientHealthFromExtended() && (player->HasExtendedHealthForCombat() || player->GetExtendedMaxHealth256() > maxHealth) && player->GetExtendedHealth256() > maxHealth && val > 0)
             val = maxHealth;
     }
 
@@ -16997,12 +17128,12 @@ void Unit::SetHealth(uint32 val)
         val = MaxClientResourceValue;
     }
 
-    if (creature && !creature->IsSyncingClientHealthFromExtended() && creature->GetExtendedMaxHealth128() > maxHealth)
+    if (creature && !creature->IsSyncingClientHealthFromExtended() && creature->GetExtendedMaxHealth256() > maxHealth)
     {
         if (!val)
             creature->SetExtendedHealth(0);
         else if (val >= maxHealth)
-            creature->SetExtendedHealth(creature->GetExtendedMaxHealth128());
+            creature->SetExtendedHealth(creature->GetExtendedMaxHealth256());
         else
             creature->SetExtendedHealth(val);
     }
@@ -17022,7 +17153,7 @@ void Unit::SetHealth(uint32 val)
     {
         if (!player->IsSyncingClientHealthFromExtended())
         {
-            bool skipExtendedReverseSync = (player->HasExtendedHealthForCombat() || player->GetExtendedMaxHealth128() > maxHealth) && player->GetExtendedHealth128() > maxHealth && val == maxHealth;
+            bool skipExtendedReverseSync = (player->HasExtendedHealthForCombat() || player->GetExtendedMaxHealth256() > maxHealth) && player->GetExtendedHealth256() > maxHealth && val == maxHealth;
             if (!skipExtendedReverseSync)
                 player->SetExtendedHealthFromClientHealth(val);
         }
@@ -17052,18 +17183,18 @@ void Unit::SetHealth(uint32 val)
 
 void Unit::SetHealthForCombat(uint64 value)
 {
-    SetHealthForCombat128(value);
+    SetHealthForCombat256(value);
 }
 
-void Unit::SetHealthForCombat128(uint128 value)
+void Unit::SetHealthForCombat256(uint256 value)
 {
-    uint128 maxHealth = GetMaxHealthForCombat128();
+    uint256 maxHealth = GetMaxHealthForCombat256();
     if (value > maxHealth)
         value = maxHealth;
 
     if (Player* player = ToPlayer())
     {
-        if (player->HasExtendedHealthForCombat() || player->GetExtendedMaxHealth128() > ToSafeClientResourceValue(GetMaxHealth()))
+        if (player->HasExtendedHealthForCombat() || player->GetExtendedMaxHealth256() > ToSafeClientResourceValue(GetMaxHealth()))
         {
             player->SetExtendedHealth(value);
             player->SyncClientHealthFromExtended();
@@ -17072,7 +17203,7 @@ void Unit::SetHealthForCombat128(uint128 value)
     }
     else if (Creature* creature = ToCreature())
     {
-        if (creature->GetExtendedMaxHealth128() > ToSafeClientResourceValue(GetMaxHealth()))
+        if (creature->GetExtendedMaxHealth256() > ToSafeClientResourceValue(GetMaxHealth()))
         {
             creature->SetExtendedHealth(value);
             creature->SyncClientHealthFromExtended();
@@ -17139,11 +17270,11 @@ void Unit::SetPower(Powers power, uint32 val, bool withPowerUpdate /*= true*/, b
     bool extendedPowerChanged = false;
     if (Player* player = ToPlayer())
     {
-        if (!player->IsSyncingClientPowerFromExtended(power) && (player->HasExtendedPowerForCombat(power) || player->GetExtendedMaxPower128(power) > clientMaxPower))
+        if (!player->IsSyncingClientPowerFromExtended(power) && (player->HasExtendedPowerForCombat(power) || player->GetExtendedMaxPower256(power) > clientMaxPower))
         {
-            uint128 before = player->GetExtendedPower128(power);
-            uint128 scaledPower = ScaleClientValueToExtended(val, clientMaxPower, player->GetExtendedMaxPower128(power));
-            uint128 lowWatermark = player->GetExtendedMaxPower128(power) / 100;
+            uint256 before = player->GetExtendedPower256(power);
+            uint256 scaledPower = ScaleClientValueToExtended(val, clientMaxPower, player->GetExtendedMaxPower256(power));
+            uint256 lowWatermark = player->GetExtendedMaxPower256(power) / 100;
             if (lowWatermark == 0)
                 lowWatermark = 1;
 
@@ -17155,17 +17286,17 @@ void Unit::SetPower(Powers power, uint32 val, bool withPowerUpdate /*= true*/, b
 
             player->SetExtendedPower(power, scaledPower);
 
-            extendedPowerChanged = before != player->GetExtendedPower128(power);
+            extendedPowerChanged = before != player->GetExtendedPower256(power);
         }
     }
     else if (Creature* creature = ToCreature())
     {
-        if (!creature->IsSyncingClientPowerFromExtended(power) && creature->GetExtendedMaxPower128(power) > clientMaxPower)
+        if (!creature->IsSyncingClientPowerFromExtended(power) && creature->GetExtendedMaxPower256(power) > clientMaxPower)
         {
-            uint128 before = creature->GetExtendedPower128(power);
-            creature->SetExtendedPower(power, ScaleClientValueToExtended(val, clientMaxPower, creature->GetExtendedMaxPower128(power)));
+            uint256 before = creature->GetExtendedPower256(power);
+            creature->SetExtendedPower(power, ScaleClientValueToExtended(val, clientMaxPower, creature->GetExtendedMaxPower256(power)));
 
-            extendedPowerChanged = before != creature->GetExtendedPower128(power);
+            extendedPowerChanged = before != creature->GetExtendedPower256(power);
         }
     }
 
@@ -17221,21 +17352,21 @@ void Unit::SetPower(Powers power, uint32 val, bool withPowerUpdate /*= true*/, b
 
 void Unit::SetPowerForCombat(Powers power, uint64 value, bool withPowerUpdate /*= true*/)
 {
-    SetPowerForCombat128(power, value, withPowerUpdate);
+    SetPowerForCombat256(power, value, withPowerUpdate);
 }
 
-void Unit::SetPowerForCombat128(Powers power, uint128 value, bool withPowerUpdate /*= true*/)
+void Unit::SetPowerForCombat256(Powers power, uint256 value, bool withPowerUpdate /*= true*/)
 {
     if (power < POWER_MANA || power >= MAX_POWERS)
         return;
 
-    uint128 maxPower = GetMaxPowerForCombat128(power);
+    uint256 maxPower = GetMaxPowerForCombat256(power);
     if (value > maxPower)
         value = maxPower;
 
     if (Player* player = ToPlayer())
     {
-        if (player->HasExtendedPowerForCombat(power) || player->GetExtendedMaxPower128(power) > ToSafeClientResourceValue(GetMaxPower(power)))
+        if (player->HasExtendedPowerForCombat(power) || player->GetExtendedMaxPower256(power) > ToSafeClientResourceValue(GetMaxPower(power)))
         {
             player->SetExtendedPower(power, value);
             player->SyncClientPowerFromExtended(power, false, withPowerUpdate);
@@ -17244,7 +17375,7 @@ void Unit::SetPowerForCombat128(Powers power, uint128 value, bool withPowerUpdat
     }
     else if (Creature* creature = ToCreature())
     {
-        if (creature->GetExtendedMaxPower128(power) > ToSafeClientResourceValue(GetMaxPower(power)))
+        if (creature->GetExtendedMaxPower256(power) > ToSafeClientResourceValue(GetMaxPower(power)))
         {
             creature->SetExtendedPower(power, value);
             creature->SyncClientPowerFromExtended(power, withPowerUpdate);
@@ -17712,7 +17843,7 @@ uint32 createProcExtendMask(SpellNonMeleeDamage* damageInfo, SpellMissInfo missC
     return procEx;
 }
 
-void Unit::ProcDamageAndSpellFor(bool isVictim, Unit* target, uint32 procFlag, uint32 procExtra, WeaponAttackType attType, SpellInfo const* procSpellInfo, uint128 const& damage, SpellInfo const* procAura, int8 procAuraEffectIndex, Spell const* procSpell, DamageInfo* damageInfo, HealInfo* healInfo, uint32 procPhase)
+void Unit::ProcDamageAndSpellFor(bool isVictim, Unit* target, uint32 procFlag, uint32 procExtra, WeaponAttackType attType, SpellInfo const* procSpellInfo, uint256 const& damage, SpellInfo const* procAura, int8 procAuraEffectIndex, Spell const* procSpell, DamageInfo* damageInfo, HealInfo* healInfo, uint32 procPhase)
 {
     // Player is loaded now - do not allow passive spell casts to proc
     if (IsPlayer() && ToPlayer()->GetSession()->PlayerLoading())
@@ -19364,7 +19495,7 @@ bool Unit::HandleAuraRaidProcFromCharge(AuraEffect* triggeredByAura)
 void Unit::Kill(Unit* killer, Unit* victim, bool durabilityLoss, WeaponAttackType attackType, SpellInfo const* spellProto, Spell const* spell /*= nullptr*/)
 {
     // Prevent killing unit twice (and giving reward from kill twice)
-    uint128 const victimHealthForCombat = victim->GetHealthForCombat128();
+    uint256 const victimHealthForCombat = victim->GetHealthForCombat256();
     if (!victim->GetHealth() && victimHealthForCombat == 0)
         return;
 
@@ -21836,20 +21967,20 @@ void Unit::RewardRage(uint32 damage, uint32 weaponSpeedHitFactor, bool attacker)
     if (rageGain <= 0.0L || std::isnan(static_cast<double>(rageGain)))
         return;
 
-    uint128 currentPower = GetPowerForCombat128(POWER_RAGE);
-    uint128 maxPower = GetMaxPowerForCombat128(POWER_RAGE);
+    uint256 currentPower = GetPowerForCombat256(POWER_RAGE);
+    uint256 maxPower = GetMaxPowerForCombat256(POWER_RAGE);
     if (currentPower >= maxPower)
         return;
 
-    uint128 missingPower = maxPower - currentPower;
-    uint128 gainPower = Acore::Number::ToUInt128Saturated(rageGain);
+    uint256 missingPower = maxPower - currentPower;
+    uint256 gainPower = Acore::Number::ToUInt256Saturated(rageGain);
     if (gainPower > missingPower)
         gainPower = missingPower;
 
     if (gainPower == 0)
         return;
 
-    SetPowerForCombat128(POWER_RAGE, currentPower + gainPower);
+    SetPowerForCombat256(POWER_RAGE, currentPower + gainPower);
 }
 
 void Unit::StopAttackFaction(uint32 faction_id)
@@ -22077,13 +22208,13 @@ void Unit::PetSpellFail(SpellInfo const* spellInfo, Unit* target, uint32 result)
     }
 }
 
-uint128 Unit::CalculateAOEDamageReduction(uint128 const& damage, uint32 schoolMask, bool npcCaster) const
+uint256 Unit::CalculateAOEDamageReduction(uint256 const& damage, uint32 schoolMask, bool npcCaster) const
 {
     long double reducedDamage = Acore::Number::ToLongDouble(damage) * static_cast<long double>(GetTotalAuraMultiplierByMiscMask(SPELL_AURA_MOD_AOE_DAMAGE_AVOIDANCE, schoolMask));
     if (npcCaster)
         reducedDamage *= static_cast<long double>(GetTotalAuraMultiplierByMiscMask(SPELL_AURA_MOD_CREATURE_AOE_DAMAGE_AVOIDANCE, schoolMask));
 
-    return ToUInt128Damage(reducedDamage);
+    return ToUInt256Damage(reducedDamage);
 }
 
 void Unit::ExecuteDelayedUnitRelocationEvent()

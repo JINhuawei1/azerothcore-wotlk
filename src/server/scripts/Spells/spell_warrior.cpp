@@ -405,21 +405,21 @@ class spell_warr_execute : public SpellScript
         if (Unit* target = GetHitUnit())
         {
             SpellInfo const* spellInfo = GetSpellInfo();
-            uint128 currentRage = caster->GetPowerForCombat128(POWER_RAGE);
-            int128 powerCost = spellInfo->CalcPowerCost(caster, SpellSchoolMask(spellInfo->SchoolMask));
-            uint128 maxRageSpend = powerCost >= 300 ? 0 : Acore::Number::ToUInt128Saturated(300 - powerCost);
-            uint128 rageUsed = std::min<uint128>(maxRageSpend, currentRage);
-            uint128 newRage = currentRage - rageUsed;
+            uint256 currentRage = caster->GetPowerForCombat256(POWER_RAGE);
+            int256 powerCost = spellInfo->CalcPowerCost(caster, SpellSchoolMask(spellInfo->SchoolMask));
+            uint256 maxRageSpend = powerCost >= 300 ? 0 : Acore::Number::ToUInt256Saturated(300 - powerCost);
+            uint256 rageUsed = std::min<uint256>(maxRageSpend, currentRage);
+            uint256 newRage = currentRage - rageUsed;
 
             // Sudden Death rage save
             if (AuraEffect* aurEff = caster->GetAuraEffect(SPELL_AURA_PROC_TRIGGER_SPELL, SPELLFAMILY_GENERIC, WARRIOR_ICON_ID_SUDDEN_DEATH, EFFECT_0))
             {
                 int32 ragesave = aurEff->GetSpellInfo()->Effects[EFFECT_1].CalcValue() * 10;
                 if (ragesave > 0)
-                    newRage = std::max<uint128>(newRage, static_cast<uint128>(ragesave));
+                    newRage = std::max<uint256>(newRage, static_cast<uint256>(ragesave));
             }
 
-            caster->SetPowerForCombat128(POWER_RAGE, newRage);
+            caster->SetPowerForCombat256(POWER_RAGE, newRage);
             // Glyph of Execution bonus
             if (AuraEffect* aurEff = caster->GetAuraEffect(SPELL_WARRIOR_GLYPH_OF_EXECUTION, EFFECT_0))
             {
@@ -450,7 +450,7 @@ class spell_warr_concussion_blow : public SpellScript
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
-        SetHitDamage128(Acore::Number::ToUInt128Saturated(SpellScriptCombat::PercentOf(SpellScriptCombat::GetAttackPower(GetCaster(), BASE_ATTACK), static_cast<long double>(GetEffectValue()))));
+        SetHitDamage256(Acore::Number::ToUInt256Saturated(SpellScriptCombat::PercentOf(SpellScriptCombat::GetAttackPower(GetCaster(), BASE_ATTACK), static_cast<long double>(GetEffectValue()))));
     }
 
     void Register() override
@@ -471,14 +471,14 @@ class spell_warr_bloodthirst : public SpellScript
 
     void HandleDamage(SpellEffIndex effIndex)
     {
-        uint128 damage = Acore::Number::ToUInt128Saturated(SpellScriptCombat::PercentOf(static_cast<long double>(GetEffectValue()), SpellScriptCombat::GetAttackPower(GetCaster(), BASE_ATTACK)));
+        uint256 damage = Acore::Number::ToUInt256Saturated(SpellScriptCombat::PercentOf(static_cast<long double>(GetEffectValue()), SpellScriptCombat::GetAttackPower(GetCaster(), BASE_ATTACK)));
 
         if (Unit* target = GetHitUnit())
         {
             damage = GetCaster()->SpellDamageBonusDone(target, GetSpellInfo(), damage, SPELL_DIRECT_DAMAGE, effIndex);
             damage = target->SpellDamageBonusTaken(GetCaster(), GetSpellInfo(), damage, SPELL_DIRECT_DAMAGE);
         }
-        SetHitDamage128(damage);
+        SetHitDamage256(damage);
     }
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
@@ -966,8 +966,8 @@ class spell_warr_heroic_strike : public SpellScript
         }
         if (bonusDamage)
         {
-            uint128 damage = GetHitDamage128();
-            SetHitDamage128(AddUInt128Damage(damage, Acore::Number::CalculatePct(damage, 35))); // "Causes ${0.35*$m1} additional damage against Dazed targets."
+            uint256 damage = GetHitDamage256();
+            SetHitDamage256(AddUInt256Damage(damage, Acore::Number::CalculatePct(damage, 35))); // "Causes ${0.35*$m1} additional damage against Dazed targets."
         }
     }
 

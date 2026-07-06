@@ -6,6 +6,7 @@
 #include "AddonThrottle.h"
 #include "ScriptMgr.h"
 #include "Chat.h"
+#include "HermesBridgeAddonApi.h"
 #include "Player.h"
 #include "WorldSession.h"
 #include "Configuration/Config.h"
@@ -609,6 +610,9 @@ public:
             return false;
 
         // 发送打开UI界面的Addon消息
+        if (HermesBridge_SendAddonMessage(player, TALENT_SOUL_ADDON_PREFIX, "OPEN_UI"))
+            return true;
+
         std::string fullMessage = std::string(TALENT_SOUL_ADDON_PREFIX) + "\tOPEN_UI";
         WorldPacket data;
         ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
@@ -701,6 +705,9 @@ private:
         // 如果消息足够短，直接发送
         if (payload.length() <= MAX_ADDON_PAYLOAD)
         {
+            if (HermesBridge_SendAddonMessage(player, TALENT_SOUL_ADDON_PREFIX, payload))
+                return;
+
             std::string fullMessage = std::string(TALENT_SOUL_ADDON_PREFIX) + '\t' + payload;
             WorldPacket data;
             ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
@@ -720,6 +727,8 @@ private:
 
             std::ostringstream chunkMsg;
             chunkMsg << "CHUNK:" << (i + 1) << ":" << totalChunks << ":" << chunk;
+            if (HermesBridge_SendAddonMessage(player, TALENT_SOUL_ADDON_PREFIX, chunkMsg.str()))
+                continue;
 
             std::string fullMessage = std::string(TALENT_SOUL_ADDON_PREFIX) + '\t' + chunkMsg.str();
             WorldPacket data;

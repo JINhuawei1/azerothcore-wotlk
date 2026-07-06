@@ -108,13 +108,13 @@ static int32 ToInt32Saturated(long double value)
     return static_cast<int32>(value);
 }
 
-static double ToDouble(uint128 const& value)
+static double ToDouble(uint256 const& value)
 {
     double result = value.convert_to<double>();
     return std::isfinite(result) ? result : std::numeric_limits<double>::max();
 }
 
-static double ToDouble(int128 const& value)
+static double ToDouble(int256 const& value)
 {
     double result = value.convert_to<double>();
     if (std::isfinite(result))
@@ -123,16 +123,16 @@ static double ToDouble(int128 const& value)
     return value < 0 ? -std::numeric_limits<double>::max() : std::numeric_limits<double>::max();
 }
 
-static float ToFloat(uint128 const& value)
+static float ToFloat(uint256 const& value)
 {
     float result = value.convert_to<float>();
     return std::isfinite(result) ? result : std::numeric_limits<float>::max();
 }
 
-static uint128 AddUInt128Saturated(uint128 const& left, uint128 const& right)
+static uint256 AddUInt256Saturated(uint256 const& left, uint256 const& right)
 {
-    if (right > std::numeric_limits<uint128>::max() - left)
-        return std::numeric_limits<uint128>::max();
+    if (right > std::numeric_limits<uint256>::max() - left)
+        return std::numeric_limits<uint256>::max();
 
     return left + right;
 }
@@ -168,7 +168,7 @@ void Unit::UpdateDamagePhysical(WeaponAttackType attType)
     if (player)
     {
         ClassAttributeData const& cad = sClassAttributeCache->GetData(player->getClass());
-        uint128 damageLimit = 0;
+        uint256 damageLimit = 0;
         switch (attType)
         {
             case BASE_ATTACK:   damageLimit = cad.主手伤害上限; break;
@@ -229,7 +229,7 @@ bool Player::UpdateStats(Stats stat)
     // 先调用脚本钩子，允许模块修改最终属性值（转生模块等会在这里加成）
     sScriptMgr->OnPlayerAfterUpdateStat(this, stat, value);
 
-    double const MAX_EXTENDED_VALUE = std::numeric_limits<int128>::max().convert_to<double>();
+    double const MAX_EXTENDED_VALUE = std::numeric_limits<int256>::max().convert_to<double>();
 
     if (std::isnan(value) || value < 0.0f)
         extendedStatValue = 0.0;
@@ -253,7 +253,7 @@ bool Player::UpdateStats(Stats stat)
     // Apply attribute limits from cache
     {
         ClassAttributeData const& cad = sClassAttributeCache->GetData(getClass());
-        uint128 limit = 0;
+        uint256 limit = 0;
         switch (stat)
         {
             case STAT_STRENGTH:  limit = cad.力量上限; break;
@@ -274,7 +274,7 @@ bool Player::UpdateStats(Stats stat)
         }
     }
 
-    _extendedStats[stat] = Acore::Number::ToInt128Saturated(static_cast<long double>(extendedStatValue));
+    _extendedStats[stat] = Acore::Number::ToInt256Saturated(static_cast<long double>(extendedStatValue));
 
     SetStat(stat, static_cast<int32>(value));
 
@@ -340,7 +340,7 @@ bool Player::UpdateStats(Stats stat)
     return true;
 }
 
-void Player::ApplySpellPowerBonus(int128 amount, bool apply)
+void Player::ApplySpellPowerBonus(int256 amount, bool apply)
 {
     if (amount < 0)
     {
@@ -350,15 +350,15 @@ void Player::ApplySpellPowerBonus(int128 amount, bool apply)
 
     if (apply)
     {
-        uint128 addAmount = static_cast<uint128>(amount);
-        if (addAmount > std::numeric_limits<uint128>::max() - m_baseSpellPower)
-            m_baseSpellPower = std::numeric_limits<uint128>::max();
+        uint256 addAmount = static_cast<uint256>(amount);
+        if (addAmount > std::numeric_limits<uint256>::max() - m_baseSpellPower)
+            m_baseSpellPower = std::numeric_limits<uint256>::max();
         else
             m_baseSpellPower += addAmount;
     }
     else
     {
-        uint128 removeAmount = static_cast<uint128>(amount);
+        uint256 removeAmount = static_cast<uint256>(amount);
         m_baseSpellPower = removeAmount > m_baseSpellPower ? 0 : m_baseSpellPower - removeAmount;
     }
 
@@ -423,7 +423,7 @@ void Player::UpdateSpellDamageAndHealingBonus()
     // This information for client side use only
     auto getServerStatValue = [this](Stats stat) -> double
     {
-        int128 extendedValue = GetExtendedStat128(stat);
+        int256 extendedValue = GetExtendedStat256(stat);
         if (extendedValue > 0)
             return ToDouble(extendedValue);
 
@@ -431,16 +431,16 @@ void Player::UpdateSpellDamageAndHealingBonus()
         return displayValue > 0 ? static_cast<double>(displayValue) : 0.0;
     };
 
-    auto toExtendedValue = [](double value) -> int128
+    auto toExtendedValue = [](double value) -> int256
     {
         if (std::isnan(value) || value <= 0.0)
             return 0;
-        if (std::isinf(value) || value >= Acore::Number::ToDouble(std::numeric_limits<int128>::max()))
-            return std::numeric_limits<int128>::max();
-        return static_cast<int128>(value);
+        if (std::isinf(value) || value >= Acore::Number::ToDouble(std::numeric_limits<int256>::max()))
+            return std::numeric_limits<int256>::max();
+        return static_cast<int256>(value);
     };
 
-    auto toClientValue = [](int128 const& value) -> int32
+    auto toClientValue = [](int256 const& value) -> int32
     {
         constexpr int32 MAX_CLIENT_SPELL_POWER = 2000000000;
         if (value <= 0)
@@ -483,7 +483,7 @@ void Player::UpdateSpellDamageAndHealingBonus()
         if (!(*i)->GetMiscValue() || ((*i)->GetMiscValue() & SPELL_SCHOOL_MASK_ALL) != 0)
             extendedHealingBonus += static_cast<double>((*i)->GetAmount());
 
-    double baseSpellPower = Acore::Number::ToDouble(GetBaseSpellPowerBonus128());
+    double baseSpellPower = Acore::Number::ToDouble(GetBaseSpellPowerBonus256());
     double attackPowerBonus = GetExtendedTotalAttackPowerValue(BASE_ATTACK);
 
     extendedHealingBonus += baseSpellPower;
@@ -556,8 +556,8 @@ void Player::UpdateSpellDamageAndHealingBonus()
     if (healingMultiplier > 0.0 && healingMultiplier != 100.0)
         extendedHealingBonus = extendedHealingBonus * healingMultiplier / 100.0;
 
-    int128 healingBonus = toExtendedValue(extendedHealingBonus);
-    int128 spellDamage[MAX_SPELL_SCHOOL] = { };
+    int256 healingBonus = toExtendedValue(extendedHealingBonus);
+    int256 spellDamage[MAX_SPELL_SCHOOL] = { };
     for (int i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
         spellDamage[i] = toExtendedValue(extendedSpellDamage[i]);
 
@@ -650,7 +650,7 @@ void Player::UpdateArmor()
 
     double value = static_cast<double>(GetModifierValue(unitMod, BASE_VALUE));   // base armor (from items)
     value *= static_cast<double>(GetModifierValue(unitMod, BASE_PCT));           // armor percent from items
-    value += (GetExtendedStat128(STAT_AGILITY) > 0 ? ToDouble(GetExtendedStat128(STAT_AGILITY)) : static_cast<double>(GetStat(STAT_AGILITY))) * 2.0; // armor bonus from stats
+    value += (GetExtendedStat256(STAT_AGILITY) > 0 ? ToDouble(GetExtendedStat256(STAT_AGILITY)) : static_cast<double>(GetStat(STAT_AGILITY))) * 2.0; // armor bonus from stats
     value += static_cast<double>(GetModifierValue(unitMod, TOTAL_VALUE));
 
     //add dynamic flat mods
@@ -659,7 +659,7 @@ void Player::UpdateArmor()
     {
         if ((*i)->GetMiscValue() & SPELL_SCHOOL_MASK_NORMAL)
         {
-            int128 extendedStat = GetExtendedStat128(Stats((*i)->GetMiscValueB()));
+            int256 extendedStat = GetExtendedStat256(Stats((*i)->GetMiscValueB()));
             double statValue = extendedStat > 0 ? ToDouble(extendedStat) : static_cast<double>(GetStat(Stats((*i)->GetMiscValueB())));
             value += statValue * static_cast<double>((*i)->GetAmount()) / 100.0;
         }
@@ -679,8 +679,8 @@ void Player::UpdateArmor()
 
     if (value < 0.0 || std::isnan(value))
         value = 0.0;
-    else if (std::isinf(value) || value > std::numeric_limits<int128>::max().convert_to<double>())
-        value = std::numeric_limits<int128>::max().convert_to<double>();
+    else if (std::isinf(value) || value > std::numeric_limits<int256>::max().convert_to<double>())
+        value = std::numeric_limits<int256>::max().convert_to<double>();
 
     // Apply armor limit from cache
     {
@@ -688,7 +688,7 @@ void Player::UpdateArmor()
         if (player)
         {
             ClassAttributeData const& cad = sClassAttributeCache->GetData(player->getClass());
-            uint128 armorLimit = cad.护甲上限;
+            uint256 armorLimit = cad.护甲上限;
             if (armorLimit > 0 && value > ToDouble(armorLimit))
             {
                 value = ToDouble(armorLimit);
@@ -696,7 +696,7 @@ void Player::UpdateArmor()
         }
     }
 
-    _extendedArmor = Acore::Number::ToInt128Saturated(static_cast<long double>(value));
+    _extendedArmor = Acore::Number::ToInt256Saturated(static_cast<long double>(value));
 
     constexpr double MAX_CLIENT_ARMOR = 2000000000.0;
     double clientArmor = value > MAX_CLIENT_ARMOR ? MAX_CLIENT_ARMOR : value;
@@ -707,7 +707,7 @@ void Player::UpdateArmor()
 
 double Player::GetHealthBonusFromStamina()
 {
-    double stamina = GetExtendedStat128(STAT_STAMINA) > 0 ? ToDouble(GetExtendedStat128(STAT_STAMINA)) : static_cast<double>(GetStat(STAT_STAMINA));
+    double stamina = GetExtendedStat256(STAT_STAMINA) > 0 ? ToDouble(GetExtendedStat256(STAT_STAMINA)) : static_cast<double>(GetStat(STAT_STAMINA));
 
     double baseStam = stamina < 20.0 ? stamina : 20.0;
     double moreStam = stamina - baseStam;
@@ -733,7 +733,7 @@ double Player::GetHealthBonusFromStamina()
 
 double Player::GetManaBonusFromIntellect()
 {
-    double intellect = GetExtendedStat128(STAT_INTELLECT) > 0 ? ToDouble(GetExtendedStat128(STAT_INTELLECT)) : static_cast<double>(GetStat(STAT_INTELLECT));
+    double intellect = GetExtendedStat256(STAT_INTELLECT) > 0 ? ToDouble(GetExtendedStat256(STAT_INTELLECT)) : static_cast<double>(GetStat(STAT_INTELLECT));
 
     double baseInt = intellect < 20.0 ? intellect : 20.0;
     double moreInt = intellect - baseInt;
@@ -760,12 +760,12 @@ double Player::GetManaBonusFromIntellect()
 void Player::UpdateMaxHealth()
 {
     UnitMods unitMod = UNIT_MOD_HEALTH;
-    uint128 oldExtendedMaxHealth = GetExtendedMaxHealth128();
-    uint128 oldExtendedHealth = GetExtendedHealth128();
+    uint256 oldExtendedMaxHealth = GetExtendedMaxHealth256();
+    uint256 oldExtendedHealth = GetExtendedHealth256();
     uint32 oldClientMaxHealth = GetMaxHealth();
     bool wasFullHealth = _extendedHealth != 0 ? oldExtendedHealth >= oldExtendedMaxHealth : GetHealth() >= GetMaxHealth();
 
-    float value = GetModifierValue(unitMod, BASE_VALUE) + ToFloat(GetCreateHealthForCombat128());
+    float value = GetModifierValue(unitMod, BASE_VALUE) + ToFloat(GetCreateHealthForCombat256());
     value *= GetModifierValue(unitMod, BASE_PCT);
     value += GetModifierValue(unitMod, TOTAL_VALUE) + static_cast<float>(GetHealthBonusFromStamina());
     value *= GetModifierValue(unitMod, TOTAL_PCT);
@@ -773,7 +773,7 @@ void Player::UpdateMaxHealth()
     // 先调用钩子（转生模块等会在这里加成）
     sScriptMgr->OnPlayerAfterUpdateMaxHealth(this, value);
 
-    uint128 extendedMaxHealth = Acore::Number::ToUInt128Saturated(static_cast<long double>(value));
+    uint256 extendedMaxHealth = Acore::Number::ToUInt256Saturated(static_cast<long double>(value));
 
     // 【重要】在钩子之后应用血量上限限制
     constexpr float MAX_SAFE_VALUE = 2000000000.0f;
@@ -787,7 +787,7 @@ void Player::UpdateMaxHealth()
     // Apply health limit from cache
     {
         ClassAttributeData const& cad = sClassAttributeCache->GetData(getClass());
-        uint128 healthLimit = cad.血量上限;
+        uint256 healthLimit = cad.血量上限;
         if (healthLimit > 0)
         {
             double limitD = ToDouble(healthLimit);
@@ -801,8 +801,8 @@ void Player::UpdateMaxHealth()
     _extendedMaxHealth = extendedMaxHealth;
     SetMaxHealth(static_cast<uint32>(value));
     if (wasFullHealth)
-        SetExtendedHealth(GetExtendedMaxHealth128());
-    else if (oldClientMaxHealth && oldExtendedMaxHealth <= oldClientMaxHealth && oldExtendedHealth <= oldClientMaxHealth && (HasExtendedHealthForCombat() || GetExtendedMaxHealth128() > GetMaxHealth()))
+        SetExtendedHealth(GetExtendedMaxHealth256());
+    else if (oldClientMaxHealth && oldExtendedMaxHealth <= oldClientMaxHealth && oldExtendedHealth <= oldClientMaxHealth && (HasExtendedHealthForCombat() || GetExtendedMaxHealth256() > GetMaxHealth()))
         SetExtendedHealthFromClientHealth(Acore::Number::ToUInt32Saturated(oldExtendedHealth));
     else
         SetExtendedHealth(oldExtendedHealth);
@@ -813,12 +813,12 @@ void Player::UpdateMaxHealth()
 void Player::UpdateMaxPower(Powers power)
 {
     UnitMods unitMod = UnitMods(static_cast<uint16>(UNIT_MOD_POWER_START) + power);
-    uint128 oldExtendedMaxPower = GetExtendedMaxPower128(power);
-    uint128 oldExtendedPower = GetPowerForCombat128(power);
+    uint256 oldExtendedMaxPower = GetExtendedMaxPower256(power);
+    uint256 oldExtendedPower = GetPowerForCombat256(power);
     uint32 oldClientMaxPower = GetMaxPower(power);
     bool wasFullPower = oldExtendedMaxPower != 0 ? oldExtendedPower >= oldExtendedMaxPower : GetPower(power) >= GetMaxPower(power);
 
-    uint128 createPower = GetCreatePowerForCombat128(power);
+    uint256 createPower = GetCreatePowerForCombat256(power);
     float bonusPower = (power == POWER_MANA && createPower > 0) ? static_cast<float>(GetManaBonusFromIntellect()) : 0;
 
     float value = GetModifierValue(unitMod, BASE_VALUE) + ToFloat(createPower);
@@ -829,7 +829,7 @@ void Player::UpdateMaxPower(Powers power)
     // 先调用钩子（转生模块等会在这里加成）
     sScriptMgr->OnPlayerAfterUpdateMaxPower(this, power, value);
 
-    uint128 extendedMaxPower = Acore::Number::ToUInt128Saturated(static_cast<long double>(value));
+    uint256 extendedMaxPower = Acore::Number::ToUInt256Saturated(static_cast<long double>(value));
 
     // 【重要】在钩子之后应用法力上限限制
     constexpr float MAX_SAFE_VALUE = 2000000000.0f;
@@ -844,7 +844,7 @@ void Player::UpdateMaxPower(Powers power)
     if (power == POWER_MANA)
     {
         ClassAttributeData const& cad = sClassAttributeCache->GetData(getClass());
-        uint128 manaLimit = cad.法力上限;
+        uint256 manaLimit = cad.法力上限;
         if (manaLimit > 0)
         {
             double limitD = ToDouble(manaLimit);
@@ -859,15 +859,15 @@ void Player::UpdateMaxPower(Powers power)
     SetExtendedMaxPower(power, extendedMaxPower);
     if (wasFullPower)
     {
-        uint128 newMaxPower = GetMaxPowerForCombat128(power);
-        bool hasExtendedPower = HasExtendedPowerForCombat(power) || GetExtendedMaxPower128(power) > GetMaxPower(power);
+        uint256 newMaxPower = GetMaxPowerForCombat256(power);
+        bool hasExtendedPower = HasExtendedPowerForCombat(power) || GetExtendedMaxPower256(power) > GetMaxPower(power);
 
         if (hasExtendedPower)
             SetExtendedPower(power, newMaxPower);
         else
             SetPower(power, Acore::Number::ToUInt32Saturated(newMaxPower), power == POWER_MANA);
     }
-    else if (oldClientMaxPower && oldExtendedMaxPower <= oldClientMaxPower && oldExtendedPower <= oldClientMaxPower && (HasExtendedPowerForCombat(power) || GetExtendedMaxPower128(power) > GetMaxPower(power)))
+    else if (oldClientMaxPower && oldExtendedMaxPower <= oldClientMaxPower && oldExtendedPower <= oldClientMaxPower && (HasExtendedPowerForCombat(power) || GetExtendedMaxPower256(power) > GetMaxPower(power)))
         SetExtendedPowerFromClientPower(power, Acore::Number::ToUInt32Saturated(oldExtendedPower));
     else
         SetExtendedPower(power, oldExtendedPower);
@@ -896,7 +896,7 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
 
     auto getServerStatValue = [this](Stats stat) -> double
     {
-        int128 extendedValue = GetExtendedStat128(stat);
+        int256 extendedValue = GetExtendedStat256(stat);
         if (extendedValue > 0)
             return ToDouble(extendedValue);
 
@@ -993,7 +993,7 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
                                 if (!proto)
                                     continue;
 
-                                uint128 ap = proto->getFeralBonus() > 0 ? static_cast<uint128>(proto->getFeralBonus()) : 0;
+                                uint256 ap = proto->getFeralBonus() > 0 ? static_cast<uint256>(proto->getFeralBonus()) : 0;
                                 // Get AP Bonuses from weapon
                                 for (uint8 i = 0; i < MAX_ITEM_PROTO_STATS; ++i)
                                 {
@@ -1001,7 +1001,7 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
                                         break;
 
                                     if (proto->ItemStat[i].ItemStatType == ITEM_MOD_ATTACK_POWER)
-                                        ap = AddUInt128Saturated(ap, Acore::Number::ToUInt128Saturated(proto->ItemStatValue128[i]));
+                                        ap = AddUInt256Saturated(ap, Acore::Number::ToUInt256Saturated(proto->ItemStatValue256[i]));
                                 }
 
                                 // Get AP Bonuses from weapon spells
@@ -1021,7 +1021,7 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
                                         {
                                             int32 spellAp = spellproto->Effects[j].CalcValue();
                                             if (spellAp > 0)
-                                                ap = AddUInt128Saturated(ap, static_cast<uint128>(spellAp));
+                                                ap = AddUInt256Saturated(ap, static_cast<uint256>(spellAp));
                                         }
                                 }
 
@@ -1107,7 +1107,7 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
         AuraEffectList const& mAPbyArmor = GetAuraEffectsByType(SPELL_AURA_MOD_ATTACK_POWER_OF_ARMOR);
         for (AuraEffectList::const_iterator iter = mAPbyArmor.begin(); iter != mAPbyArmor.end(); ++iter)
             // always: ((*i)->GetModifier()->m_miscvalue == 1 == SPELL_SCHOOL_MASK_NORMAL)
-            dAttPowerModValue += Acore::Number::ToDouble(GetExtendedArmor128()) / static_cast<double>((*iter)->GetAmount());
+            dAttPowerModValue += Acore::Number::ToDouble(GetExtendedArmor256()) / static_cast<double>((*iter)->GetAmount());
     }
 
     if (dAttPowerModValue < -MAX_SERVER_AP_D || std::isnan(dAttPowerModValue))
@@ -1232,8 +1232,8 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
 {
     if (attType == OFF_ATTACK && !HasOffhandWeaponForAttack())
     {
-        SetExtendedWeaponDamageRange128(OFF_ATTACK, MINDAMAGE, 0);
-        SetExtendedWeaponDamageRange128(OFF_ATTACK, MAXDAMAGE, 0);
+        SetExtendedWeaponDamageRange256(OFF_ATTACK, MINDAMAGE, 0);
+        SetExtendedWeaponDamageRange256(OFF_ATTACK, MAXDAMAGE, 0);
         minDamage = 0.0f;
         maxDamage = 0.0f;
         return;
@@ -1273,7 +1273,7 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
     double attackSpeedMod = static_cast<double>(GetAPMultiplier(attType, normalized));
 
     // 从缓存获取伤害上限
-    uint128 damageLimit = 0;
+    uint256 damageLimit = 0;
     {
         ClassAttributeData const& cad = sClassAttributeCache->GetData(getClass());
         switch (attType)
@@ -1339,8 +1339,8 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
             maxDamage = 0.0f;
             if (!normalized && addTotalPct)
             {
-                SetExtendedWeaponDamageRange128(attType, MINDAMAGE, 0);
-                SetExtendedWeaponDamageRange128(attType, MAXDAMAGE, 0);
+                SetExtendedWeaponDamageRange256(attType, MINDAMAGE, 0);
+                SetExtendedWeaponDamageRange256(attType, MAXDAMAGE, 0);
             }
             return;
         }
@@ -1369,8 +1369,8 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
 
     if (!normalized && addTotalPct)
     {
-        SetExtendedWeaponDamageRange128(attType, MINDAMAGE, Acore::Number::ToInt128Saturated(dMinDamage));
-        SetExtendedWeaponDamageRange128(attType, MAXDAMAGE, Acore::Number::ToInt128Saturated(dMaxDamage));
+        SetExtendedWeaponDamageRange256(attType, MINDAMAGE, Acore::Number::ToInt256Saturated(dMinDamage));
+        SetExtendedWeaponDamageRange256(attType, MAXDAMAGE, Acore::Number::ToInt256Saturated(dMaxDamage));
     }
 
     auto toCombatFloat = [](long double value) -> float
@@ -1419,7 +1419,7 @@ void Player::UpdateBlockPercentage()
             if (customRate > 0.0f)
             {
                 // Use custom conversion rate: rating / customRate = percentage
-                int128 extendedRating = GetExtendedCombatRating(CR_BLOCK);
+                int256 extendedRating = GetExtendedCombatRating(CR_BLOCK);
                 double ratingValue = extendedRating > 0 ? Acore::Number::ToDouble(extendedRating) : static_cast<double>(GetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + CR_BLOCK));
                 double converted = ratingValue / static_cast<double>(customRate);
                 blockRating = converted > static_cast<double>(std::numeric_limits<float>::max()) ? std::numeric_limits<float>::max() : static_cast<float>(converted);
@@ -1622,7 +1622,7 @@ void Player::UpdateParryPercentage()
             if (customRate > 0.0f)
             {
                 // Use custom conversion rate: rating / customRate = percentage
-                int128 extendedRating = GetExtendedCombatRating(CR_PARRY);
+                int256 extendedRating = GetExtendedCombatRating(CR_PARRY);
                 double ratingValue = extendedRating > 0 ? Acore::Number::ToDouble(extendedRating) : static_cast<double>(GetUInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + CR_PARRY));
                 double converted = ratingValue / static_cast<double>(customRate);
                 diminishing = converted > static_cast<double>(std::numeric_limits<float>::max()) ? std::numeric_limits<float>::max() : static_cast<float>(converted);
@@ -1809,7 +1809,7 @@ void Player::UpdateMeleeHitChances()
 
     // Check for custom hit rating conversion rate
     double hitRating = static_cast<double>(GetRatingBonusValue(CR_HIT_MELEE));
-    int128 extendedRatingValue = GetExtendedCombatRating(CR_HIT_MELEE);
+    int256 extendedRatingValue = GetExtendedCombatRating(CR_HIT_MELEE);
     if (extendedRatingValue > 0)
         hitRating = Acore::Number::ToDouble(extendedRatingValue) * static_cast<double>(GetRatingMultiplier(CR_HIT_MELEE));
     {
@@ -1842,7 +1842,7 @@ void Player::UpdateRangedHitChances()
 
     // Check for custom hit rating conversion rate
     double hitRating = static_cast<double>(GetRatingBonusValue(CR_HIT_RANGED));
-    int128 extendedRatingValue = GetExtendedCombatRating(CR_HIT_RANGED);
+    int256 extendedRatingValue = GetExtendedCombatRating(CR_HIT_RANGED);
     if (extendedRatingValue > 0)
         hitRating = Acore::Number::ToDouble(extendedRatingValue) * static_cast<double>(GetRatingMultiplier(CR_HIT_RANGED));
 
@@ -1877,7 +1877,7 @@ void Player::UpdateSpellHitChances()
 
     // Check for custom hit rating conversion rate
     double hitRating = static_cast<double>(GetRatingBonusValue(CR_HIT_SPELL));
-    int128 extendedRatingValue = GetExtendedCombatRating(CR_HIT_SPELL);
+    int256 extendedRatingValue = GetExtendedCombatRating(CR_HIT_SPELL);
     if (extendedRatingValue > 0)
         hitRating = Acore::Number::ToDouble(extendedRatingValue) * static_cast<double>(GetRatingMultiplier(CR_HIT_SPELL));
     {
@@ -1961,7 +1961,7 @@ void Player::ApplyHealthRegenBonus(int32 amount, bool apply)
 void Player::UpdateManaRegen()
 {
     constexpr uint8 CLIENT_MANA_REGEN_PREDICTION_MASK = 1 << POWER_MANA;
-    bool disableClientManaPrediction = HasExtendedPowerForCombat(POWER_MANA) || GetExtendedMaxPower128(POWER_MANA) > 2000000000ULL;
+    bool disableClientManaPrediction = HasExtendedPowerForCombat(POWER_MANA) || GetExtendedMaxPower256(POWER_MANA) > 2000000000ULL;
     if (disableClientManaPrediction)
         SetByteFlag(PLAYER_FIELD_BYTES2, PLAYER_FIELD_BYTES_2_OFFSET_IGNORE_POWER_REGEN_PREDICTION_MASK, CLIENT_MANA_REGEN_PREDICTION_MASK);
     else
@@ -1998,7 +1998,7 @@ void Player::UpdateManaRegen()
         modManaRegenInterrupt = 100;
     float interruptedRegen = power_regen_mp5 + CalculatePct(power_regen, modManaRegenInterrupt);
     float normalRegen = power_regen_mp5 + power_regen;
-    if ((HasExtendedPowerForCombat(POWER_MANA) || GetExtendedMaxPower128(POWER_MANA) > GetMaxPower(POWER_MANA)) && (interruptedRegen < 0.0f || normalRegen < 0.0f))
+    if ((HasExtendedPowerForCombat(POWER_MANA) || GetExtendedMaxPower256(POWER_MANA) > GetMaxPower(POWER_MANA)) && (interruptedRegen < 0.0f || normalRegen < 0.0f))
     {
         if (interruptedRegen < 0.0f)
             interruptedRegen = 0.0f;
@@ -2121,13 +2121,13 @@ void Creature::UpdateArmor()
 
 void Creature::UpdateMaxHealth()
 {
-    uint128 oldExtendedMaxHealth = GetExtendedMaxHealth128();
-    uint128 oldExtendedHealth = GetHealthForCombat128();
+    uint256 oldExtendedMaxHealth = GetExtendedMaxHealth256();
+    uint256 oldExtendedHealth = GetHealthForCombat256();
     uint32 oldClientMaxHealth = GetMaxHealth();
     bool wasFullHealth = oldExtendedMaxHealth != 0 ? oldExtendedHealth >= oldExtendedMaxHealth : GetHealth() >= GetMaxHealth();
 
     float value = GetTotalAuraModValue(UNIT_MOD_HEALTH);
-    uint128 extendedMaxHealth = Acore::Number::ToUInt128Saturated(static_cast<long double>(value));
+    uint256 extendedMaxHealth = Acore::Number::ToUInt256Saturated(static_cast<long double>(value));
 
     if (value < 0.0f)
         value = 0.0f;
@@ -2137,8 +2137,8 @@ void Creature::UpdateMaxHealth()
     SetMaxHealth(uint32(value));
     SetExtendedMaxHealth(extendedMaxHealth);
     if (wasFullHealth)
-        SetExtendedHealth(GetExtendedMaxHealth128());
-    else if (oldClientMaxHealth && oldExtendedMaxHealth <= oldClientMaxHealth && oldExtendedHealth <= oldClientMaxHealth && GetExtendedMaxHealth128() > GetMaxHealth())
+        SetExtendedHealth(GetExtendedMaxHealth256());
+    else if (oldClientMaxHealth && oldExtendedMaxHealth <= oldClientMaxHealth && oldExtendedHealth <= oldClientMaxHealth && GetExtendedMaxHealth256() > GetMaxHealth())
         SetExtendedHealth(Acore::Number::ToUInt32Saturated(oldExtendedHealth));
     else
         SetExtendedHealth(oldExtendedHealth);
@@ -2149,13 +2149,13 @@ void Creature::UpdateMaxHealth()
 void Creature::UpdateMaxPower(Powers power)
 {
     UnitMods unitMod = UnitMods(static_cast<uint16>(UNIT_MOD_POWER_START) + power);
-    uint128 oldExtendedMaxPower = GetExtendedMaxPower128(power);
-    uint128 oldExtendedPower = GetPowerForCombat128(power);
+    uint256 oldExtendedMaxPower = GetExtendedMaxPower256(power);
+    uint256 oldExtendedPower = GetPowerForCombat256(power);
     uint32 oldClientMaxPower = GetMaxPower(power);
     bool wasFullPower = oldExtendedMaxPower != 0 ? oldExtendedPower >= oldExtendedMaxPower : GetPower(power) >= GetMaxPower(power);
 
     float value  = GetTotalAuraModValue(unitMod);
-    uint128 extendedMaxPower = Acore::Number::ToUInt128Saturated(static_cast<long double>(value));
+    uint256 extendedMaxPower = Acore::Number::ToUInt256Saturated(static_cast<long double>(value));
 
     if (value < 0.0f)
         value = 0.0f;
@@ -2165,8 +2165,8 @@ void Creature::UpdateMaxPower(Powers power)
     SetMaxPower(power, uint32(value));
     SetExtendedMaxPower(power, extendedMaxPower);
     if (wasFullPower)
-        SetExtendedPower(power, GetExtendedMaxPower128(power));
-    else if (oldClientMaxPower && oldExtendedMaxPower <= oldClientMaxPower && oldExtendedPower <= oldClientMaxPower && GetExtendedMaxPower128(power) > GetMaxPower(power))
+        SetExtendedPower(power, GetExtendedMaxPower256(power));
+    else if (oldClientMaxPower && oldExtendedMaxPower <= oldClientMaxPower && oldExtendedPower <= oldClientMaxPower && GetExtendedMaxPower256(power) > GetMaxPower(power))
         SetExtendedPower(power, Acore::Number::ToUInt32Saturated(oldExtendedPower));
     else
         SetExtendedPower(power, oldExtendedPower);
@@ -2299,8 +2299,8 @@ void Creature::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, 
 
     if (!normalized && addTotalPct)
     {
-        SetExtendedWeaponDamageRange128(attType, MINDAMAGE, Acore::Number::ToInt128Saturated(minDamageValue));
-        SetExtendedWeaponDamageRange128(attType, MAXDAMAGE, Acore::Number::ToInt128Saturated(maxDamageValue));
+        SetExtendedWeaponDamageRange256(attType, MINDAMAGE, Acore::Number::ToInt256Saturated(minDamageValue));
+        SetExtendedWeaponDamageRange256(attType, MAXDAMAGE, Acore::Number::ToInt256Saturated(maxDamageValue));
     }
 }
 

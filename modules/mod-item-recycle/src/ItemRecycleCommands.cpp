@@ -1,6 +1,7 @@
 #include "ItemRecycle.h"
 #include "Log.h"
 #include "GameTime.h"
+#include "HermesBridgeAddonApi.h"
 #include "ChatCommandTags.h"
 #include "WorldPacket.h"
 #include "Opcodes.h"
@@ -19,12 +20,15 @@ namespace
             return;
         }
 
-        player->SetMoney(player->GetMoney() + static_cast<int128>(amount));
+        player->SetMoney(player->GetMoney() + static_cast<int256>(amount));
     }
 
     void SendRecycleAddonMessage(Player* player, std::string const& payload)
     {
         if (!player || payload.empty())
+            return;
+
+        if (HermesBridge_SendAddonMessage(player, ITEM_RECYCLE_ADDON_PREFIX, payload))
             return;
 
         std::string fullMessage = std::string(ITEM_RECYCLE_ADDON_PREFIX) + '\t' + payload;
@@ -808,7 +812,7 @@ bool HandleRecycleExecuteCommand(ChatHandler* handler)
     }
 
     // 使用与自动回收相同的逻辑
-    std::vector<Item*> itemsToRecycle;
+    std::vector<ObjectGuid::LowType> itemsToRecycle;
     uint32 totalReward = 0;
     uint32 totalCount = 0;
     std::map<uint32, uint32> groupCounts;
@@ -823,7 +827,7 @@ bool HandleRecycleExecuteCommand(ChatHandler* handler)
         Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i);
         if (item && ItemRecycleScript::CanRecycleItem(player, item, settings))
         {
-            itemsToRecycle.push_back(item);
+            itemsToRecycle.push_back(item->GetGUID().GetCounter());
         }
     }
 
@@ -838,7 +842,7 @@ bool HandleRecycleExecuteCommand(ChatHandler* handler)
                 Item* item = bag->GetItemByPos(j);
                 if (item && ItemRecycleScript::CanRecycleItem(player, item, settings))
                 {
-                    itemsToRecycle.push_back(item);
+                    itemsToRecycle.push_back(item->GetGUID().GetCounter());
                 }
             }
         }
@@ -852,18 +856,22 @@ bool HandleRecycleExecuteCommand(ChatHandler* handler)
 
     // 【审计修复】收集需要检查的需求模板ID和对应的物品数量
     std::map<uint32, uint32> requirementTemplateCounts; // 模板ID -> 需要消耗的次数
-    std::map<Item*, const ItemRecycleInfo*> itemRecycleRules;
+    std::map<ObjectGuid::LowType, const ItemRecycleInfo*> itemRecycleRules;
 
     // 为每个物品查找匹配的回收规则，并按物品数量累加需求次数
-    for (Item* item : itemsToRecycle)
+    for (ObjectGuid::LowType itemGuid : itemsToRecycle)
     {
+        Item* item = player->GetItemByGuid(ObjectGuid::Create<HighGuid::Item>(itemGuid));
         if (!item)
+            continue;
+
+        if (!ItemRecycleScript::CanRecycleItem(player, item, settings))
             continue;
 
         const ItemRecycleInfo* recycleRule = ItemRecycleScript::FindMatchingRecycleRule(item, settings);
         if (recycleRule)
         {
-            itemRecycleRules[item] = recycleRule;
+            itemRecycleRules[itemGuid] = recycleRule;
 
             // 如果有需求模板，按物品数量累加需求次数
             if (recycleRule->requirementTemplateId > 0)
@@ -926,9 +934,13 @@ bool HandleRecycleExecuteCommand(ChatHandler* handler)
     uint64 totalCopperReward = 0; // 总铜币奖励
     uint32 destroyedCount = 0; // 摧毁的物品数量
 
-    for (Item* item : itemsToRecycle)
+    for (ObjectGuid::LowType itemGuid : itemsToRecycle)
     {
+        Item* item = player->GetItemByGuid(ObjectGuid::Create<HighGuid::Item>(itemGuid));
         if (!item)
+            continue;
+
+        if (!ItemRecycleScript::CanRecycleItem(player, item, settings))
             continue;
 
         ItemTemplate const* itemTemplate = item->GetTemplate();
@@ -966,7 +978,7 @@ bool HandleRecycleExecuteCommand(ChatHandler* handler)
         }
 
         // 检查是否有匹配的回收规则并处理奖励
-        auto ruleIt = itemRecycleRules.find(item);
+        auto ruleIt = itemRecycleRules.find(itemGuid);
         if (ruleIt != itemRecycleRules.end() && ruleIt->second->rewardTemplateId > 0)
         {
             // 使用奖励模板

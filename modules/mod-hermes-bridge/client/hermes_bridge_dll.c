@@ -3,7 +3,12 @@
 #include <stdio.h>
 #include <string.h>
 
-#define HERMES_BRIDGE_VERSION "0.7.55-breakthroughwrite"
+#include "hermes_bridge_client_pump_gate.h"
+#include "hermes_bridge_latency_policy.h"
+#include "hermes_bridge_recv_queue_policy.h"
+#include "hermes_bridge_send_queue_policy.h"
+
+#define HERMES_BRIDGE_VERSION "0.7.84-recvpump-watchdog"
 #define HERMES_STRINGIFY_VALUE(x) #x
 #define HERMES_STRINGIFY(x) HERMES_STRINGIFY_VALUE(x)
 #define HERMES_FRAME_SCRIPT_EXECUTE_RVA 0x00419210
@@ -80,9 +85,17 @@
 #define HERMES_METHOD_BREAKTHROUGH_RESET_SKILLS 370
 #define HERMES_METHOD_SYNTHESIS_LIST 380
 #define HERMES_METHOD_SYNTHESIS_DO 381
-#define HERMES_SEND_QUEUE_CAPACITY 32
+#define HERMES_METHOD_TOOLTIP_QUERY 500
+#define HERMES_METHOD_TOOLTIP_QUERY_TEMPLATE 501
+#define HERMES_METHOD_TOOLTIP_INSPECT_ITEM_GUID 502
+#define HERMES_METHOD_TOOLTIP_LIST_PENDING 503
+#define HERMES_METHOD_MALL_GET_CATEGORIES 520
+#define HERMES_METHOD_MALL_GET_ITEMS 521
+#define HERMES_METHOD_MALL_PURCHASE 522
+#define HERMES_SEND_QUEUE_CAPACITY 256
 #define HERMES_SEND_QUEUE_PAYLOAD_SIZE 512
-#define HERMES_SEND_QUEUE_SELF_WAIT_ATTEMPTS 60
+#define HERMES_SEND_QUEUE_DIAGNOSTIC_RESERVE 64
+#define HERMES_SEND_QUEUE_SELF_WAIT_ATTEMPTS 240
 #define HERMES_SEND_QUEUE_SELF_WAIT_MS 250
 #define HERMES_LUA_MAX_REQUEST_PAYLOAD_SIZE 384
 #define HERMES_FRAME_MAX_PAYLOAD_SIZE 65536
@@ -99,7 +112,9 @@
 #define HERMES_BOOTSTRAP_TIMER_ID 0x4845
 #define HERMES_RECV_PUMP_INTERVAL_MS 5
 #define HERMES_RECV_PUMP_MAX_PER_TICK 128
-#define HERMES_RECV_PUMP_BACKLOG_PER_TICK 384
+#define HERMES_RECV_PUMP_BACKLOG_PER_TICK 512
+#define HERMES_RECV_QUEUE_PRIORITY_THRESHOLD 64
+#define HERMES_RECV_QUEUE_PRIORITY_SCAN_LIMIT 512
 #define HERMES_LOG_ROTATE_BYTES (4u * 1024u * 1024u)
 
 #ifndef HERMES_ENABLE_STARTUP_SELF_TEST
@@ -107,7 +122,7 @@
 #endif
 
 #ifndef HERMES_ENABLE_PLAYER_READY_EVENT
-#define HERMES_ENABLE_PLAYER_READY_EVENT 0
+#define HERMES_ENABLE_PLAYER_READY_EVENT 1
 #endif
 
 #ifndef HERMES_ENABLE_RECV_PUMP_TIMER
@@ -115,11 +130,22 @@
 #endif
 
 #ifndef HERMES_RECV_PUMP_TIMER_DELAY_MS
-#define HERMES_RECV_PUMP_TIMER_DELAY_MS 3000
+#define HERMES_RECV_PUMP_TIMER_DELAY_MS 250
+#endif
+
+#ifndef HERMES_RECV_PUMP_TIMER_BACKLOG_DELAY_MS
+#define HERMES_RECV_PUMP_TIMER_BACKLOG_DELAY_MS 50
+#endif
+
+/* recv pump timer 绑定在 WoW 主窗口上。玩家调整分辨率/全屏切换时 WoW 可能销毁并
+   重建主窗口，旧 HWND 失效后挂在其上的 WM_TIMER 永不再派发，导致服务器回包泵不进
+   Lua、Lua API 也不再被重装，表现为静默失联。watchdog 线程按此间隔巡检并自愈。 */
+#ifndef HERMES_RECV_PUMP_WATCHDOG_INTERVAL_MS
+#define HERMES_RECV_PUMP_WATCHDOG_INTERVAL_MS 1000
 #endif
 
 #ifndef HERMES_AUTO_SNAPSHOT_TIMER_DELAY_MS
-#define HERMES_AUTO_SNAPSHOT_TIMER_DELAY_MS 15000
+#define HERMES_AUTO_SNAPSHOT_TIMER_DELAY_MS 1500
 #endif
 
 #ifndef HERMES_AUTO_SNAPSHOT_RETRY_MS
@@ -127,7 +153,39 @@
 #endif
 
 #ifndef HERMES_BOOTSTRAP_TIMER_DELAY_MS
-#define HERMES_BOOTSTRAP_TIMER_DELAY_MS 1000
+#define HERMES_BOOTSTRAP_TIMER_DELAY_MS 500
+#endif
+
+#ifndef HERMES_BOOTSTRAP_STALE_TIMER_DELAY_MS
+#define HERMES_BOOTSTRAP_STALE_TIMER_DELAY_MS 250
+#endif
+
+#ifndef HERMES_LUA_API_CHAIN_DELAY_MS
+#define HERMES_LUA_API_CHAIN_DELAY_MS 50
+#endif
+
+#ifndef HERMES_WORLD_BOOTSTRAP_RETRY_DELAY_MS
+#define HERMES_WORLD_BOOTSTRAP_RETRY_DELAY_MS 100
+#endif
+
+#ifndef HERMES_WORLD_LUA_READY_BOOTSTRAP_DELAY_MS
+#define HERMES_WORLD_LUA_READY_BOOTSTRAP_DELAY_MS 250
+#endif
+
+#ifndef HERMES_AUTO_HANDSHAKE_ATTEMPTS
+#define HERMES_AUTO_HANDSHAKE_ATTEMPTS 120
+#endif
+
+#ifndef HERMES_AUTO_HANDSHAKE_RETRY_MS
+#define HERMES_AUTO_HANDSHAKE_RETRY_MS 500
+#endif
+
+#ifndef HERMES_LUA_WARMUP_DELAY_SECONDS
+#define HERMES_LUA_WARMUP_DELAY_SECONDS "0.05"
+#endif
+
+#ifndef HERMES_BOOTSTRAP_MAX_RETRIES
+#define HERMES_BOOTSTRAP_MAX_RETRIES 120
 #endif
 
 #ifndef HERMES_LUA_API_ENSURE_MIN_INTERVAL_MS
@@ -192,21 +250,40 @@ static volatile LONG g_recvFrameLogBudget = 0;
 static volatile LONG g_recvDispatching = 0;
 static volatile LONG g_recvPumpLogBudget = 16;
 static volatile LONG g_recvChunkLogBudget = 8;
+static volatile LONG g_recvAddonLogBudget = 80;
+static volatile LONG g_recvLuaDispatchLogBudget = 48;
+static volatile LONG g_reloadTraceLogBudget = 120;
+static volatile LONG g_recvPumpDeferLogBudget = 24;
 static volatile LONG g_recvBinaryPayloadLogBudget = 4;
+static volatile LONG g_recvPriorityPopLogBudget = 8;
 static volatile LONG g_nativeSendLogBudget = 8;
+static volatile LONG g_luaExecuteLogBudget = 0;
+static volatile LONG g_luaStateExceptionLogBudget = 8;
+static volatile LONG g_luaFallbackLogBudget = 8;
+static volatile LONG g_luaCaptureLogBudget = 12;
+static volatile LONG g_bootstrapWaitingLogBudget = 8;
 static volatile LONG g_recvPumped = 0;
 static HWND g_recvPumpWindow = NULL;
 static UINT_PTR g_recvPumpTimer = 0;
+static CRITICAL_SECTION g_recvPumpTimerLock;
+static BOOL g_recvPumpTimerLockInitialized = FALSE;
+static volatile LONG g_recvPumpWatchdogStarted = 0;
+static volatile LONG g_recvPumpWatchdogStop = 0;
+static volatile LONG g_recvPumpTimerReinstalls = 0;
 static HWND g_autoSnapshotWindow = NULL;
 static UINT_PTR g_autoSnapshotTimer = 0;
 static HWND g_bootstrapWindow = NULL;
 static UINT_PTR g_bootstrapTimer = 0;
 static volatile LONG g_bootstrapInstalling = 0;
+static volatile LONG g_bootstrapRetryAttempts = 0;
 static volatile LONG g_autoSnapshotAttempts = 0;
 static volatile LONG g_nativeSelfReady = 0;
 static volatile LONG g_playerReadySent = 0;
 static volatile LONG g_autoHandshakeThreadStarted = 0;
 static volatile LONG g_worldBootstrapThreadStarted = 0;
+static volatile LONG g_connectionGeneration = 0;
+static volatile LONG g_luaWorldResetGeneration = 0;
+static volatile LONG g_worldLuaReady = 0;
 static volatile LONG g_luaApiEnsureRunning = 0;
 static volatile LONG g_luaApiEnsureAttempts = 0;
 static volatile LONG g_luaApiEnsureSuccesses = 0;
@@ -223,16 +300,23 @@ static char g_logPath[MAX_PATH] = "HermesBridge.log";
 static volatile LONG g_logRotateLock = 0;
 static volatile LONG g_logWriteLock = 0;
 
+#define HERMES_LUA_STATE_EXCEPTION_RESULT (-10001)
+
 static BOOL SendHermesPayload(const char* text);
 static BOOL InstallLuaApi(void);
 static BOOL InstallLuaStateApi(void);
 static BOOL InstallLuaStateAccessors(void);
 static BOOL InstallLuaStateHelpers(void);
+static BOOL InstallLuaLifecycleApi(void);
 static BOOL InstallLuaDebugPanelApi(void);
 static BOOL EnsureLuaApiInstalled(const char* reason);
-static BOOL InstallBootstrapTimer(void);
+static BOOL EnsureLuaApiInstalledNow(const char* reason);
+static BOOL InstallBootstrapTimer(DWORD delayMs);
+static BOOL ScheduleBootstrapRetry(const char* reason);
+static BOOL CaptureRealLuaState(void* luaState, const char* source);
 static DWORD WINAPI DelayedRecvPumpTimerThread(LPVOID parameter);
 static DWORD WINAPI DelayedAutoSnapshotTimerThread(LPVOID parameter);
+static DWORD WINAPI RecvPumpWatchdogThread(LPVOID parameter);
 
 static void InitializeLogPath(HINSTANCE instance)
 {
@@ -315,6 +399,81 @@ static void WriteLogFormat4(const char* format, DWORD a, DWORD b, DWORD c, DWORD
     WriteLog(buffer);
 }
 
+static void CopyTracePreview(const char* input, char* output, DWORD outputSize)
+{
+    DWORD pos = 0;
+
+    if (!output || outputSize == 0)
+        return;
+
+    output[0] = 0;
+    if (!input)
+        return;
+
+    while (*input && pos + 1 < outputSize)
+    {
+        unsigned char ch = (unsigned char)*input++;
+        if (ch == '\r' || ch == '\n' || ch == '\t')
+            output[pos++] = ' ';
+        else if (ch < 32 || ch == 127)
+            output[pos++] = '?';
+        else
+            output[pos++] = (char)ch;
+    }
+
+    output[pos] = 0;
+}
+
+static void WriteHermesClientTrace(const char* scope, const char* detail)
+{
+    char buffer[768];
+
+    if (InterlockedDecrement(&g_reloadTraceLogBudget) < 0)
+        return;
+
+    _snprintf(buffer, sizeof(buffer), "HermesBridge TRACE client %s %s", scope ? scope : "unknown", detail ? detail : "");
+    buffer[sizeof(buffer) - 1] = 0;
+    WriteLog(buffer);
+}
+
+static BOOL CaptureRealLuaState(void* luaState, const char* source)
+{
+    void* previousLuaState = NULL;
+    BOOL changed = FALSE;
+
+    if (!luaState)
+        return FALSE;
+
+    previousLuaState = InterlockedCompareExchangePointer((PVOID volatile*)&g_realLuaState, luaState, NULL);
+    if (!previousLuaState)
+        changed = TRUE;
+    else if (previousLuaState != luaState)
+    {
+        previousLuaState = InterlockedExchangePointer((PVOID volatile*)&g_realLuaState, luaState);
+        changed = TRUE;
+    }
+
+    if (!changed)
+        return FALSE;
+
+    g_luaApiEnsureLastTick = 0;
+    InterlockedExchange(&g_bootstrapRetryAttempts, 0);
+
+    if (InterlockedDecrement(&g_luaCaptureLogBudget) >= 0)
+    {
+        char trace[256];
+        wsprintfA(trace,
+            "HermesBridge captured real addon lua_State source=%s old=0x%08lX new=0x%08lX",
+            source ? source : "",
+            (DWORD)(uintptr_t)previousLuaState,
+            (DWORD)(uintptr_t)luaState);
+        WriteLog(trace);
+    }
+
+    ScheduleBootstrapRetry("HermesBridge real lua_State captured; retrying bootstrap");
+    return TRUE;
+}
+
 static DWORD SafeReadDword(void* base, DWORD offset)
 {
     DWORD value = 0;
@@ -380,40 +539,106 @@ static int ExecuteLuaInState(void* luaState, const char* script, const char* sou
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
     {
-        WriteLog("HermesBridge lua_State execute raised exception");
-        return -1;
+        LONG budget = InterlockedDecrement(&g_luaStateExceptionLogBudget);
+        if (budget >= 0)
+        {
+            char trace[256];
+            wsprintfA(trace, "HermesBridge lua_State execute raised exception state=0x%08lX source=%s", (DWORD)(uintptr_t)luaState, source ? source : "");
+            WriteLog(trace);
+        }
+        return HERMES_LUA_STATE_EXCEPTION_RESULT;
     }
 }
 
 static int ExecuteLua(const char* script, const char* source)
 {
     void* realLuaState = g_realLuaState;
-    FrameScriptExecuteFn execute = (FrameScriptExecuteFn)g_frameScriptExecute;
+    LONG budget = InterlockedDecrement(&g_luaExecuteLogBudget);
+    BOOL worldLuaReady = InterlockedCompareExchange(&g_worldLuaReady, 0, 0) == 1;
+
+    if (budget >= 0)
+    {
+        char trace[256];
+        wsprintfA(trace, "HermesBridge ExecuteLua begin source=%s realLuaState=0x%08lX frameExecute=0x%08lX worldReady=%ld", source ? source : "", (DWORD)(uintptr_t)realLuaState, (DWORD)g_frameScriptExecute, (LONG)worldLuaReady);
+        WriteLog(trace);
+    }
 
     if (realLuaState)
-        return ExecuteLuaInState(realLuaState, script, source);
+    {
+        int stateResult = ExecuteLuaInState(realLuaState, script, source);
+        if (stateResult != HERMES_LUA_STATE_EXCEPTION_RESULT)
+        {
+            if (budget >= 0)
+            {
+                char trace[256];
+                wsprintfA(trace, "HermesBridge ExecuteLua state result=%ld source=%s state=0x%08lX", (LONG)stateResult, source ? source : "", (DWORD)(uintptr_t)realLuaState);
+                WriteLog(trace);
+            }
+            return stateResult;
+        }
 
-    __try
-    {
-        return execute(script, source, 0);
+        InterlockedExchangePointer((PVOID volatile*)&g_realLuaState, NULL);
+        g_luaApiEnsureLastTick = 0;
+        LONG fallbackBudget = InterlockedDecrement(&g_luaFallbackLogBudget);
+        if (fallbackBudget >= 0)
+        {
+            char trace[256];
+            wsprintfA(trace, "HermesBridge invalidated stale lua_State=0x%08lX source=%s; waiting for fresh capture", (DWORD)(uintptr_t)realLuaState, source ? source : "");
+            WriteLog(trace);
+        }
+
+        if (HermesBridge_ShouldScheduleLuaStateRecovery(realLuaState != NULL, stateResult == HERMES_LUA_STATE_EXCEPTION_RESULT))
+            ScheduleBootstrapRetry("HermesBridge stale lua_State invalidated; retrying bootstrap");
+
+        return HERMES_LUA_STATE_EXCEPTION_RESULT;
     }
-    __except (EXCEPTION_EXECUTE_HANDLER)
+
+    if (HermesBridge_ShouldUseFrameScriptFallback(FALSE, worldLuaReady))
     {
-        WriteLog("HermesBridge FrameScript::Execute raised exception");
-        return -1;
+        FrameScriptExecuteFn execute = (FrameScriptExecuteFn)g_frameScriptExecute;
+        int result = -1;
+        __try
+        {
+            result = execute(script, source, 0);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            WriteLog("HermesBridge FrameScript::Execute fallback raised exception");
+            result = -1;
+        }
+
+        if (budget >= 0)
+            WriteLogFormat("HermesBridge ExecuteLua FrameScript fallback returned %lu", (DWORD)result);
+        return result;
     }
+
+    if (budget >= 0)
+    {
+        char trace[256];
+        wsprintfA(trace, "HermesBridge ExecuteLua skipped without real lua_State source=%s", source ? source : "");
+        WriteLog(trace);
+    }
+
+    (void)script;
+    return -1;
 }
 
 static BOOL IsLuaApiReady(void)
 {
     const char* script =
         "local h=_G and _G.HermesDLL; "
-        "if not (type(h)=='table' "
-        "and type(h.Request)=='function' "
-        "and type(h._NativeReceive)=='function' "
-        "and type(h._DispatchAddonCompat)=='function') then "
-        "error('HermesDLL API missing') end";
+        "if type(h)=='table' and type(h.Request)=='function' and type(h._NativeReceive)=='function' and type(h._DispatchAddonCompat)=='function' and type(h._WarmupWorld)=='function' and type(h._ResetForWorld)=='function' then "
+        "h._probeRequestReady=true; "
+        "h._probeReceiveReady=true; "
+        "h._probeCompatReady=true; "
+        "return true; "
+        "end "
+        "error('HermesDLL Lua API is not ready')";
     int result = 0;
+
+    if (!HermesBridge_ShouldAttemptLuaApiInstall(g_realLuaState != NULL) &&
+        !HermesBridge_ShouldUseFrameScriptFallback(g_realLuaState != NULL, InterlockedCompareExchange(&g_worldLuaReady, 0, 0) == 1))
+        return FALSE;
 
     __try { result = ExecuteLua(script, "HermesBridgeLuaApiProbe"); }
     __except (EXCEPTION_EXECUTE_HANDLER) { WriteLog("HermesBridge Lua API probe raised exception"); result = -1; }
@@ -431,6 +656,7 @@ static BOOL InstallFullLuaApiBundle(const char* reason)
     ok = InstallLuaStateApi() && ok;
     ok = InstallLuaStateAccessors() && ok;
     ok = InstallLuaStateHelpers() && ok;
+    ok = InstallLuaLifecycleApi() && ok;
     ok = InstallLuaDebugPanelApi() && ok;
 
     if (ok)
@@ -448,6 +674,20 @@ static BOOL EnsureLuaApiInstalled(const char* reason)
 {
     DWORD now = GetTickCount();
     DWORD last = g_luaApiEnsureLastTick;
+    LONG traceBudget = InterlockedDecrement(&g_luaFallbackLogBudget);
+
+    if (!HermesBridge_ShouldAttemptLuaApiInstall(g_realLuaState != NULL) &&
+        !HermesBridge_ShouldUseFrameScriptFallback(g_realLuaState != NULL, InterlockedCompareExchange(&g_worldLuaReady, 0, 0) == 1))
+    {
+        if (traceBudget >= 0)
+        {
+            char trace[256];
+            _snprintf(trace, sizeof(trace), "HermesBridge Lua API install deferred: no real lua_State reason=%s", reason ? reason : "");
+            trace[sizeof(trace) - 1] = 0;
+            WriteLog(trace);
+        }
+        return FALSE;
+    }
 
     if (last != 0 && now - last < HERMES_LUA_API_ENSURE_MIN_INTERVAL_MS)
         return TRUE;
@@ -459,15 +699,31 @@ static BOOL EnsureLuaApiInstalled(const char* reason)
 
     if (IsLuaApiReady())
     {
+        if (traceBudget >= 0)
+        {
+            char trace[256];
+            wsprintfA(trace, "HermesBridge Lua API already ready reason=%s state=0x%08lX", reason ? reason : "", (DWORD)(uintptr_t)g_realLuaState);
+            WriteLog(trace);
+        }
         InterlockedExchange(&g_luaApiEnsureRunning, 0);
         return TRUE;
     }
 
     InterlockedIncrement(&g_luaApiEnsureAttempts);
-        WriteLogFormat("HermesBridge ensuring Lua API in current Lua state attempt=%lu", (DWORD)g_luaApiEnsureAttempts);
+    {
+        char trace[256];
+        wsprintfA(trace, "HermesBridge ensuring Lua API attempt=%lu reason=%s state=0x%08lX", (DWORD)g_luaApiEnsureAttempts, reason ? reason : "", (DWORD)(uintptr_t)g_realLuaState);
+        WriteLog(trace);
+    }
     BOOL ok = InstallFullLuaApiBundle(reason);
     InterlockedExchange(&g_luaApiEnsureRunning, 0);
     return ok;
+}
+
+static BOOL EnsureLuaApiInstalledNow(const char* reason)
+{
+    g_luaApiEnsureLastTick = 0;
+    return EnsureLuaApiInstalled(reason);
 }
 
 static void EscapeLuaString(const char* input, DWORD inputLen, char* output, DWORD outputSize)
@@ -839,6 +1095,27 @@ static WORD ResolveHermesMethodId(const char* method)
     if (lstrcmpiA(method, "synthesis.do") == 0)
         return HERMES_METHOD_SYNTHESIS_DO;
 
+    if (lstrcmpiA(method, "tooltip.query") == 0)
+        return HERMES_METHOD_TOOLTIP_QUERY;
+
+    if (lstrcmpiA(method, "tooltip.queryTemplate") == 0)
+        return HERMES_METHOD_TOOLTIP_QUERY_TEMPLATE;
+
+    if (lstrcmpiA(method, "tooltip.inspectItemGuid") == 0)
+        return HERMES_METHOD_TOOLTIP_INSPECT_ITEM_GUID;
+
+    if (lstrcmpiA(method, "tooltip.listPending") == 0)
+        return HERMES_METHOD_TOOLTIP_LIST_PENDING;
+
+    if (lstrcmpiA(method, "mall.getCategories") == 0)
+        return HERMES_METHOD_MALL_GET_CATEGORIES;
+
+    if (lstrcmpiA(method, "mall.getItems") == 0)
+        return HERMES_METHOD_MALL_GET_ITEMS;
+
+    if (lstrcmpiA(method, "mall.purchase") == 0)
+        return HERMES_METHOD_MALL_PURCHASE;
+
     return 0;
 }
 
@@ -861,6 +1138,7 @@ static BOOL IsHermesAddonTakeoverPrefix(const char* prefix)
         "ITEMENHANCE",
         "RUNESYSTEM",
         "VIPSYS",
+        "MALLSYSTEM",
         "REALMONEY",
         "PROMOREWARD",
         "QuestRewardAttrUI",
@@ -874,7 +1152,6 @@ static BOOL IsHermesAddonTakeoverPrefix(const char* prefix)
         "ZDYUI_TJ",
         "MAGICHIT",
         "TALENTSOUL",
-        "MALL_SYS",
         "POPUPTPL",
         "DarkHardcore",
         "HBUI",
@@ -952,6 +1229,11 @@ static void InitializeRecvQueue(void)
         InitializeCriticalSection(&g_recvQueueLock);
         g_recvQueueLockInitialized = TRUE;
         WriteLog("HermesBridge recv queue initialized");
+    }
+    if (!g_recvPumpTimerLockInitialized)
+    {
+        InitializeCriticalSection(&g_recvPumpTimerLock);
+        g_recvPumpTimerLockInitialized = TRUE;
     }
 }
 
@@ -1034,6 +1316,64 @@ static BOOL ReplaceRecvQueueItemPayload(HermesRecvQueueItem* item, const char* p
     return TRUE;
 }
 
+static BOOL IsPriorityRecvQueueItem(HermesRecvQueueItem const* item)
+{
+    if (!item)
+        return FALSE;
+
+    return HermesBridge_IsPriorityRecvFrame(
+        item->messageType == HERMES_MESSAGE_RESPONSE,
+        item->messageType == HERMES_MESSAGE_ERROR,
+        item->lane == HERMES_LANE_RPC,
+        item->methodId == HERMES_METHOD_ADDON_MESSAGE);
+}
+
+static LONG FindRecvQueuePopIndexLocked(void)
+{
+    LONG index = g_recvQueueHead;
+    DWORD scanned = 0;
+    DWORD scanLimit = HERMES_RECV_QUEUE_PRIORITY_SCAN_LIMIT;
+
+    if (!HermesBridge_ShouldPriorityPopRecvQueue((unsigned long)g_recvQueueCount, HERMES_RECV_QUEUE_PRIORITY_THRESHOLD))
+        return g_recvQueueHead;
+
+    while (scanned < (DWORD)g_recvQueueCount && scanned < scanLimit)
+    {
+        if (IsPriorityRecvQueueItem(&g_recvQueue[index]))
+            return index;
+
+        index = (index + 1) % HERMES_RECV_QUEUE_CAPACITY;
+        ++scanned;
+    }
+
+    return g_recvQueueHead;
+}
+
+static BOOL PopRecvQueueItemAtLocked(LONG popIndex, HermesRecvQueueItem* item)
+{
+    LONG lastIndex;
+    LONG index;
+
+    if (g_recvQueueCount <= 0 || !item)
+        return FALSE;
+
+    CopyMemory(item, &g_recvQueue[popIndex], sizeof(*item));
+
+    lastIndex = (g_recvQueueTail + HERMES_RECV_QUEUE_CAPACITY - 1) % HERMES_RECV_QUEUE_CAPACITY;
+    index = popIndex;
+    while (index != lastIndex)
+    {
+        LONG next = (index + 1) % HERMES_RECV_QUEUE_CAPACITY;
+        g_recvQueue[index] = g_recvQueue[next];
+        index = next;
+    }
+
+    ZeroMemory(&g_recvQueue[lastIndex], sizeof(g_recvQueue[lastIndex]));
+    g_recvQueueTail = lastIndex;
+    --g_recvQueueCount;
+    return TRUE;
+}
+
 static BOOL PopRecvQueueItem(HermesRecvQueueItem* item)
 {
     BOOL hasItem = FALSE;
@@ -1045,11 +1385,26 @@ static BOOL PopRecvQueueItem(HermesRecvQueueItem* item)
     EnterCriticalSection(&g_recvQueueLock);
     if (g_recvQueueCount > 0)
     {
-        CopyMemory(item, &g_recvQueue[g_recvQueueHead], sizeof(*item));
-        ZeroMemory(&g_recvQueue[g_recvQueueHead], sizeof(g_recvQueue[g_recvQueueHead]));
-        g_recvQueueHead = (g_recvQueueHead + 1) % HERMES_RECV_QUEUE_CAPACITY;
-        --g_recvQueueCount;
-        hasItem = TRUE;
+        LONG popIndex = FindRecvQueuePopIndexLocked();
+        BOOL priorityPop = popIndex != g_recvQueueHead;
+        if (priorityPop)
+        {
+            hasItem = PopRecvQueueItemAtLocked(popIndex, item);
+            if (hasItem)
+            {
+                LONG budget = InterlockedDecrement(&g_recvPriorityPopLogBudget);
+                if (budget >= 0)
+                    WriteLogFormat4("HermesBridge recv queue priority pop methodId=%lu lane=%lu type=%lu queued=%lu", (DWORD)item->methodId, (DWORD)item->lane, (DWORD)item->messageType, (DWORD)g_recvQueueCount);
+            }
+        }
+        else
+        {
+            CopyMemory(item, &g_recvQueue[g_recvQueueHead], sizeof(*item));
+            ZeroMemory(&g_recvQueue[g_recvQueueHead], sizeof(g_recvQueue[g_recvQueueHead]));
+            g_recvQueueHead = (g_recvQueueHead + 1) % HERMES_RECV_QUEUE_CAPACITY;
+            --g_recvQueueCount;
+            hasItem = TRUE;
+        }
     }
     LeaveCriticalSection(&g_recvQueueLock);
 
@@ -1252,6 +1607,12 @@ static BOOL FlushRecvLuaBatch(char* script, DWORD scriptSize, DWORD* position, D
     __try { result = ExecuteLua(script, "HermesBridgeRecvPump"); }
     __except (EXCEPTION_EXECUTE_HANDLER) { WriteLog("HermesBridge recv Lua pump raised exception"); result = -1; }
 
+    {
+        LONG budget = InterlockedDecrement(&g_recvLuaDispatchLogBudget);
+        if (budget >= 0)
+            WriteLogFormat2("HermesBridge DEBUG client lua-pump result=%lu batch=%lu", (DWORD)result, *batchCount);
+    }
+
     if (result != 0)
         WriteLogFormat2("HermesBridge recv Lua pump returned=%lu batch=%lu", (DWORD)result, *batchCount);
 
@@ -1328,21 +1689,84 @@ static DWORD PumpRecvQueueToLua(DWORD maxItems)
     DWORD pumped = 0;
     DWORD batchCount = 0;
     DWORD position = 0;
+    DWORD pendingBefore = 0;
+    BOOL luaApiReady = FALSE;
     char script[HERMES_RECV_LUA_SCRIPT_SIZE];
 
     if (maxItems == 0)
         maxItems = HERMES_RECV_PUMP_MAX_PER_TICK;
 
-    if (GetRecvQueueCount() == 0)
+    pendingBefore = GetRecvQueueCount();
+    if (pendingBefore == 0)
         return 0;
 
-    if (!g_realLuaState)
+    luaApiReady = EnsureLuaApiInstalledNow("HermesBridge recv pump reinstalling Lua API");
+    if (!luaApiReady)
+    {
+        char trace[256];
+        _snprintf(trace, sizeof(trace), "api-not-ready pending=%lu maxItems=%lu luaState=0x%08lX", pendingBefore, maxItems, (DWORD)(uintptr_t)g_realLuaState);
+        trace[sizeof(trace) - 1] = 0;
+        WriteHermesClientTrace("recv-pump", trace);
         return 0;
+    }
 
-    EnsureLuaApiInstalled("HermesBridge recv pump reinstalling Lua API");
+    if (!HermesBridge_ShouldPumpRecvQueue(
+            pendingBefore != 0,
+            luaApiReady,
+            g_realLuaState != NULL,
+            g_luaApiEnsureRunning != 0,
+            g_recvDispatching != 0))
+    {
+        LONG deferBudget = InterlockedDecrement(&g_recvPumpDeferLogBudget);
+        if (deferBudget >= 0)
+        {
+            char trace[256];
+            const char* reason = (g_realLuaState == NULL) ? "no-real-lua-state" :
+                ((g_luaApiEnsureRunning != 0) ? "lua-api-install-running" :
+                ((g_recvDispatching != 0) ? "dispatch-running" : "gate"));
+            _snprintf(trace, sizeof(trace), "defer reason=%s pending=%lu maxItems=%lu luaState=0x%08lX ensureRunning=%ld dispatching=%ld",
+                reason,
+                pendingBefore,
+                maxItems,
+                (DWORD)(uintptr_t)g_realLuaState,
+                (LONG)g_luaApiEnsureRunning,
+                (LONG)g_recvDispatching);
+            trace[sizeof(trace) - 1] = 0;
+            WriteHermesClientTrace("recv-pump", trace);
+        }
+        return 0;
+    }
+
+    {
+        char trace[256];
+        _snprintf(trace, sizeof(trace), "begin pending=%lu maxItems=%lu luaState=0x%08lX", pendingBefore, maxItems, (DWORD)(uintptr_t)g_realLuaState);
+        trace[sizeof(trace) - 1] = 0;
+        WriteHermesClientTrace("recv-pump", trace);
+    }
 
     if (InterlockedCompareExchange(&g_recvDispatching, 1, 0) != 0)
+    {
+        WriteHermesClientTrace("recv-pump", "skip dispatch already running");
         return 0;
+    }
+
+    if (!HermesBridge_ShouldPumpRecvQueue(TRUE, TRUE, g_realLuaState != NULL, g_luaApiEnsureRunning != 0, FALSE))
+    {
+        LONG deferBudget = InterlockedDecrement(&g_recvPumpDeferLogBudget);
+        InterlockedExchange(&g_recvDispatching, 0);
+        if (deferBudget >= 0)
+        {
+            char trace[256];
+            _snprintf(trace, sizeof(trace), "defer reason=state-changed pending=%lu maxItems=%lu luaState=0x%08lX ensureRunning=%ld",
+                pendingBefore,
+                maxItems,
+                (DWORD)(uintptr_t)g_realLuaState,
+                (LONG)g_luaApiEnsureRunning);
+            trace[sizeof(trace) - 1] = 0;
+            WriteHermesClientTrace("recv-pump", trace);
+        }
+        return 0;
+    }
 
     if (!ResetRecvLuaBatch(script, sizeof(script), &position))
     {
@@ -1434,6 +1858,12 @@ static DWORD PumpRecvQueueToLua(DWORD maxItems)
         if (budget >= 0)
             WriteLogFormat2("HermesBridge recv pump main-thread pumped=%lu pending=%lu", pumped, GetRecvQueueCount());
     }
+    {
+        char trace[256];
+        _snprintf(trace, sizeof(trace), "end pumped=%lu pending=%lu batchLeft=%lu luaState=0x%08lX", pumped, GetRecvQueueCount(), batchCount, (DWORD)(uintptr_t)g_realLuaState);
+        trace[sizeof(trace) - 1] = 0;
+        WriteHermesClientTrace("recv-pump", trace);
+    }
 
     InterlockedExchange(&g_recvDispatching, 0);
     return pumped;
@@ -1488,24 +1918,65 @@ static HWND FindWowMainWindow(void)
 
 static BOOL InstallRecvPumpTimer(void)
 {
-    if (g_recvPumpTimer)
-        return TRUE;
+    HWND freshWindow;
+    UINT_PTR newTimer;
+    BOOL locked = FALSE;
+    BOOL rebuild;
 
-    g_recvPumpWindow = FindWowMainWindow();
-    if (!g_recvPumpWindow)
+    if (g_recvPumpTimerLockInitialized)
     {
+        EnterCriticalSection(&g_recvPumpTimerLock);
+        locked = TRUE;
+    }
+
+    freshWindow = FindWowMainWindow();
+
+    /* 已装且健康则短路：timer 存在、记录窗口仍存活、且它仍是当前主窗口。切换瞬间可能
+       暂时枚举不到可见顶层窗口(freshWindow==NULL)，此时只要旧窗口还活着就不动，避免误杀。 */
+    if (g_recvPumpTimer != 0 && g_recvPumpWindow != NULL && IsWindow(g_recvPumpWindow) &&
+        (freshWindow == NULL || freshWindow == g_recvPumpWindow))
+    {
+        if (locked)
+            LeaveCriticalSection(&g_recvPumpTimerLock);
+        return TRUE;
+    }
+
+    rebuild = (g_recvPumpTimer != 0);
+
+    /* 杀掉绑在旧窗口上的过期 timer（旧窗口已销毁则无需 KillTimer）。 */
+    if (g_recvPumpTimer != 0 && g_recvPumpWindow != NULL && IsWindow(g_recvPumpWindow))
+        KillTimer(g_recvPumpWindow, g_recvPumpTimer);
+    g_recvPumpTimer = 0;
+
+    if (!freshWindow)
+    {
+        if (locked)
+            LeaveCriticalSection(&g_recvPumpTimerLock);
         WriteLog("HermesBridge recv pump timer skipped: WoW window not found");
         return FALSE;
     }
 
-    g_recvPumpTimer = SetTimer(g_recvPumpWindow, HERMES_RECV_PUMP_TIMER_ID, HERMES_RECV_PUMP_INTERVAL_MS, HermesRecvPumpTimerProc);
-    if (!g_recvPumpTimer)
+    newTimer = SetTimer(freshWindow, HERMES_RECV_PUMP_TIMER_ID, HERMES_RECV_PUMP_INTERVAL_MS, HermesRecvPumpTimerProc);
+    if (!newTimer)
     {
+        if (locked)
+            LeaveCriticalSection(&g_recvPumpTimerLock);
         WriteLog("HermesBridge recv pump timer install failed");
         return FALSE;
     }
 
-    WriteLogFormat2("HermesBridge recv pump timer installed hwnd=0x%08lX interval=%lu", (DWORD)(uintptr_t)g_recvPumpWindow, (DWORD)HERMES_RECV_PUMP_INTERVAL_MS);
+    g_recvPumpWindow = freshWindow;
+    g_recvPumpTimer = newTimer;
+    if (rebuild)
+        InterlockedIncrement(&g_recvPumpTimerReinstalls);
+
+    if (locked)
+        LeaveCriticalSection(&g_recvPumpTimerLock);
+
+    if (rebuild)
+        WriteLogFormat2("HermesBridge recv pump timer reinstalled hwnd=0x%08lX reinstalls=%lu", (DWORD)(uintptr_t)freshWindow, (DWORD)g_recvPumpTimerReinstalls);
+    else
+        WriteLogFormat2("HermesBridge recv pump timer installed hwnd=0x%08lX interval=%lu", (DWORD)(uintptr_t)freshWindow, (DWORD)HERMES_RECV_PUMP_INTERVAL_MS);
     return TRUE;
 }
 
@@ -1538,16 +2009,14 @@ static VOID CALLBACK HermesAutoSnapshotTimerProc(HWND hwnd, UINT message, UINT_P
         return;
     }
 
-    if (!g_realLuaState)
+    if (!EnsureLuaApiInstalledNow("HermesBridge auto snapshot reinstalling Lua API"))
     {
-        WriteLog("HermesBridge auto snapshot waiting for real addon lua_State");
+        WriteLog("HermesBridge auto snapshot waiting for Lua API reinstall");
         return;
     }
 
     KillTimer(hwnd, eventId);
     g_autoSnapshotTimer = 0;
-
-    EnsureLuaApiInstalled("HermesBridge auto snapshot reinstalling Lua API");
 
     __try { result = ExecuteLua(script, "HermesBridgeAutoSnapshot"); }
     __except (EXCEPTION_EXECUTE_HANDLER) { WriteLog("HermesBridge auto snapshot Lua raised exception"); result = -1; }
@@ -1603,6 +2072,97 @@ static BOOL ExtractJsonStringField(const char* payload, DWORD payloadSize, const
 
     output[position] = 0;
     return position > 0;
+}
+
+static BOOL ExtractJsonNumberField(const char* payload, DWORD payloadSize, const char* field, DWORD* valueOut)
+{
+    char pattern[64];
+    const char* start = NULL;
+    DWORD value = 0;
+    BOOL hasDigit = FALSE;
+
+    if (!payload || !field || !valueOut)
+        return FALSE;
+
+    _snprintf(pattern, sizeof(pattern), "\"%s\":", field);
+    pattern[sizeof(pattern) - 1] = 0;
+    start = strstr(payload, pattern);
+    if (!start || (DWORD)(start - payload) >= payloadSize)
+        return FALSE;
+
+    start += lstrlenA(pattern);
+    while (*start == ' ' || *start == '\t')
+        ++start;
+
+    while (*start >= '0' && *start <= '9' && (DWORD)(start - payload) < payloadSize)
+    {
+        value = value * 10 + (DWORD)(*start - '0');
+        hasDigit = TRUE;
+        ++start;
+    }
+
+    if (!hasDigit)
+        return FALSE;
+
+    *valueOut = value;
+    return TRUE;
+}
+
+static void LogAddonFrameTrace(const char* stage, WORD lane, BYTE messageType, BYTE codec, WORD methodId, DWORD requestId, DWORD sequence, const char* payload, DWORD payloadSize)
+{
+    char prefix[64];
+    char message[160];
+    DWORD payloadBytes = payloadSize;
+    LONG budget = InterlockedDecrement(&g_recvAddonLogBudget);
+
+    if (budget < 0)
+        return;
+
+    prefix[0] = 0;
+    message[0] = 0;
+    ExtractJsonStringField(payload, payloadSize, "prefix", prefix, sizeof(prefix));
+    ExtractJsonStringField(payload, payloadSize, "payload", message, sizeof(message));
+    ExtractJsonNumberField(payload, payloadSize, "payloadBytes", &payloadBytes);
+
+    {
+        char trace[512];
+        wsprintfA(trace,
+            "HermesBridge DEBUG client %s lane=%lu type=%lu codec=%lu methodId=%lu requestId=%lu seq=%lu frameBytes=%lu payloadBytes=%lu prefix=%s msg=%s",
+            stage ? stage : "",
+            (DWORD)lane,
+            (DWORD)messageType,
+            (DWORD)codec,
+            (DWORD)methodId,
+            requestId,
+            sequence,
+            payloadSize,
+            payloadBytes,
+            prefix[0] ? prefix : "(none)",
+            message[0] ? message : "(empty)");
+        WriteLog(trace);
+    }
+}
+
+static BOOL ShouldTraceClientFrame(WORD methodId)
+{
+    return methodId == HERMES_METHOD_HELLO ||
+        methodId == HERMES_METHOD_ADDON_DISPATCH ||
+        methodId == HERMES_METHOD_ADDON_MESSAGE ||
+        methodId == HERMES_METHOD_PLAYER_GET_SNAPSHOT ||
+        methodId == HERMES_METHOD_PLAYER_GET_ATTRIBUTES ||
+        methodId == HERMES_METHOD_ABYSS_GET_EQUIPMENT_PAGE ||
+        methodId == HERMES_METHOD_ABYSS_GET_SET_OVERVIEW ||
+        methodId == HERMES_METHOD_ABYSS_GET_SET_BONUSES ||
+        methodId == HERMES_METHOD_ABYSS_GET_RELICS ||
+        methodId == HERMES_METHOD_TOOLTIP_QUERY ||
+        methodId == HERMES_METHOD_TOOLTIP_QUERY_TEMPLATE ||
+        methodId == HERMES_METHOD_TOOLTIP_INSPECT_ITEM_GUID ||
+        methodId == HERMES_METHOD_TOOLTIP_LIST_PENDING ||
+        methodId == HERMES_METHOD_MALL_GET_CATEGORIES ||
+        methodId == HERMES_METHOD_MALL_GET_ITEMS ||
+        methodId == HERMES_METHOD_SYNTHESIS_LIST ||
+        methodId == HERMES_METHOD_SYNTHESIS_DO ||
+        methodId == HERMES_METHOD_MALL_PURCHASE;
 }
 
 static BOOL BuildAddonMessageCoalesceKey(const char* payload, DWORD payloadSize, char* output, DWORD outputSize)
@@ -1757,6 +2317,18 @@ static BOOL TryHandleHermesSmsg(void* dispatchSelf, void* packet)
     __try { CopyMemory(payload, (void*)(address + headerSize), payloadSize); }
     __except (EXCEPTION_EXECUTE_HANDLER) { WriteLog("HermesBridge recv payload read raised exception"); return FALSE; }
 
+    if (ShouldTraceClientFrame((WORD)methodId))
+        LogAddonFrameTrace("recv", (WORD)lane, messageType, codec, (WORD)methodId, requestId, sequence, payload, payloadSize);
+
+    if (lane == HERMES_LANE_RPC &&
+        messageType == HERMES_MESSAGE_RESPONSE &&
+        methodId == HERMES_METHOD_HELLO &&
+        InterlockedCompareExchange(&g_worldLuaReady, 1, 0) == 0)
+    {
+        WriteLogFormat("HermesBridge world Lua ready after hello response requestId=%lu", requestId);
+        InstallBootstrapTimer(HERMES_WORLD_LUA_READY_BOOTSTRAP_DELAY_MS);
+    }
+
     LONG frameLogBudget = InterlockedDecrement(&g_recvFrameLogBudget);
     if (frameLogBudget >= 0)
     {
@@ -1791,26 +2363,63 @@ static void LogAfterOpcode(void* dispatchSelf, DWORD opcode, void* packet)
 
 static DWORD WINAPI AutoHandshakeThread(LPVOID parameter)
 {
+    DWORD attempt;
+
     (void)parameter;
-    Sleep(5000);
+    Sleep(250);
 
-    if (InterlockedCompareExchange(&g_nativeSelfReady, 1, 1) != 1)
+    for (attempt = 1; attempt <= HERMES_AUTO_HANDSHAKE_ATTEMPTS; ++attempt)
     {
-        WriteLog("HermesBridge auto handshake skipped: self not ready");
-        return 0;
-    }
-
-    if (InterlockedCompareExchange(&g_playerReadySent, 1, 0) == 0)
-    {
-        WriteLog("HermesBridge auto handshake sending native hello");
-        if (!SendHermesPayload("rpc hermes.hello auto-handshake-native"))
+        if (InterlockedCompareExchange(&g_worldLuaReady, 0, 0) == 1)
         {
-            InterlockedExchange(&g_playerReadySent, 0);
-            WriteLog("HermesBridge auto handshake native hello failed");
+            WriteLogFormat("HermesBridge auto handshake stopped world-ready attempt=%lu", attempt);
+            return 0;
         }
+
+        if (InterlockedCompareExchange(&g_nativeSelfReady, 1, 1) != 1)
+        {
+            if (attempt == HERMES_AUTO_HANDSHAKE_ATTEMPTS)
+                WriteLog("HermesBridge auto handshake skipped: self not ready");
+            Sleep(HERMES_AUTO_HANDSHAKE_RETRY_MS);
+            continue;
+        }
+
+        WriteLogFormat("HermesBridge auto handshake sending native hello attempt=%lu", attempt);
+        if (SendHermesPayload("rpc hermes.hello auto-handshake-native"))
+            InterlockedExchange(&g_playerReadySent, 1);
+        else
+            WriteLogFormat("HermesBridge auto handshake native hello failed attempt=%lu", attempt);
+
+        Sleep(HERMES_AUTO_HANDSHAKE_RETRY_MS);
     }
 
     return 0;
+}
+
+static void RestartAutoHandshakeForWorldLifecycle(const char* reason)
+{
+    HANDLE handshakeThread = NULL;
+    InterlockedExchange(&g_worldLuaReady, 0);
+    InterlockedExchange(&g_playerReadySent, 0);
+    InterlockedExchange(&g_autoHandshakeThreadStarted, 0);
+
+    if (InterlockedCompareExchange(&g_autoHandshakeThreadStarted, 1, 0) != 0)
+        return;
+
+    handshakeThread = CreateThread(NULL, 0, AutoHandshakeThread, NULL, 0, NULL);
+    if (handshakeThread)
+    {
+        char trace[160];
+        CloseHandle(handshakeThread);
+        _snprintf(trace, sizeof(trace), "HermesBridge lifecycle restarted auto handshake reason=%s", reason ? reason : "");
+        trace[sizeof(trace) - 1] = 0;
+        WriteLog(trace);
+    }
+    else
+    {
+        InterlockedExchange(&g_autoHandshakeThreadStarted, 0);
+        WriteLog("HermesBridge lifecycle auto handshake thread create failed");
+    }
 }
 
 static DWORD WINAPI WorldBootstrapRetryThread(LPVOID parameter)
@@ -1818,12 +2427,12 @@ static DWORD WINAPI WorldBootstrapRetryThread(LPVOID parameter)
     DWORD attempts = 0;
     (void)parameter;
 
-    Sleep(3000);
+    Sleep(HERMES_WORLD_BOOTSTRAP_RETRY_DELAY_MS);
     WriteLog("HermesBridge world bootstrap retry after connection self");
 
     for (attempts = 0; attempts < 8; ++attempts)
     {
-        if (InstallBootstrapTimer())
+        if (InstallBootstrapTimer(HERMES_BOOTSTRAP_TIMER_DELAY_MS))
             return 0;
         Sleep(1000);
     }
@@ -1853,8 +2462,32 @@ static uint32_t __fastcall HookedUpperSend(void* self, void* edxValue, void* pac
     (void)edxValue;
     LONG count = InterlockedIncrement(&g_upperSendHitCount);
     LONG budget = InterlockedDecrement(&g_upperSendLogBudget);
+    void* previousConnection = g_connectionSelf;
+    BOOL newConnection = previousConnection != self;
+
     g_connectionSelf = self;
     InterlockedExchange(&g_nativeSelfReady, 1);
+
+    if (newConnection)
+    {
+        LONG generation = InterlockedIncrement(&g_connectionGeneration);
+        InterlockedExchange(&g_playerReadySent, 0);
+        InterlockedExchange(&g_autoHandshakeThreadStarted, 0);
+        InterlockedExchange(&g_worldBootstrapThreadStarted, 0);
+        InterlockedExchange(&g_autoSnapshotAttempts, 0);
+        InterlockedExchange(&g_worldLuaReady, 0);
+        g_luaApiEnsureLastTick = 0;
+
+        if (g_autoSnapshotTimer && g_autoSnapshotWindow)
+        {
+            KillTimer(g_autoSnapshotWindow, g_autoSnapshotTimer);
+            g_autoSnapshotTimer = 0;
+            g_autoSnapshotWindow = NULL;
+        }
+
+        WriteLogFormat2("HermesBridge connection self changed generation=%lu self=0x%08lX", (DWORD)generation, (DWORD)(uintptr_t)self);
+    }
+
     if (InterlockedCompareExchange(&g_worldBootstrapThreadStarted, 1, 0) == 0)
     {
         HANDLE bootstrapThread = CreateThread(NULL, 0, WorldBootstrapRetryThread, NULL, 0, NULL);
@@ -1922,6 +2555,71 @@ static DWORD GetSendQueueCount(void)
     return count;
 }
 
+static BOOL RemoveSendQueueItemAtLocked(LONG logicalIndex, char* removedPayload, DWORD removedPayloadSize)
+{
+    LONG i;
+
+    if (logicalIndex < 0 || logicalIndex >= g_sendQueueCount)
+        return FALSE;
+
+    if (removedPayload && removedPayloadSize > 0)
+    {
+        LONG removeIndex = (g_sendQueueHead + logicalIndex) % HERMES_SEND_QUEUE_CAPACITY;
+        ZeroMemory(removedPayload, removedPayloadSize);
+        lstrcpynA(removedPayload, g_sendQueue[removeIndex], removedPayloadSize);
+    }
+
+    for (i = logicalIndex; i < g_sendQueueCount - 1; ++i)
+    {
+        LONG current = (g_sendQueueHead + i) % HERMES_SEND_QUEUE_CAPACITY;
+        LONG next = (g_sendQueueHead + i + 1) % HERMES_SEND_QUEUE_CAPACITY;
+        ZeroMemory(g_sendQueue[current], HERMES_SEND_QUEUE_PAYLOAD_SIZE);
+        lstrcpynA(g_sendQueue[current], g_sendQueue[next], HERMES_SEND_QUEUE_PAYLOAD_SIZE);
+    }
+
+    g_sendQueueTail = (g_sendQueueTail + HERMES_SEND_QUEUE_CAPACITY - 1) % HERMES_SEND_QUEUE_CAPACITY;
+    ZeroMemory(g_sendQueue[g_sendQueueTail], HERMES_SEND_QUEUE_PAYLOAD_SIZE);
+    --g_sendQueueCount;
+    return TRUE;
+}
+
+static BOOL RemoveFirstDiagnosticSendQueueItemLocked(char* removedPayload, DWORD removedPayloadSize)
+{
+    LONG i;
+
+    for (i = 0; i < g_sendQueueCount; ++i)
+    {
+        LONG index = (g_sendQueueHead + i) % HERMES_SEND_QUEUE_CAPACITY;
+        if (HermesBridge_IsDiagnosticSendPayload(g_sendQueue[index]))
+            return RemoveSendQueueItemAtLocked(i, removedPayload, removedPayloadSize);
+    }
+
+    return FALSE;
+}
+
+static void LogSendQueueDrop(const char* reason, const char* payload, DWORD queued)
+{
+    DWORD dropped = (DWORD)InterlockedIncrement(&g_sendQueueDropped);
+    char preview[160];
+    char trace[384];
+
+    if (!HermesBridge_ShouldLogSendQueueDrop(dropped))
+        return;
+
+    CopyTracePreview(payload ? payload : "", preview, sizeof(preview));
+    _snprintf(trace,
+        sizeof(trace),
+        "HermesBridge SendAddonMessage queue drop reason=%s dropped=%lu queued=%lu capacity=%lu diagnostic=%ld payload=%s",
+        reason ? reason : "queue-full",
+        dropped,
+        queued,
+        (DWORD)HERMES_SEND_QUEUE_CAPACITY,
+        (LONG)HermesBridge_IsDiagnosticSendPayload(payload),
+        preview);
+    trace[sizeof(trace) - 1] = 0;
+    WriteLog(trace);
+}
+
 static DWORD WINAPI SendAddonQueueWorkerThread(LPVOID parameter)
 {
     (void)parameter;
@@ -1968,29 +2666,55 @@ static BOOL QueueSendAddonPayload(const char* payload)
 {
     BOOL queued = FALSE;
     BOOL shouldStartWorker = FALSE;
+    BOOL droppedDiagnostic = FALSE;
+    BOOL evictedDiagnostic = FALSE;
+    BOOL diagnosticPayload = FALSE;
+    DWORD queuedBefore = 0;
+    char evictedPayload[HERMES_SEND_QUEUE_PAYLOAD_SIZE];
     HANDLE thread = NULL;
 
     if (!payload)
         payload = "";
+    diagnosticPayload = HermesBridge_IsDiagnosticSendPayload(payload);
+    ZeroMemory(evictedPayload, sizeof(evictedPayload));
 
     if (!g_sendQueueLockInitialized)
         InitializeSendQueue();
 
     EnterCriticalSection(&g_sendQueueLock);
-    if (g_sendQueueCount < HERMES_SEND_QUEUE_CAPACITY)
+    queuedBefore = (DWORD)g_sendQueueCount;
+    if (HermesBridge_ShouldDropDiagnosticSendPayload(payload, queuedBefore, HERMES_SEND_QUEUE_CAPACITY, HERMES_SEND_QUEUE_DIAGNOSTIC_RESERVE))
     {
-        ZeroMemory(g_sendQueue[g_sendQueueTail], HERMES_SEND_QUEUE_PAYLOAD_SIZE);
-        lstrcpynA(g_sendQueue[g_sendQueueTail], payload, HERMES_SEND_QUEUE_PAYLOAD_SIZE);
-        g_sendQueueTail = (g_sendQueueTail + 1) % HERMES_SEND_QUEUE_CAPACITY;
-        ++g_sendQueueCount;
-        queued = TRUE;
+        droppedDiagnostic = TRUE;
+    }
+    else
+    {
+        if (g_sendQueueCount >= HERMES_SEND_QUEUE_CAPACITY && !diagnosticPayload)
+            evictedDiagnostic = RemoveFirstDiagnosticSendQueueItemLocked(evictedPayload, sizeof(evictedPayload));
+
+        if (g_sendQueueCount < HERMES_SEND_QUEUE_CAPACITY)
+        {
+            ZeroMemory(g_sendQueue[g_sendQueueTail], HERMES_SEND_QUEUE_PAYLOAD_SIZE);
+            lstrcpynA(g_sendQueue[g_sendQueueTail], payload, HERMES_SEND_QUEUE_PAYLOAD_SIZE);
+            g_sendQueueTail = (g_sendQueueTail + 1) % HERMES_SEND_QUEUE_CAPACITY;
+            ++g_sendQueueCount;
+            queued = TRUE;
+        }
     }
     LeaveCriticalSection(&g_sendQueueLock);
 
+    if (evictedDiagnostic)
+        LogSendQueueDrop("evict-diagnostic-for-business", evictedPayload, queuedBefore);
+
+    if (droppedDiagnostic)
+    {
+        LogSendQueueDrop("diagnostic-reserve", payload, queuedBefore);
+        return FALSE;
+    }
+
     if (!queued)
     {
-        DWORD dropped = (DWORD)InterlockedIncrement(&g_sendQueueDropped);
-        WriteLogFormat("HermesBridge SendAddonMessage queue full dropped=%lu", dropped);
+        LogSendQueueDrop("queue-full", payload, queuedBefore);
         return FALSE;
     }
 
@@ -2021,13 +2745,7 @@ static int __cdecl HookedSendAddonMessage(void* luaState)
     int typeOut = 0;
     BOOL capturedRealLuaState = FALSE;
 
-    if (luaState && g_realLuaState != luaState)
-    {
-        g_realLuaState = luaState;
-        g_luaApiEnsureLastTick = 0;
-        capturedRealLuaState = TRUE;
-        WriteLogFormat("HermesBridge captured real addon lua_State=0x%08lX", (DWORD)(uintptr_t)luaState);
-    }
+    capturedRealLuaState = CaptureRealLuaState(luaState, "SendAddonMessage");
 
     if (luaState)
         EnsureLuaApiInstalled("HermesBridge installing Lua API into real addon lua_State");
@@ -2048,10 +2766,19 @@ static int __cdecl HookedSendAddonMessage(void* luaState)
 
     if (prefix && lstrcmpiA(prefix, "HERMESDLL") == 0)
     {
+        char preview[160];
+        char trace[320];
         if (!payload)
             payload = "";
+        CopyTracePreview(payload, preview, sizeof(preview));
+        _snprintf(trace, sizeof(trace), "prefix=HERMESDLL channel=%s bytes=%lu payload=%s", channel ? channel : "(nil)", (DWORD)lstrlenA(payload), preview);
+        trace[sizeof(trace) - 1] = 0;
+        WriteHermesClientTrace("send-addon", trace);
         if (budget >= 0)
             WriteLogFormat2("HermesBridge SendAddonMessage intercepted hit=%lu bytes=%lu", (DWORD)count, (DWORD)lstrlenA(payload));
+        if (_strnicmp(payload, "rpc hermes.ping trace lifecycle ", 32) == 0 &&
+            (strstr(payload, "reason=reset-") || strstr(payload, "reason=event detail=PLAYER_ENTERING_WORLD")))
+            RestartAutoHandshakeForWorldLifecycle("lua-lifecycle");
         QueueSendAddonPayload(payload);
         return 0;
     }
@@ -2064,6 +2791,15 @@ static int __cdecl HookedSendAddonMessage(void* luaState)
         DWORD payloadLen = payload ? (DWORD)lstrlenA(payload) : 0;
         if (!payload)
             payload = "";
+
+        {
+            char preview[160];
+            char trace[320];
+            CopyTracePreview(payload, preview, sizeof(preview));
+            _snprintf(trace, sizeof(trace), "takeover prefix=%s channel=%s bytes=%lu payload=%s", prefix ? prefix : "(nil)", channel ? channel : "(nil)", payloadLen, preview);
+            trace[sizeof(trace) - 1] = 0;
+            WriteHermesClientTrace("send-addon", trace);
+        }
 
         if (headerLen + prefixLen + 1 + payloadLen >= sizeof(takeoverPayload))
         {
@@ -2241,6 +2977,12 @@ static BOOL SendHermesPayload(const char* text)
     void* connection = g_connectionSelf;
     if (!connection)
     {
+        char preview[160];
+        char trace[320];
+        CopyTracePreview(text ? text : "", preview, sizeof(preview));
+        _snprintf(trace, sizeof(trace), "no-connection payload=%s", preview);
+        trace[sizeof(trace) - 1] = 0;
+        WriteHermesClientTrace("native-send", trace);
         WriteLog("HermesBridge native send skipped: no connection self yet");
         return FALSE;
     }
@@ -2290,6 +3032,43 @@ static BOOL SendHermesPayload(const char* text)
 
     WORD methodId = ResolveHermesMethodId(method);
     DWORD methodPayloadLen = methodPayload ? (DWORD)lstrlenA(methodPayload) : 0;
+    if (methodPayload && _strnicmp(methodPayload, "trace ", 6) == 0)
+    {
+        char scope[64];
+        char detail[384];
+        const char* scopeStart = methodPayload + 6;
+        const char* scopeEnd = scopeStart;
+        while (*scopeEnd && *scopeEnd != ' ')
+            ++scopeEnd;
+        ZeroMemory(scope, sizeof(scope));
+        ZeroMemory(detail, sizeof(detail));
+        if (scopeEnd > scopeStart)
+        {
+            DWORD scopeLen = (DWORD)(scopeEnd - scopeStart);
+            if (scopeLen >= sizeof(scope))
+                scopeLen = sizeof(scope) - 1;
+            CopyMemory(scope, scopeStart, scopeLen);
+            CopyTracePreview(*scopeEnd == ' ' ? scopeEnd + 1 : "", detail, sizeof(detail));
+            WriteHermesClientTrace(scope, detail);
+        }
+    }
+    if (methodPayload && (_strnicmp(methodPayload, "trace ", 6) == 0 || _strnicmp(methodPayload, "addon-compat ", 13) == 0))
+    {
+        char preview[320];
+        char trace[512];
+        CopyTracePreview(methodPayload, preview, sizeof(preview));
+        _snprintf(trace, sizeof(trace), "method=%s requestId=%lu methodId=%lu payload=%s", method ? method : "", requestId, (DWORD)methodId, preview);
+        trace[sizeof(trace) - 1] = 0;
+        WriteHermesClientTrace("native-send", trace);
+    }
+    if (methodPayload && _strnicmp(methodPayload, "addon-compat ", 13) == 0)
+    {
+        char compatTrace[512];
+        _snprintf(compatTrace, sizeof(compatTrace), "HermesBridge DEBUG client %s", methodPayload);
+        compatTrace[sizeof(compatTrace) - 1] = 0;
+        WriteHermesClientTrace("addon-compat", methodPayload + 13);
+        WriteLog(compatTrace);
+    }
     LONG sendLogBudget = InterlockedDecrement(&g_nativeSendLogBudget);
     if (sendLogBudget >= 0)
     {
@@ -2447,7 +3226,7 @@ static BOOL InstallLuaApi(void)
 
     const char* script1State =
         "if type(_G)~='table' then _G=getfenv(0); end; if type(_G.HermesDLL)~='table' then _G.HermesDLL={}; end; HermesDLL=_G.HermesDLL; "
-        "HermesDLL.callbacks = HermesDLL.callbacks or {}; HermesDLL.events = HermesDLL.events or {}; HermesDLL.pending = HermesDLL.pending or {}; HermesDLL.pendingById = HermesDLL.pendingById or {}; HermesDLL.inbox = HermesDLL.inbox or {}; HermesDLL.streamQueue = HermesDLL.streamQueue or {}; HermesDLL.state = HermesDLL.state or {basic={},position={},vitals={},attributes={}}; HermesDLL.luaApiInstalls=(HermesDLL.luaApiInstalls or 0)+1; HermesDLL.stateUpdates = HermesDLL.stateUpdates or 0; HermesDLL.nextRequestId = HermesDLL.nextRequestId or 100000; HermesDLL.maxInbox = HermesDLL.maxInbox or 64; HermesDLL.maxPending = HermesDLL.maxPending or 128; HermesDLL.maxStreamQueue = HermesDLL.maxStreamQueue or 512; HermesDLL.maxPayloadSize = " HERMES_STRINGIFY(HERMES_LUA_MAX_REQUEST_PAYLOAD_SIZE) "; HermesDLL.maxFramePayloadSize = " HERMES_STRINGIFY(HERMES_FRAME_MAX_PAYLOAD_SIZE) "; HermesDLL.requestTimeout = HermesDLL.requestTimeout or 15; HermesDLL.callbackHits = HermesDLL.callbackHits or 0; HermesDLL.eventHits = HermesDLL.eventHits or 0; HermesDLL.streamDropped = HermesDLL.streamDropped or 0; HermesDLL.pumped = HermesDLL.pumped or 0; HermesDLL.addonCompatDispatches = HermesDLL.addonCompatDispatches or 0; HermesDLL.addonCompatErrors = HermesDLL.addonCompatErrors or 0; HermesDLL.lastAddonCompatPrefix = HermesDLL.lastAddonCompatPrefix or nil; HermesDLL.lastAddonCompatCount = HermesDLL.lastAddonCompatCount or 0; HermesDLL.lastError = nil; ";
+        "HermesDLL.callbacks = HermesDLL.callbacks or {}; HermesDLL.events = HermesDLL.events or {}; HermesDLL.pending = HermesDLL.pending or {}; HermesDLL.pendingById = HermesDLL.pendingById or {}; HermesDLL.inbox = HermesDLL.inbox or {}; HermesDLL.streamQueue = HermesDLL.streamQueue or {}; HermesDLL.state = HermesDLL.state or {basic={},position={},vitals={},attributes={}}; HermesDLL.luaApiInstalls=(HermesDLL.luaApiInstalls or 0)+1; HermesDLL.stateUpdates = HermesDLL.stateUpdates or 0; HermesDLL.nextRequestId = HermesDLL.nextRequestId or 100000; HermesDLL.maxInbox = HermesDLL.maxInbox or 64; HermesDLL.maxPending = HermesDLL.maxPending or 128; HermesDLL.maxStreamQueue = HermesDLL.maxStreamQueue or 512; HermesDLL.maxPayloadSize = " HERMES_STRINGIFY(HERMES_LUA_MAX_REQUEST_PAYLOAD_SIZE) "; HermesDLL.maxFramePayloadSize = " HERMES_STRINGIFY(HERMES_FRAME_MAX_PAYLOAD_SIZE) "; HermesDLL.requestTimeout = HermesDLL.requestTimeout or 15; HermesDLL.callbackHits = HermesDLL.callbackHits or 0; HermesDLL.eventHits = HermesDLL.eventHits or 0; HermesDLL.streamDropped = HermesDLL.streamDropped or 0; HermesDLL.pumped = HermesDLL.pumped or 0; HermesDLL.addonCompatDispatches = HermesDLL.addonCompatDispatches or 0; HermesDLL.addonCompatErrors = HermesDLL.addonCompatErrors or 0; HermesDLL.addonCompatDebugSeq = HermesDLL.addonCompatDebugSeq or 0; HermesDLL.addonCompatServerTraceBudget = 8; HermesDLL.lifecycleTraceBudget = 8; HermesDLL.lastAddonCompatPrefix = HermesDLL.lastAddonCompatPrefix or nil; HermesDLL.lastAddonCompatCount = HermesDLL.lastAddonCompatCount or 0; HermesDLL.lastAddonCompatHandlerCount = HermesDLL.lastAddonCompatHandlerCount or 0; HermesDLL.lastAddonCompatHandlerOk = HermesDLL.lastAddonCompatHandlerOk or 0; HermesDLL.lastAddonCompatHandlerErrors = HermesDLL.lastAddonCompatHandlerErrors or 0; HermesDLL.lastAddonCompatPath = HermesDLL.lastAddonCompatPath or nil; HermesDLL.lastAddonCompatResult = HermesDLL.lastAddonCompatResult or nil; HermesDLL.lastAddonCompatPayloadBytes = HermesDLL.lastAddonCompatPayloadBytes or 0; HermesDLL.lastAddonCompatPayloadHead = HermesDLL.lastAddonCompatPayloadHead or nil; HermesDLL.lastHermesCompatPresent = HermesDLL.lastHermesCompatPresent or false; HermesDLL.lastHermesCompatHasDispatch = HermesDLL.lastHermesCompatHasDispatch or false; HermesDLL.lastHermesCompatHasHandlers = HermesDLL.lastHermesCompatHasHandlers or false; HermesDLL.lastError = nil; ";
 
     const char* script1Functions =
         "if type(_G)~='table' then _G=getfenv(0); end; if type(_G.HermesDLL)~='table' then _G.HermesDLL={}; end; HermesDLL=_G.HermesDLL; "
@@ -2473,7 +3252,7 @@ static BOOL InstallLuaApi(void)
         "function HermesDLL._ResolveCallback(callback) if type(callback)=='function' then return callback; end if callback and _G[tostring(callback)] and type(_G[tostring(callback)])=='function' then return _G[tostring(callback)]; end return nil; end; "
         "function HermesDLL._CountMap(map) local n=0; if map then for _ in pairs(map) do n=n+1; end end return n; end; "
         "function HermesDLL._InvokeResponseCallback(callback, msg, pending) local fn=HermesDLL._ResolveCallback(callback); if not fn then return false; end local ok,err=pcall(fn,msg,pending); if not ok then HermesDLL._Print('|cffff3333HermesDLL callback error|r '..tostring(err)); return false; end HermesDLL.callbackHits=(HermesDLL.callbackHits or 0)+1; return true; end; "
-        "function HermesDLL.NativeStatus() return { version=HermesDLL.version, frameVersion=HermesDLL.frameVersion, upperSendHook=HermesDLL.nativeHooks.upperSend, sendHook=HermesDLL.nativeHooks.send, recvHook=HermesDLL.nativeHooks.recv, recvPump='timer-delayed', cmsg=HermesDLL.CMSG_OPCODE, smsg=HermesDLL.SMSG_OPCODE, inbox=table.getn(HermesDLL.inbox), streamQueue=table.getn(HermesDLL.streamQueue), streamDropped=HermesDLL.streamDropped or 0, pumped=HermesDLL.pumped or 0, pending=table.getn(HermesDLL.pending), events=HermesDLL._CountMap(HermesDLL.events), nextRequestId=HermesDLL.nextRequestId, callbackHits=HermesDLL.callbackHits or 0, eventHits=HermesDLL.eventHits or 0, stateUpdates=HermesDLL.stateUpdates or 0, luaApiInstalls=HermesDLL.luaApiInstalls or 0, playerReady=(HermesDLL.state and HermesDLL.state.playerReady) or false, nativeSendQueue=" HERMES_STRINGIFY(HERMES_SEND_QUEUE_CAPACITY) ", nativeRecvQueue=" HERMES_STRINGIFY(HERMES_RECV_QUEUE_CAPACITY) ", maxPayloadSize=HermesDLL.maxPayloadSize, maxFramePayloadSize=HermesDLL.maxFramePayloadSize, addonCompatDispatches=HermesDLL.addonCompatDispatches or 0, addonCompatErrors=HermesDLL.addonCompatErrors or 0, lastAddonCompatPrefix=HermesDLL.lastAddonCompatPrefix, lastAddonCompatCount=HermesDLL.lastAddonCompatCount or 0, lastAddonCompatError=HermesDLL.lastAddonCompatError, lastErrorCode=HermesDLL.lastError and HermesDLL.lastError.hermesCode or nil }; end; "
+        "function HermesDLL.NativeStatus() return { version=HermesDLL.version, frameVersion=HermesDLL.frameVersion, upperSendHook=HermesDLL.nativeHooks.upperSend, sendHook=HermesDLL.nativeHooks.send, recvHook=HermesDLL.nativeHooks.recv, recvPump='timer-delayed', cmsg=HermesDLL.CMSG_OPCODE, smsg=HermesDLL.SMSG_OPCODE, inbox=table.getn(HermesDLL.inbox), streamQueue=table.getn(HermesDLL.streamQueue), streamDropped=HermesDLL.streamDropped or 0, pumped=HermesDLL.pumped or 0, pending=table.getn(HermesDLL.pending), events=HermesDLL._CountMap(HermesDLL.events), nextRequestId=HermesDLL.nextRequestId, callbackHits=HermesDLL.callbackHits or 0, eventHits=HermesDLL.eventHits or 0, stateUpdates=HermesDLL.stateUpdates or 0, luaApiInstalls=HermesDLL.luaApiInstalls or 0, playerReady=(HermesDLL.state and HermesDLL.state.playerReady) or false, nativeSendQueue=" HERMES_STRINGIFY(HERMES_SEND_QUEUE_CAPACITY) ", nativeRecvQueue=" HERMES_STRINGIFY(HERMES_RECV_QUEUE_CAPACITY) ", maxPayloadSize=HermesDLL.maxPayloadSize, maxFramePayloadSize=HermesDLL.maxFramePayloadSize, addonCompatDispatches=HermesDLL.addonCompatDispatches or 0, addonCompatErrors=HermesDLL.addonCompatErrors or 0, addonCompatDebugSeq=HermesDLL.addonCompatDebugSeq or 0, lastAddonCompatPrefix=HermesDLL.lastAddonCompatPrefix, lastAddonCompatCount=HermesDLL.lastAddonCompatCount or 0, lastAddonCompatHandlerCount=HermesDLL.lastAddonCompatHandlerCount or 0, lastAddonCompatHandlerOk=HermesDLL.lastAddonCompatHandlerOk or 0, lastAddonCompatHandlerErrors=HermesDLL.lastAddonCompatHandlerErrors or 0, lastAddonCompatPath=HermesDLL.lastAddonCompatPath, lastAddonCompatResult=HermesDLL.lastAddonCompatResult, lastAddonCompatPayloadBytes=HermesDLL.lastAddonCompatPayloadBytes or 0, lastAddonCompatPayloadHead=HermesDLL.lastAddonCompatPayloadHead, lastHermesCompatPresent=HermesDLL.lastHermesCompatPresent or false, lastHermesCompatHasDispatch=HermesDLL.lastHermesCompatHasDispatch or false, lastHermesCompatHasHandlers=HermesDLL.lastHermesCompatHasHandlers or false, lastAddonCompatError=HermesDLL.lastAddonCompatError, lastErrorCode=HermesDLL.lastError and HermesDLL.lastError.hermesCode or nil }; end; "
         "function HermesDLL.Ping() HermesDLL._Print('|cff00ff00HermesDLL Ping OK v'..HermesDLL.version..'|r'); return 'pong:'..HermesDLL.version; end; "
         "function HermesDLL.ClearInbox() local n=table.getn(HermesDLL.inbox); HermesDLL.inbox={}; HermesDLL.lastReceive=nil; return n; end; ";
 
@@ -2506,6 +3285,19 @@ static BOOL InstallLuaApi(void)
         "function HermesDLL._RefreshAddonCompatFrames(force) local now=(GetTime and GetTime()) or 0; if not force and HermesDLL.addonCompatFrames and now<(HermesDLL.addonCompatFrameCacheUntil or 0) then return HermesDLL.addonCompatFrames,HermesDLL.addonCompatAllFrames or {}; end local frames={}; local all={}; if EnumerateFrames then local frame=EnumerateFrames(); while frame do table.insert(all,frame); local registered=false; if frame.IsEventRegistered then local ok,value=pcall(frame.IsEventRegistered,frame,'CHAT_MSG_ADDON'); registered=ok and value; end if registered then table.insert(frames,frame); end frame=EnumerateFrames(frame); end end HermesDLL.addonCompatFrames=frames; HermesDLL.addonCompatAllFrames=all; HermesDLL.addonCompatFrameCacheUntil=now+2; HermesDLL.addonCompatFrameCacheSize=table.getn(frames); return frames,all; end; "
         "function HermesDLL._DispatchAddonCompat(msg) local p=msg and msg.params or {}; local prefix=tostring(p.prefix or ''); local payload=tostring(p.payload or ''); if prefix=='' or HermesDLL.addonCompatDispatching then return false; end local channel='WHISPER'; local sender=(UnitName and UnitName('player')) or nil; if sender=='' then sender=nil; end local count=0; local function noteError(err) HermesDLL.addonCompatErrors=(HermesDLL.addonCompatErrors or 0)+1; HermesDLL.lastAddonCompatError=tostring(err); end; local function callKnownClient() if prefix=='PLUGMGR' and _G and _G.PluginManagerClient and _G.PluginManagerClient.DispatchMessage then local ok,result=pcall(_G.PluginManagerClient.DispatchMessage,_G.PluginManagerClient,payload); if ok then if result then count=count+1; end else noteError(result); end end end; local function callFrame(frame) if frame and frame.GetScript then local okHandler,handler=pcall(frame.GetScript,frame,'OnEvent'); if okHandler and handler then local oldThis,oldEvent,oldArg1,oldArg2,oldArg3,oldArg4=this,event,arg1,arg2,arg3,arg4; this=frame; event='CHAT_MSG_ADDON'; arg1=prefix; arg2=payload; arg3=channel; arg4=sender; local ok,err=pcall(handler,frame,'CHAT_MSG_ADDON',prefix,payload,channel,sender); this=oldThis; event=oldEvent; arg1=oldArg1; arg2=oldArg2; arg3=oldArg3; arg4=oldArg4; count=count+1; if not ok then noteError(err); end end end end HermesDLL.addonCompatDispatching=true; HermesDLL.lastAddonCompatPrefix=prefix; callKnownClient(); local frames,all=HermesDLL._RefreshAddonCompatFrames(false); for i=1,table.getn(frames) do callFrame(frames[i]); end if count==0 then frames,all=HermesDLL._RefreshAddonCompatFrames(true); for i=1,table.getn(all) do callFrame(all[i]); end end HermesDLL.addonCompatDispatching=false; HermesDLL.lastAddonCompatCount=count; HermesDLL.addonCompatByPrefix=HermesDLL.addonCompatByPrefix or {}; HermesDLL.addonCompatByPrefix[prefix]=(HermesDLL.addonCompatByPrefix[prefix] or 0)+count; HermesDLL.addonCompatDispatches=(HermesDLL.addonCompatDispatches or 0)+count; return count>0; end; ";
 
+    const char* addonCompatDirectLua =
+        "function HermesDLL._DispatchAddonCompat(msg) local p=msg and msg.params or {}; local prefix=tostring(p.prefix or ''); local payload=tostring(p.payload or ''); if prefix=='' or HermesDLL.addonCompatDispatching then return false; end local channel='WHISPER'; local sender=(UnitName and UnitName('player')) or nil; if sender=='' then sender=nil; end local count=0; "
+        "local handlerTotal=0; local handlerOk=0; local handlerErrors=0; local frameCalls=0; "
+        "local function noteError(err) HermesDLL.addonCompatErrors=(HermesDLL.addonCompatErrors or 0)+1; handlerErrors=handlerErrors+1; HermesDLL.lastAddonCompatError=tostring(err); end; "
+        "local function markPath(path) path=tostring(path or ''); if path=='' then return; end if HermesDLL.lastAddonCompatPath and HermesDLL.lastAddonCompatPath~='' then HermesDLL.lastAddonCompatPath=HermesDLL.lastAddonCompatPath..'+'..path; else HermesDLL.lastAddonCompatPath=path; end end; "
+        "local function listCount(list) if type(list)~='table' then return 0; end local n=table.getn(list); if n and n>0 then return n; end local c=0; for _,fn in pairs(list) do if type(fn)=='function' then c=c+1; end end return c; end; "
+        "local function callHandler(fn,label) if type(fn)~='function' then noteError(tostring(label)..':not_function'); return false; end local ok,err=pcall(fn,prefix,payload,channel,sender); if ok then count=count+1; handlerOk=handlerOk+1; return true; end noteError(tostring(label)..':'..tostring(err)); return false; end; "
+        "local function callHermesCompatHandlers() local compat=(_G and _G.HermesCompat) or nil; HermesDLL.lastHermesCompatPresent=type(compat)=='table'; HermesDLL.lastHermesCompatHasDispatch=HermesDLL.lastHermesCompatPresent and type(compat.Dispatch)=='function' or false; HermesDLL.lastHermesCompatHasHandlers=HermesDLL.lastHermesCompatPresent and type(compat.handlers)=='table' or false; if not HermesDLL.lastHermesCompatHasHandlers then return false; end local list=compat.handlers[prefix]; handlerTotal=listCount(list); HermesDLL.lastAddonCompatHandlerCount=handlerTotal; if handlerTotal<=0 or type(list)~='table' then return false; end markPath('handlers'); local n=table.getn(list); if n and n>0 then for i=1,n do callHandler(list[i],'handler#'..i); end else local i=0; for _,fn in pairs(list) do i=i+1; callHandler(fn,'handler@'..i); end end return true; end; "
+        "local function callHermesCompatDispatch() local compat=(_G and _G.HermesCompat) or nil; if type(compat)=='table' and type(compat.Dispatch)=='function' then HermesDLL.lastHermesCompatDispatchCalled=true; local ok,result=pcall(compat.Dispatch,prefix,payload,channel,sender); HermesDLL.lastHermesCompatDispatchResult=tostring(result); if ok then if result then count=count+1; markPath('dispatch'); return true; end return false; end noteError('dispatch:'..tostring(result)); end return false; end; "
+        "local function callKnownClient() if prefix=='PLUGMGR' and _G and _G.PluginManagerClient and _G.PluginManagerClient.DispatchMessage then HermesDLL.lastKnownClientCalled=true; local ok,result=pcall(_G.PluginManagerClient.DispatchMessage,_G.PluginManagerClient,payload); HermesDLL.lastKnownClientResult=tostring(result); if ok then if result then count=count+1; markPath('known'); return true; end return false; end noteError('known:'..tostring(result)); end return false; end; "
+        "local function callFrame(frame) if frame and frame.GetScript then local okHandler,handler=pcall(frame.GetScript,frame,'OnEvent'); if okHandler and handler then local oldThis,oldEvent,oldArg1,oldArg2,oldArg3,oldArg4=this,event,arg1,arg2,arg3,arg4; this=frame; event='CHAT_MSG_ADDON'; arg1=prefix; arg2=payload; arg3=channel; arg4=sender; local ok,err=pcall(handler,frame,'CHAT_MSG_ADDON',prefix,payload,channel,sender); this=oldThis; event=oldEvent; arg1=oldArg1; arg2=oldArg2; arg3=oldArg3; arg4=oldArg4; frameCalls=frameCalls+1; if ok then count=count+1; markPath('frame'); else noteError('frame:'..tostring(err)); end end end end; "
+        "local function emitServerTrace() local b=tonumber(HermesDLL.addonCompatServerTraceBudget or 0) or 0; if b<=0 or type(SendAddonMessage)~='function' then return; end HermesDLL.addonCompatServerTraceBudget=b-1; local path=tostring(HermesDLL.lastAddonCompatPath or 'none'); local result=tostring(HermesDLL.lastAddonCompatResult or 'unknown'); local head=string.sub(payload,1,48); local trace='addon-compat seq='..tostring(HermesDLL.addonCompatDebugSeq or 0)..' prefix='..prefix..' result='..result..' path='..path..' count='..tostring(count)..' handlers='..tostring(handlerOk)..'/'..tostring(handlerTotal)..' errors='..tostring(handlerErrors)..' compat='..tostring(HermesDLL.lastHermesCompatPresent)..' dispatch='..tostring(HermesDLL.lastHermesCompatHasDispatch)..' bytes='..tostring(string.len(payload))..' head='..head; local target=(UnitName and UnitName('player')) or nil; pcall(SendAddonMessage,'HERMESDLL','rpc hermes.ping '..trace,'WHISPER',target); end; "
+        "HermesDLL.addonCompatDispatching=true; HermesDLL.addonCompatDebugSeq=(HermesDLL.addonCompatDebugSeq or 0)+1; HermesDLL.lastAddonCompatPrefix=prefix; HermesDLL.lastAddonCompatPayloadBytes=string.len(payload); HermesDLL.lastAddonCompatPayloadHead=string.sub(payload,1,96); HermesDLL.lastAddonCompatCount=0; HermesDLL.lastAddonCompatHandlerCount=0; HermesDLL.lastAddonCompatHandlerOk=0; HermesDLL.lastAddonCompatHandlerErrors=0; HermesDLL.lastAddonCompatFrameCalls=0; HermesDLL.lastAddonCompatPath=''; HermesDLL.lastAddonCompatResult='running'; HermesDLL.lastAddonCompatError=nil; HermesDLL.lastHermesCompatDispatchCalled=false; HermesDLL.lastHermesCompatDispatchResult=nil; HermesDLL.lastKnownClientCalled=false; HermesDLL.lastKnownClientResult=nil; local sawHandlers=callHermesCompatHandlers(); if not sawHandlers and count==0 then callHermesCompatDispatch(); end if count==0 then callKnownClient(); end local frames,all={},{}; if count==0 and HermesDLL._RefreshAddonCompatFrames then frames,all=HermesDLL._RefreshAddonCompatFrames(false); for i=1,table.getn(frames or {}) do callFrame(frames[i]); end end if count==0 and HermesDLL._RefreshAddonCompatFrames then frames,all=HermesDLL._RefreshAddonCompatFrames(true); for i=1,table.getn(all or {}) do callFrame(all[i]); end end HermesDLL.addonCompatDispatching=false; HermesDLL.lastAddonCompatCount=count; HermesDLL.lastAddonCompatHandlerCount=handlerTotal; HermesDLL.lastAddonCompatHandlerOk=handlerOk; HermesDLL.lastAddonCompatHandlerErrors=handlerErrors; HermesDLL.lastAddonCompatFrameCalls=frameCalls; if not HermesDLL.lastAddonCompatPath or HermesDLL.lastAddonCompatPath=='' then HermesDLL.lastAddonCompatPath='none'; end HermesDLL.lastAddonCompatResult=(count>0 and 'handled' or 'miss'); HermesDLL.addonCompatByPrefix=HermesDLL.addonCompatByPrefix or {}; HermesDLL.addonCompatByPrefix[prefix]=(HermesDLL.addonCompatByPrefix[prefix] or 0)+count; HermesDLL.addonCompatDispatches=(HermesDLL.addonCompatDispatches or 0)+count; emitServerTrace(); return count>0; end; ";
     const char* script4Pump =
         "if type(_G)~='table' then _G=getfenv(0); end; if type(_G.HermesDLL)~='table' then _G.HermesDLL={}; end; HermesDLL=_G.HermesDLL; "
         "HermesDLL.bulkTransfers = HermesDLL.bulkTransfers or {}; "
@@ -2513,6 +3305,8 @@ static BOOL InstallLuaApi(void)
         "function HermesDLL._HandleMessage(msg,pending) local handled=false; if HermesDLL._UpdateStateFromMessage then HermesDLL._UpdateStateFromMessage(msg,pending); end if HermesDLL._HandleBulkChunk then handled=HermesDLL._HandleBulkChunk(msg,pending) or handled; end if pending then handled=HermesDLL._InvokeResponseCallback(pending.callback,msg,pending) or handled; if pending.method then handled=HermesDLL.Emit(pending.method,msg,pending) or handled; end handled=HermesDLL.Emit('response',msg,pending) or handled; if msg.isError then handled=HermesDLL.Emit('error',msg,pending) or handled; end else local eventName=msg.event or msg.method; if eventName=='hermes.addon.message' and HermesDLL._DispatchAddonCompat then handled=HermesDLL._DispatchAddonCompat(msg) or handled; end if eventName and eventName~='' then handled=HermesDLL.Emit(eventName,msg,nil) or handled; end local bulkEvent=msg.bulkCompleteEvent; if bulkEvent and bulkEvent~='' then handled=HermesDLL.Emit(bulkEvent,msg,nil) or handled; end handled=HermesDLL.Emit(msg.isError and 'error' or 'message',msg,nil) or handled; end if not handled and msg.hasResult and not msg.isError then handled=true; end if not handled then HermesDLL.Dispatch(msg.channel or 'default',msg.payload or ''); end return handled; end; "
         "function HermesDLL.Pump(maxEvents,maxMs) local limit=tonumber(maxEvents or 64) or 64; if limit<1 then limit=1; end if limit>256 then limit=256; end local deadline=nil; local budget=tonumber(maxMs or 8) or 8; if GetTime and budget>0 then deadline=GetTime()+(budget/1000); end local n=0; while n<limit and table.getn(HermesDLL.streamQueue)>0 do if deadline and GetTime and GetTime()>deadline then break; end local msg=table.remove(HermesDLL.streamQueue,1); HermesDLL._HandleMessage(msg,nil); n=n+1; end HermesDLL.pumped=(HermesDLL.pumped or 0)+n; return n; end; ";
 
+    const char* script4AddonDispatchOverride =
+        "function HermesDLL._HandleMessage(msg,pending) local handled=false; if HermesDLL._UpdateStateFromMessage then HermesDLL._UpdateStateFromMessage(msg,pending); end if HermesDLL._HandleBulkChunk then handled=HermesDLL._HandleBulkChunk(msg,pending) or handled; end if pending then handled=HermesDLL._InvokeResponseCallback(pending.callback,msg,pending) or handled; if pending.method then handled=HermesDLL.Emit(pending.method,msg,pending) or handled; end handled=HermesDLL.Emit('response',msg,pending) or handled; if msg.isError then handled=HermesDLL.Emit('error',msg,pending) or handled; end else local eventName=msg.event or msg.method; if eventName=='hermes.addon.message' then if HermesDLL._DispatchAddonCompat then handled=HermesDLL._DispatchAddonCompat(msg) or handled; end if not handled then handled=HermesDLL.Emit(eventName,msg,nil) or handled; end elseif eventName and eventName~='' then handled=HermesDLL.Emit(eventName,msg,nil) or handled; end local bulkEvent=msg.bulkCompleteEvent; if bulkEvent and bulkEvent~='' then handled=HermesDLL.Emit(bulkEvent,msg,nil) or handled; end handled=HermesDLL.Emit(msg.isError and 'error' or 'message',msg,nil) or handled; end if not handled and msg.hasResult and not msg.isError then handled=true; end if not handled then HermesDLL.Dispatch(msg.channel or 'default',msg.payload or ''); end return handled; end; ";
     const char* script4Native =
         "if type(_G)~='table' then _G=getfenv(0); end; if type(_G.HermesDLL)~='table' then _G.HermesDLL={}; end; HermesDLL=_G.HermesDLL; "
         "HermesDLL.recvChunks = HermesDLL.recvChunks or {}; "
@@ -2522,7 +3316,7 @@ static BOOL InstallLuaApi(void)
 
     const char* script4Slash =
         "if type(_G)~='table' then _G=getfenv(0); end; if type(_G.HermesDLL)~='table' then _G.HermesDLL={}; end; HermesDLL=_G.HermesDLL; "
-        "function HermesDLL._EnsureSlash() if type(SlashCmdList)~='table' then HermesDLL.slashInstallPending=true; return false; end SLASH_HERMESDLL1='/hdll'; SlashCmdList['HERMESDLL']=function(msg) msg=tostring(msg or ''); if msg=='' or msg=='ping' then HermesDLL.Ping(); return; end if msg=='clear' then local n=HermesDLL.ClearInbox(); HermesDLL._Print('|cffffff00HermesDLL cleared inbox|r '..n); return; end if msg=='pump' then local n=HermesDLL.Pump(64,8); HermesDLL._Print('|cffffff00HermesDLL pumped|r '..n); return; end if msg=='panel' or msg=='debug' or msg=='debug panel' then if HermesDLL.ToggleDebugPanel then HermesDLL.ToggleDebugPanel(); else HermesDLL._Print('|cffff3333HermesDLL debug panel not installed|r'); end return; end if string.sub(msg,1,5)=='send ' then HermesDLL.Send('debug', string.sub(msg,6)); return; end if string.sub(msg,1,4)=='rpc ' then local rest=string.sub(msg,5); local sp=string.find(rest,' '); if sp then HermesDLL.Request(string.sub(rest,1,sp-1), string.sub(rest,sp+1)); else HermesDLL.Request(rest,''); end return; end if msg=='inbox' then local n=table.getn(HermesDLL.inbox); HermesDLL._Print('|cffffff00HermesDLL inbox|r '..n); if n>0 then local m=HermesDLL.inbox[n]; HermesDLL._Print('|cff66ccfflast|r id='..tostring(m.id)..' lane='..tostring(m.channel)..' err='..tostring(m.isError)..' len='..string.len(tostring(m.payload))..' '..tostring(m.payload)); end return; end if msg=='state' then local s=HermesDLL.NativeStatus(); HermesDLL._Print('|cffffff00HermesDLL|r version='..s.version..' frame='..s.frameVersion..' upper='..tostring(s.upperSendHook)..' send='..tostring(s.sendHook)..' recv='..tostring(s.recvHook)..' sendQ='..tostring(s.nativeSendQueue)..' recvQ='..tostring(s.nativeRecvQueue)..' pending='..s.pending..' inbox='..s.inbox..' stream='..s.streamQueue..' dropped='..s.streamDropped..' pumped='..s.pumped..' events='..s.events..' callbacks='..s.callbackHits..' eventHits='..s.eventHits); return; end HermesDLL._Print('|cffffff00/hdll ping|r, |cffffff00/hdll send text|r, |cffffff00/hdll rpc method payload|r, |cffffff00/hdll pump|r, |cffffff00/hdll inbox|r, |cffffff00/hdll clear|r, |cffffff00/hdll state|r, |cffffff00/hdll panel|r'); end; HermesDLL.slashInstallPending=false; return true; end; HermesDLL._EnsureSlash(); ";
+        "function HermesDLL._EnsureSlash() if type(SlashCmdList)~='table' then HermesDLL.slashInstallPending=true; return false; end SLASH_HERMESDLL1='/hdll'; SlashCmdList['HERMESDLL']=function(msg) msg=tostring(msg or ''); if msg=='' or msg=='ping' then HermesDLL.Ping(); return; end if msg=='clear' then local n=HermesDLL.ClearInbox(); HermesDLL._Print('|cffffff00HermesDLL cleared inbox|r '..n); return; end if msg=='pump' then local n=HermesDLL.Pump(64,8); HermesDLL._Print('|cffffff00HermesDLL pumped|r '..n); return; end if msg=='panel' or msg=='debug' or msg=='debug panel' then if HermesDLL.ToggleDebugPanel then HermesDLL.ToggleDebugPanel(); else HermesDLL._Print('|cffff3333HermesDLL debug panel not installed|r'); end return; end if string.sub(msg,1,5)=='send ' then HermesDLL.Send('debug', string.sub(msg,6)); return; end if string.sub(msg,1,4)=='rpc ' then local rest=string.sub(msg,5); local sp=string.find(rest,' '); if sp then HermesDLL.Request(string.sub(rest,1,sp-1), string.sub(rest,sp+1)); else HermesDLL.Request(rest,''); end return; end if msg=='inbox' then local n=table.getn(HermesDLL.inbox); HermesDLL._Print('|cffffff00HermesDLL inbox|r '..n); if n>0 then local m=HermesDLL.inbox[n]; HermesDLL._Print('|cff66ccfflast|r id='..tostring(m.id)..' lane='..tostring(m.channel)..' err='..tostring(m.isError)..' len='..string.len(tostring(m.payload))..' '..tostring(m.payload)); end return; end if msg=='state' then local s=HermesDLL.NativeStatus(); HermesDLL._Print('|cffffff00HermesDLL|r version='..s.version..' frame='..s.frameVersion..' upper='..tostring(s.upperSendHook)..' send='..tostring(s.sendHook)..' recv='..tostring(s.recvHook)..' pending='..s.pending..' inbox='..s.inbox..' stream='..s.streamQueue..' pumped='..s.pumped); HermesDLL._Print('|cffffff00HermesDLL addon|r seq='..tostring(s.addonCompatDebugSeq)..' prefix='..tostring(s.lastAddonCompatPrefix)..' result='..tostring(s.lastAddonCompatResult)..' path='..tostring(s.lastAddonCompatPath)..' count='..tostring(s.lastAddonCompatCount)..' handlers='..tostring(s.lastAddonCompatHandlerOk)..'/'..tostring(s.lastAddonCompatHandlerCount)..' handlerErrors='..tostring(s.lastAddonCompatHandlerErrors)..' compat='..tostring(s.lastHermesCompatPresent)..' dispatch='..tostring(s.lastHermesCompatHasDispatch)..' handlersTable='..tostring(s.lastHermesCompatHasHandlers)..' bytes='..tostring(s.lastAddonCompatPayloadBytes)); HermesDLL._Print('|cffffff00HermesDLL addon payload|r '..tostring(s.lastAddonCompatPayloadHead)..' error='..tostring(s.lastAddonCompatError)); return; end HermesDLL._Print('|cffffff00/hdll ping|r, |cffffff00/hdll send text|r, |cffffff00/hdll rpc method payload|r, |cffffff00/hdll pump|r, |cffffff00/hdll inbox|r, |cffffff00/hdll clear|r, |cffffff00/hdll state|r, |cffffff00/hdll panel|r'); end; HermesDLL.slashInstallPending=false; return true; end; HermesDLL._EnsureSlash(); ";
 
     WriteLog("installing HermesDLL Lua API v" HERMES_BRIDGE_VERSION);
     int result1Core = ExecuteLua(script1Core, "HermesBridgeBootstrapCore");
@@ -2544,8 +3338,12 @@ static BOOL InstallLuaApi(void)
     int result4AddonCompat = (result4Queue == 0) ? ExecuteLua(addonCompatLua, "HermesBridgeBootstrapAddonCompat") : -1;
     if (result4AddonCompat == 0)
         result4AddonCompat = ExecuteLua(addonCompatFastLua, "HermesBridgeBootstrapAddonCompatFast");
+    if (result4AddonCompat == 0)
+        result4AddonCompat = ExecuteLua(addonCompatDirectLua, "HermesBridgeBootstrapAddonCompatDirect");
     WriteLogFormat("HermesDLL bridge addon compat install returned %lu", (DWORD)result4AddonCompat);
     int result4Pump = (result4AddonCompat == 0) ? ExecuteLua(script4Pump, "HermesBridgeBootstrapPumpDispatch") : -1;
+    if (result4Pump == 0)
+        result4Pump = ExecuteLua(script4AddonDispatchOverride, "HermesBridgeBootstrapAddonDispatchOverride");
     WriteLogFormat("HermesDLL bridge pump dispatch install returned %lu", (DWORD)result4Pump);
     int result4Native = (result4Pump == 0) ? ExecuteLua(script4Native, "HermesBridgeBootstrapPumpNative") : -1;
     WriteLogFormat("HermesDLL bridge pump native install returned %lu", (DWORD)result4Native);
@@ -2554,7 +3352,7 @@ static BOOL InstallLuaApi(void)
     if (result1Core == 0 && result1State == 0 && result1Functions == 0 && result2 == 0 && result2Attributes == 0 && result3Events == 0 && result3Request == 0 && result4Queue == 0 && result4AddonCompat == 0 && result4Pump == 0 && result4Native == 0 && result4Slash == 0)
         return TRUE;
 
-    WriteLog("HermesDLL Lua API install failed; skipping in-process retry");
+    WriteLog("HermesDLL Lua API install failed; bootstrap will retry");
     return FALSE;
 }
 
@@ -2655,6 +3453,49 @@ static BOOL InstallLuaStateHelpers(void)
     return basicOk && bindingCoreOk && bindingApiOk && bindingDispatchOk && refreshOk;
 }
 
+static BOOL InstallLuaLifecycleApi(void)
+{
+    const char* script =
+        "if type(_G)~='table' then _G=getfenv(0); end; if type(_G.HermesDLL)~='table' then _G.HermesDLL={}; end; HermesDLL=_G.HermesDLL; "
+        "function HermesDLL._Trace(reason,detail) HermesDLL.traceSeq=(HermesDLL.traceSeq or 0)+1; local msg='trace lifecycle seq='..tostring(HermesDLL.traceSeq)..' reason='..tostring(reason or '')..' detail='..tostring(detail or '')..' hasRequest='..tostring(type(HermesDLL.Request)=='function')..' hasReceive='..tostring(type(HermesDLL._NativeReceive)=='function')..' frames='..tostring(HermesDLL.addonCompatFrameCacheSize or -1)..' pending='..tostring(HermesDLL.pending and table.getn(HermesDLL.pending) or -1)..' inbox='..tostring(HermesDLL.inbox and table.getn(HermesDLL.inbox) or -1); local b=tonumber(HermesDLL.lifecycleTraceBudget or 0) or 0; if b>0 and type(SendAddonMessage)=='function' then HermesDLL.lifecycleTraceBudget=b-1; local target=(UnitName and UnitName('player')) or nil; pcall(SendAddonMessage,'HERMESDLL','rpc hermes.ping '..msg,'WHISPER',target); end return msg; end; "
+        "function HermesDLL._ResetForWorld(reason) if HermesDLL._Trace then HermesDLL._Trace('reset-before',reason); end HermesDLL.pending={}; HermesDLL.pendingById={}; HermesDLL.recvChunks={}; HermesDLL.bulkTransfers={}; HermesDLL.lastSend=nil; HermesDLL.lastReceive=nil; HermesDLL.autoSnapshotSent=false; HermesDLL.autoSnapshotReady=false; HermesDLL.state={basic={},position={},vitals={},attributes={},playerReady=false}; HermesDLL.worldResets=(HermesDLL.worldResets or 0)+1; HermesDLL.worldResetReason=tostring(reason or ''); HermesDLL.worldResetAt=HermesDLL._Now and HermesDLL._Now() or 0; if HermesDLL._Trace then HermesDLL._Trace('reset-after',reason); end return true; end; "
+        "function HermesDLL._WarmupWorld(reason) if not HermesDLL.Request then if HermesDLL._Trace then HermesDLL._Trace('warmup-no-request',reason); end return false; end local name=(UnitName and UnitName('player')) or nil; if not name or name=='' then if HermesDLL._Trace then HermesDLL._Trace('warmup-no-player',reason); end return false; end local tag=tostring(reason or 'world-entering'); if HermesDLL._Trace then HermesDLL._Trace('warmup-send',tag); end HermesDLL.Request('hermes.hello',tag); HermesDLL.Request('player.getSnapshot',tag..'-snapshot',function(msg,pending) HermesDLL.autoSnapshotReady=true; if HermesDLL._Trace then HermesDLL._Trace('snapshot-callback',tag); end end); HermesDLL.autoSnapshotSent=true; return true; end; "
+        "function HermesDLL._ScheduleWarmup(reason) local f=HermesDLL.worldFrame; if not f or not f.SetScript then if HermesDLL._Trace then HermesDLL._Trace('schedule-no-frame',reason); end return false; end f.pendingWarmup=tostring(reason or 'scheduled'); f.pendingWarmupAt=(GetTime and (GetTime()+" HERMES_LUA_WARMUP_DELAY_SECONDS ")) or 0; if HermesDLL._Trace then HermesDLL._Trace('schedule',f.pendingWarmup); end f:SetScript('OnUpdate',function(self) if GetTime and self.pendingWarmupAt and GetTime()<self.pendingWarmupAt then return; end local pending=self.pendingWarmup; self.pendingWarmup=nil; self.pendingWarmupAt=nil; self:SetScript('OnUpdate',nil); if HermesDLL._EnsureSlash then HermesDLL._EnsureSlash(); end local frameCount=-1; if HermesDLL._RefreshAddonCompatFrames then local frames=HermesDLL._RefreshAddonCompatFrames(true); frameCount=frames and table.getn(frames) or -1; end if HermesDLL._Trace then HermesDLL._Trace('onupdate-warmup','reason='..tostring(pending)..' frames='..tostring(frameCount)); end if HermesDLL._WarmupWorld then HermesDLL._WarmupWorld(pending or 'scheduled'); end end); return true; end; "
+        "if CreateFrame then local f=HermesDLL.worldFrame; if not f then f=CreateFrame('Frame','HermesDLLWorldLifecycleFrame'); HermesDLL.worldFrame=f; if HermesDLL._Trace then HermesDLL._Trace('frame-created',''); end else if HermesDLL._Trace then HermesDLL._Trace('frame-reused',''); end end f:RegisterEvent('PLAYER_ENTERING_WORLD'); f:RegisterEvent('PLAYER_LOGOUT'); f:RegisterEvent('ADDON_LOADED'); f:SetScript('OnEvent',function(self,event,...) local a1=...; if HermesDLL._Trace then HermesDLL._Trace('event',tostring(event)..':'..tostring(a1 or '')); end if event=='PLAYER_LOGOUT' then if HermesDLL._ResetForWorld then HermesDLL._ResetForWorld('player-logout'); end return; end if event=='PLAYER_ENTERING_WORLD' then if HermesDLL._ResetForWorld then HermesDLL._ResetForWorld('player-entering-world'); end if HermesDLL._ScheduleWarmup then HermesDLL._ScheduleWarmup('player-entering-world'); end return; end if event=='ADDON_LOADED' then if HermesDLL._EnsureSlash then HermesDLL._EnsureSlash(); end if HermesDLL._RefreshAddonCompatFrames then HermesDLL._RefreshAddonCompatFrames(true); end if HermesDLL._ScheduleWarmup then HermesDLL._ScheduleWarmup('addon-loaded:'..tostring(a1 or '')); end end end); if HermesDLL._ScheduleWarmup then HermesDLL._ScheduleWarmup('lifecycle-install'); end end; ";
+
+    WriteLog("installing HermesDLL lifecycle API v" HERMES_BRIDGE_VERSION);
+    int result = ExecuteLua(script, "HermesBridgeLifecycleApi");
+    WriteLogFormat("HermesDLL lifecycle API install returned %lu", (DWORD)result);
+    return result == 0;
+}
+
+static void ResetLuaForConnectionGenerationIfNeeded(void)
+{
+    LONG generation = InterlockedCompareExchange(&g_connectionGeneration, 0, 0);
+    LONG lastReset = InterlockedCompareExchange(&g_luaWorldResetGeneration, 0, 0);
+    int result = 0;
+
+    if (generation <= 0 || lastReset == generation)
+        return;
+
+    const char* script =
+        "if HermesDLL and HermesDLL._ResetForWorld then "
+        "HermesDLL._ResetForWorld('native-connection-change'); "
+        "if HermesDLL._WarmupWorld then HermesDLL._WarmupWorld('native-connection-change'); end "
+        "end";
+
+    __try { result = ExecuteLua(script, "HermesBridgeConnectionReset"); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { WriteLog("HermesBridge connection Lua reset raised exception"); result = -1; }
+
+    if (result == 0)
+    {
+        InterlockedExchange(&g_luaWorldResetGeneration, generation);
+        WriteLogFormat("HermesBridge Lua world state reset generation=%lu", (DWORD)generation);
+    }
+    else
+        WriteLogFormat("HermesBridge Lua world state reset failed generation=%lu", (DWORD)generation);
+}
+
 static BOOL InstallLuaDebugPanelApi(void)
 {
     const char* script =
@@ -2676,13 +3517,38 @@ static void RunBootstrapOnMainThread(void)
         BOOL stateCacheOk = FALSE;
         BOOL stateAccessorsOk = FALSE;
         BOOL stateHelpersOk = FALSE;
+        BOOL lifecycleOk = FALSE;
         BOOL debugPanelOk = FALSE;
         BOOL nativeHooksOk = FALSE;
+        BOOL luaApiOk = FALSE;
+        BOOL worldLuaReady = InterlockedCompareExchange(&g_worldLuaReady, 0, 0) == 1;
 
         WriteLog("HermesBridge bootstrap main-thread install started");
-        if (!InstallLuaApi())
+        nativeHooksOk = InstallNativeHooks();
+        if (!nativeHooksOk)
+        {
+            WriteLog("HermesBridge native hook install incomplete before Lua API bootstrap");
+            ScheduleBootstrapRetry("HermesBridge native hooks unavailable; retrying bootstrap");
             return;
-        Sleep(250);
+        }
+
+        if (!HermesBridge_ShouldBootstrapInstallLuaApi(g_realLuaState != NULL) &&
+            !HermesBridge_ShouldUseFrameScriptFallback(g_realLuaState != NULL, worldLuaReady))
+        {
+            if (InterlockedDecrement(&g_bootstrapWaitingLogBudget) >= 0)
+                WriteLog("HermesBridge bootstrap waiting for real addon lua_State; native hooks active");
+            return;
+        }
+
+        luaApiOk = InstallLuaApi();
+        if (HermesBridge_ShouldBootstrapRetryLuaApi(nativeHooksOk, g_realLuaState != NULL, luaApiOk))
+        {
+            ScheduleBootstrapRetry("HermesBridge Lua API unavailable after lua_State capture; retrying bootstrap");
+            return;
+        }
+
+        InterlockedExchange(&g_bootstrapRetryAttempts, 0);
+        Sleep(HERMES_LUA_API_CHAIN_DELAY_MS);
         stateCacheOk = InstallLuaStateApi();
         if (!stateCacheOk)
             WriteLog("HermesDLL state cache API install failed; bridge continues without state cache");
@@ -2699,16 +3565,16 @@ static void RunBootstrapOnMainThread(void)
             }
         }
 
+        lifecycleOk = InstallLuaLifecycleApi();
+        if (!lifecycleOk)
+            WriteLog("HermesDLL lifecycle API install failed; bridge continues without automatic world reset events");
+
         debugPanelOk = InstallLuaDebugPanelApi();
         if (!debugPanelOk)
             WriteLog("HermesDLL debug panel API install failed; bridge continues without debug panel");
 
-        nativeHooksOk = InstallNativeHooks();
-        if (!nativeHooksOk)
-        {
-            WriteLog("HermesBridge native hook install incomplete; timers and self-test skipped");
-            return;
-        }
+        if (lifecycleOk)
+            ResetLuaForConnectionGenerationIfNeeded();
 
         if (stateCacheOk && stateAccessorsOk)
         {
@@ -2723,14 +3589,21 @@ static void RunBootstrapOnMainThread(void)
         }
 #if HERMES_ENABLE_RECV_PUMP_TIMER
         {
-            HANDLE pumpThread = CreateThread(NULL, 0, DelayedRecvPumpTimerThread, NULL, 0, NULL);
-            if (pumpThread)
+            if (InstallRecvPumpTimer())
             {
-                CloseHandle(pumpThread);
-                WriteLogFormat("HermesBridge recv pump timer delayed by %lu ms", (DWORD)HERMES_RECV_PUMP_TIMER_DELAY_MS);
+                WriteLog("HermesBridge recv pump timer installed without delay");
             }
             else
-                WriteLog("HermesBridge recv pump timer delay thread create failed");
+            {
+                HANDLE pumpThread = CreateThread(NULL, 0, DelayedRecvPumpTimerThread, NULL, 0, NULL);
+                if (pumpThread)
+                {
+                    CloseHandle(pumpThread);
+                    WriteLogFormat("HermesBridge recv pump timer retry delayed by %lu ms", (DWORD)HERMES_RECV_PUMP_TIMER_DELAY_MS);
+                }
+                else
+                    WriteLog("HermesBridge recv pump timer delay thread create failed");
+            }
         }
 #else
         WriteLog("HermesBridge recv pump timer disabled; use HermesDLL.Pump");
@@ -2772,8 +3645,10 @@ static VOID CALLBACK HermesBootstrapTimerProc(HWND hwnd, UINT message, UINT_PTR 
     InterlockedExchange(&g_bootstrapInstalling, 0);
 }
 
-static BOOL InstallBootstrapTimer(void)
+static BOOL InstallBootstrapTimer(DWORD delayMs)
 {
+    DWORD actualDelay = delayMs ? delayMs : 1;
+
     if (g_bootstrapTimer)
         return TRUE;
 
@@ -2784,15 +3659,37 @@ static BOOL InstallBootstrapTimer(void)
         return FALSE;
     }
 
-    g_bootstrapTimer = SetTimer(g_bootstrapWindow, HERMES_BOOTSTRAP_TIMER_ID, HERMES_BOOTSTRAP_TIMER_DELAY_MS, HermesBootstrapTimerProc);
+    g_bootstrapTimer = SetTimer(g_bootstrapWindow, HERMES_BOOTSTRAP_TIMER_ID, actualDelay, HermesBootstrapTimerProc);
     if (!g_bootstrapTimer)
     {
         WriteLog("HermesBridge bootstrap timer install failed");
         return FALSE;
     }
 
-    WriteLogFormat2("HermesBridge bootstrap timer installed hwnd=0x%08lX delay=%lu", (DWORD)(uintptr_t)g_bootstrapWindow, (DWORD)HERMES_BOOTSTRAP_TIMER_DELAY_MS);
+    WriteLogFormat2("HermesBridge bootstrap timer installed hwnd=0x%08lX delay=%lu", (DWORD)(uintptr_t)g_bootstrapWindow, actualDelay);
     return TRUE;
+}
+
+static BOOL ScheduleBootstrapRetry(const char* reason)
+{
+    LONG attempt = InterlockedIncrement(&g_bootstrapRetryAttempts);
+    BOOL staleRecovery = reason && strstr(reason, "stale lua_State") != NULL;
+    DWORD delayMs = (DWORD)HermesBridge_SelectBootstrapRetryDelayMs(
+        staleRecovery,
+        HERMES_BOOTSTRAP_TIMER_DELAY_MS,
+        HERMES_BOOTSTRAP_STALE_TIMER_DELAY_MS);
+
+    if (reason)
+        WriteLog(reason);
+
+    if (attempt > HERMES_BOOTSTRAP_MAX_RETRIES)
+    {
+        WriteLogFormat("HermesBridge bootstrap retry abandoned attempts=%lu", (DWORD)attempt);
+        return FALSE;
+    }
+
+    WriteLogFormat2("HermesBridge bootstrap retry scheduled attempt=%lu delay=%lu", (DWORD)attempt, delayMs);
+    return InstallBootstrapTimer(delayMs);
 }
 
 static DWORD WINAPI BootstrapThread(LPVOID parameter)
@@ -2800,7 +3697,7 @@ static DWORD WINAPI BootstrapThread(LPVOID parameter)
     DWORD attempts = 0;
     (void)parameter;
     WriteLog("HermesBridge bootstrap thread started");
-    Sleep(3000);
+    Sleep(500);
 
     __try
     {
@@ -2808,9 +3705,18 @@ static DWORD WINAPI BootstrapThread(LPVOID parameter)
         InitializeSendQueue();
         InitializeRecvQueue();
 
+        if (InterlockedCompareExchange(&g_recvPumpWatchdogStarted, 1, 0) == 0)
+        {
+            HANDLE watchdogThread = CreateThread(NULL, 0, RecvPumpWatchdogThread, NULL, 0, NULL);
+            if (watchdogThread)
+                CloseHandle(watchdogThread);
+            else
+                WriteLog("HermesBridge recv pump watchdog thread create failed");
+        }
+
         for (attempts = 0; attempts < 10; ++attempts)
         {
-            if (InstallBootstrapTimer())
+            if (InstallBootstrapTimer(HERMES_BOOTSTRAP_TIMER_DELAY_MS))
                 return 0;
             Sleep(1000);
         }
@@ -2827,9 +3733,70 @@ static DWORD WINAPI BootstrapThread(LPVOID parameter)
 
 static DWORD WINAPI DelayedRecvPumpTimerThread(LPVOID parameter)
 {
+    DWORD delayMs = (DWORD)HermesBridge_SelectRecvPumpTimerDelayMs(
+        GetRecvQueueCount(),
+        HERMES_RECV_PUMP_TIMER_DELAY_MS,
+        HERMES_RECV_PUMP_TIMER_BACKLOG_DELAY_MS);
+
     (void)parameter;
-    Sleep(HERMES_RECV_PUMP_TIMER_DELAY_MS);
+    Sleep(delayMs);
     InstallRecvPumpTimer();
+    return 0;
+}
+
+/* 独立后台线程：定期巡检 recv pump timer 的宿主窗口。分辨率/全屏切换重建 WoW 主窗口
+   后，绑在旧 HWND 上的 WM_TIMER 不再派发，此处检测到并重建 timer，使回包泵送、Lua API
+   重装、连接重置整条恢复链自愈。不在此线程直接执行 Lua（历史上后台线程执行 Lua 会崩溃），
+   只重建 timer，真正的泵送仍由主线程 timer proc 完成。 */
+static DWORD WINAPI RecvPumpWatchdogThread(LPVOID parameter)
+{
+    (void)parameter;
+    WriteLog("HermesBridge recv pump watchdog thread started");
+
+    for (;;)
+    {
+        HWND current;
+        HWND fresh;
+        BOOL needFix;
+
+        Sleep(HERMES_RECV_PUMP_WATCHDOG_INTERVAL_MS);
+
+        if (InterlockedCompareExchange(&g_recvPumpWatchdogStop, 0, 0) != 0)
+            break;
+
+        /* recv 队列未初始化说明 bootstrap 尚未推进到 recv pump，暂不干预。 */
+        if (!g_recvQueueLockInitialized)
+            continue;
+
+        __try
+        {
+            current = g_recvPumpWindow;
+            fresh = FindWowMainWindow();
+
+            /* 需要修复：timer 从未装成、记录窗口已销毁、或主窗口已换成新的 HWND
+               （分辨率/全屏切换重建窗口的典型表现）。 */
+            needFix = (g_recvPumpTimer == 0) ||
+                      (current == NULL) ||
+                      (!IsWindow(current)) ||
+                      (fresh != NULL && fresh != current);
+
+            if (needFix)
+            {
+                WriteLogFormat4("HermesBridge recv pump watchdog repairing timer=%lu curHwnd=0x%08lX curAlive=%lu freshHwnd=0x%08lX",
+                    (DWORD)g_recvPumpTimer,
+                    (DWORD)(uintptr_t)current,
+                    (DWORD)(current != NULL && IsWindow(current)),
+                    (DWORD)(uintptr_t)fresh);
+                InstallRecvPumpTimer();
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            WriteLog("HermesBridge recv pump watchdog raised exception");
+        }
+    }
+
+    WriteLog("HermesBridge recv pump watchdog thread exiting");
     return 0;
 }
 
@@ -2858,6 +3825,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
     }
     else if (reason == DLL_PROCESS_DETACH)
     {
+        InterlockedExchange(&g_recvPumpWatchdogStop, 1);
         if (g_sendQueueLockInitialized)
         {
             DeleteCriticalSection(&g_sendQueueLock);
@@ -2869,6 +3837,11 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
             g_recvPumpTimer = 0;
         }
         g_recvPumpWindow = NULL;
+        if (g_recvPumpTimerLockInitialized)
+        {
+            DeleteCriticalSection(&g_recvPumpTimerLock);
+            g_recvPumpTimerLockInitialized = FALSE;
+        }
         if (g_recvQueueLockInitialized)
         {
             DeleteCriticalSection(&g_recvQueueLock);

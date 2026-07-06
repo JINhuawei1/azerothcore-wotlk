@@ -1,17 +1,26 @@
 #include "Log.h"
+#include "Config.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
+#include "HermesBridgeAddonApi.h"
+#include "HermesBridgeReadyGate.h"
+#include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
+#include "Bag.h"
+#include "Item.h"
 #include "Player.h"
 #include "Random.h"
 #include "ScriptMgr.h"
+#include "Timer.h"
 #include "Util.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include "../../mod-boundary/src/BoundaryMgr.h"
 #include "../../mod-breakthrough/src/BreakthroughSystem.h"
 #include "../../mod-breakthrough/src/BreakthroughSkillSystem.h"
+#include "../../mod-item-identification-system/src/ItemIdentificationSystem.h"
+#include "../../mod-mall-system/src/MallSystem.h"
 #include "../../mod-requirement-template/src/RequirementSystem.h"
 #include "../../mod-reward-template/src/RewardTemplate.h"
 
@@ -27,6 +36,7 @@
 #include <limits>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -38,6 +48,8 @@ namespace
     constexpr uint8 HERMES_BRIDGE_FRAME_VERSION = 2;
     constexpr uint8 HERMES_BRIDGE_FRAME_HEADER_SIZE = 24;
     constexpr bool HERMES_BRIDGE_TRACE_PACKETS = false;
+    constexpr bool HERMES_BRIDGE_DEBUG_COMM = false;
+    constexpr bool HERMES_BRIDGE_TRACE_SERVER_COMM = false;
     constexpr uint32 HERMES_SERVER_OUTBOUND_QUEUE_CAPACITY = 4096;
     constexpr uint8 HERMES_LANE_COUNT = 6;
 
@@ -114,7 +126,14 @@ namespace
         HERMES_METHOD_BREAKTHROUGH_UPGRADE_SKILL = 369,
         HERMES_METHOD_BREAKTHROUGH_RESET_SKILLS = 370,
         HERMES_METHOD_SYNTHESIS_LIST = 380,
-        HERMES_METHOD_SYNTHESIS_DO = 381
+        HERMES_METHOD_SYNTHESIS_DO = 381,
+        HERMES_METHOD_TOOLTIP_QUERY = 500,
+        HERMES_METHOD_TOOLTIP_QUERY_TEMPLATE = 501,
+        HERMES_METHOD_TOOLTIP_INSPECT_ITEM_GUID = 502,
+        HERMES_METHOD_TOOLTIP_LIST_PENDING = 503,
+        HERMES_METHOD_MALL_GET_CATEGORIES = 520,
+        HERMES_METHOD_MALL_GET_ITEMS = 521,
+        HERMES_METHOD_MALL_PURCHASE = 522
     };
 
     enum HermesSchemaId : uint16
@@ -204,6 +223,13 @@ namespace
     JsonRpcDispatchResult HandleBreakthroughResetSkills(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method);
     JsonRpcDispatchResult HandleSynthesisList(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method);
     JsonRpcDispatchResult HandleSynthesisDo(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method);
+    JsonRpcDispatchResult HandleTooltipQuery(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method);
+    JsonRpcDispatchResult HandleTooltipQueryTemplate(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method);
+    JsonRpcDispatchResult HandleTooltipInspectItemGuid(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method);
+    JsonRpcDispatchResult HandleTooltipListPending(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method);
+    JsonRpcDispatchResult HandleMallGetCategories(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method);
+    JsonRpcDispatchResult HandleMallGetItems(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method);
+    JsonRpcDispatchResult HandleMallPurchase(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method);
 
     struct HermesMethodDescriptor
     {
@@ -261,7 +287,14 @@ namespace
         { "breakthrough.upgradeSkill", HERMES_METHOD_BREAKTHROUGH_UPGRADE_SKILL, HERMES_LANE_RPC, HERMES_CODEC_JSON, "active", SEC_PLAYER, 8, HandleBreakthroughUpgradeSkill },
         { "breakthrough.resetSkills", HERMES_METHOD_BREAKTHROUGH_RESET_SKILLS, HERMES_LANE_RPC, HERMES_CODEC_JSON, "active", SEC_PLAYER, 4, HandleBreakthroughResetSkills },
         { "synthesis.list", HERMES_METHOD_SYNTHESIS_LIST, HERMES_LANE_RPC, HERMES_CODEC_JSON, "active", SEC_PLAYER, 4, HandleSynthesisList },
-        { "synthesis.do", HERMES_METHOD_SYNTHESIS_DO, HERMES_LANE_RPC, HERMES_CODEC_JSON, "active", SEC_PLAYER, 2, HandleSynthesisDo }
+        { "synthesis.do", HERMES_METHOD_SYNTHESIS_DO, HERMES_LANE_RPC, HERMES_CODEC_JSON, "active", SEC_PLAYER, 2, HandleSynthesisDo },
+        { "tooltip.query", HERMES_METHOD_TOOLTIP_QUERY, HERMES_LANE_RPC, HERMES_CODEC_JSON, "active", SEC_PLAYER, 64, HandleTooltipQuery },
+        { "tooltip.queryTemplate", HERMES_METHOD_TOOLTIP_QUERY_TEMPLATE, HERMES_LANE_RPC, HERMES_CODEC_JSON, "active", SEC_PLAYER, 64, HandleTooltipQueryTemplate },
+        { "tooltip.inspectItemGuid", HERMES_METHOD_TOOLTIP_INSPECT_ITEM_GUID, HERMES_LANE_RPC, HERMES_CODEC_JSON, "active", SEC_PLAYER, 64, HandleTooltipInspectItemGuid },
+        { "tooltip.listPending", HERMES_METHOD_TOOLTIP_LIST_PENDING, HERMES_LANE_RPC, HERMES_CODEC_JSON, "active", SEC_PLAYER, 16, HandleTooltipListPending },
+        { "mall.getCategories", HERMES_METHOD_MALL_GET_CATEGORIES, HERMES_LANE_RPC, HERMES_CODEC_JSON, "active", SEC_PLAYER, 16, HandleMallGetCategories },
+        { "mall.getItems", HERMES_METHOD_MALL_GET_ITEMS, HERMES_LANE_RPC, HERMES_CODEC_JSON, "active", SEC_PLAYER, 32, HandleMallGetItems },
+        { "mall.purchase", HERMES_METHOD_MALL_PURCHASE, HERMES_LANE_RPC, HERMES_CODEC_JSON, "active", SEC_PLAYER, 8, HandleMallPurchase }
     };
 
     struct HermesRateLimitBucket
@@ -312,6 +345,274 @@ namespace
     uint32 g_HermesOutboundBatchDepth = 0;
     std::atomic<uint32> g_HermesServerEventSequence{1};
     std::atomic<uint64> g_HermesAddonTakeoverBlockedLegacySmsg{0};
+    std::atomic<int> g_HermesDebugRecvLogBudget{200};
+    std::atomic<int> g_HermesDebugDispatchLogBudget{200};
+    std::atomic<int> g_HermesDebugAddonLogBudget{200};
+    std::atomic<int> g_HermesDebugSendLogBudget{200};
+    std::atomic<int> g_HermesTraceLogBudget{160};
+    std::atomic<int> g_HermesTraceReadyLogBudget{20};
+    std::atomic<int> g_HermesTraceRecvFrameLogBudget{40};
+    std::atomic<int> g_HermesTracePingLogBudget{20};
+    std::atomic<int> g_HermesTraceAddonEventOutLogBudget{60};
+    std::atomic<int> g_HermesTraceAddonDispatchLogBudget{40};
+    std::atomic<int> g_HermesTraceAddonNotReadyLogBudget{20};
+    std::atomic<int> g_HermesTraceLegacyBypassLogBudget{20};
+
+    bool ConsumeHermesDebugBudget(std::atomic<int>& budget)
+    {
+        return HERMES_BRIDGE_DEBUG_COMM && budget.fetch_sub(1, std::memory_order_relaxed) > 0;
+    }
+
+    bool ConsumeHermesTraceBudget()
+    {
+        return HERMES_BRIDGE_TRACE_SERVER_COMM && g_HermesTraceLogBudget.fetch_sub(1, std::memory_order_relaxed) > 0;
+    }
+
+    bool ConsumeHermesTraceBudget(std::atomic<int>& budget)
+    {
+        return HERMES_BRIDGE_TRACE_SERVER_COMM && budget.fetch_sub(1, std::memory_order_relaxed) > 0 && ConsumeHermesTraceBudget();
+    }
+
+    bool IsHermesTracePayload(std::string const& payload)
+    {
+        return payload.rfind("trace ", 0) == 0 || payload.rfind("addon-compat ", 0) == 0;
+    }
+
+    bool ShouldTraceHermesServerMethod(uint16 methodId)
+    {
+        switch (methodId)
+        {
+            case HERMES_METHOD_HELLO:
+            case HERMES_METHOD_ADDON_DISPATCH:
+            case HERMES_METHOD_ADDON_MESSAGE:
+            case HERMES_METHOD_PLAYER_GET_SNAPSHOT:
+            case HERMES_METHOD_PLAYER_GET_ATTRIBUTES:
+            case HERMES_METHOD_ABYSS_GET_EQUIPMENT_PAGE:
+            case HERMES_METHOD_ABYSS_GET_SET_OVERVIEW:
+            case HERMES_METHOD_ABYSS_GET_SET_BONUSES:
+            case HERMES_METHOD_ABYSS_GET_RELICS:
+            case HERMES_METHOD_TOOLTIP_QUERY:
+            case HERMES_METHOD_TOOLTIP_QUERY_TEMPLATE:
+            case HERMES_METHOD_TOOLTIP_INSPECT_ITEM_GUID:
+            case HERMES_METHOD_TOOLTIP_LIST_PENDING:
+            case HERMES_METHOD_MALL_GET_CATEGORIES:
+            case HERMES_METHOD_MALL_GET_ITEMS:
+            case HERMES_METHOD_SYNTHESIS_LIST:
+            case HERMES_METHOD_SYNTHESIS_DO:
+            case HERMES_METHOD_MALL_PURCHASE:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    char const* HexDigits()
+    {
+        return "0123456789ABCDEF";
+    }
+
+    std::string HermesByteHex(unsigned char value)
+    {
+        std::string out;
+        out.reserve(4);
+        out += "0x";
+        out += HexDigits()[(value >> 4) & 0x0F];
+        out += HexDigits()[value & 0x0F];
+        return out;
+    }
+
+    bool IsHermesUtf8Continuation(unsigned char value)
+    {
+        return (value & 0xC0) == 0x80;
+    }
+
+    struct HermesUtf8Check
+    {
+        bool Valid = true;
+        std::size_t InvalidOffset = 0;
+        unsigned char InvalidByte = 0;
+        uint32 Replacements = 0;
+    };
+
+    bool TryHermesUtf8Sequence(std::string const& text, std::size_t offset, std::size_t& length)
+    {
+        unsigned char const lead = static_cast<unsigned char>(text[offset]);
+        std::size_t const remaining = text.size() - offset;
+
+        length = 1;
+        if (lead <= 0x7F)
+            return true;
+
+        if (lead >= 0xC2 && lead <= 0xDF)
+        {
+            length = 2;
+            return remaining >= 2 && IsHermesUtf8Continuation(static_cast<unsigned char>(text[offset + 1]));
+        }
+
+        if (lead == 0xE0)
+        {
+            length = 3;
+            return remaining >= 3 &&
+                static_cast<unsigned char>(text[offset + 1]) >= 0xA0 &&
+                static_cast<unsigned char>(text[offset + 1]) <= 0xBF &&
+                IsHermesUtf8Continuation(static_cast<unsigned char>(text[offset + 2]));
+        }
+
+        if ((lead >= 0xE1 && lead <= 0xEC) || (lead >= 0xEE && lead <= 0xEF))
+        {
+            length = 3;
+            return remaining >= 3 &&
+                IsHermesUtf8Continuation(static_cast<unsigned char>(text[offset + 1])) &&
+                IsHermesUtf8Continuation(static_cast<unsigned char>(text[offset + 2]));
+        }
+
+        if (lead == 0xED)
+        {
+            length = 3;
+            return remaining >= 3 &&
+                static_cast<unsigned char>(text[offset + 1]) >= 0x80 &&
+                static_cast<unsigned char>(text[offset + 1]) <= 0x9F &&
+                IsHermesUtf8Continuation(static_cast<unsigned char>(text[offset + 2]));
+        }
+
+        if (lead == 0xF0)
+        {
+            length = 4;
+            return remaining >= 4 &&
+                static_cast<unsigned char>(text[offset + 1]) >= 0x90 &&
+                static_cast<unsigned char>(text[offset + 1]) <= 0xBF &&
+                IsHermesUtf8Continuation(static_cast<unsigned char>(text[offset + 2])) &&
+                IsHermesUtf8Continuation(static_cast<unsigned char>(text[offset + 3]));
+        }
+
+        if (lead >= 0xF1 && lead <= 0xF3)
+        {
+            length = 4;
+            return remaining >= 4 &&
+                IsHermesUtf8Continuation(static_cast<unsigned char>(text[offset + 1])) &&
+                IsHermesUtf8Continuation(static_cast<unsigned char>(text[offset + 2])) &&
+                IsHermesUtf8Continuation(static_cast<unsigned char>(text[offset + 3]));
+        }
+
+        if (lead == 0xF4)
+        {
+            length = 4;
+            return remaining >= 4 &&
+                static_cast<unsigned char>(text[offset + 1]) >= 0x80 &&
+                static_cast<unsigned char>(text[offset + 1]) <= 0x8F &&
+                IsHermesUtf8Continuation(static_cast<unsigned char>(text[offset + 2])) &&
+                IsHermesUtf8Continuation(static_cast<unsigned char>(text[offset + 3]));
+        }
+
+        return false;
+    }
+
+    HermesUtf8Check CheckHermesUtf8(std::string const& text)
+    {
+        HermesUtf8Check result;
+
+        for (std::size_t offset = 0; offset < text.size();)
+        {
+            std::size_t length = 1;
+            if (TryHermesUtf8Sequence(text, offset, length))
+            {
+                offset += length;
+                continue;
+            }
+
+            if (result.Valid)
+            {
+                result.Valid = false;
+                result.InvalidOffset = offset;
+                result.InvalidByte = static_cast<unsigned char>(text[offset]);
+            }
+
+            ++result.Replacements;
+            ++offset;
+        }
+
+        return result;
+    }
+
+    std::string HermesUtf8OffsetText(HermesUtf8Check const& check)
+    {
+        return check.Valid ? "-" : std::to_string(check.InvalidOffset);
+    }
+
+    std::string HermesUtf8ByteText(HermesUtf8Check const& check)
+    {
+        return check.Valid ? "-" : HermesByteHex(check.InvalidByte);
+    }
+
+    std::string HermesLogPreview(std::string const& text, std::size_t maxLen = 96)
+    {
+        std::string preview;
+        preview.reserve(std::min(text.size() * 4, maxLen + 3));
+
+        for (char ch : text)
+        {
+            if (preview.size() >= maxLen)
+            {
+                preview += "...";
+                break;
+            }
+
+            unsigned char c = static_cast<unsigned char>(ch);
+            if (c >= 32 && c < 127)
+            {
+                preview += ch;
+                continue;
+            }
+
+            if (preview.size() + 4 > maxLen)
+            {
+                preview += "...";
+                break;
+            }
+
+            preview += "\\x";
+            preview += HexDigits()[(c >> 4) & 0x0F];
+            preview += HexDigits()[c & 0x0F];
+        }
+
+        return preview;
+    }
+
+    struct HermesOutboundDebugBucket
+    {
+        uint8 Lane = 0;
+        uint8 MessageType = 0;
+        uint8 Codec = 0;
+        uint16 SchemaId = 0;
+        uint16 MethodId = 0;
+        uint64 Sent = 0;
+        uint64 SentBytes = 0;
+        uint64 Suppressed = 0;
+        uint64 SuppressedBytes = 0;
+    };
+
+    struct HermesOutboundDebugStats
+    {
+        uint32 WindowStartMs = 0;
+        uint64 Sent = 0;
+        uint64 SentBytes = 0;
+        uint64 Suppressed = 0;
+        uint64 SuppressedBytes = 0;
+        std::unordered_map<uint64, HermesOutboundDebugBucket> Buckets;
+    };
+
+    struct HermesOutboundRateBucket
+    {
+        uint32 WindowStartMs = 0;
+        uint32 LastSentMs = 0;
+        uint32 Count = 0;
+        uint64 Bytes = 0;
+    };
+
+    HermesOutboundDebugStats g_HermesOutboundDebugStats;
+    std::unordered_map<uint32, HermesOutboundRateBucket> g_HermesOutboundRateBuckets;
+    std::unordered_set<uint32> g_HermesAddonReadyPlayers;
+    std::unordered_map<uint32, std::unordered_set<std::string>> g_HermesAddonReadyPrefixes;
 
     struct HermesAddonChunkBuffer
     {
@@ -386,8 +687,25 @@ namespace
         std::string escaped;
         escaped.reserve(value.size() + 8);
 
-        for (char ch : value)
+        for (std::size_t offset = 0; offset < value.size();)
         {
+            unsigned char const c = static_cast<unsigned char>(value[offset]);
+            if (c >= 0x80)
+            {
+                std::size_t length = 1;
+                if (TryHermesUtf8Sequence(value, offset, length))
+                {
+                    escaped.append(value, offset, length);
+                    offset += length;
+                    continue;
+                }
+
+                escaped += '?';
+                ++offset;
+                continue;
+            }
+
+            char const ch = value[offset++];
             switch (ch)
             {
                 case '"':
@@ -488,10 +806,155 @@ namespace
         return "Interface\\Icons\\INV_Misc_QuestionMark";
     }
 
+    void EnsureHermesMallDataLoaded()
+    {
+        if (!sMallSystem || !sMallSystem->IsMallSystemEnable())
+            return;
+
+        if (sMallSystem->GetMallItems().empty())
+            sMallSystem->LoadMallSystemData();
+    }
+
+    std::string LimitHermesMallText(std::string value, size_t maxLength)
+    {
+        value = SanitizeAddonPayloadText(value);
+        if (value.length() <= maxLength)
+            return value;
+
+        if (maxLength <= 3)
+            return value.substr(0, maxLength);
+
+        size_t end = maxLength - 3;
+        while (end > 0 && (static_cast<unsigned char>(value[end]) & 0xC0) == 0x80)
+            --end;
+
+        return value.substr(0, end) + "...";
+    }
+
+    std::string GetHermesMallItemName(MallSystemInfo const& info)
+    {
+        if (info.displayItemEntry > 0)
+        {
+            if (ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(info.displayItemEntry))
+                return itemTemplate->Name1;
+        }
+
+        if (!info.comment.empty())
+            return info.comment;
+
+        return "商品 #" + std::to_string(info.id);
+    }
+
+    std::string GetHermesMallIconPath(MallSystemInfo const& info)
+    {
+        if (info.displayItemEntry > 0)
+            return GetHermesItemIconPathForAddon(info.displayItemEntry);
+
+        if (!info.categoryIcon.empty())
+            return info.categoryIcon;
+
+        return "Interface\\Icons\\INV_Misc_QuestionMark";
+    }
+
+    std::string BuildHermesMallCategoriesPayload()
+    {
+        EnsureHermesMallDataLoaded();
+
+        std::vector<MallSystemInfo const*> categories;
+        for (auto const& mallItem : sMallSystem->GetMallItems())
+        {
+            MallSystemInfo const& info = mallItem.second;
+            if (info.categoryName.empty())
+                continue;
+
+            bool exists = false;
+            for (MallSystemInfo const* category : categories)
+            {
+                if (category->categoryIndex == info.categoryIndex || category->categoryName == info.categoryName)
+                {
+                    exists = true;
+                    break;
+                }
+            }
+
+            if (!exists)
+                categories.push_back(&info);
+        }
+
+        std::sort(categories.begin(), categories.end(), [](MallSystemInfo const* left, MallSystemInfo const* right)
+        {
+            if (left->categoryIndex != right->categoryIndex)
+                return left->categoryIndex < right->categoryIndex;
+            return left->categoryName < right->categoryName;
+        });
+
+        std::ostringstream payload;
+        payload << "CATEGORIES|" << categories.size();
+        for (MallSystemInfo const* category : categories)
+        {
+            payload << '|' << category->categoryIndex
+                    << '^' << LimitHermesMallText(category->categoryName, 48)
+                    << '^' << LimitHermesMallText(category->categoryIcon, 96)
+                    << '^' << category->categoryIndex;
+        }
+
+        return payload.str();
+    }
+
+    std::string BuildHermesMallItemsPayload(uint32 categoryId)
+    {
+        EnsureHermesMallDataLoaded();
+
+        std::vector<MallSystemInfo const*> items;
+        for (auto const& mallItem : sMallSystem->GetMallItems())
+        {
+            MallSystemInfo const& info = mallItem.second;
+            if (categoryId != 0 && info.categoryIndex != categoryId)
+                continue;
+
+            items.push_back(&info);
+        }
+
+        std::sort(items.begin(), items.end(), [](MallSystemInfo const* left, MallSystemInfo const* right)
+        {
+            if (left->categoryIndex != right->categoryIndex)
+                return left->categoryIndex < right->categoryIndex;
+            if (left->pageIndex != right->pageIndex)
+                return left->pageIndex < right->pageIndex;
+            return left->id < right->id;
+        });
+
+        std::ostringstream payload;
+        payload << "ITEMS|" << categoryId << '|' << items.size();
+        for (MallSystemInfo const* info : items)
+        {
+            payload << '|' << info->id
+                    << '^' << LimitHermesMallText(GetHermesMallItemName(*info), 64)
+                    << '^' << LimitHermesMallText(GetHermesMallIconPath(*info), 96)
+                    << '^' << info->displayItemEntry
+                    << '^' << info->tryOnItemEntry
+                    << '^' << (info->isNew ? 1 : 0)
+                    << '^' << info->discount
+                    << '^' << LimitHermesMallText(info->categoryName, 48)
+                    << '^' << info->categoryIndex
+                    << '^' << info->pageIndex;
+        }
+
+        return payload.str();
+    }
+
+    std::string BuildHermesMallStatusPayload(bool success, std::string const& message)
+    {
+        std::ostringstream payload;
+        payload << (success ? "OK" : "FAIL") << '|' << LimitHermesMallText(message, 120);
+        return payload.str();
+    }
+
     struct HermesSynthesisEntry
     {
         uint32 ItemId = 0;
         uint32 UpgradeLevel = 0;
+        uint8 ClassType = 0;
         uint32 RequirementId = 0;
         uint32 RewardId = 0;
         float SuccessChance = 100.0f;
@@ -650,6 +1113,47 @@ namespace
         return summary.str();
     }
 
+    std::string BuildHermesSynthesisRequirementItems(Player& player, uint32 requirementId)
+    {
+        if (requirementId == 0)
+            return "";
+
+        QueryResult result = WorldDatabase.Query(
+            "SELECT `消耗物品` FROM `_模板_需求` WHERE `id` = {}", requirementId);
+        if (!result)
+            return "";
+
+        std::string items = TrimHermesSynthesisText((*result)[0].Get<std::string>());
+        if (items.empty())
+            return "";
+
+        std::ostringstream details;
+        bool first = true;
+        std::istringstream itemPairs(items);
+        std::string itemPair;
+        while (std::getline(itemPairs, itemPair, ','))
+        {
+            std::istringstream itemStream(itemPair);
+            uint32 itemId = 0;
+            uint32 count = 0;
+            itemStream >> itemId >> count;
+            if (!itemId)
+                continue;
+
+            if (!first)
+                details << ';';
+            first = false;
+
+            details << itemId << ':'
+                    << (count ? count : 1) << ':'
+                    << player.GetItemCount(itemId, true) << ':'
+                    << LimitHermesSynthesisText(GetHermesSynthesisItemName(itemId), 52) << ':'
+                    << GetHermesItemIconPathForAddon(itemId);
+        }
+
+        return details.str();
+    }
+
     std::string GetHermesSynthesisRewardItemList(uint32 rewardId)
     {
         if (rewardId == 0)
@@ -675,7 +1179,7 @@ namespace
     {
         std::vector<HermesSynthesisEntry> entries;
         QueryResult result = WorldDatabase.Query(
-            "SELECT `物品id`, `升级等级`, `需求id`, `升级成功奖励id`, `成功几率`, "
+            "SELECT `物品id`, `升级等级`, `职业类型`, `需求id`, `升级成功奖励id`, `成功几率`, "
             "`合成几率物品id`, `合成几率提升`, `失败是否摧毁` "
             "FROM `_物品合成` ORDER BY `物品id`, `升级等级`");
 
@@ -688,12 +1192,13 @@ namespace
             HermesSynthesisEntry entry;
             entry.ItemId = fields[0].Get<uint32>();
             entry.UpgradeLevel = fields[1].Get<uint32>();
-            entry.RequirementId = fields[2].Get<uint32>();
-            entry.RewardId = fields[3].Get<uint32>();
-            entry.SuccessChance = std::clamp(fields[4].Get<float>(), 0.0f, 100.0f);
-            entry.BoosterItemId = fields[5].Get<uint32>();
-            entry.BoosterChance = std::clamp(fields[6].Get<float>(), 0.0f, 100.0f);
-            entry.DestroyOnFail = fields[7].Get<uint8>() != 0;
+            entry.ClassType = fields[2].Get<uint8>();
+            entry.RequirementId = fields[3].Get<uint32>();
+            entry.RewardId = fields[4].Get<uint32>();
+            entry.SuccessChance = std::clamp(fields[5].Get<float>(), 0.0f, 100.0f);
+            entry.BoosterItemId = fields[6].Get<uint32>();
+            entry.BoosterChance = std::clamp(fields[7].Get<float>(), 0.0f, 100.0f);
+            entry.DestroyOnFail = fields[8].Get<uint8>() != 0;
 
             if (!sObjectMgr->GetItemTemplate(entry.ItemId))
                 continue;
@@ -737,6 +1242,7 @@ namespace
         auto [nextItemId, nextItemCount] = ParseHermesSynthesisFirstRewardItem(rewardItems);
         std::string nextItemName = nextItemId ? GetHermesSynthesisItemName(nextItemId) : rewardText;
         std::string requirementSummary = BuildHermesSynthesisRequirementSummary(entry.RequirementId);
+        std::string requirementItems = BuildHermesSynthesisRequirementItems(player, entry.RequirementId);
 
         std::ostringstream record;
         record << entry.ItemId << '^'
@@ -757,17 +1263,30 @@ namespace
                << sourceCount << '^'
                << boosterCount << '^'
                << LimitHermesSynthesisText(requirementSummary, 80) << '^'
-               << LimitHermesSynthesisText(rewardText, 70);
+               << LimitHermesSynthesisText(rewardText, 70) << '^'
+               << static_cast<uint32>(entry.ClassType) << '^'
+               << requirementItems;
         return record.str();
     }
 
-    std::string BuildHermesSynthesisListPayload(Player& player, uint32 offset, uint32 limit)
+    std::string BuildHermesSynthesisListPayload(Player& player, uint32 offset, uint32 limit, uint32 classType)
     {
         std::vector<HermesSynthesisEntry> entries = LoadHermesSynthesisEntries();
-        uint32 total = static_cast<uint32>(entries.size());
+        std::vector<HermesSynthesisEntry const*> filteredEntries;
+        filteredEntries.reserve(entries.size());
+
+        for (HermesSynthesisEntry const& entry : entries)
+        {
+            if (classType <= 10 && entry.ClassType != classType)
+                continue;
+
+            filteredEntries.push_back(&entry);
+        }
+
+        uint32 total = static_cast<uint32>(filteredEntries.size());
         if (limit == 0)
-            limit = 40;
-        limit = std::min<uint32>(limit, 60);
+            limit = 8;
+        limit = std::min<uint32>(limit, 12);
         offset = std::min<uint32>(offset, total);
 
         std::ostringstream payload;
@@ -780,7 +1299,7 @@ namespace
             if (!first)
                 payload << '~';
             first = false;
-            payload << BuildHermesSynthesisRecord(player, entries[index]);
+            payload << BuildHermesSynthesisRecord(player, *filteredEntries[index]);
         }
 
         return payload.str();
@@ -847,15 +1366,11 @@ namespace
                 return BuildHermesSynthesisResultPayload(false, entry.ItemId, entry.UpgradeLevel, "消耗合成需求失败");
         }
 
-        if (useBooster && entry.BoosterItemId != 0)
-            player.DestroyItemCount(entry.BoosterItemId, 1, true);
-
         float finalChance = std::clamp(entry.SuccessChance + (useBooster ? entry.BoosterChance : 0.0f), 0.0f, 100.0f);
         bool success = roll_chance_f(finalChance);
 
         if (success)
         {
-            player.DestroyItemCount(entry.ItemId, 1, true);
             bool rewarded = sRewardTemplate->GiveReward(&player, entry.RewardId, false, true);
             if (rewarded)
                 return BuildHermesSynthesisResultPayload(true, entry.ItemId, entry.UpgradeLevel, "合成成功");
@@ -863,10 +1378,7 @@ namespace
             return BuildHermesSynthesisResultPayload(false, entry.ItemId, entry.UpgradeLevel, "合成成功但发放奖励失败，请检查奖励模板或背包空间");
         }
 
-        if (entry.DestroyOnFail)
-            player.DestroyItemCount(entry.ItemId, 1, true);
-
-        return BuildHermesSynthesisResultPayload(false, entry.ItemId, entry.UpgradeLevel, entry.DestroyOnFail ? "合成失败，物品已摧毁" : "合成失败，物品未摧毁");
+        return BuildHermesSynthesisResultPayload(false, entry.ItemId, entry.UpgradeLevel, "合成失败");
     }
 
     char const* const HERMES_ABYSS_LOAD_CHAPTERS_SQL =
@@ -2316,11 +2828,342 @@ namespace
         return result;
     }
 
+    int32 ParseHermesInt(std::string const& text, int32 defaultValue = 0)
+    {
+        if (text.empty())
+            return defaultValue;
+
+        char* end = nullptr;
+        long value = std::strtol(text.c_str(), &end, 10);
+        if (end == text.c_str())
+            return defaultValue;
+
+        return static_cast<int32>(value);
+    }
+
+    char HermesTooltipDbValueToHuanJingMode(int32 value)
+    {
+        if (value == 1)
+            return '+';
+        if (value == -1)
+            return '-';
+        return 'x';
+    }
+
+    Item* ResolveHermesTooltipItemByClientPosition(Player* player, int32 bag, uint8 slot, uint32 itemID)
+    {
+        if (!player || itemID == 0)
+            return nullptr;
+
+        Item* item = nullptr;
+
+        if (bag == 255)
+        {
+            uint8 equipSlot = (slot > 0) ? static_cast<uint8>(slot - 1) : slot;
+            item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, equipSlot);
+        }
+        else if (bag == 0)
+        {
+            uint8 bagSlot = (slot > 0) ? static_cast<uint8>(slot - 1) : slot;
+            item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_START + bagSlot);
+        }
+        else if (bag >= 1 && bag <= 4)
+        {
+            uint8 serverBagSlot = INVENTORY_SLOT_BAG_START + static_cast<uint8>(bag - 1);
+            if (Bag* bagPtr = player->GetBagByPos(serverBagSlot))
+                item = bagPtr->GetItemByPos(slot > 0 ? slot - 1 : slot);
+        }
+        else if (bag == -1)
+        {
+            uint8 bankSlot = (slot > 0) ? static_cast<uint8>(slot - 1) : slot;
+            item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, BANK_SLOT_ITEM_START + bankSlot);
+        }
+        else if (bag >= 5 && bag <= 11)
+        {
+            uint8 serverBagSlot = BANK_SLOT_BAG_START + static_cast<uint8>(bag - 5);
+            if (Bag* bagPtr = player->GetBagByPos(serverBagSlot))
+                item = bagPtr->GetItemByPos(slot > 0 ? slot - 1 : slot);
+        }
+
+        if (!item || item->GetEntry() != itemID)
+            return nullptr;
+
+        return item;
+    }
+
+    std::string BuildHermesTooltipAllModulePayload(uint32 itemID, uint32 guid, int32 bag, uint8 slot)
+    {
+        if (!sItemIdentificationSystem || !sItemIdentificationSystem->_enabled || itemID == 0 || guid == 0)
+            return "";
+
+        ItemIdentificationSystem::AllModuleData data = sItemIdentificationSystem->QueryAllModuleData(itemID, guid);
+
+        std::ostringstream response;
+        response << "ALL_MODULE_DATA:" << bag << ":" << static_cast<uint32>(slot) << ":" << itemID << ":" << guid << ":"
+                 << data.baseAttributes << ":"
+                 << data.additionalAttributes << ":"
+                 << data.identificationDisplayData << ":"
+                 << data.growthData << ":"
+                 << data.enhancementData << ":"
+                 << data.skillsData << ":"
+                 << data.magicHitData << ":"
+                 << data.runeData << ":"
+                 << data.setData << ":"
+                 << data.huanjingData;
+
+        if (!data.pendingIdentifyData.empty())
+            response << ":" << data.pendingIdentifyData;
+
+        response << ":" << data.templateStatsData;
+        return response.str();
+    }
+
+    std::string BuildHermesTooltipTemplatePayload(uint32 itemID)
+    {
+        if (!sItemIdentificationSystem || !sItemIdentificationSystem->_enabled || itemID == 0)
+            return "";
+
+        ItemIdentificationSystem::AllModuleData data = sItemIdentificationSystem->QueryAllModuleData(itemID, 0);
+        if (data.templateStatsData.empty())
+            return "";
+
+        std::ostringstream response;
+        response << "ALL_MODULE_DATA:" << 255 << ":" << 0 << ":" << itemID << ":" << 0 << ":"
+                 << ":"  // baseAttributes
+                 << ":"  // additionalAttributes
+                 << ":"  // identificationDisplayData
+                 << ":"  // growthData
+                 << ":"  // enhancementData
+                 << ":"  // skillsData
+                 << ":"  // magicHitData
+                 << ":"  // runeData
+                 << ":"  // setData
+                 << ":"  // huanjingData
+                 << data.templateStatsData;
+        return response.str();
+    }
+
+    std::unordered_map<uint32, Item*> BuildHermesTooltipPlayerItemGuidIndex(Player* player)
+    {
+        std::unordered_map<uint32, Item*> itemsByGuid;
+        if (!player)
+            return itemsByGuid;
+
+        itemsByGuid.reserve(128);
+
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+            if (Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                itemsByGuid[item->GetGUID().GetCounter()] = item;
+
+        for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+            if (Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                itemsByGuid[item->GetGUID().GetCounter()] = item;
+
+        for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+        {
+            Bag* bag = player->GetBagByPos(bagSlot);
+            if (!bag)
+                continue;
+
+            for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
+                if (Item* item = bag->GetItemByPos(slot))
+                    itemsByGuid[item->GetGUID().GetCounter()] = item;
+        }
+
+        return itemsByGuid;
+    }
+
+    std::string BuildHermesTooltipPendingListPayload(Player* player)
+    {
+        if (!player)
+            return "";
+
+        QueryResult result = CharacterDatabase.Query(
+            "SELECT `物品GUID`, `物品ID`, `幻境倍率`, `幻境倍率模式`, `鉴定组ID` FROM `待鉴定物品标记` "
+            "WHERE `玩家GUID` = {} ORDER BY `物品GUID` DESC LIMIT 100",
+            player->GetGUID().GetCounter());
+
+        if (!result)
+            return "PENDING_LIST:0:";
+
+        std::vector<std::string> itemEntries;
+        std::unordered_map<uint32, Item*> itemsByGuid = BuildHermesTooltipPlayerItemGuidIndex(player);
+
+        do
+        {
+            Field* fields = result->Fetch();
+            uint32 guid = fields[0].Get<uint32>();
+            uint32 itemId = fields[1].Get<uint32>();
+            uint32 multiplier = fields[2].Get<uint32>();
+            char multiplierMode = HermesTooltipDbValueToHuanJingMode(fields[3].Get<int32>());
+            uint32 groupId = fields[4].Get<uint32>();
+
+            auto itemItr = itemsByGuid.find(guid);
+            Item* item = itemItr != itemsByGuid.end() ? itemItr->second : nullptr;
+            if (!item)
+                continue;
+
+            uint8 serverBag = item->GetBagSlot();
+            uint8 slot = item->GetSlot();
+            int32 clientBag = 255;
+            int32 clientSlot = 0;
+
+            if (serverBag == INVENTORY_SLOT_BAG_0)
+            {
+                if (slot >= EQUIPMENT_SLOT_START && slot < EQUIPMENT_SLOT_END)
+                {
+                    clientBag = 255;
+                    clientSlot = static_cast<int32>(slot) + 1;
+                }
+                else if (slot >= INVENTORY_SLOT_ITEM_START && slot < INVENTORY_SLOT_ITEM_END)
+                {
+                    clientBag = 0;
+                    clientSlot = static_cast<int32>(slot - INVENTORY_SLOT_ITEM_START) + 1;
+                }
+                else
+                    continue;
+            }
+            else if (serverBag >= INVENTORY_SLOT_BAG_START && serverBag < INVENTORY_SLOT_BAG_END)
+            {
+                clientBag = serverBag - INVENTORY_SLOT_BAG_START + 1;
+                clientSlot = static_cast<int32>(slot) + 1;
+            }
+            else
+                continue;
+
+            std::ostringstream entryStream;
+            entryStream << clientBag << "," << clientSlot << "," << itemId << "," << multiplierMode << "," << multiplier << "," << groupId;
+            itemEntries.push_back(entryStream.str());
+        } while (result->NextRow());
+
+        if (itemEntries.empty())
+            return "PENDING_LIST:0:";
+
+        constexpr size_t MaxDataSize = 180;
+        std::vector<std::string> packets;
+        std::ostringstream currentPacketData;
+        bool firstInPacket = true;
+
+        for (std::string const& entry : itemEntries)
+        {
+            size_t newSize = currentPacketData.str().length();
+            if (!firstInPacket)
+                newSize += 1;
+            newSize += entry.length();
+
+            if (newSize > MaxDataSize && !firstInPacket)
+            {
+                packets.push_back(currentPacketData.str());
+                currentPacketData.str("");
+                currentPacketData.clear();
+                firstInPacket = true;
+            }
+
+            if (!firstInPacket)
+                currentPacketData << ";";
+            currentPacketData << entry;
+            firstInPacket = false;
+        }
+
+        if (!currentPacketData.str().empty())
+            packets.push_back(currentPacketData.str());
+
+        std::ostringstream payload;
+        uint32 totalCount = static_cast<uint32>(itemEntries.size());
+        uint32 totalPackets = static_cast<uint32>(packets.size());
+        for (size_t i = 0; i < packets.size(); ++i)
+        {
+            if (i > 0)
+                payload << "\n";
+            payload << "PENDING_LIST:" << totalCount << ":" << (i + 1) << ":" << totalPackets << ":" << packets[i];
+        }
+
+        return payload.str();
+    }
+
+    bool CanHermesTooltipInspect(Player* requester, Player* target)
+    {
+        if (!requester || !target)
+            return false;
+
+        if (requester->GetGUID() == target->GetGUID())
+            return true;
+
+        if (requester->GetSession() && requester->GetSession()->GetSecurity() >= SEC_GAMEMASTER)
+            return true;
+
+        return requester->IsWithinDistInMap(target, 30.0f);
+    }
+
+    Player* ResolveHermesTooltipInspectTarget(Player* requester, std::string const& targetPlayerName, uint8 clientSlot, uint32 itemID)
+    {
+        if (!requester)
+            return nullptr;
+
+        auto slotMatches = [clientSlot, itemID](Player* candidate) -> bool
+        {
+            if (!candidate || itemID == 0)
+                return false;
+
+            uint8 serverSlot = clientSlot > 0 ? static_cast<uint8>(clientSlot - 1) : clientSlot;
+            if (Item* exact = candidate->GetItemByPos(INVENTORY_SLOT_BAG_0, serverSlot))
+                if (exact->GetEntry() == itemID)
+                    return true;
+
+            for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+                if (Item* item = candidate->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                    if (item->GetEntry() == itemID)
+                        return true;
+
+            return false;
+        };
+
+        if (Player* selected = requester->GetSelectedPlayer())
+        {
+            if (selected != requester && slotMatches(selected))
+                return selected;
+        }
+
+        std::string lookupName = targetPlayerName;
+        size_t realmSep = lookupName.find('-');
+        if (realmSep != std::string::npos)
+            lookupName.resize(realmSep);
+
+        if (!lookupName.empty())
+            if (Player* byName = ObjectAccessor::FindPlayerByName(lookupName))
+                return byName;
+
+        if (Player* selected = requester->GetSelectedPlayer())
+            if (selected != requester)
+                return selected;
+
+        return nullptr;
+    }
+
+    uint32 ResolveHermesTooltipInspectItemGuid(Player* target, uint8 clientSlot, uint32 itemID)
+    {
+        if (!target || itemID == 0)
+            return 0;
+
+        uint8 serverSlot = clientSlot > 0 ? static_cast<uint8>(clientSlot - 1) : clientSlot;
+        if (Item* exact = target->GetItemByPos(INVENTORY_SLOT_BAG_0, serverSlot))
+        {
+            if (exact->GetEntry() == itemID)
+                return exact->GetGUID().GetCounter();
+        }
+
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+            if (Item* item = target->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                if (item->GetEntry() == itemID)
+                    return item->GetGUID().GetCounter();
+
+        return 0;
+    }
+
     bool IsHermesAddonTakeoverPrefix(std::string const& prefix)
     {
         static constexpr char const* prefixes[] =
         {
-            "PLUGMGR",
             "PATTRPANEL",
             "ASCENSION",
             "ABYSS_UI",
@@ -2334,7 +3177,9 @@ namespace
             "UITQ",
             "ITEMENHANCE",
             "RUNESYSTEM",
+            "RuneManagerUI",
             "VIPSYS",
+            "MALLSYSTEM",
             "REALMONEY",
             "PROMOREWARD",
             "QuestRewardAttrUI",
@@ -2348,7 +3193,6 @@ namespace
             "ZDYUI_TJ",
             "MAGICHIT",
             "TALENTSOUL",
-            "MALL_SYS",
             "POPUPTPL",
             "DarkHardcore",
             "HBUI",
@@ -2389,6 +3233,62 @@ namespace
         prefix = fullMessage.substr(0, separator);
         payload = fullMessage.substr(separator + 1);
         return IsHermesAddonTakeoverPrefix(prefix);
+    }
+
+    void MarkHermesAddonReady(WorldSession& session, char const* reason)
+    {
+        if (Player* player = session.GetPlayer())
+        {
+            auto const result = g_HermesAddonReadyPlayers.insert(player->GetGUID().GetCounter());
+            if (result.second && ConsumeHermesTraceBudget(g_HermesTraceReadyLogBudget))
+                LOG_INFO("server.loading", "HermesBridge TRACE server ready-mark account={} player={} guid={} reason={}", session.GetAccountId(), player->GetName(), player->GetGUID().GetCounter(), reason ? reason : "");
+        }
+    }
+
+    void MarkHermesAddonPrefixReady(WorldSession& session, std::string const& prefix, char const* reason)
+    {
+        if (prefix.empty() || !IsHermesAddonTakeoverPrefix(prefix))
+            return;
+
+        if (Player* player = session.GetPlayer())
+        {
+            uint32 const guid = player->GetGUID().GetCounter();
+            auto& prefixes = g_HermesAddonReadyPrefixes[guid];
+            auto const result = prefixes.insert(prefix);
+            if (result.second && ConsumeHermesTraceBudget(g_HermesTraceReadyLogBudget))
+                LOG_INFO("server.loading", "HermesBridge TRACE server prefix-ready-mark account={} player={} guid={} prefix={} reason={}", session.GetAccountId(), player->GetName(), guid, prefix, reason ? reason : "");
+        }
+    }
+
+    void ClearHermesAddonReady(Player* player, char const* reason)
+    {
+        if (!player)
+            return;
+
+        uint32 const guid = player->GetGUID().GetCounter();
+        auto const erasedPlayer = g_HermesAddonReadyPlayers.erase(guid);
+        auto const erasedPrefixes = g_HermesAddonReadyPrefixes.erase(guid);
+        if ((erasedPlayer || erasedPrefixes) && ConsumeHermesTraceBudget(g_HermesTraceReadyLogBudget))
+            LOG_INFO("server.loading", "HermesBridge TRACE server ready-clear player={} guid={} prefixes={} reason={}", player->GetName(), guid, erasedPrefixes ? 1 : 0, reason ? reason : "");
+    }
+
+    void ClearHermesAddonReady(WorldSession& session, char const* reason)
+    {
+        ClearHermesAddonReady(session.GetPlayer(), reason);
+    }
+
+    bool IsHermesAddonReady(Player const* player)
+    {
+        return player && g_HermesAddonReadyPlayers.find(player->GetGUID().GetCounter()) != g_HermesAddonReadyPlayers.end();
+    }
+
+    bool IsHermesAddonPrefixReady(Player const* player, std::string const& prefix)
+    {
+        if (!player || prefix.empty())
+            return false;
+
+        auto const playerItr = g_HermesAddonReadyPrefixes.find(player->GetGUID().GetCounter());
+        return playerItr != g_HermesAddonReadyPrefixes.end() && playerItr->second.find(prefix) != playerItr->second.end();
     }
 
     bool TryParseAddonChunkPayload(std::string const& payload, uint32& index, uint32& total, std::string& chunk)
@@ -2659,6 +3559,178 @@ namespace
             && existing.MethodId == candidate.MethodId;
     }
 
+    uint64 HermesOutboundDebugKey(uint8 lane, uint8 messageType, uint8 codec, uint16 schemaId, uint16 methodId)
+    {
+        return (static_cast<uint64>(lane) << 56)
+            | (static_cast<uint64>(messageType) << 48)
+            | (static_cast<uint64>(codec) << 40)
+            | (static_cast<uint64>(schemaId) << 16)
+            | static_cast<uint64>(methodId);
+    }
+
+    bool IsHermesAddonMessageFrame(uint8 messageType, uint16 methodId)
+    {
+        return messageType == HERMES_MESSAGE_EVENT && methodId == HERMES_METHOD_ADDON_MESSAGE;
+    }
+
+    bool IsHermesWhiteDamageEventFrame(uint8 messageType, uint16 methodId)
+    {
+        return messageType == HERMES_MESSAGE_EVENT && methodId == HERMES_METHOD_PLAYER_EMIT_DAMAGE_EVENT;
+    }
+
+    bool IsHermesPriorityVitalsAddonMessage(std::string const& prefix, std::string const& payload)
+    {
+        if (prefix != "PATTRPANEL")
+            return false;
+
+        bool const isPlayerVitals = payload.rfind("STATS:", 0) == 0
+            && (payload.find("CUR_HEALTH=") != std::string::npos || payload.find("CURRENT_HEALTH=") != std::string::npos);
+        bool const isTargetVitals = payload.rfind("TARGET:", 0) == 0
+            && payload.find("CUR_HEALTH=") != std::string::npos
+            && payload.find("MAX_HEALTH=") != std::string::npos;
+
+        return isPlayerVitals || isTargetVitals;
+    }
+
+    void TrackHermesOutboundDebugStats(WorldSession& session, uint8 lane, uint8 messageType, uint8 codec, uint16 schemaId, uint16 methodId, uint32 payloadSize, bool suppressed)
+    {
+        if (!sConfigMgr->GetOption<bool>("HermesBridge.DebugOutboundStats", false))
+            return;
+
+        uint32 const now = getMSTime();
+        if (!g_HermesOutboundDebugStats.WindowStartMs)
+            g_HermesOutboundDebugStats.WindowStartMs = now;
+
+        uint64 const key = HermesOutboundDebugKey(lane, messageType, codec, schemaId, methodId);
+        HermesOutboundDebugBucket& bucket = g_HermesOutboundDebugStats.Buckets[key];
+        bucket.Lane = lane;
+        bucket.MessageType = messageType;
+        bucket.Codec = codec;
+        bucket.SchemaId = schemaId;
+        bucket.MethodId = methodId;
+
+        if (suppressed)
+        {
+            ++g_HermesOutboundDebugStats.Suppressed;
+            g_HermesOutboundDebugStats.SuppressedBytes += payloadSize;
+            ++bucket.Suppressed;
+            bucket.SuppressedBytes += payloadSize;
+        }
+        else
+        {
+            ++g_HermesOutboundDebugStats.Sent;
+            g_HermesOutboundDebugStats.SentBytes += payloadSize;
+            ++bucket.Sent;
+            bucket.SentBytes += payloadSize;
+        }
+
+        uint32 const logIntervalMs = std::max<uint32>(sConfigMgr->GetOption<uint32>("HermesBridge.DebugOutboundStats.LogIntervalMs", 1000), 100);
+        uint32 const elapsedMs = GetMSTimeDiffToNow(g_HermesOutboundDebugStats.WindowStartMs);
+        if (elapsedMs < logIntervalMs)
+            return;
+
+        std::vector<HermesOutboundDebugBucket> buckets;
+        buckets.reserve(g_HermesOutboundDebugStats.Buckets.size());
+        for (auto const& itr : g_HermesOutboundDebugStats.Buckets)
+            buckets.push_back(itr.second);
+
+        std::sort(buckets.begin(), buckets.end(), [](HermesOutboundDebugBucket const& left, HermesOutboundDebugBucket const& right)
+        {
+            uint64 const leftTotal = left.Sent + left.Suppressed;
+            uint64 const rightTotal = right.Sent + right.Suppressed;
+            if (leftTotal != rightTotal)
+                return leftTotal > rightTotal;
+            return (left.SentBytes + left.SuppressedBytes) > (right.SentBytes + right.SuppressedBytes);
+        });
+
+        std::ostringstream top;
+        std::size_t const topCount = std::min<std::size_t>(buckets.size(), 8);
+        for (std::size_t i = 0; i < topCount; ++i)
+        {
+            if (i)
+                top << " | ";
+
+            HermesOutboundDebugBucket const& bucketRef = buckets[i];
+            top << "[method=" << bucketRef.MethodId
+                << " schema=" << bucketRef.SchemaId
+                << " lane=" << HermesLaneName(bucketRef.Lane)
+                << " type=" << HermesMessageTypeName(bucketRef.MessageType)
+                << " codec=" << HermesCodecName(bucketRef.Codec)
+                << "] sent=" << bucketRef.Sent
+                << " sentBytes=" << bucketRef.SentBytes
+                << " suppressed=" << bucketRef.Suppressed
+                << " suppressedBytes=" << bucketRef.SuppressedBytes;
+        }
+
+        Player const* player = session.GetPlayer();
+        LOG_INFO("server.loading", "[HermesBridgeOutboundStats] player={} elapsedMs={} sent={} sentBytes={} suppressed={} suppressedBytes={} top={}",
+            player ? player->GetName() : "<none>",
+            elapsedMs,
+            g_HermesOutboundDebugStats.Sent,
+            g_HermesOutboundDebugStats.SentBytes,
+            g_HermesOutboundDebugStats.Suppressed,
+            g_HermesOutboundDebugStats.SuppressedBytes,
+            top.str());
+
+        g_HermesOutboundDebugStats = HermesOutboundDebugStats();
+        g_HermesOutboundDebugStats.WindowStartMs = now;
+    }
+
+    bool ShouldSuppressHermesOutboundFrame(WorldSession& session, uint8 messageType, uint16 methodId, uint32 payloadSize, bool bypassRateLimit = false)
+    {
+        if (!IsHermesWhiteDamageEventFrame(messageType, methodId))
+            return false;
+
+        Player const* player = session.GetPlayer();
+        bool const inCombat = player && player->IsInCombat();
+
+        if (sConfigMgr->GetOption<bool>("HermesBridge.SuppressOutbound", false))
+            return true;
+
+        if (inCombat && sConfigMgr->GetOption<bool>("HermesBridge.SuppressOutboundInCombat", false))
+            return true;
+
+        if (inCombat && IsHermesAddonMessageFrame(messageType, methodId) && sConfigMgr->GetOption<bool>("HermesBridge.SuppressAddonMessageEventsInCombat", false))
+            return true;
+
+        if (bypassRateLimit)
+            return false;
+
+        uint32 const maxPerSecond = sConfigMgr->GetOption<uint32>("HermesBridge.Outbound.MaxPacketsPerSecond", 0);
+        uint32 const maxBytesPerSecond = sConfigMgr->GetOption<uint32>("HermesBridge.Outbound.MaxBytesPerSecond", 0);
+        uint32 const maxFrameBytes = sConfigMgr->GetOption<uint32>("HermesBridge.Outbound.MaxFrameBytes", 0);
+        if (!maxPerSecond && !maxBytesPerSecond && !maxFrameBytes)
+            return false;
+
+        if (maxFrameBytes && payloadSize > maxFrameBytes)
+            return true;
+
+        uint32 const now = getMSTime();
+        uint32 const accountId = session.GetAccountId();
+        HermesOutboundRateBucket& bucket = g_HermesOutboundRateBuckets[accountId];
+        if (!bucket.WindowStartMs || getMSTimeDiff(bucket.WindowStartMs, now) >= 1000)
+        {
+            bucket.WindowStartMs = now;
+            bucket.Count = 0;
+            bucket.Bytes = 0;
+        }
+
+        uint32 const minIntervalMs = maxPerSecond ? std::max<uint32>((1000 + maxPerSecond - 1) / maxPerSecond, 1) : 0;
+        if (minIntervalMs && bucket.LastSentMs && getMSTimeDiff(bucket.LastSentMs, now) < minIntervalMs)
+            return true;
+
+        if (maxPerSecond && bucket.Count >= maxPerSecond)
+            return true;
+
+        if (maxBytesPerSecond && bucket.Bytes + payloadSize > maxBytesPerSecond)
+            return true;
+
+        ++bucket.Count;
+        bucket.Bytes += payloadSize;
+        bucket.LastSentMs = now;
+        return false;
+    }
+
     void TrackHermesOutboundDrop(WorldSession& session, uint8 lane, uint16 methodId, uint32 requestId, uint32 payloadSize)
     {
         uint8 const index = HermesLaneStatsIndex(lane);
@@ -2856,9 +3928,50 @@ namespace
         return (uint64(accountId) << 16) | methodId;
     }
 
+    bool HermesMethodNameStartsWith(HermesMethodDescriptor const& descriptor, char const* prefix)
+    {
+        if (!descriptor.Name || !prefix)
+            return false;
+
+        char const* name = descriptor.Name;
+        while (*prefix)
+        {
+            if (*name++ != *prefix++)
+                return false;
+        }
+
+        return true;
+    }
+
+    bool HermesMethodNameEquals(HermesMethodDescriptor const& descriptor, char const* expected)
+    {
+        if (!descriptor.Name || !expected)
+            return false;
+
+        char const* name = descriptor.Name;
+        while (*name && *expected)
+        {
+            if (*name++ != *expected++)
+                return false;
+        }
+
+        return *name == '\0' && *expected == '\0';
+    }
+
+    bool IsHermesRateLimitedMethod(HermesMethodDescriptor const& descriptor)
+    {
+        return HermesMethodNameEquals(descriptor, "player.emitDamageEvent");
+    }
+
+    uint16 GetEffectiveHermesRateLimitPerSecond(HermesMethodDescriptor const& descriptor)
+    {
+        return IsHermesRateLimitedMethod(descriptor) ? descriptor.RateLimitPerSecond : 0;
+    }
+
     bool IsHermesRateLimited(WorldSession& session, HermesMethodDescriptor const& descriptor)
     {
-        if (!descriptor.RateLimitPerSecond)
+        uint16 const rateLimitPerSecond = GetEffectiveHermesRateLimitPerSecond(descriptor);
+        if (!rateLimitPerSecond)
             return false;
 
         time_t const now = std::time(nullptr);
@@ -2871,7 +3984,7 @@ namespace
             bucket.Count = 0;
         }
 
-        if (bucket.Count >= descriptor.RateLimitPerSecond)
+        if (bucket.Count >= rateLimitPerSecond)
             return true;
 
         ++bucket.Count;
@@ -2925,7 +4038,7 @@ namespace
                 << ",\"status\":\"" << EscapeJsonString(descriptor.Status ? descriptor.Status : "")
                 << "\",\"minSecurity\":" << static_cast<unsigned int>(descriptor.MinSecurity)
                 << ",\"minSecurityName\":\"" << HermesSecurityName(descriptor.MinSecurity)
-                << "\",\"rateLimitPerSecond\":" << descriptor.RateLimitPerSecond
+                << "\",\"rateLimitPerSecond\":" << GetEffectiveHermesRateLimitPerSecond(descriptor)
                 << "}";
         }
 
@@ -3002,54 +4115,54 @@ namespace
             << ",\"orientation\":" << player.GetOrientation();
     }
 
-    bool IsJsonSafeUInt(uint128 const& value)
+    bool IsJsonSafeUInt(uint256 const& value)
     {
-        return value <= static_cast<uint128>(HERMES_JSON_SAFE_UINT_MAX);
+        return value <= static_cast<uint256>(HERMES_JSON_SAFE_UINT_MAX);
     }
 
-    uint64 ToJsonSafeUInt(uint128 const& value)
+    uint64 ToJsonSafeUInt(uint256 const& value)
     {
         return IsJsonSafeUInt(value) ? static_cast<uint64>(value) : HERMES_JSON_SAFE_UINT_MAX;
     }
 
-    bool IsUInt32Exact(uint128 const& value)
+    bool IsUInt32Exact(uint256 const& value)
     {
-        return value <= static_cast<uint128>(std::numeric_limits<uint32>::max());
+        return value <= static_cast<uint256>(std::numeric_limits<uint32>::max());
     }
 
-    uint32 ToUInt32Saturated(uint128 const& value)
+    uint32 ToUInt32Saturated(uint256 const& value)
     {
         return IsUInt32Exact(value) ? static_cast<uint32>(value) : std::numeric_limits<uint32>::max();
     }
 
-    uint32 ToUInt32SaturatedPositive(int128 const& value)
+    uint32 ToUInt32SaturatedPositive(int256 const& value)
     {
         if (value <= 0)
             return 0;
 
-        return ToUInt32Saturated(static_cast<uint128>(value));
+        return ToUInt32Saturated(static_cast<uint256>(value));
     }
 
-    bool IsJsonSafeInt(int128 const& value)
+    bool IsJsonSafeInt(int256 const& value)
     {
-        return value >= 0 && static_cast<uint128>(value) <= static_cast<uint128>(HERMES_JSON_SAFE_UINT_MAX);
+        return value >= 0 && static_cast<uint256>(value) <= static_cast<uint256>(HERMES_JSON_SAFE_UINT_MAX);
     }
 
-    uint64 ToJsonSafeInt(int128 const& value)
+    uint64 ToJsonSafeInt(int256 const& value)
     {
         if (value <= 0)
             return 0;
 
-        uint128 const unsignedValue = static_cast<uint128>(value);
-        return unsignedValue <= static_cast<uint128>(HERMES_JSON_SAFE_UINT_MAX) ? static_cast<uint64>(unsignedValue) : HERMES_JSON_SAFE_UINT_MAX;
+        uint256 const unsignedValue = static_cast<uint256>(value);
+        return unsignedValue <= static_cast<uint256>(HERMES_JSON_SAFE_UINT_MAX) ? static_cast<uint64>(unsignedValue) : HERMES_JSON_SAFE_UINT_MAX;
     }
 
-    std::string BigUIntToText(uint128 const& value)
+    std::string BigUIntToText(uint256 const& value)
     {
         return value.convert_to<std::string>();
     }
 
-    std::string BigIntToText(int128 const& value)
+    std::string BigIntToText(int256 const& value)
     {
         return value.convert_to<std::string>();
     }
@@ -3064,14 +4177,14 @@ namespace
         return value.size() <= count ? value : value.substr(value.size() - count);
     }
 
-    void AppendBigUIntMetricJson(std::ostringstream& out, char const* name, uint128 const& value)
+    void AppendBigUIntMetricJson(std::ostringstream& out, char const* name, uint256 const& value)
     {
         out << "\"" << name << "\":" << ToJsonSafeUInt(value)
             << ",\"" << name << "Text\":\"" << BigUIntToText(value) << "\""
             << ",\"" << name << "Exact\":" << (IsJsonSafeUInt(value) ? "true" : "false");
     }
 
-    void AppendBigIntMetricJson(std::ostringstream& out, char const* name, int128 const& value)
+    void AppendBigIntMetricJson(std::ostringstream& out, char const* name, int256 const& value)
     {
         out << "\"" << name << "\":" << ToJsonSafeInt(value)
             << ",\"" << name << "Text\":\"" << BigIntToText(value) << "\""
@@ -3084,14 +4197,14 @@ namespace
         out << "\"alive\":" << (player.IsAlive() ? "true" : "false")
             << ",\"inCombat\":" << (player.IsInCombat() ? "true" : "false")
             << ",";
-        AppendBigUIntMetricJson(out, "health", player.GetHealthForCombat128());
+        AppendBigUIntMetricJson(out, "health", player.GetHealthForCombat256());
         out << ",";
-        AppendBigUIntMetricJson(out, "maxHealth", player.GetMaxHealthForCombat128());
+        AppendBigUIntMetricJson(out, "maxHealth", player.GetMaxHealthForCombat256());
         out << ",\"powerType\":" << static_cast<unsigned int>(powerType)
             << ",";
-        AppendBigUIntMetricJson(out, "power", player.GetPowerForCombat128(powerType));
+        AppendBigUIntMetricJson(out, "power", player.GetPowerForCombat256(powerType));
         out << ",";
-        AppendBigUIntMetricJson(out, "maxPower", player.GetMaxPowerForCombat128(powerType));
+        AppendBigUIntMetricJson(out, "maxPower", player.GetMaxPowerForCombat256(powerType));
         out << ",";
         AppendBigIntMetricJson(out, "money", player.GetMoney());
     }
@@ -3106,12 +4219,12 @@ namespace
         return std::to_string(value);
     }
 
-    std::string PanelValueText(int128 const& value)
+    std::string PanelValueText(int256 const& value)
     {
         return value > 0 ? value.convert_to<std::string>() : "0";
     }
 
-    std::string PanelValueText(uint128 const& value)
+    std::string PanelValueText(uint256 const& value)
     {
         return value.convert_to<std::string>();
     }
@@ -3121,40 +4234,40 @@ namespace
         if (value <= 0.0L)
             return "0";
 
-        return PanelValueText(Acore::Number::ToInt128Saturated(value));
+        return PanelValueText(Acore::Number::ToInt256Saturated(value));
     }
 
-    std::string BuildPanelRangePayload(int128 const& minValue, int128 const& maxValue)
+    std::string BuildPanelRangePayload(int256 const& minValue, int256 const& maxValue)
     {
         std::ostringstream range;
-        range << (minValue > 0 ? minValue : int128(0)) << "~" << (maxValue > 0 ? maxValue : int128(0));
+        range << (minValue > 0 ? minValue : int256(0)) << "~" << (maxValue > 0 ? maxValue : int256(0));
         return range.str();
     }
 
-    int128 GetPanelStat(Player& player, Stats stat)
+    int256 GetPanelStat(Player& player, Stats stat)
     {
-        int128 extendedValue = player.GetExtendedStat128(stat);
-        return extendedValue > 0 ? extendedValue : Acore::Number::ToInt128Saturated(static_cast<long double>(player.GetStat(stat)));
+        int256 extendedValue = player.GetExtendedStat256(stat);
+        return extendedValue > 0 ? extendedValue : Acore::Number::ToInt256Saturated(static_cast<long double>(player.GetStat(stat)));
     }
 
-    int128 GetPanelCombatRating(Player& player, CombatRating combatRating)
+    int256 GetPanelCombatRating(Player& player, CombatRating combatRating)
     {
-        int128 extendedValue = player.GetExtendedCombatRating(combatRating);
+        int256 extendedValue = player.GetExtendedCombatRating(combatRating);
         if (extendedValue > 0)
             return extendedValue;
 
         int32 fieldValue = player.GetInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + combatRating);
-        return fieldValue > 0 ? int128(fieldValue) : int128(0);
+        return fieldValue > 0 ? int256(fieldValue) : int256(0);
     }
 
-    int128 GetPanelBaseSpellPowerBonus(Player& player)
+    int256 GetPanelBaseSpellPowerBonus(Player& player)
     {
-        return Acore::Number::ToInt128Saturated(player.GetBaseSpellPowerBonus128());
+        return Acore::Number::ToInt256Saturated(player.GetBaseSpellPowerBonus256());
     }
 
-    int128 GetPanelHealingBonus(Player& player)
+    int256 GetPanelHealingBonus(Player& player)
     {
-        int128 extendedValue = player.GetExtendedHealingBonus128();
+        int256 extendedValue = player.GetExtendedHealingBonus256();
         if (extendedValue > 0)
             return extendedValue;
 
@@ -3165,9 +4278,9 @@ namespace
         return GetPanelBaseSpellPowerBonus(player);
     }
 
-    int128 GetPanelSpellDamageBonus(Player& player)
+    int256 GetPanelSpellDamageBonus(Player& player)
     {
-        int128 extendedValue = player.GetExtendedSpellDamageBonus128();
+        int256 extendedValue = player.GetExtendedSpellDamageBonus256();
         if (extendedValue > 0)
             return extendedValue;
 
@@ -3185,9 +4298,9 @@ namespace
         return GetPanelBaseSpellPowerBonus(player);
     }
 
-    int128 GetPanelSpellPowerBonus(Player& player)
+    int256 GetPanelSpellPowerBonus(Player& player)
     {
-        int128 extendedValue = player.GetExtendedSpellPowerBonus128();
+        int256 extendedValue = player.GetExtendedSpellPowerBonus256();
         if (extendedValue > 0)
             return extendedValue;
 
@@ -3235,17 +4348,17 @@ namespace
     {
         attributes.reserve(56);
 
-        AddPanelAttribute(attributes, "CUR_HEALTH", PanelValueText(player.GetExtendedHealth128()));
-        AddPanelAttribute(attributes, "CURRENT_HEALTH", PanelValueText(player.GetExtendedHealth128()));
-        AddPanelAttribute(attributes, "CUR_MANA", PanelValueText(player.GetPowerForCombat128(POWER_MANA)));
-        AddPanelAttribute(attributes, "CURRENT_MANA", PanelValueText(player.GetPowerForCombat128(POWER_MANA)));
-        AddPanelAttribute(attributes, uint32(1), PanelValueText(player.GetExtendedMaxHealth128()));
-        AddPanelAttribute(attributes, uint32(0), PanelValueText(player.GetExtendedMaxPower128(POWER_MANA)));
+        AddPanelAttribute(attributes, "CUR_HEALTH", PanelValueText(player.GetExtendedHealth256()));
+        AddPanelAttribute(attributes, "CURRENT_HEALTH", PanelValueText(player.GetExtendedHealth256()));
+        AddPanelAttribute(attributes, "CUR_MANA", PanelValueText(player.GetPowerForCombat256(POWER_MANA)));
+        AddPanelAttribute(attributes, "CURRENT_MANA", PanelValueText(player.GetPowerForCombat256(POWER_MANA)));
+        AddPanelAttribute(attributes, uint32(1), PanelValueText(player.GetExtendedMaxHealth256()));
+        AddPanelAttribute(attributes, uint32(0), PanelValueText(player.GetExtendedMaxPower256(POWER_MANA)));
 
         for (HermesPanelStatDef const& statDef : HERMES_PANEL_PRIMARY_STATS)
             AddPanelAttribute(attributes, statDef.Id, PanelValueText(GetPanelStat(player, statDef.Stat)));
 
-        AddPanelAttribute(attributes, "ARMOR", PanelValueText(player.GetExtendedArmor128()));
+        AddPanelAttribute(attributes, "ARMOR", PanelValueText(player.GetExtendedArmor256()));
         AddPanelAttribute(attributes, 8, PanelValueText(player.GetTrueDamageBonus()));
         AddPanelAttribute(attributes, 9, PanelValueText(player.GetCuttingDamageBonus()));
         AddPanelAttribute(attributes, 10, PanelValueText(static_cast<uint64>(player.GetCooldownReductionBonus())));
@@ -3381,10 +4494,10 @@ namespace
 
         Powers const powerType = target->getPowerType();
         appendField("GUID", std::to_string(target->GetGUID().GetRawValue()));
-        appendField("CUR_HEALTH", PanelValueText(target->GetHealthForCombat128()));
-        appendField("MAX_HEALTH", PanelValueText(target->GetMaxHealthForCombat128()));
-        appendField("CUR_MANA", PanelValueText(target->GetPowerForCombat128(POWER_MANA)));
-        appendField("MAX_MANA", PanelValueText(target->GetMaxPowerForCombat128(POWER_MANA)));
+        appendField("CUR_HEALTH", PanelValueText(target->GetHealthForCombat256()));
+        appendField("MAX_HEALTH", PanelValueText(target->GetMaxHealthForCombat256()));
+        appendField("CUR_MANA", PanelValueText(target->GetPowerForCombat256(POWER_MANA)));
+        appendField("MAX_MANA", PanelValueText(target->GetMaxPowerForCombat256(POWER_MANA)));
         appendField("POWER_TYPE", std::to_string(static_cast<uint32>(powerType)));
         return payload.str();
     }
@@ -3408,10 +4521,33 @@ namespace
         return nullptr;
     }
 
-    void SendHermesFrameV2(WorldSession& session, HermesFrameV2 const& requestFrame, uint8 messageType, uint8 codec, std::string const& responsePayload)
+    void SendHermesFrameV2(WorldSession& session, HermesFrameV2 const& requestFrame, uint8 messageType, uint8 codec, std::string const& responsePayload, bool bypassRateLimit = false)
     {
         if (HERMES_BRIDGE_TRACE_PACKETS)
             LOG_INFO("server.loading", "HermesBridge: v2 send begin account={} type={} codec={} methodId={} requestId={} seq={} bytes={}", session.GetAccountId(), messageType, codec, requestFrame.MethodId, requestFrame.RequestId, requestFrame.Sequence, responsePayload.size());
+
+        uint32 const payloadSize = static_cast<uint32>(responsePayload.size());
+        if (ShouldSuppressHermesOutboundFrame(session, messageType, requestFrame.MethodId, payloadSize, bypassRateLimit))
+        {
+            if (ShouldTraceHermesServerMethod(requestFrame.MethodId) && ConsumeHermesDebugBudget(g_HermesDebugSendLogBudget))
+                LOG_INFO("server.loading", "HermesBridge DEBUG server send-suppressed account={} type={} methodId={} requestId={} bytes={}", session.GetAccountId(), static_cast<unsigned int>(messageType), requestFrame.MethodId, requestFrame.RequestId, payloadSize);
+            TrackHermesOutboundDebugStats(session, requestFrame.Lane, messageType, codec, requestFrame.SchemaId, requestFrame.MethodId, payloadSize, true);
+            return;
+        }
+
+        TrackHermesOutboundDebugStats(session, requestFrame.Lane, messageType, codec, requestFrame.SchemaId, requestFrame.MethodId, payloadSize, false);
+
+        if (ShouldTraceHermesServerMethod(requestFrame.MethodId) && ConsumeHermesDebugBudget(g_HermesDebugSendLogBudget))
+            LOG_INFO("server.loading", "HermesBridge DEBUG server send-frame account={} player={} lane={} type={} codec={} methodId={} requestId={} bytes={} payload={}",
+                session.GetAccountId(),
+                session.GetPlayer() ? session.GetPlayer()->GetName().c_str() : "<none>",
+                static_cast<unsigned int>(requestFrame.Lane),
+                static_cast<unsigned int>(messageType),
+                static_cast<unsigned int>(codec),
+                requestFrame.MethodId,
+                requestFrame.RequestId,
+                payloadSize,
+                HermesLogPreview(responsePayload));
 
         if (!QueueHermesOutboundFrame(session, requestFrame, messageType, codec, responsePayload))
             return;
@@ -3445,6 +4581,7 @@ namespace
     void SendHermesAddonMessageEvent(WorldSession& session, std::string const& prefix, std::string const& payload)
     {
         HermesFrameV2 eventFrame;
+        HermesUtf8Check const payloadUtf8 = CheckHermesUtf8(payload);
         eventFrame.Lane = HERMES_LANE_EVENT;
         eventFrame.MessageType = HERMES_MESSAGE_EVENT;
         eventFrame.Codec = HERMES_CODEC_JSON;
@@ -3461,10 +4598,36 @@ namespace
             << ",\"prefix\":\"" << EscapeJsonString(prefix) << "\""
             << ",\"payload\":\"" << EscapeJsonString(payload) << "\""
             << ",\"payloadBytes\":" << payload.size()
+            << ",\"payloadUtf8Ok\":" << (payloadUtf8.Valid ? "true" : "false")
+            << ",\"payloadUtf8Repairs\":" << payloadUtf8.Replacements
             << ",\"serverTime\":" << static_cast<long long>(std::time(nullptr))
             << "}}";
 
-        SendHermesFrameV2(session, eventFrame, HERMES_MESSAGE_EVENT, HERMES_CODEC_JSON, out.str());
+        if (ConsumeHermesDebugBudget(g_HermesDebugAddonLogBudget))
+            LOG_INFO("server.loading", "HermesBridge DEBUG server addon-event-out account={} player={} prefix={} payloadBytes={} utf8Ok={} invalidOffset={} invalidByte={} repairs={} preview={}",
+                session.GetAccountId(),
+                session.GetPlayer() ? session.GetPlayer()->GetName().c_str() : "<none>",
+                prefix,
+                payload.size(),
+                payloadUtf8.Valid ? 1 : 0,
+                HermesUtf8OffsetText(payloadUtf8),
+                HermesUtf8ByteText(payloadUtf8),
+                payloadUtf8.Replacements,
+                HermesLogPreview(payload));
+        if (ConsumeHermesTraceBudget(g_HermesTraceAddonEventOutLogBudget))
+            LOG_INFO("server.loading", "HermesBridge TRACE server addon-event-out account={} player={} prefix={} bytes={} utf8Ok={} invalidOffset={} invalidByte={} repairs={} preview={}",
+                session.GetAccountId(),
+                session.GetPlayer() ? session.GetPlayer()->GetName().c_str() : "<none>",
+                prefix,
+                payload.size(),
+                payloadUtf8.Valid ? 1 : 0,
+                HermesUtf8OffsetText(payloadUtf8),
+                HermesUtf8ByteText(payloadUtf8),
+                payloadUtf8.Replacements,
+                HermesLogPreview(payload));
+
+        bool const priorityVitals = IsHermesPriorityVitalsAddonMessage(prefix, payload);
+        SendHermesFrameV2(session, eventFrame, HERMES_MESSAGE_EVENT, HERMES_CODEC_JSON, out.str(), priorityVitals);
     }
 
     void SendHermesBinaryDamageSmokeEvent(WorldSession& session, HermesFrameV2 const& requestFrame, std::string const& marker)
@@ -3501,7 +4664,7 @@ namespace
 
         uint32 amount = ToUInt32SaturatedPositive(player.GetExtendedDamageMax(BASE_ATTACK));
         if (amount == 0)
-            amount = ToUInt32Saturated(player.GetHealthForCombat128());
+            amount = ToUInt32Saturated(player.GetHealthForCombat256());
         if (amount == 0)
             amount = 1;
 
@@ -3529,10 +4692,10 @@ namespace
         ++eventFrame.Sequence;
 
         Powers const powerType = player.getPowerType();
-        uint128 const health = player.GetHealthForCombat128();
-        uint128 const maxHealth = player.GetMaxHealthForCombat128();
-        uint128 const power = player.GetPowerForCombat128(powerType);
-        uint128 const maxPower = player.GetMaxPowerForCombat128(powerType);
+        uint256 const health = player.GetHealthForCombat256();
+        uint256 const maxHealth = player.GetMaxHealthForCombat256();
+        uint256 const power = player.GetPowerForCombat256(powerType);
+        uint256 const maxPower = player.GetMaxPowerForCombat256(powerType);
         uint16 flags = 0;
 
         if (player.IsAlive())
@@ -3632,8 +4795,8 @@ namespace
         BuildPlayerAttributeFields(player, attributes);
 
         std::string const playerId = std::to_string(player.GetGUID().GetCounter());
-        std::string const healthText = PanelValueText(player.GetHealthForCombat128());
-        std::string const maxHealthText = PanelValueText(player.GetMaxHealthForCombat128());
+        std::string const healthText = PanelValueText(player.GetHealthForCombat256());
+        std::string const maxHealthText = PanelValueText(player.GetMaxHealthForCombat256());
         std::string const mainhandText = BuildPanelRangePayload(player.GetExtendedDamageMin(BASE_ATTACK), player.GetExtendedDamageMax(BASE_ATTACK));
 
         std::vector<std::string> chunks;
@@ -3662,14 +4825,15 @@ namespace
         (void)method;
 
         Player* player = session.GetPlayer();
-        LOG_INFO("server.loading", "HermesBridge: hello handshake account={} playerReady={} player={}", session.GetAccountId(), player ? 1 : 0, player ? player->GetName() : "");
+        if (HERMES_BRIDGE_TRACE_PACKETS)
+            LOG_INFO("server.loading", "HermesBridge: hello handshake account={} playerReady={} player={}", session.GetAccountId(), player ? 1 : 0, player ? player->GetName() : "");
 
         JsonRpcDispatchResult result;
         std::ostringstream out;
         out << "{\"jsonrpc\":\"2.0\",\"id\":" << idText
             << ",\"result\":{\"server\":\"azerothcore\",\"bridge\":\"mod-hermes-bridge\",\"frameVersion\":2,\"headerSize\":24,\"maxPayloadSize\":"
             << HERMES_BRIDGE_MAX_PAYLOAD_SIZE
-            << ",\"integerTextEncoding\":\"decimal-string\",\"integerTextBits\":" << std::numeric_limits<uint128>::digits
+            << ",\"integerTextEncoding\":\"decimal-string\",\"integerTextBits\":" << std::numeric_limits<uint256>::digits
             << ",\"jsonSafeIntegerMax\":" << HERMES_JSON_SAFE_UINT_MAX
             << ",\"playerReady\":" << (player ? "true" : "false");
         if (player)
@@ -3689,14 +4853,32 @@ namespace
 
     JsonRpcDispatchResult HandleHermesPing(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method)
     {
-        (void)session;
         (void)frame;
         (void)method;
 
         JsonRpcDispatchResult result;
+        std::string const payload = ExtractPayloadParam(request);
+        if (HermesBridge_IsLifecycleResetTrace(payload))
+            ClearHermesAddonReady(session, "lifecycle-reset");
+
+        if (IsHermesTracePayload(payload) && ConsumeHermesTraceBudget(g_HermesTracePingLogBudget))
+        {
+            Player* player = session.GetPlayer();
+            LOG_INFO("server.loading", "HermesBridge TRACE server ping account={} player={} requestId={} payload={}",
+                session.GetAccountId(),
+                player ? player->GetName() : "<none>",
+                frame.RequestId,
+                HermesLogPreview(payload, 240));
+        }
+        if (HERMES_BRIDGE_DEBUG_COMM && payload.rfind("addon-compat ", 0) == 0)
+        {
+            Player* player = session.GetPlayer();
+            LOG_INFO("server.loading", "HermesBridge DEBUG server {} account={} player={}", payload, session.GetAccountId(), player ? player->GetName() : "");
+        }
+
         result.Payload =
             "{\"jsonrpc\":\"2.0\",\"id\":" + idText +
-            ",\"result\":{\"pong\":true,\"payload\":\"" + EscapeJsonString(ExtractPayloadParam(request)) + "\"}}";
+            ",\"result\":{\"pong\":true,\"payload\":\"" + EscapeJsonString(payload) + "\"}}";
         return result;
     }
 
@@ -3825,15 +5007,56 @@ namespace
 
         std::string const prefix = dispatchPayload.substr(0, separator);
         std::string const addonPayload = dispatchPayload.substr(separator + 1);
+        if (ConsumeHermesDebugBudget(g_HermesDebugAddonLogBudget))
+            LOG_INFO("server.loading", "HermesBridge DEBUG server addon-dispatch-in account={} player={} requestId={} prefix={} payloadBytes={} preview={}",
+                session.GetAccountId(),
+                player->GetName().c_str(),
+                frame.RequestId,
+                prefix,
+                addonPayload.size(),
+                HermesLogPreview(addonPayload));
+        if (ConsumeHermesTraceBudget(g_HermesTraceAddonDispatchLogBudget))
+            LOG_INFO("server.loading", "HermesBridge TRACE server addon-dispatch-in account={} player={} requestId={} prefix={} bytes={} preview={}",
+                session.GetAccountId(),
+                player->GetName().c_str(),
+                frame.RequestId,
+                prefix,
+                addonPayload.size(),
+                HermesLogPreview(addonPayload));
         if (prefix.size() > 32 || dispatchPayload.size() > 255)
         {
             result.IsError = true;
             result.Payload = JsonRpcErrorPayload(idText, -32602, "Addon payload too large", "ADDON_PAYLOAD_TOO_LARGE", method);
             return result;
         }
+        if (HermesBridge_ShouldMarkAddonPrefixReadyForMethod(frame.MethodId))
+            MarkHermesAddonPrefixReady(session, prefix, "addon-dispatch");
 
-        std::string addonMessage = dispatchPayload;
-        sScriptMgr->OnPlayerChat(player, CHAT_MSG_WHISPER, LANG_ADDON, addonMessage, player);
+        uint64 const legacySmsgBefore = g_HermesAddonTakeoverBlockedLegacySmsg.load(std::memory_order_relaxed);
+        std::string const targetName = player->GetName();
+        WorldPacket legacyAddonWhisper(CMSG_MESSAGECHAT, dispatchPayload.size() + targetName.size() + 16);
+        legacyAddonWhisper << uint32(CHAT_MSG_WHISPER);
+        legacyAddonWhisper << uint32(LANG_ADDON);
+        legacyAddonWhisper << targetName;
+        legacyAddonWhisper << dispatchPayload;
+        session.HandleMessagechatOpcode(legacyAddonWhisper);
+        uint64 const legacySmsgAfter = g_HermesAddonTakeoverBlockedLegacySmsg.load(std::memory_order_relaxed);
+        uint64 const legacyEvents = legacySmsgAfter >= legacySmsgBefore ? legacySmsgAfter - legacySmsgBefore : 0;
+
+        if (ConsumeHermesDebugBudget(g_HermesDebugAddonLogBudget))
+            LOG_INFO("server.loading", "HermesBridge DEBUG server addon-dispatch-out account={} player={} requestId={} prefix={} legacyEvents={}",
+                session.GetAccountId(),
+                player->GetName().c_str(),
+                frame.RequestId,
+                prefix,
+                legacyEvents);
+        if (ConsumeHermesTraceBudget(g_HermesTraceAddonDispatchLogBudget))
+            LOG_INFO("server.loading", "HermesBridge TRACE server addon-dispatch-out account={} player={} requestId={} prefix={} legacyEvents={}",
+                session.GetAccountId(),
+                player->GetName().c_str(),
+                frame.RequestId,
+                prefix,
+                legacyEvents);
 
         result.Payload =
             "{\"jsonrpc\":\"2.0\",\"id\":" + idText +
@@ -3841,6 +5064,146 @@ namespace
             "\",\"payloadBytes\":" + std::to_string(addonPayload.size()) +
             ",\"dispatched\":true}}";
         return result;
+    }
+
+    JsonRpcDispatchResult HandleMallGetCategories(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method)
+    {
+        (void)frame;
+        (void)request;
+        (void)method;
+
+        if (!session.GetPlayer())
+            return HermesPayloadResult(idText, "mall.categories.v1", "ERROR|玩家未就绪");
+
+        if (!sMallSystem->IsMallSystemEnable())
+            return HermesPayloadResult(idText, "mall.categories.v1", "ERROR|商城系统当前已禁用");
+
+        return HermesPayloadResult(idText, "mall.categories.v1", BuildHermesMallCategoriesPayload());
+    }
+
+    JsonRpcDispatchResult HandleMallGetItems(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method)
+    {
+        (void)frame;
+        (void)method;
+
+        if (!session.GetPlayer())
+            return HermesPayloadResult(idText, "mall.items.v1", "ERROR|玩家未就绪");
+
+        if (!sMallSystem->IsMallSystemEnable())
+            return HermesPayloadResult(idText, "mall.items.v1", "ERROR|商城系统当前已禁用");
+
+        uint32 const categoryId = ParseHermesUInt(ExtractPayloadParam(request), 0);
+        return HermesPayloadResult(idText, "mall.items.v1", BuildHermesMallItemsPayload(categoryId));
+    }
+
+    JsonRpcDispatchResult HandleMallPurchase(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method)
+    {
+        (void)frame;
+        (void)method;
+
+        Player* player = session.GetPlayer();
+        if (!player)
+            return HermesPayloadResult(idText, "mall.purchase.v1", BuildHermesMallStatusPayload(false, "玩家未就绪"));
+
+        if (!sMallSystem->IsMallSystemEnable())
+            return HermesPayloadResult(idText, "mall.purchase.v1", BuildHermesMallStatusPayload(false, "商城系统当前已禁用"));
+
+        EnsureHermesMallDataLoaded();
+
+        uint32 const itemId = ParseHermesUInt(ExtractPayloadParam(request), 0);
+        if (itemId == 0)
+            return HermesPayloadResult(idText, "mall.purchase.v1", BuildHermesMallStatusPayload(false, "商品ID无效"));
+
+        MallSystem::PurchaseResult purchase = sMallSystem->PurchaseItem(player, itemId);
+        bool const success = purchase.status == MallSystem::PurchaseStatus::SUCCESS;
+        return HermesPayloadResult(idText, "mall.purchase.v1", BuildHermesMallStatusPayload(success, purchase.message));
+    }
+
+    JsonRpcDispatchResult HandleTooltipQuery(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method)
+    {
+        (void)frame;
+        (void)method;
+
+        Player* player = session.GetPlayer();
+        if (!player)
+            return HermesPayloadResult(idText, "tooltip.query.v1", "");
+
+        std::string const rawPayload = ExtractPayloadParam(request);
+        std::vector<std::string> fields = SplitHermesPayloadFields(rawPayload, '|');
+        uint32 itemID = fields.size() > 0 ? ParseHermesUInt(fields[0], 0) : 0;
+        uint32 guid = fields.size() > 1 ? ParseHermesUInt(fields[1], 0) : 0;
+        int32 bag = fields.size() > 2 ? ParseHermesInt(fields[2], 255) : 255;
+        uint8 slot = static_cast<uint8>(fields.size() > 3 ? ParseHermesUInt(fields[3], 0) : 0);
+
+        if (itemID == 0)
+            return HermesPayloadResult(idText, "tooltip.query.v1", "");
+
+        if (guid == 0 && fields.size() > 3)
+        {
+            if (Item* item = ResolveHermesTooltipItemByClientPosition(player, bag, slot, itemID))
+                guid = item->GetGUID().GetCounter();
+        }
+
+        std::string payload = BuildHermesTooltipAllModulePayload(itemID, guid, bag, slot);
+        return HermesPayloadResult(idText, "tooltip.query.v1", payload);
+    }
+
+    JsonRpcDispatchResult HandleTooltipQueryTemplate(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method)
+    {
+        (void)frame;
+        (void)method;
+
+        std::string const rawPayload = ExtractPayloadParam(request);
+        uint32 itemID = ParseHermesUInt(rawPayload, 0);
+        std::string payload = BuildHermesTooltipTemplatePayload(itemID);
+        return HermesPayloadResult(idText, "tooltip.template.v1", payload);
+    }
+
+    JsonRpcDispatchResult HandleTooltipInspectItemGuid(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method)
+    {
+        (void)frame;
+        (void)method;
+
+        Player* requester = session.GetPlayer();
+        if (!requester)
+            return HermesPayloadResult(idText, "tooltip.inspect-guid.v1", "");
+
+        std::string const rawPayload = ExtractPayloadParam(request);
+        std::vector<std::string> fields = SplitHermesPayloadFields(rawPayload, '|');
+        std::string targetPlayerName = fields.size() > 0 ? fields[0] : "";
+        uint8 slot = static_cast<uint8>(fields.size() > 1 ? ParseHermesUInt(fields[1], 0) : 0);
+        uint32 itemID = fields.size() > 2 ? ParseHermesUInt(fields[2], 0) : 0;
+        uint32 realGuid = 0;
+        Player* target = nullptr;
+        bool canInspect = false;
+
+        if (itemID != 0)
+        {
+            target = ResolveHermesTooltipInspectTarget(requester, targetPlayerName, slot, itemID);
+            if (target)
+            {
+                canInspect = CanHermesTooltipInspect(requester, target);
+                if (canInspect)
+                    realGuid = ResolveHermesTooltipInspectItemGuid(target, slot, itemID);
+            }
+        }
+
+        std::string responseName = targetPlayerName.empty() ? "-" : targetPlayerName;
+        std::ostringstream payload;
+        payload << "INSPECT_ITEM_GUID_RESPONSE:" << responseName << ":"
+                << static_cast<uint32>(slot) << ":" << itemID << ":" << realGuid;
+        return HermesPayloadResult(idText, "tooltip.inspect-guid.v1", payload.str());
+    }
+
+    JsonRpcDispatchResult HandleTooltipListPending(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method)
+    {
+        (void)frame;
+        (void)request;
+        (void)method;
+
+        Player* player = session.GetPlayer();
+        std::string payload = BuildHermesTooltipPendingListPayload(player);
+        return HermesPayloadResult(idText, "tooltip.pending-list.v1", payload);
     }
 
     JsonRpcDispatchResult HandleServerGetStatus(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method)
@@ -3873,15 +5236,15 @@ namespace
         (void)request;
         (void)method;
 
-        std::string const maxUnsignedText = BigUIntToText(std::numeric_limits<uint128>::max());
-        std::string const maxSignedText = BigIntToText(std::numeric_limits<int128>::max());
-        std::string const minSignedText = BigIntToText(std::numeric_limits<int128>::min());
+        std::string const maxUnsignedText = BigUIntToText(std::numeric_limits<uint256>::max());
+        std::string const maxSignedText = BigIntToText(std::numeric_limits<int256>::max());
+        std::string const minSignedText = BigIntToText(std::numeric_limits<int256>::min());
         JsonRpcDispatchResult result;
         std::ostringstream out;
         out << "{\"jsonrpc\":\"2.0\",\"id\":" << idText
             << ",\"result\":{\"integerTextEncoding\":\"decimal-string\""
-            << ",\"integerTextBits\":" << std::numeric_limits<uint128>::digits
-            << ",\"signedIntegerValueBits\":" << std::numeric_limits<int128>::digits
+            << ",\"integerTextBits\":" << std::numeric_limits<uint256>::digits
+            << ",\"signedIntegerValueBits\":" << std::numeric_limits<int256>::digits
             << ",\"jsonSafeIntegerMax\":" << HERMES_JSON_SAFE_UINT_MAX
             << ",\"maxUnsignedDigits\":" << maxUnsignedText.size()
             << ",\"maxUnsignedHead\":\"" << HeadText(maxUnsignedText, 16) << "\""
@@ -4129,7 +5492,7 @@ namespace
         }
 
         out << ",\"modules\":[{\"name\":\"PlayerAttributePanel\",\"status\":\"active\",\"methods\":[\"ui.getModuleStatus\",\"player.getAttributes\",\"player.getTargetSnapshot\",\"player.getVitals\",\"player.getSnapshot\"],\"stateSections\":[\"attributes\",\"vitals\",\"basic\",\"position\"]}]"
-            << ",\"queues\":{\"pendingLimit\":128,\"streamQueueLimit\":512,\"nativeSendQueue\":32,\"nativeRecvQueue\":256"
+            << ",\"queues\":{\"pendingLimit\":128,\"streamQueueLimit\":512,\"nativeSendQueue\":256,\"nativeRecvQueue\":8192"
             << ",\"serverOutboundCapacity\":" << HERMES_SERVER_OUTBOUND_QUEUE_CAPACITY
             << ",\"serverOutboundDepth\":" << g_HermesOutboundQueueStats.Depth
             << ",\"serverOutboundHighWatermark\":" << g_HermesOutboundQueueStats.HighWatermark
@@ -4629,9 +5992,23 @@ namespace
         }
 
         std::vector<std::string> fields = SplitHermesPayloadFields(ExtractPayloadParam(request), '|');
-        uint32 offset = fields.size() > 0 ? ParseHermesUInt(fields[0], 0) : 0;
-        uint32 limit = fields.size() > 1 ? ParseHermesUInt(fields[1], 40) : 40;
-        return HermesPayloadResult(idText, "synthesis.list-page.v1", BuildHermesSynthesisListPayload(*player, offset, limit));
+        uint32 classType = 255;
+        uint32 offset = 0;
+        uint32 limit = 8;
+        if (fields.size() >= 3)
+        {
+            classType = ParseHermesUInt(fields[0], 0);
+            offset = ParseHermesUInt(fields[1], 0);
+            limit = ParseHermesUInt(fields[2], 8);
+        }
+        else
+        {
+            offset = fields.size() > 0 ? ParseHermesUInt(fields[0], 0) : 0;
+            limit = fields.size() > 1 ? ParseHermesUInt(fields[1], 8) : 8;
+        }
+
+        std::string payload = BuildHermesSynthesisListPayload(*player, offset, limit, classType);
+        return HermesPayloadResult(idText, "synthesis.list-page.v1", payload);
     }
 
     JsonRpcDispatchResult HandleSynthesisDo(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method)
@@ -4874,6 +6251,8 @@ namespace
         HermesMethodDescriptor const* descriptor = FindMethodDescriptor(method);
         if (!descriptor || !descriptor->Handler)
         {
+            if (ConsumeHermesDebugBudget(g_HermesDebugDispatchLogBudget))
+                LOG_INFO("server.loading", "HermesBridge DEBUG server dispatch missing account={} requestId={} method={} payload={}", session.GetAccountId(), frame.RequestId, method, HermesLogPreview(frame.Payload));
             frame.MethodId = HERMES_METHOD_UNKNOWN;
             result.IsError = true;
             result.Payload = JsonRpcErrorPayload(idText, -32601, "Method not found", "METHOD_NOT_FOUND", method);
@@ -4881,6 +6260,14 @@ namespace
         }
 
         frame.MethodId = descriptor->MethodId;
+        if (ShouldTraceHermesServerMethod(frame.MethodId) && ConsumeHermesDebugBudget(g_HermesDebugDispatchLogBudget))
+            LOG_INFO("server.loading", "HermesBridge DEBUG server dispatch account={} player={} method={} methodId={} requestId={} bytes={}",
+                session.GetAccountId(),
+                session.GetPlayer() ? session.GetPlayer()->GetName().c_str() : "<none>",
+                method,
+                frame.MethodId,
+                frame.RequestId,
+                frame.Payload.size());
         if (session.GetSecurity() < descriptor->MinSecurity)
         {
             LOG_INFO("server.loading", "HermesBridge: permission denied account={} method={} security={} required={}", session.GetAccountId(), method, static_cast<unsigned int>(session.GetSecurity()), static_cast<unsigned int>(descriptor->MinSecurity));
@@ -4891,6 +6278,8 @@ namespace
 
         if (IsHermesRateLimited(session, *descriptor))
         {
+            if (ConsumeHermesDebugBudget(g_HermesDebugDispatchLogBudget))
+                LOG_INFO("server.loading", "HermesBridge DEBUG server rate-limited account={} method={} methodId={} requestId={}", session.GetAccountId(), method, frame.MethodId, frame.RequestId);
             result.IsError = true;
             result.Payload = JsonRpcErrorPayload(idText, -32031, "Rate limit exceeded", "RATE_LIMITED", method);
             return result;
@@ -4948,6 +6337,28 @@ namespace
         }
 
         ReadPayload(recvPacket, frame.PayloadSize, frame.Payload);
+        if ((frame.MethodId == HERMES_METHOD_HELLO || frame.MethodId == HERMES_METHOD_PING || frame.MethodId == HERMES_METHOD_ADDON_DISPATCH || IsHermesTracePayload(frame.Payload)) && ConsumeHermesTraceBudget(g_HermesTraceRecvFrameLogBudget))
+            LOG_INFO("server.loading", "HermesBridge TRACE server recv-frame account={} player={} lane={} type={} methodId={} requestId={} bytes={} payload={}",
+                session.GetAccountId(),
+                session.GetPlayer() ? session.GetPlayer()->GetName().c_str() : "<none>",
+                static_cast<unsigned int>(frame.Lane),
+                static_cast<unsigned int>(frame.MessageType),
+                frame.MethodId,
+                frame.RequestId,
+                frame.PayloadSize,
+                HermesLogPreview(frame.Payload, 240));
+        if (ShouldTraceHermesServerMethod(frame.MethodId) && ConsumeHermesDebugBudget(g_HermesDebugRecvLogBudget))
+            LOG_INFO("server.loading", "HermesBridge DEBUG server recv-frame account={} player={} lane={} type={} codec={} methodId={} requestId={} seq={} bytes={} payload={}",
+                session.GetAccountId(),
+                session.GetPlayer() ? session.GetPlayer()->GetName().c_str() : "<none>",
+                static_cast<unsigned int>(frame.Lane),
+                static_cast<unsigned int>(frame.MessageType),
+                static_cast<unsigned int>(frame.Codec),
+                frame.MethodId,
+                frame.RequestId,
+                frame.Sequence,
+                frame.PayloadSize,
+                HermesLogPreview(frame.Payload));
         if (HERMES_BRIDGE_TRACE_PACKETS)
             LOG_INFO("server.loading", "HermesBridge: v2 recv account={} lane={} type={} codec={} methodId={} requestId={} seq={} bytes={}", session.GetAccountId(), frame.Lane, frame.MessageType, frame.Codec, frame.MethodId, frame.RequestId, frame.Sequence, frame.PayloadSize);
 
@@ -4979,6 +6390,8 @@ namespace
             SendHermesFrameV2(session, frame, HERMES_MESSAGE_ERROR, HERMES_CODEC_JSON, JsonRpcErrorPayload("null", -32700, "Parse error", "JSON_PARSE_ERROR"));
             return;
         }
+        if (HermesBridge_ShouldMarkAddonReadyForMethod(frame.MethodId))
+            MarkHermesAddonReady(session, "hello");
 
         try
         {
@@ -5009,10 +6422,37 @@ namespace
             if (!session)
                 return true;
 
+            if (!sConfigMgr->GetOption<bool>("HermesBridge.AddonBridge.Enabled", true))
+                return true;
+
             std::string prefix;
             std::string payload;
             if (TryReadAddonChatPacket(packet, prefix, payload))
             {
+                Player* player = session->GetPlayer();
+                bool const addonReady = IsHermesAddonReady(player);
+                bool const prefixReady = IsHermesAddonPrefixReady(player, prefix);
+                if (!HermesBridge_ShouldTakeoverLegacyAddonPacket(true, addonReady, prefixReady, true))
+                {
+                    if (ConsumeHermesTraceBudget(g_HermesTraceLegacyBypassLogBudget))
+                        LOG_INFO("server.loading", "HermesBridge TRACE server addon-legacy-bypass-not-ready account={} player={} prefix={} ready={} prefixReady={} bytes={}",
+                            session->GetAccountId(),
+                            player ? player->GetName().c_str() : "<none>",
+                            prefix,
+                            addonReady ? 1 : 0,
+                            prefixReady ? 1 : 0,
+                            payload.size());
+                    return true;
+                }
+
+                if (ConsumeHermesDebugBudget(g_HermesDebugAddonLogBudget))
+                    LOG_INFO("server.loading", "HermesBridge DEBUG server addon-legacy-smsg account={} player={} prefix={} payloadBytes={} preview={}",
+                        session->GetAccountId(),
+                        session->GetPlayer() ? session->GetPlayer()->GetName().c_str() : "<none>",
+                        prefix,
+                        payload.size(),
+                        HermesLogPreview(payload));
+
                 std::string coalescedPayload;
                 HermesAddonChunkResult const chunkResult = TryCoalesceAddonChunk(*session, prefix, payload, coalescedPayload);
                 if (chunkResult == HermesAddonChunkResult::Complete)
@@ -5027,11 +6467,60 @@ namespace
             return true;
         }
     };
+
+    class HermesAddonReadyPlayerScript : public PlayerScript
+    {
+    public:
+        HermesAddonReadyPlayerScript() : PlayerScript("HermesAddonReadyPlayerScript", { PLAYERHOOK_ON_LOGOUT }) { }
+
+        void OnPlayerLogout(Player* player) override
+        {
+            if (player)
+                ClearHermesAddonReady(player, "logout");
+        }
+    };
+}
+
+bool HermesBridge_SendAddonMessage(Player* player, std::string const& prefix, std::string const& payload)
+{
+    if (!player || !player->GetSession() || prefix.empty() || payload.empty())
+        return false;
+
+    if (!sConfigMgr->GetOption<bool>("HermesBridge.AddonBridge.Enabled", true))
+        return false;
+
+    bool const addonReady = IsHermesAddonReady(player);
+    bool const takeoverPrefix = IsHermesAddonTakeoverPrefix(prefix);
+    bool const prefixReady = IsHermesAddonPrefixReady(player, prefix);
+    if (!HermesBridge_ShouldTakeoverLegacyAddonPacket(true, addonReady, prefixReady, takeoverPrefix))
+    {
+        if (takeoverPrefix && !addonReady && !prefixReady && ConsumeHermesTraceBudget(g_HermesTraceAddonNotReadyLogBudget))
+            LOG_INFO("server.loading", "HermesBridge TRACE server addon-send-defer-legacy player={} prefix={} ready={} prefixReady={} takeover={} bytes={}",
+                player->GetName(),
+                prefix,
+                addonReady ? 1 : 0,
+                prefixReady ? 1 : 0,
+                takeoverPrefix ? 1 : 0,
+                payload.size());
+        return false;
+    }
+
+    WorldSession* session = player->GetSession();
+    std::string coalescedPayload;
+    HermesAddonChunkResult const chunkResult = TryCoalesceAddonChunk(*session, prefix, payload, coalescedPayload);
+    if (chunkResult == HermesAddonChunkResult::Complete)
+        SendHermesAddonMessageEvent(*session, prefix, coalescedPayload);
+    else if (chunkResult == HermesAddonChunkResult::NotChunk || chunkResult == HermesAddonChunkResult::Invalid)
+        SendHermesAddonMessageEvent(*session, prefix, payload);
+
+    g_HermesAddonTakeoverBlockedLegacySmsg.fetch_add(1, std::memory_order_relaxed);
+    return true;
 }
 
 void AddHermesBridgePacketBridgeScripts()
 {
     new HermesAddonPacketBridgeScript();
+    new HermesAddonReadyPlayerScript();
 }
 
 void WorldSession::HandleHermesBridgeOpcode(WorldPacket& recvPacket)

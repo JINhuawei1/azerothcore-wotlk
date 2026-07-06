@@ -135,7 +135,7 @@ namespace SpellScriptCombat
 
         if (Player* player = unit->ToPlayer())
         {
-            int128 extended = player->GetExtendedStat128(stat);
+            int256 extended = player->GetExtendedStat256(stat);
             if (extended > 0)
                 return Acore::Number::ToLongDouble(extended);
         }
@@ -167,7 +167,7 @@ namespace SpellScriptCombat
 
         if (Player* player = unit->ToPlayer())
         {
-            int128 extended = player->GetExtendedSpellDamageBonus128(schoolMask);
+            int256 extended = player->GetExtendedSpellDamageBonus256(schoolMask);
             if (extended > 0)
                 return Acore::Number::ToLongDouble(extended);
         }
@@ -183,7 +183,7 @@ namespace SpellScriptCombat
 
         if (Player* player = unit->ToPlayer())
         {
-            int128 extended = player->GetExtendedHealingBonus128();
+            int256 extended = player->GetExtendedHealingBonus256();
             if (extended > 0)
                 return Acore::Number::ToLongDouble(extended);
         }

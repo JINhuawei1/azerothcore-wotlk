@@ -57,6 +57,7 @@ public:
 #include "DatabaseEnv.h"
 #include "Item.h"
 #include "ItemTemplate.h"
+#include "HermesBridgeAddonApi.h"
 #include "Log.h"
 #if defined(__INTELLISENSE__)
 #ifndef sConfigMgr
@@ -1039,6 +1040,9 @@ void SendFashionSystemPayload(Player* player, std::string const& payload)
 
     if (payload.length() <= MAX_ADDON_PAYLOAD)
     {
+        if (HermesBridge_SendAddonMessage(player, FASHION_SYSTEM_ADDON_PREFIX, payload))
+            return;
+
         std::string fullMessage = std::string(FASHION_SYSTEM_ADDON_PREFIX) + '\t' + payload;
         WorldPacket data;
         ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
@@ -1053,6 +1057,8 @@ void SendFashionSystemPayload(Player* player, std::string const& payload)
         size_t len = std::min(MAX_ADDON_PAYLOAD, payload.length() - start);
         std::ostringstream chunk;
         chunk << "CHUNK:" << (i + 1) << ":" << totalChunks << ":" << payload.substr(start, len);
+        if (HermesBridge_SendAddonMessage(player, FASHION_SYSTEM_ADDON_PREFIX, chunk.str()))
+            continue;
 
         std::string fullMessage = std::string(FASHION_SYSTEM_ADDON_PREFIX) + '\t' + chunk.str();
         WorldPacket data;

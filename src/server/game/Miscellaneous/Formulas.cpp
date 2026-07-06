@@ -126,7 +126,7 @@ uint32 Acore::XP::Gain(Player* player, Unit* unit, bool isBattleGround /*= false
         // if players dealt less than 50% of the damage and were credited anyway (due to CREATURE_FLAG_EXTRA_NO_PLAYER_DAMAGE_REQ), scale XP gained appropriately (linear scaling)
         if (creature && creature->GetPlayerDamageReq())
         {
-            uint128 maxHealth = creature->GetMaxHealthForCombat128();
+            uint256 maxHealth = creature->GetMaxHealthForCombat256();
             if (maxHealth != 0)
             {
                 long double reqRatio = Acore::Number::ToLongDouble(creature->GetPlayerDamageReq()) / Acore::Number::ToLongDouble(maxHealth);

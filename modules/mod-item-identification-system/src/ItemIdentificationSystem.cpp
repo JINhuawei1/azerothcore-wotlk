@@ -1,6 +1,7 @@
 #include "ItemIdentificationSystem.h"
 #include "AddonThrottle.h"
 #include "Define.h"
+#include "HermesBridgeAddonApi.h"
 #include <limits>
 #include "ScriptMgr.h"
 #include "Player.h"
@@ -90,6 +91,22 @@
 
 namespace
 {
+    constexpr char const* ITEM_IDENTIFICATION_ADDON_PREFIX = "UITQ";
+
+    void SendItemIdentificationAddonMessage(Player* player, std::string const& payload)
+    {
+        if (!player)
+            return;
+
+        if (HermesBridge_SendAddonMessage(player, ITEM_IDENTIFICATION_ADDON_PREFIX, payload))
+            return;
+
+        std::string fullMessage = std::string(ITEM_IDENTIFICATION_ADDON_PREFIX) + "\t" + payload;
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
+        player->SendDirectMessage(&data);
+    }
+
     char NormalizeHuanJingMode(char mode)
     {
         if (mode == '+' || mode == 1)
@@ -134,7 +151,7 @@ namespace
 
         for (uint32 i = 0; i < proto->StatsCount && i < MAX_ITEM_PROTO_STATS; ++i)
         {
-            int128 statValue = proto->ItemStatValue128[i];
+            int256 statValue = proto->ItemStatValue256[i];
             if (!statValue)
                 continue;
 
@@ -162,13 +179,13 @@ namespace
                    << proto->Damage[i].DamageType;
         }
 
-        if (!hasStats && proto->Armor128 == 0 && !hasDamage)
+        if (!hasStats && proto->Armor256 == 0 && !hasDamage)
             return "";
 
         std::ostringstream data;
         data << "TPL64|" << stats.str() << "|";
-        if (proto->Armor128 != 0)
-            data << proto->Armor128.convert_to<std::string>();
+        if (proto->Armor256 != 0)
+            data << proto->Armor256.convert_to<std::string>();
         data << "|" << damage.str();
 
         return data.str();
@@ -320,7 +337,7 @@ namespace
 std::vector<uint32> ParseCommaSeparatedNumbers(const std::string& str);
 uint32 SelectRandomFromList(const std::vector<uint32>& list);
 uint32 GenerateRandomNumber(uint32 min, uint32 max);
-uint128 GenerateRandomUInt128(uint128 min, uint128 max);
+uint256 GenerateRandomUInt256(uint256 min, uint256 max);
 uint32 GetIdentificationTemplateMatchLevel(Item* item);
 
 // 单例实例
@@ -392,14 +409,14 @@ struct IdentificationTemplate
     std::string itemGrowthGroups;
     uint32 growthAttrMinCount;
     uint32 growthAttrMaxCount;
-    uint128 growthAttrMinValue;
-    uint128 growthAttrMaxValue;
+    uint256 growthAttrMinValue;
+    uint256 growthAttrMaxValue;
 
     std::string itemEnhancementGroups;
     uint32 enhancementAttrMinCount;
     uint32 enhancementAttrMaxCount;
-    uint128 enhancementAttrMinValue;
-    uint128 enhancementAttrMaxValue;
+    uint256 enhancementAttrMinValue;
+    uint256 enhancementAttrMaxValue;
 
     std::string itemAttributesGroups;
     std::string itemAttributesAdditionalGroups;
@@ -411,15 +428,15 @@ struct IdentificationTemplate
     // 基础属性配置
     uint32 baseAttrMinCount;
     uint32 baseAttrMaxCount;
-    uint128 baseAttrMinValue;
-    uint128 baseAttrMaxValue;
+    uint256 baseAttrMinValue;
+    uint256 baseAttrMaxValue;
     bool baseAttrAllowDuplicate;
 
     // 追加属性配置
     uint32 additionalAttrMinCount;
     uint32 additionalAttrMaxCount;
-    uint128 additionalAttrMinValue;
-    uint128 additionalAttrMaxValue;
+    uint256 additionalAttrMinValue;
+    uint256 additionalAttrMaxValue;
     bool additionalAttrAllowDuplicate;
 
     // 追加技能配置
@@ -556,30 +573,30 @@ void ItemIdentificationSystem::LoadIdentificationTemplates()
         tmpl.itemGrowthGroups      = fields[5].Get<std::string>();              // 物品成长_系统
         tmpl.growthAttrMinCount    = fields[6].Get<uint32>();                   // 成长属性最小数量
         tmpl.growthAttrMaxCount    = fields[7].Get<uint32>();                   // 成长属性最大数量
-        tmpl.growthAttrMinValue    = fields[8].Get<uint128>();                  // 成长属性最小属性值
-        tmpl.growthAttrMaxValue    = fields[9].Get<uint128>();                  // 成长属性最大属性值
+        tmpl.growthAttrMinValue    = fields[8].Get<uint256>();                  // 成长属性最小属性值
+        tmpl.growthAttrMaxValue    = fields[9].Get<uint256>();                  // 成长属性最大属性值
 
         tmpl.itemEnhancementGroups   = fields[10].Get<std::string>();           // 物品强化_系统
         tmpl.enhancementAttrMinCount = fields[11].Get<uint32>();                // 强化属性最小数量
         tmpl.enhancementAttrMaxCount = fields[12].Get<uint32>();                // 强化属性最大数量
-        tmpl.enhancementAttrMinValue = fields[13].Get<uint128>();               // 强化属性最小属性值
-        tmpl.enhancementAttrMaxValue = fields[14].Get<uint128>();               // 强化属性最大属性值
+        tmpl.enhancementAttrMinValue = fields[13].Get<uint256>();               // 强化属性最小属性值
+        tmpl.enhancementAttrMaxValue = fields[14].Get<uint256>();               // 强化属性最大属性值
 
         tmpl.itemAttributesGroups = fields[15].Get<std::string>();              // 物品属性_模板（基础属性）
 
         // 基础属性配置
         tmpl.baseAttrMinCount = fields[16].Get<uint32>();                       // 基础属性最小数量
         tmpl.baseAttrMaxCount = fields[17].Get<uint32>();                       // 基础属性最大数量
-        tmpl.baseAttrMinValue = fields[18].Get<uint128>();                      // 基础最小属性值
-        tmpl.baseAttrMaxValue = fields[19].Get<uint128>();                      // 基础最大属性值
+        tmpl.baseAttrMinValue = fields[18].Get<uint256>();                      // 基础最小属性值
+        tmpl.baseAttrMaxValue = fields[19].Get<uint256>();                      // 基础最大属性值
         tmpl.baseAttrAllowDuplicate = fields[20].Get<uint32>() == 0;           // 基础属性允许重复
 
         // 追加属性配置
         tmpl.itemAttributesAdditionalGroups = fields[21].Get<std::string>();   // 物品属性_模板_组（追加属性）
         tmpl.additionalAttrMinCount = fields[22].Get<uint32>();                // 追加属性最小数量
         tmpl.additionalAttrMaxCount = fields[23].Get<uint32>();                // 追加属性最大数量
-        tmpl.additionalAttrMinValue = fields[24].Get<uint128>();               // 追加属性最小值
-        tmpl.additionalAttrMaxValue = fields[25].Get<uint128>();               // 追加属性最大值
+        tmpl.additionalAttrMinValue = fields[24].Get<uint256>();               // 追加属性最小值
+        tmpl.additionalAttrMaxValue = fields[25].Get<uint256>();               // 追加属性最大值
         tmpl.additionalAttrAllowDuplicate = fields[26].Get<uint32>() == 0;     // 追加属性允许重复
 
         // 追加技能配置
@@ -677,7 +694,7 @@ bool ItemIdentificationSystem::CanIdentify(Player* player, Item* item, bool send
     DebugLog("物品类型检查通过 (类型: {}, 名称: {})", proto->Class, proto->Name1);
 
     // 检查玩家金币是否足够
-    int128 playerMoney = player->GetMoney();
+    int256 playerMoney = player->GetMoney();
 
     if (playerMoney < _cost)
     {
@@ -1136,13 +1153,13 @@ uint32 GenerateRandomNumber(uint32 min, uint32 max)
     return dis(sItemIdentificationSystem->GetRandomGenerator());
 }
 
-uint128 GenerateRandomUInt128(uint128 min, uint128 max)
+uint256 GenerateRandomUInt256(uint256 min, uint256 max)
 {
     if (min >= max)
         return min;
 
-    uint128 span = max - min;
-    uint128 randomValue = 0;
+    uint256 span = max - min;
+    uint256 randomValue = 0;
     std::uniform_int_distribution<uint32> dis(0, std::numeric_limits<uint32>::max());
 
     for (uint8 i = 0; i < 4; ++i)
@@ -1151,7 +1168,7 @@ uint128 GenerateRandomUInt128(uint128 min, uint128 max)
         randomValue += dis(sItemIdentificationSystem->GetRandomGenerator());
     }
 
-    if (span == std::numeric_limits<uint128>::max())
+    if (span == std::numeric_limits<uint256>::max())
         return randomValue;
 
     return min + (randomValue % (span + 1));
@@ -1166,24 +1183,24 @@ uint32 GetIdentificationTemplateMatchLevel(Item* item)
 }
 
 #ifdef MODULE_ITEM_ATTRIBUTES
-uint128 GetOfficialStatReferenceValue(Item* item, uint32 attributeType)
+uint256 GetOfficialStatReferenceValue(Item* item, uint32 attributeType)
 {
     if (!item || !item->GetTemplate())
         return 1;
 
     ItemTemplate const* proto = item->GetTemplate();
-    std::vector<uint128> values;
-    uint128 matchedValue = 0;
+    std::vector<uint256> values;
+    uint256 matchedValue = 0;
 
     for (uint32 i = 0; i < proto->StatsCount && i < MAX_ITEM_PROTO_STATS; ++i)
     {
         uint32 statType = proto->ItemStat[i].ItemStatType;
-        int128 statValue = proto->ItemStatValue128[i];
+        int256 statValue = proto->ItemStatValue256[i];
 
         if (statType == 0 || statValue <= 0)
             continue;
 
-        uint128 value = Acore::Number::ToUInt128Saturated(statValue);
+        uint256 value = Acore::Number::ToUInt256Saturated(statValue);
         values.push_back(value);
 
         if (statType == attributeType)
@@ -1201,23 +1218,23 @@ uint128 GetOfficialStatReferenceValue(Item* item, uint32 attributeType)
         if (values.size() % 2 == 1)
             return values[middle];
 
-        uint128 median = values[middle - 1] + ((values[middle] - values[middle - 1]) / 2);
-        return std::max<uint128>(1, median);
+        uint256 median = values[middle - 1] + ((values[middle] - values[middle - 1]) / 2);
+        return std::max<uint256>(1, median);
     }
 
     uint32 itemLevelFallback = proto->ItemLevel / 4;
     return std::max<uint32>(1, itemLevelFallback);
 }
 
-int128 CalculateOfficialPercentAttributeValue(Item* item, uint32 attributeType, uint128 minPercent, uint128 maxPercent)
+int256 CalculateOfficialPercentAttributeValue(Item* item, uint32 attributeType, uint256 minPercent, uint256 maxPercent)
 {
     if (minPercent > maxPercent)
         std::swap(minPercent, maxPercent);
 
-    uint128 percent = GenerateRandomUInt128(minPercent, maxPercent);
-    uint128 referenceValue = GetOfficialStatReferenceValue(item, attributeType);
+    uint256 percent = GenerateRandomUInt256(minPercent, maxPercent);
+    uint256 referenceValue = GetOfficialStatReferenceValue(item, attributeType);
     long double scaledValue = Acore::Number::ToLongDouble(referenceValue) * Acore::Number::ToLongDouble(percent) / 100.0L;
-    int128 value = Acore::Number::ToInt128Saturated(std::round(scaledValue));
+    int256 value = Acore::Number::ToInt256Saturated(std::round(scaledValue));
 
     if (percent > 0 && value < 1)
         value = 1;
@@ -1312,7 +1329,7 @@ uint32 ApplyOfficialPercentAdditionalAttributes(
             if (!attributeTemplate)
                 continue;
 
-            int128 value = CalculateOfficialPercentAttributeValue(
+            int256 value = CalculateOfficialPercentAttributeValue(
                 item,
                 attributeTemplate->attributeType,
                 tmpl.additionalAttrMinValue,
@@ -1351,7 +1368,7 @@ uint32 ApplyOfficialPercentBaseAttributes(
     uint32 appliedCount = 0;
     std::set<uint32> selectedTypes;
     std::vector<uint32> baseAttributes;
-    std::vector<int128> baseValues;
+    std::vector<int256> baseValues;
     uint32 maxAttempts = std::max<uint32>(attrCount * 8, 8);
 
     for (uint32 attempt = 0; appliedCount < attrCount && attempt < maxAttempts; ++attempt)
@@ -1371,7 +1388,7 @@ uint32 ApplyOfficialPercentBaseAttributes(
             if (!attributeTemplate)
                 continue;
 
-            int128 value = CalculateOfficialPercentAttributeValue(
+            int256 value = CalculateOfficialPercentAttributeValue(
                 item,
                 attributeTemplate->attributeType,
                 tmpl.baseAttrMinValue,
@@ -1445,7 +1462,7 @@ uint32 FilterItemAdditionalAttributesByGroups(Item* item, const std::vector<uint
         return static_cast<uint32>(data->additionalAttributeIds.size());
 
     std::vector<uint32> filteredIds;
-    std::vector<int128> filteredValues;
+    std::vector<int256> filteredValues;
     filteredIds.reserve(data->additionalAttributeIds.size());
     filteredValues.reserve(data->additionalAttributeValues.size());
 
@@ -1562,8 +1579,8 @@ uint32 ItemIdentificationSystem::ApplyItemGrowth(Player* player, Item* item, con
             selectedGroup,
             tmpl.growthAttrMinCount,
             tmpl.growthAttrMaxCount,
-            Acore::Number::ToInt128Saturated(tmpl.growthAttrMinValue),
-            Acore::Number::ToInt128Saturated(tmpl.growthAttrMaxValue));
+            Acore::Number::ToInt256Saturated(tmpl.growthAttrMinValue),
+            Acore::Number::ToInt256Saturated(tmpl.growthAttrMaxValue));
 
         // ChatHandler(player->GetSession()).PSendSysMessage("物品获得成长属性（组{}）", selectedGroup);
 
@@ -1727,8 +1744,8 @@ void ItemIdentificationSystem::ApplyBaseAttributes(Player* player, Item* item, c
     options.minAttributes = attrCount;        // 最少属性数量
     options.maxAttributes = attrCount;        // 最多属性数量
     options.attributeGroup = selectedGroup;   // 指定属性组
-    options.minItemLevel = Acore::Number::ToInt128Saturated(tmpl.baseAttrMinValue);   // 属性值最小值
-    options.maxItemLevel = Acore::Number::ToInt128Saturated(tmpl.baseAttrMaxValue);   // 属性值最大值
+    options.minItemLevel = Acore::Number::ToInt256Saturated(tmpl.baseAttrMinValue);   // 属性值最小值
+    options.maxItemLevel = Acore::Number::ToInt256Saturated(tmpl.baseAttrMaxValue);   // 属性值最大值
     options.respectChance = true;             // 考虑属性获取几率
     options.allowDuplicateTypes = tmpl.baseAttrAllowDuplicate;  // 是否允许重复
     options.useValueRangeFilter = true;       // 启用属性值范围过滤
@@ -1745,7 +1762,7 @@ void ItemIdentificationSystem::ApplyBaseAttributes(Player* player, Item* item, c
         // 如果读取失败，接受属性延迟加载（不影响鉴定成功）
 
         std::vector<uint32> baseAttributes;
-        std::vector<int128> baseValues;
+        std::vector<int256> baseValues;
 
         uint64 itemGuid = item->GetGUID().GetCounter();
 
@@ -1851,8 +1868,8 @@ uint32 ItemIdentificationSystem::ApplyAdditionalAttributes(Player* player, Item*
             options.minAttributes = attrCount;  // 使用配置的数量
             options.maxAttributes = attrCount;
             options.attributeGroup = attributeGroups[0];
-            options.minItemLevel = Acore::Number::ToInt128Saturated(tmpl.additionalAttrMinValue);
-            options.maxItemLevel = Acore::Number::ToInt128Saturated(tmpl.additionalAttrMaxValue);
+            options.minItemLevel = Acore::Number::ToInt256Saturated(tmpl.additionalAttrMinValue);
+            options.maxItemLevel = Acore::Number::ToInt256Saturated(tmpl.additionalAttrMaxValue);
             options.respectChance = true;
             options.allowDuplicateTypes = tmpl.additionalAttrAllowDuplicate;
             options.useValueRangeFilter = true;
@@ -1877,8 +1894,8 @@ uint32 ItemIdentificationSystem::ApplyAdditionalAttributes(Player* player, Item*
                 options.minAttributes = 1;
                 options.maxAttributes = 1;
                 options.attributeGroup = groupId;
-                options.minItemLevel = Acore::Number::ToInt128Saturated(tmpl.additionalAttrMinValue);
-                options.maxItemLevel = Acore::Number::ToInt128Saturated(tmpl.additionalAttrMaxValue);
+                options.minItemLevel = Acore::Number::ToInt256Saturated(tmpl.additionalAttrMinValue);
+                options.maxItemLevel = Acore::Number::ToInt256Saturated(tmpl.additionalAttrMaxValue);
                 options.respectChance = true;
                 options.allowDuplicateTypes = tmpl.additionalAttrAllowDuplicate;
                 options.useValueRangeFilter = true;
@@ -3560,11 +3577,7 @@ private:
                  << ":"  // huanjingData
                  << templateStatsData;
 
-        std::string fullMessage = "UITQ\t" + response.str();
-        WorldPacket data;
-        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON,
-                                     player, player, fullMessage, 0);
-        player->SendDirectMessage(&data);
+        SendItemIdentificationAddonMessage(player, response.str());
     }
 
     // 处理查询其他玩家装备GUID的请求
@@ -3610,12 +3623,7 @@ private:
             // 玩家不在线，返回空响应
             std::string response = "INSPECT_ITEM_GUID_RESPONSE:" + targetPlayerName + ":" +
                                    std::to_string(slot) + ":" + std::to_string(itemID) + ":0";
-            std::string fullMessage = "UITQ\t" + response;
-
-            WorldPacket data;
-            ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON,
-                                         requester, requester, fullMessage, 0);
-            requester->SendDirectMessage(&data);
+            SendItemIdentificationAddonMessage(requester, response);
             return;
         }
 
@@ -3646,12 +3654,7 @@ private:
             // 无权限查看，返回空响应
             std::string response = "INSPECT_ITEM_GUID_RESPONSE:" + targetPlayerName + ":" +
                                    std::to_string(slot) + ":" + std::to_string(itemID) + ":0";
-            std::string fullMessage = "UITQ\t" + response;
-
-            WorldPacket data;
-            ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON,
-                                         requester, requester, fullMessage, 0);
-            requester->SendDirectMessage(&data);
+            SendItemIdentificationAddonMessage(requester, response);
             return;
         }
 
@@ -3669,12 +3672,7 @@ private:
         response << "INSPECT_ITEM_GUID_RESPONSE:" << targetPlayerName << ":"
                  << static_cast<uint32>(slot) << ":" << itemID << ":" << realGuid;
 
-        std::string fullMessage = "UITQ\t" + response.str();
-
-        WorldPacket data;
-        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON,
-                                     requester, requester, fullMessage, 0);
-        requester->SendDirectMessage(&data);
+        SendItemIdentificationAddonMessage(requester, response.str());
     }
 
     // 【修复】辅助函数：在玩家背包和装备中查找指定itemID的物品的真实GUID
@@ -3823,16 +3821,7 @@ private:
 
         std::string responseStr = response.str();
 
-        // 通过Addon消息发送响应
-        // 参考符文系统：构建完整消息 "UITQ<TAB>响应数据"
-        std::string fullMessage = "UITQ\t" + responseStr;
-
-        // 使用ChatHandler::BuildChatPacket构建标准包
-        WorldPacket data;
-        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, 
-                                     player, player, fullMessage, 0);
-        
-        player->SendDirectMessage(&data);
+        SendItemIdentificationAddonMessage(player, responseStr);
 
         // 计算查询耗时
         auto queryEnd = std::chrono::high_resolution_clock::now();
@@ -3862,11 +3851,7 @@ private:
         if (!player)
             return;
 
-        std::string fullMessage = "UITQ\t" + response;
-        WorldPacket data;
-        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON,
-                                     player, player, fullMessage, 0);
-        player->SendDirectMessage(&data);
+        SendItemIdentificationAddonMessage(player, response);
     }
 
     // 辅助函数：在玩家背包中通过GUID查找物品
@@ -5205,13 +5190,7 @@ void ItemIdentificationSystem::SendAllModuleDataAddon(Player* player, uint32 ite
 
     std::string responseStr = response.str();
 
-    // 参考 HandleAddonBatchQuery：使用 "UITQ<TAB>数据" 作为实际发送内容
-    std::string fullMessage = "UITQ\t" + responseStr;
-
-    WorldPacket pkt;
-    ChatHandler::BuildChatPacket(pkt, CHAT_MSG_WHISPER, LANG_ADDON,
-                                 player, player, fullMessage, 0);
-    player->SendDirectMessage(&pkt);
+    SendItemIdentificationAddonMessage(player, responseStr);
 }
 
 // 批量查询命令处理器（一次性返回所有数据）
@@ -6103,11 +6082,7 @@ bool ItemIdentificationCommandScript::HandleOpenUICommand(ChatHandler* handler, 
         return false;
 
     // 发送打开UI界面的Addon消息
-    std::string fullMessage = "UITQ\tOPEN_UI";
-    WorldPacket data;
-    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
-    player->SendDirectMessage(&data);
+    SendItemIdentificationAddonMessage(player, "OPEN_UI");
 
     return true;
 }
-

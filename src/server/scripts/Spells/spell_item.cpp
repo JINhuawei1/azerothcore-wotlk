@@ -575,8 +575,8 @@ class spell_item_skull_of_impeding_doom : public AuraScript
         if (!GetCaster())
             return;
 
-        uint128 damage = Acore::Number::CalculatePct(GetCaster()->GetMaxHealthForCombat128(), 12);
-        amount = Acore::Number::ToInt32Saturated(Acore::Number::ToInt128Saturated(damage)); // 5 ticks which reduce health by 60%
+        uint256 damage = Acore::Number::CalculatePct(GetCaster()->GetMaxHealthForCombat256(), 12);
+        amount = Acore::Number::ToInt32Saturated(Acore::Number::ToInt256Saturated(damage)); // 5 ticks which reduce health by 60%
     }
 
     void CalculateManaLeechAmount(AuraEffect const* /*aurEff*/, int32& amount, bool& /*canBeRecalculated*/)
@@ -584,8 +584,8 @@ class spell_item_skull_of_impeding_doom : public AuraScript
         if (!GetCaster() || !GetCaster()->HasActivePowerType(POWER_MANA))
             return;
 
-        uint128 mana = Acore::Number::CalculatePct(GetCaster()->GetMaxPowerForCombat128(POWER_MANA), 12);
-        amount = Acore::Number::ToInt32Saturated(Acore::Number::ToInt128Saturated(mana)); // 5 ticks which reduce mana by 60%
+        uint256 mana = Acore::Number::CalculatePct(GetCaster()->GetMaxPowerForCombat256(POWER_MANA), 12);
+        amount = Acore::Number::ToInt32Saturated(Acore::Number::ToInt256Saturated(mana)); // 5 ticks which reduce mana by 60%
     }
 
     void Register() override
@@ -959,7 +959,7 @@ class spell_item_oracle_ablutions : public SpellScript
                 break;
             case POWER_MANA:
                 {
-                    long double manaValue = Acore::Number::ToLongDouble(caster->GetMaxPowerForCombat128(POWER_MANA)) * 5.0L / 100.0L;
+                    long double manaValue = Acore::Number::ToLongDouble(caster->GetMaxPowerForCombat256(POWER_MANA)) * 5.0L / 100.0L;
                     int32 mana = manaValue >= static_cast<long double>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(manaValue);
                     caster->CastCustomSpell(SPELL_ABLUTION_MANA, SPELLVALUE_BASE_POINT0, mana, caster, true);
                     break;
@@ -1040,9 +1040,9 @@ class spell_item_blood_draining_enchant : public AuraScript
         if (!target || !damageInfo)
             return;
 
-        uint128 targetHealth = target->GetHealthForCombat128();
-        uint128 remainingHealth = targetHealth > damageInfo->GetDamage() ? targetHealth - damageInfo->GetDamage() : uint128(0);
-        if (remainingHealth >= target->CountPctFromMaxHealth128(35))
+        uint256 targetHealth = target->GetHealthForCombat256();
+        uint256 remainingHealth = targetHealth > damageInfo->GetDamage() ? targetHealth - damageInfo->GetDamage() : uint256(0);
+        if (remainingHealth >= target->CountPctFromMaxHealth256(35))
         {
             return;
         }
@@ -3141,7 +3141,7 @@ class spell_item_impale_leviroth : public SpellScript
                 target->CastSpell(target, SPELL_LEVIROTH_SELF_IMPALE, true);
                 target->SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, 150);
                 target->SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, 200);
-                target->LowerPlayerDamageReq(target->GetMaxHealthForCombat128());
+                target->LowerPlayerDamageReq(target->GetMaxHealthForCombat256());
             }
     }
 
@@ -3341,7 +3341,7 @@ class spell_item_healing_injector : public SpellScript
     {
         if (Player* caster = GetCaster()->ToPlayer())
             if (caster->HasSkill(SKILL_ENGINEERING))
-                SetHitHeal128(Acore::Number::ToUInt128Saturated(Acore::Number::ToLongDouble(GetHitHeal128()) * 1.25L));
+                SetHitHeal256(Acore::Number::ToUInt256Saturated(Acore::Number::ToLongDouble(GetHitHeal256()) * 1.25L));
     }
 
     void Register() override
@@ -3692,8 +3692,8 @@ class spell_item_wraith_scythe_drain_life : public SpellScript
         Unit* caster = GetCaster();
         if (target && caster)
         {
-            uint128 damage = AddUInt128Damage(GetHitDamage128(), Acore::Number::ToUInt128Saturated(SpellScriptCombat::GetSpellDamageBonus(caster, SPELL_SCHOOL_MASK_ALL)));
-            SetHitDamage128(damage);
+            uint256 damage = AddUInt256Damage(GetHitDamage256(), Acore::Number::ToUInt256Saturated(SpellScriptCombat::GetSpellDamageBonus(caster, SPELL_SCHOOL_MASK_ALL)));
+            SetHitDamage256(damage);
         }
     }
 

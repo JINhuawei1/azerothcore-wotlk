@@ -57,7 +57,7 @@ namespace
 
     bool CanAddMoney64(Player* player, uint64 amount)
     {
-        return !amount || player->GetMoney() <= Acore::Number::GetDecimal65SignedMax() - static_cast<int128>(amount);
+        return !amount || player->GetMoney() <= Acore::Number::GetDecimal65SignedMax() - static_cast<int256>(amount);
     }
 }
 

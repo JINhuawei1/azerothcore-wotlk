@@ -605,7 +605,7 @@ public:
                     if (pXT002->IsAlive())
                     {
                         pXT002->AI()->DoAction(DATA_XT002_NERF_ENGINEERING);
-                        Unit::DealHeal(pXT002, pXT002, pXT002->CountPctFromMaxHealth128(1));
+                        Unit::DealHeal(pXT002, pXT002, pXT002->CountPctFromMaxHealth256(1));
                     }
 
                     if (!urand(0, 2))

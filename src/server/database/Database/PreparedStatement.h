@@ -96,12 +96,12 @@ public:
     }
 
     // MySQL has no native signed/unsigned 256-bit integer binding; send these as DECIMAL(65,0) strings.
-    inline void SetData(const uint8 index, int128 const& value)
+    inline void SetData(const uint8 index, int256 const& value)
     {
         SetValidData(index, Acore::Number::ToDecimal65String(value));
     }
 
-    inline void SetData(const uint8 index, uint128 const& value)
+    inline void SetData(const uint8 index, uint256 const& value)
     {
         SetValidData(index, Acore::Number::ToDecimal65String(value));
     }

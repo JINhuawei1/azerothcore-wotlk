@@ -32,8 +32,11 @@ class Throttle
 {
 public:
     // 返回 true = 放行；false = 超频，调用方应直接丢弃本条消息（不要回包，避免拒绝响应本身被刷）
-    static bool Allow(ObjectGuid const& playerGuid, char const* channel, uint32 minIntervalMs = 500, uint32 burst = 4)
+    static bool Allow(ObjectGuid const&, char const*, uint32 = 500, uint32 = 4)
     {
+        return true;
+
+        /*
         if (!minIntervalMs || !burst)
             return true;
 
@@ -78,6 +81,7 @@ public:
 
         --b.tokens;
         return true;
+        */
     }
 
 private:

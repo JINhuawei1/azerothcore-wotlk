@@ -170,7 +170,7 @@ INSERT INTO `_通用配置` (`模块ID`, `模块名称`, `模块标识`, `配置
 (32, '生物属性', 'mod_creature_attributes', 'CreatureAttributes.EnableMovementChange', '是否启用生物移动修改', '1', '是否启用生物移动修改', 1),
 (32, '生物属性', 'mod_creature_attributes', 'CreatureAttributes.EnableCombatAttributesChange', '是否启用生物战斗属性修改', '1', '是否启用生物战斗属性修改', 1),
 (32, '生物属性', 'mod_creature_attributes', 'CreatureAttributes.EnableLootChange', '是否启用生物掉落修改', '1', '是否启用生物掉落修改', 1),
-(32, '生物属性', 'mod_creature_attributes', 'CreatureAttributes.EnableDescription', '是否启用生物描述显示', '1', '是否启用生物描述显示', 1),
+(32, '生物属性', 'mod_creature_attributes', 'CreatureAttributes.EnableDescription', '是否启用生物描述显示', '0', '是否启用生物描述显示', 1),
 (33, '修仙系统', 'mod_cultivation_system', 'Cultivation.Enable', '是否启用', '1', '0  - (禁用)', 1),
 (33, '修仙系统', 'mod_cultivation_system', 'Cultivation.Debug', '是否调试', '0', '1  - (启用)', 1),
 (33, '修仙系统', 'mod_cultivation_system', 'Cultivation.TribulationCooldown', 'TribulationCooldown', '600', 'TribulationCooldown', 1),

@@ -14,7 +14,7 @@
 
 namespace
 {
-uint64 ToTalentSoulUInt64Damage(uint128 const& value)
+uint64 ToTalentSoulUInt64Damage(uint256 const& value)
 {
     return Acore::Number::ToUInt64Saturated(value);
 }
@@ -809,7 +809,7 @@ void TalentSoulMgr::ApplyCooldownReduction(Player* player, uint32 spellId, int32
     }
 }
 
-void TalentSoulMgr::ApplyCostReduction(Player* player, uint32 spellId, int128& cost) const
+void TalentSoulMgr::ApplyCostReduction(Player* player, uint32 spellId, int256& cost) const
 {
     if (!player || cost <= 0)
         return;
@@ -817,7 +817,7 @@ void TalentSoulMgr::ApplyCostReduction(Player* player, uint32 spellId, int128& c
     float reductionPercent = GetPlayerCostReduction(player->GetGUID().GetCounter(), spellId);
     if (reductionPercent > 0)
     {
-        int128 reducedAmount = Acore::Number::ToInt128Saturated(Acore::Number::ToLongDouble(cost) * static_cast<long double>(reductionPercent) / 100.0L);
+        int256 reducedAmount = Acore::Number::ToInt256Saturated(Acore::Number::ToLongDouble(cost) * static_cast<long double>(reductionPercent) / 100.0L);
         cost -= reducedAmount;
 
         if (cost < 0)
@@ -825,7 +825,7 @@ void TalentSoulMgr::ApplyCostReduction(Player* player, uint32 spellId, int128& c
     }
 }
 
-void TalentSoulMgr::ApplyDamageBonus(Unit* attacker, uint32 spellId, uint128& damage) const
+void TalentSoulMgr::ApplyDamageBonus(Unit* attacker, uint32 spellId, uint256& damage) const
 {
     if (!attacker || damage == 0)
         return;
@@ -837,17 +837,17 @@ void TalentSoulMgr::ApplyDamageBonus(Unit* attacker, uint32 spellId, uint128& da
     float bonusPercent = GetPlayerDamageBonus(player->GetGUID().GetCounter(), spellId);
     if (bonusPercent > 0)
     {
-        uint128 baseDamage = damage;
+        uint256 baseDamage = damage;
         long double bonusAmount = Acore::Number::ToLongDouble(baseDamage) * static_cast<long double>(bonusPercent) / 100.0L;
-        uint128 bonusDamage = !std::isfinite(static_cast<double>(bonusAmount))
-            ? std::numeric_limits<uint128>::max()
-            : Acore::Number::ToUInt128Saturated(bonusAmount);
+        uint256 bonusDamage = !std::isfinite(static_cast<double>(bonusAmount))
+            ? std::numeric_limits<uint256>::max()
+            : Acore::Number::ToUInt256Saturated(bonusAmount);
 
         if (!bonusDamage && bonusAmount > 0.0L)
             bonusDamage = 1;
 
-        uint128 finalDamage = bonusDamage > std::numeric_limits<uint128>::max() - baseDamage
-            ? std::numeric_limits<uint128>::max()
+        uint256 finalDamage = bonusDamage > std::numeric_limits<uint256>::max() - baseDamage
+            ? std::numeric_limits<uint256>::max()
             : baseDamage + bonusDamage;
 
         damage = finalDamage;

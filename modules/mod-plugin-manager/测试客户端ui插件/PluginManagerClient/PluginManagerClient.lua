@@ -2,7 +2,7 @@
 -- 插件管理器客户端集成 - 共享监听器
 -- ========================================
 -- 说明:
---   1. 使用真正的 AddOn 通道与服务端通信
+--   1. 使用 Hermes 兼容通道与服务端通信
 --   2. 玩家登录、重载UI、重新进世界时主动请求配置，并在无响应时短暂重试
 --   3. 提供统一的坐标保存接口，供各插件在拖拽结束后回传服务器
 
@@ -40,8 +40,88 @@ PMClient.isReceivingSync = PMClient.isReceivingSync or false
 PMClient.syncGeneration = PMClient.syncGeneration or 0
 PMClient.completedSyncGeneration = PMClient.completedSyncGeneration or 0
 PMClient.lastRequestTime = PMClient.lastRequestTime or 0
+PMClient.startupPullActive = PMClient.startupPullActive or false
+PMClient.startupPullStartedAt = PMClient.startupPullStartedAt or 0
 
 local SYNC_RETRY_DELAYS = { 0.5, 2.0, 5.0 }
+local SYNC_RETRY_INTERVAL = 5.0
+local SYNC_RETRY_MAX_SECONDS = 60.0
+local STARTUP_PULL_INTERVAL = 2.0
+local STARTUP_PULL_MAX_SECONDS = 60.0
+
+local function EnsureHermesCompat()
+    if _G.HermesCompat and _G.HermesCompat.Send and _G.HermesCompat.Register then
+        return _G.HermesCompat
+    end
+
+    local compat = _G.HermesCompat or { handlers = {}, installed = false, elapsed = 0 }
+    _G.HermesCompat = compat
+
+    function compat.Send(prefix, payload, callback)
+        local bridge = (_G and _G.HermesDLL) or HermesDLL
+        if not bridge or type(bridge.Request) ~= "function" then
+            return false
+        end
+        return bridge.Request("addon.dispatch", tostring(prefix or "") .. "\t" .. tostring(payload or ""), callback) ~= nil
+    end
+
+    function compat.Dispatch(prefix, payload, channel, sender)
+        local list = compat.handlers and compat.handlers[prefix]
+        if not list then
+            return false
+        end
+        for _, handler in ipairs(list) do
+            pcall(handler, prefix, payload, channel or "WHISPER", sender)
+        end
+        return true
+    end
+
+    function compat.TryInstall()
+        local bridge = (_G and _G.HermesDLL) or HermesDLL
+        if not bridge or type(bridge.On) ~= "function" then
+            return false
+        end
+        bridge.On("hermes.addon.message", function(msg)
+            local params = msg and msg.params or {}
+            compat.Dispatch(tostring(params.prefix or ""), tostring(params.payload or ""), "WHISPER", UnitName and UnitName("player") or nil)
+        end)
+        compat.installed = true
+        if compat.frame then
+            compat.frame:SetScript("OnUpdate", nil)
+        end
+        return true
+    end
+
+    function compat.Register(prefix, handler)
+        if type(handler) ~= "function" then
+            return false
+        end
+        prefix = tostring(prefix or "")
+        compat.handlers[prefix] = compat.handlers[prefix] or {}
+        table.insert(compat.handlers[prefix], handler)
+        compat.TryInstall()
+        return true
+    end
+
+    if not compat.frame then
+        compat.frame = CreateFrame("Frame")
+        compat.frame:SetScript("OnUpdate", function(_, elapsed)
+            if compat.installed then
+                return
+            end
+            compat.elapsed = (compat.elapsed or 0) + elapsed
+            if compat.elapsed >= 0.5 then
+                compat.elapsed = 0
+                compat.TryInstall()
+            end
+        end)
+    end
+
+    compat.TryInstall()
+    return compat
+end
+
+local HermesCompat = EnsureHermesCompat()
 
 local function DebugPrint(message)
     if PMClient.debug then
@@ -109,6 +189,7 @@ function PMClient:RegisterPlugin(pluginName, handler)
     end
 
     if not self.hasRequestedInitialSync and not self.hasCompletedInitialSync then
+        self:EnsureStartupConfigPull("REGISTER_PLUGIN")
         self:ScheduleConfigRequest("REGISTER_PLUGIN", false)
     end
 
@@ -202,20 +283,32 @@ function PMClient:ShouldShowPlugin(pluginName, fallbackEnabled)
     return fallbackEnabled == true
 end
 
-function PMClient:SendAddonPayload(payload)
-    local playerName = UnitName("player")
-    if not payload or payload == "" or not playerName then
+function PMClient:SendHermesPayload(payload)
+    if not payload or payload == "" then
+        return false
+    end
+
+    if HermesCompat.Send(self.addonPrefix, payload) then
+        return true
+    end
+
+    local playerName = UnitName and UnitName("player") or nil
+    if not playerName or playerName == "" then
         return false
     end
 
     if SendAddonMessage then
-        SendAddonMessage(self.addonPrefix, payload, "WHISPER", playerName)
-        return true
+        local ok, result = pcall(SendAddonMessage, self.addonPrefix, payload, "WHISPER", playerName)
+        if ok and result ~= false then
+            return true
+        end
     end
 
     if C_ChatInfo and C_ChatInfo.SendAddonMessage then
-        C_ChatInfo.SendAddonMessage(self.addonPrefix, payload, "WHISPER", playerName)
-        return true
+        local ok, result = pcall(C_ChatInfo.SendAddonMessage, self.addonPrefix, payload, "WHISPER", playerName)
+        if ok and result ~= false then
+            return true
+        end
     end
 
     return false
@@ -233,7 +326,7 @@ function PMClient:RequestPluginConfig(force)
         return false
     end
 
-    if self:SendAddonPayload("REQ_ALL") then
+    if self:SendHermesPayload("REQ_ALL") then
         self.hasRequestedInitialSync = true
         self.lastRequestTime = now
         DebugPrint("已发送插件配置请求")
@@ -243,11 +336,66 @@ function PMClient:RequestPluginConfig(force)
     return false
 end
 
+function PMClient:EnsureStartupConfigPull(reason)
+    if self.hasCompletedInitialSync then
+        return false
+    end
+
+    if self.startupPullActive then
+        return true
+    end
+
+    self.startupPullActive = true
+    self.startupPullStartedAt = GetClientTime()
+
+    local function StartupPullPulse()
+        if PMClient.hasCompletedInitialSync then
+            PMClient.startupPullActive = false
+            return
+        end
+
+        local elapsed = GetClientTime() - (PMClient.startupPullStartedAt or 0)
+        if elapsed >= STARTUP_PULL_MAX_SECONDS then
+            PMClient.startupPullActive = false
+            return
+        end
+
+        if not PMClient.isReceivingSync then
+            PMClient:RequestPluginConfig(true)
+        end
+
+        C_Timer.After(STARTUP_PULL_INTERVAL, StartupPullPulse)
+    end
+
+    C_Timer.After(0.2, StartupPullPulse)
+    return true
+end
+
 function PMClient:ScheduleConfigRequest(reason, force)
     self.syncGeneration = (self.syncGeneration or 0) + 1
     local generation = self.syncGeneration
+    local startedAt = GetClientTime()
 
     DebugPrint("安排插件配置同步: " .. tostring(reason))
+
+    local function ScheduleConfigRetryLoop()
+        C_Timer.After(SYNC_RETRY_INTERVAL, function()
+            if PMClient.syncGeneration ~= generation then
+                return
+            end
+
+            if PMClient.hasCompletedInitialSync or PMClient.isReceivingSync then
+                return
+            end
+
+            if GetClientTime() - startedAt >= SYNC_RETRY_MAX_SECONDS then
+                return
+            end
+
+            PMClient:RequestPluginConfig(true)
+            ScheduleConfigRetryLoop()
+        end)
+    end
 
     for _, delay in ipairs(SYNC_RETRY_DELAYS) do
         C_Timer.After(delay, function()
@@ -266,6 +414,8 @@ function PMClient:ScheduleConfigRequest(reason, force)
             PMClient:RequestPluginConfig(true)
         end)
     end
+
+    ScheduleConfigRetryLoop()
 end
 
 function PMClient:SavePluginPosition(pluginName, x, y, width, height)
@@ -283,7 +433,7 @@ function PMClient:SavePluginPosition(pluginName, x, y, width, height)
         return false
     end
 
-    if self:SendAddonPayload(string.format(
+    if self:SendHermesPayload(string.format(
         "SAVE_POS:%s:%d:%d:%d:%d",
         pluginName,
         normalizedX,
@@ -324,41 +474,40 @@ function PMClient:SaveFramePosition(pluginName, frame, width, height)
     return self:SavePluginPosition(pluginName, left, bottom, finalWidth or 0, finalHeight or 0)
 end
 
-function PMClient:RegisterAddonPrefix()
-    if RegisterAddonMessagePrefix then
-        RegisterAddonMessagePrefix(self.addonPrefix)
-        return
-    end
-
-    if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
-        C_ChatInfo.RegisterAddonMessagePrefix(self.addonPrefix)
-    end
-end
-
 function PMClient:Initialize()
     if self.initialized then
         return
     end
 
-    self:RegisterAddonPrefix()
+    if not self.hermesRegistered then
+        HermesCompat.Register(self.addonPrefix, function(prefix, message)
+            PMClient:DispatchMessage(message)
+        end)
+        self.hermesRegistered = true
+    end
 
     local eventFrame = CreateFrame("Frame", "PluginManagerClientFrame")
-    eventFrame:RegisterEvent("CHAT_MSG_ADDON")
+    if RegisterAddonMessagePrefix then
+        RegisterAddonMessagePrefix(self.addonPrefix)
+    end
     eventFrame:RegisterEvent("CHAT_MSG_SYSTEM")
+    eventFrame:RegisterEvent("CHAT_MSG_ADDON")
     eventFrame:RegisterEvent("PLAYER_LOGIN")
     eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
     eventFrame:SetScript("OnEvent", function(_, event, ...)
-        if event == "CHAT_MSG_ADDON" then
+        if event == "CHAT_MSG_SYSTEM" then
+            local message = ...
+            PMClient:DispatchMessage(message)
+        elseif event == "CHAT_MSG_ADDON" then
             local prefix, message = ...
             if prefix == PMClient.addonPrefix then
                 PMClient:DispatchMessage(message)
             end
-        elseif event == "CHAT_MSG_SYSTEM" then
-            local message = ...
-            PMClient:DispatchMessage(message)
         elseif event == "PLAYER_LOGIN" then
+            PMClient:EnsureStartupConfigPull("PLAYER_LOGIN")
             PMClient:ScheduleConfigRequest("PLAYER_LOGIN", true)
         elseif event == "PLAYER_ENTERING_WORLD" then
+            PMClient:EnsureStartupConfigPull("PLAYER_ENTERING_WORLD")
             PMClient:ScheduleConfigRequest("PLAYER_ENTERING_WORLD", true)
         end
     end)
@@ -373,6 +522,7 @@ function PMClient:Initialize()
 
     self.initialized = true
     self.eventFrame = eventFrame
+    self:EnsureStartupConfigPull("INITIALIZE")
     DebugPrint("共享监听器已初始化")
 end
 

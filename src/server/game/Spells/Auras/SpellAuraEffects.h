@@ -62,10 +62,10 @@ public:
     int32 GetMiscValue() const;
     AuraType GetAuraType() const;
     int32 GetAmount() const { return m_isAuraEnabled ? m_amount : 0; }
-    uint128 const& GetAmountForCombat() const { return m_isAuraEnabled ? m_amountForCombat : _zeroAmountForCombat; }
-    void SetScriptAmountForCombat(uint128 const& amount) const;
+    uint256 const& GetAmountForCombat() const { return m_isAuraEnabled ? m_amountForCombat : _zeroAmountForCombat; }
+    void SetScriptAmountForCombat(uint256 const& amount) const;
     int32 GetForcedAmount() const { return m_amount; }
-    void SetAmount(int32 amount) { m_amount = amount; SetAmountForCombat(amount > 0 ? static_cast<uint128>(amount) : 0); m_canBeRecalculated = false;}
+    void SetAmount(int32 amount) { m_amount = amount; SetAmountForCombat(amount > 0 ? static_cast<uint256>(amount) : 0); m_canBeRecalculated = false;}
 
     int32 GetPeriodicTimer() const { return m_periodicTimer; }
     void SetPeriodicTimer(int32 periodicTimer) { m_periodicTimer = periodicTimer; }
@@ -129,8 +129,8 @@ private:
     bool m_applyResilience;
     uint8 m_casterLevel;
     int32 m_amount;
-    uint128 m_amountForCombat;
-    static uint128 const _zeroAmountForCombat;
+    uint256 m_amountForCombat;
+    static uint256 const _zeroAmountForCombat;
     float m_critChance;
     float m_pctMods;
 
@@ -152,7 +152,7 @@ private:
     bool m_isPeriodic;
 private:
     bool HasCombatAmount() const;
-    void SetAmountForCombat(uint128 const& amount);
+    void SetAmountForCombat(uint256 const& amount);
     float CalcPeriodicCritChance(Unit const* caster, Unit const* target) const;
 
 public:

@@ -9,6 +9,7 @@
 #include "Chat.h"
 #include "DatabaseEnv.h"
 #include "Item.h"
+#include "HermesBridgeAddonApi.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
@@ -62,8 +63,8 @@ void PromotionRewardMgr::LoadConfig()
 
     Field* f = r->Fetch();
     _cfg.weaponEntry     = f[0].Get<uint32>();
-    _cfg.baseAttrValue   = f[1].Get<int128>();
-    _cfg.perDayAttrValue = f[2].Get<int128>();
+    _cfg.baseAttrValue   = f[1].Get<int256>();
+    _cfg.perDayAttrValue = f[2].Get<int256>();
     _cfg.groupId         = f[3].Get<uint32>();
     _cfg.requireId       = f[4].Get<uint32>();
     _cfg.rewardId        = f[5].Get<uint32>();
@@ -190,12 +191,12 @@ bool PromotionRewardMgr::IssueCodes(uint32 targetGuid, std::string const& target
     return true;
 }
 
-int128 PromotionRewardMgr::CalcTotalAttr(uint32 days) const
+int256 PromotionRewardMgr::CalcTotalAttr(uint32 days) const
 {
     uint32 level = GetWeaponLevelForDays(days);
     if (level == 0)
         return 0;
-    return _cfg.baseAttrValue + (static_cast<int128>(level - 1) * _cfg.perDayAttrValue);
+    return _cfg.baseAttrValue + (static_cast<int256>(level - 1) * _cfg.perDayAttrValue);
 }
 
 uint32 PromotionRewardMgr::GetWeaponLevelForDays(uint32 days) const
@@ -500,6 +501,9 @@ void PromotionRewardMgr::SendAddonMsg(Player* player, std::string const& payload
     if (!player || !player->GetSession() || payload.empty())
         return;
 
+    if (HermesBridge_SendAddonMessage(player, PROMO_ADDON_PREFIX, payload))
+        return;
+
     std::string full = std::string(PROMO_ADDON_PREFIX) + '\t' + payload;
 
     WorldPacket data;
@@ -516,17 +520,17 @@ void PromotionRewardMgr::SendInfoToClient(Player* player)
     if (PromotionPlayerData* d = GetPlayerData(player->GetGUID().GetCounter()))
         days = d->days;
 
-    int128 attr  = CalcTotalAttr(days);
+    int256 attr  = CalcTotalAttr(days);
     bool  hold   = IsWeaponHeld(player);
     uint32 currentLevel = GetWeaponLevelForDays(days);
     uint32 nextLevel = days >= PROMO_WEAPON_MAX_LEVEL ? PROMO_WEAPON_MAX_LEVEL : days + 1;
     uint32 currentWeapon = GetWeaponEntryForLevel(currentLevel);
     uint32 nextWeapon = GetNextWeaponEntry(days);
-    int128 currentMinDmg = currentLevel == 0 ? 0 : CalcTotalAttr(currentLevel);
-    int128 currentMaxDmg = currentLevel == 0 ? 0 : currentMinDmg + _cfg.perDayAttrValue;
-    int128 nextAttr = CalcTotalAttr(nextLevel);
-    int128 nextMinDmg = nextAttr;
-    int128 nextMaxDmg = nextAttr + _cfg.perDayAttrValue;
+    int256 currentMinDmg = currentLevel == 0 ? 0 : CalcTotalAttr(currentLevel);
+    int256 currentMaxDmg = currentLevel == 0 ? 0 : currentMinDmg + _cfg.perDayAttrValue;
+    int256 nextAttr = CalcTotalAttr(nextLevel);
+    int256 nextMinDmg = nextAttr;
+    int256 nextMaxDmg = nextAttr + _cfg.perDayAttrValue;
 
     std::ostringstream o;
     o << "INFO:" << days

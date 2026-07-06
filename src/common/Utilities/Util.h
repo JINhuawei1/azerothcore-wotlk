@@ -60,44 +60,44 @@ inline void ApplyPercentModFloatVar(float& var, float val, bool apply)
 }
 
 // Percentage calculation
-// Exclude uint128/int128 — they have their own overloads below
+// Exclude uint256/int256 — they have their own overloads below
 // (the generic body `T(base * float(pct) / 100.f)` fails on boost::multiprecision).
 template <class T, class U,
-    std::enable_if_t<!std::is_same_v<T, uint128> && !std::is_same_v<T, int128>, int> = 0>
+    std::enable_if_t<!std::is_same_v<T, uint256> && !std::is_same_v<T, int256>, int> = 0>
 inline T CalculatePct(T base, U pct)
 {
     return T(base * static_cast<float>(pct) / 100.0f);
 }
 
-// uint128/int128 overloads — self-contained, used by AddPct below.
+// uint256/int256 overloads — self-contained, used by AddPct below.
 template <class U>
-inline uint128 CalculatePct(uint128 const& base, U pct)
+inline uint256 CalculatePct(uint256 const& base, U pct)
 {
     long double v = base.template convert_to<long double>() * static_cast<long double>(pct) / 100.0L;
     if (v <= 0.0L || std::isnan(static_cast<double>(v)))
-        return uint128(0);
-    uint128 const maxValue = std::numeric_limits<uint128>::max();
+        return uint256(0);
+    uint256 const maxValue = std::numeric_limits<uint256>::max();
     long double const maxLD = maxValue.template convert_to<long double>();
     if (!std::isfinite(static_cast<double>(v)) || v >= maxLD)
         return maxValue;
-    return static_cast<uint128>(v);
+    return static_cast<uint256>(v);
 }
 
 template <class U>
-inline int128 CalculatePct(int128 const& base, U pct)
+inline int256 CalculatePct(int256 const& base, U pct)
 {
     long double v = base.template convert_to<long double>() * static_cast<long double>(pct) / 100.0L;
     if (std::isnan(static_cast<double>(v)))
-        return int128(0);
-    int128 const maxValue = std::numeric_limits<int128>::max();
-    int128 const minValue = std::numeric_limits<int128>::min();
+        return int256(0);
+    int256 const maxValue = std::numeric_limits<int256>::max();
+    int256 const minValue = std::numeric_limits<int256>::min();
     long double const maxLD = maxValue.template convert_to<long double>();
     long double const minLD = minValue.template convert_to<long double>();
     if (!std::isfinite(static_cast<double>(v)))
         return v > 0.0L ? maxValue : minValue;
     if (v >= maxLD) return maxValue;
     if (v <= minLD) return minValue;
-    return static_cast<int128>(v);
+    return static_cast<int256>(v);
 }
 
 template <class T, class U>
@@ -120,11 +120,11 @@ inline T RoundToInterval(T& num, T floor, T ceil)
 
 namespace Acore::Number
 {
-    inline uint128 GetDecimal65UnsignedMax()
+    inline uint256 GetDecimal65UnsignedMax()
     {
-        static uint128 const value = []()
+        static uint256 const value = []()
         {
-            uint128 maxValue = 0;
+            uint256 maxValue = 0;
             for (uint8 i = 0; i < 65; ++i)
                 maxValue = (maxValue * 10) + 9;
             return maxValue;
@@ -133,47 +133,47 @@ namespace Acore::Number
         return value;
     }
 
-    inline int128 GetDecimal65SignedMax()
+    inline int256 GetDecimal65SignedMax()
     {
-        return static_cast<int128>(GetDecimal65UnsignedMax());
+        return static_cast<int256>(GetDecimal65UnsignedMax());
     }
 
-    inline std::string ToDecimal65String(int128 const& value)
+    inline std::string ToDecimal65String(int256 const& value)
     {
-        int128 const maxValue = GetDecimal65SignedMax();
+        int256 const maxValue = GetDecimal65SignedMax();
         if (value > maxValue)
             return maxValue.convert_to<std::string>();
 
-        int128 const minValue = -maxValue;
+        int256 const minValue = -maxValue;
         if (value < minValue)
             return minValue.convert_to<std::string>();
 
         return value.convert_to<std::string>();
     }
 
-    inline std::string ToDecimal65String(uint128 const& value)
+    inline std::string ToDecimal65String(uint256 const& value)
     {
-        uint128 const maxValue = GetDecimal65UnsignedMax();
+        uint256 const maxValue = GetDecimal65UnsignedMax();
         return (value > maxValue ? maxValue : value).convert_to<std::string>();
     }
 
-    inline long double ToLongDouble(uint128 const& value)
+    inline long double ToLongDouble(uint256 const& value)
     {
         return value.convert_to<long double>();
     }
 
-    inline long double ToLongDouble(int128 const& value)
+    inline long double ToLongDouble(int256 const& value)
     {
         return value.convert_to<long double>();
     }
 
-    inline double ToDouble(uint128 const& value)
+    inline double ToDouble(uint256 const& value)
     {
         double result = value.convert_to<double>();
         return std::isfinite(result) ? result : std::numeric_limits<double>::max();
     }
 
-    inline double ToDouble(int128 const& value)
+    inline double ToDouble(int256 const& value)
     {
         double result = value.convert_to<double>();
         if (std::isfinite(result))
@@ -182,13 +182,13 @@ namespace Acore::Number
         return value > 0 ? std::numeric_limits<double>::max() : std::numeric_limits<double>::lowest();
     }
 
-    inline float ToFloat(uint128 const& value)
+    inline float ToFloat(uint256 const& value)
     {
         float result = value.convert_to<float>();
         return std::isfinite(result) ? result : std::numeric_limits<float>::max();
     }
 
-    inline float ToFloat(int128 const& value)
+    inline float ToFloat(int256 const& value)
     {
         float result = value.convert_to<float>();
         if (std::isfinite(result))
@@ -197,34 +197,34 @@ namespace Acore::Number
         return value > 0 ? std::numeric_limits<float>::max() : std::numeric_limits<float>::lowest();
     }
 
-    inline uint64 ToUInt64Saturated(uint128 const& value)
+    inline uint64 ToUInt64Saturated(uint256 const& value)
     {
-        if (value > static_cast<uint128>(std::numeric_limits<uint64>::max()))
+        if (value > static_cast<uint256>(std::numeric_limits<uint64>::max()))
             return std::numeric_limits<uint64>::max();
 
         return static_cast<uint64>(value);
     }
 
-    inline uint32 ToUInt32Saturated(uint128 const& value)
+    inline uint32 ToUInt32Saturated(uint256 const& value)
     {
-        if (value > static_cast<uint128>(std::numeric_limits<uint32>::max()))
+        if (value > static_cast<uint256>(std::numeric_limits<uint32>::max()))
             return std::numeric_limits<uint32>::max();
 
         return static_cast<uint32>(value);
     }
 
-    inline int64 ToInt64Saturated(int128 const& value)
+    inline int64 ToInt64Saturated(int256 const& value)
     {
-        if (value > static_cast<int128>(std::numeric_limits<int64>::max()))
+        if (value > static_cast<int256>(std::numeric_limits<int64>::max()))
             return std::numeric_limits<int64>::max();
 
-        if (value < static_cast<int128>(std::numeric_limits<int64>::min()))
+        if (value < static_cast<int256>(std::numeric_limits<int64>::min()))
             return std::numeric_limits<int64>::min();
 
         return static_cast<int64>(value);
     }
 
-    inline int32 ToInt32Saturated(int128 const& value)
+    inline int32 ToInt32Saturated(int256 const& value)
     {
         int64 value64 = ToInt64Saturated(value);
         if (value64 > std::numeric_limits<int32>::max())
@@ -236,26 +236,26 @@ namespace Acore::Number
         return static_cast<int32>(value64);
     }
 
-    inline uint128 ToUInt128Saturated(long double value)
+    inline uint256 ToUInt256Saturated(long double value)
     {
         if (std::isnan(static_cast<double>(value)) || value <= 0.0L)
             return 0;
 
-        uint128 const maxValue = std::numeric_limits<uint128>::max();
+        uint256 const maxValue = std::numeric_limits<uint256>::max();
         long double const maxLongDouble = ToLongDouble(maxValue);
         if (!std::isfinite(value) || value >= maxLongDouble)
             return maxValue;
 
-        return static_cast<uint128>(value);
+        return static_cast<uint256>(value);
     }
 
-    inline int128 ToInt128Saturated(long double value)
+    inline int256 ToInt256Saturated(long double value)
     {
         if (std::isnan(static_cast<double>(value)))
             return 0;
 
-        int128 const maxValue = std::numeric_limits<int128>::max();
-        int128 const minValue = std::numeric_limits<int128>::min();
+        int256 const maxValue = std::numeric_limits<int256>::max();
+        int256 const minValue = std::numeric_limits<int256>::min();
         long double const maxLongDouble = maxValue.convert_to<long double>();
         long double const minLongDouble = minValue.convert_to<long double>();
 
@@ -268,36 +268,36 @@ namespace Acore::Number
         if (value <= minLongDouble)
             return minValue;
 
-        return static_cast<int128>(value);
+        return static_cast<int256>(value);
     }
 
-    inline int128 ToInt128Saturated(uint128 const& value)
+    inline int256 ToInt256Saturated(uint256 const& value)
     {
-        uint128 const maxValue = static_cast<uint128>(std::numeric_limits<int128>::max());
+        uint256 const maxValue = static_cast<uint256>(std::numeric_limits<int256>::max());
         if (value > maxValue)
-            return std::numeric_limits<int128>::max();
+            return std::numeric_limits<int256>::max();
 
-        return static_cast<int128>(value);
+        return static_cast<int256>(value);
     }
 
-    inline uint128 ToUInt128Saturated(int128 const& value)
+    inline uint256 ToUInt256Saturated(int256 const& value)
     {
         if (value <= 0)
             return 0;
 
-        return static_cast<uint128>(value);
+        return static_cast<uint256>(value);
     }
 
     template <class T>
-    inline uint128 CalculatePct(uint128 const& base, T pct)
+    inline uint256 CalculatePct(uint256 const& base, T pct)
     {
-        return ToUInt128Saturated(ToLongDouble(base) * static_cast<long double>(pct) / 100.0L);
+        return ToUInt256Saturated(ToLongDouble(base) * static_cast<long double>(pct) / 100.0L);
     }
 
     template <class T>
-    inline int128 CalculatePct(int128 const& base, T pct)
+    inline int256 CalculatePct(int256 const& base, T pct)
     {
-        return ToInt128Saturated(ToLongDouble(base) * static_cast<long double>(pct) / 100.0L);
+        return ToInt256Saturated(ToLongDouble(base) * static_cast<long double>(pct) / 100.0L);
     }
 }
 
@@ -307,7 +307,7 @@ inline uint32 ToUInt32Damage(uint64 damage)
     return damage > std::numeric_limits<uint32>::max() ? std::numeric_limits<uint32>::max() : static_cast<uint32>(damage);
 }
 
-inline uint32 ToUInt32Damage(uint128 const& damage)
+inline uint32 ToUInt32Damage(uint256 const& damage)
 {
     return Acore::Number::ToUInt32Saturated(damage);
 }
@@ -328,17 +328,17 @@ inline uint64 AddUInt64Damage(uint64 left, uint64 right)
     return left > std::numeric_limits<uint64>::max() - right ? std::numeric_limits<uint64>::max() : left + right;
 }
 
-inline uint128 ToUInt128Damage(long double damage)
+inline uint256 ToUInt256Damage(long double damage)
 {
     if (damage <= 0.0L || std::isnan(static_cast<double>(damage)))
         return 0;
 
-    return Acore::Number::ToUInt128Saturated(damage);
+    return Acore::Number::ToUInt256Saturated(damage);
 }
 
-inline uint128 AddUInt128Damage(uint128 const& left, uint128 const& right)
+inline uint256 AddUInt256Damage(uint256 const& left, uint256 const& right)
 {
-    uint128 const maxV = std::numeric_limits<uint128>::max();
+    uint256 const maxV = std::numeric_limits<uint256>::max();
     return left > maxV - right ? maxV : left + right;
 }
 

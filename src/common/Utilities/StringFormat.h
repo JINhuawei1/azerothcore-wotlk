@@ -25,20 +25,20 @@
 #include <locale>
 
 template <>
-struct fmt::formatter<int128> : fmt::formatter<std::string>
+struct fmt::formatter<int256> : fmt::formatter<std::string>
 {
     template <typename FormatContext>
-    auto format(int128 const& value, FormatContext& ctx) const
+    auto format(int256 const& value, FormatContext& ctx) const
     {
         return fmt::formatter<std::string>::format(value.convert_to<std::string>(), ctx);
     }
 };
 
 template <>
-struct fmt::formatter<uint128> : fmt::formatter<std::string>
+struct fmt::formatter<uint256> : fmt::formatter<std::string>
 {
     template <typename FormatContext>
-    auto format(uint128 const& value, FormatContext& ctx) const
+    auto format(uint256 const& value, FormatContext& ctx) const
     {
         return fmt::formatter<std::string>::format(value.convert_to<std::string>(), ctx);
     }

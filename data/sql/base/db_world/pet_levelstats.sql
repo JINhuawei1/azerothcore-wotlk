@@ -23,8 +23,8 @@ DROP TABLE IF EXISTS `pet_levelstats`;
 CREATE TABLE `pet_levelstats` (
   `creature_entry` int unsigned NOT NULL,
   `level` tinyint unsigned NOT NULL,
-  `hp` decimal(39,0) unsigned NOT NULL DEFAULT '0',
-  `mana` decimal(39,0) unsigned NOT NULL DEFAULT '0',
+  `hp` decimal(65,0) unsigned NOT NULL DEFAULT '0',
+  `mana` decimal(65,0) unsigned NOT NULL DEFAULT '0',
   `armor` int unsigned NOT NULL DEFAULT '0',
   `str` int unsigned NOT NULL DEFAULT '0',
   `agi` int unsigned NOT NULL DEFAULT '0',

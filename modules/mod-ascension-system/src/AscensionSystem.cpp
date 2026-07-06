@@ -12,6 +12,7 @@
 #include "DBCStores.h"
 #include "Spell.h"
 #include "SpellAuras.h"
+#include "HermesBridgeAddonApi.h"
 #include "Util.h"
 #include <array>
 #include <sstream>
@@ -30,6 +31,21 @@
     #include "HuanJingSystem.h"
 #endif
 
+// 仙器装备只能穿戴到仙器槽位，飞升槽位需要复用仙门模块的登记表判断
+#if __has_include("XianmenArtifactSlots.h")
+    #ifndef MODULE_XIANMEN_ARTIFACT_SLOTS
+        #define MODULE_XIANMEN_ARTIFACT_SLOTS
+    #endif
+    #include "XianmenArtifactSlots.h"
+#endif
+
+#if __has_include("WearControl.h")
+    #ifndef MODULE_WEAR_CONTROL
+        #define MODULE_WEAR_CONTROL
+    #endif
+    #include "WearControl.h"
+#endif
+
 using namespace Acore::ChatCommands;
 
 // 获取需求模块接口（通过模块管理器）
@@ -39,6 +55,44 @@ static RequirementInterface* GetRequirementModule()
     if (!mgr)
         return nullptr;
     return mgr->GetRequirementModule();
+}
+
+static bool IsXianmenArtifactItemForSlotRestriction(uint32 itemId)
+{
+#ifdef MODULE_WEAR_CONTROL
+    if (WearControl::HasExclusiveLimit(itemId) && !WearControl::IsLimitedTo(itemId, WEAR_LIMIT_ASCENSION))
+        return true;
+#endif
+
+#ifdef MODULE_XIANMEN_ARTIFACT_SLOTS
+    return XianmenArtifactSlots::IsRegisteredArtifactItem(itemId);
+#else
+    (void)itemId;
+    return false;
+#endif
+}
+
+static bool CanEquipByWearControl(Player* player, uint32 itemId, uint8 slot, std::string& error)
+{
+#ifdef MODULE_WEAR_CONTROL
+    return WearControl::CanEquipItem(player, itemId, WEAR_LIMIT_ASCENSION, slot, &error, true);
+#else
+    (void)player;
+    (void)itemId;
+    (void)slot;
+    (void)error;
+    return true;
+#endif
+}
+
+static bool IsWearControlOfficialSlotRestricted(uint32 itemId)
+{
+#ifdef MODULE_WEAR_CONTROL
+    return WearControl::HasExclusiveLimit(itemId);
+#else
+    (void)itemId;
+    return false;
+#endif
 }
 
 namespace
@@ -53,15 +107,124 @@ namespace
     constexpr uint64 ASCENSION_CLIENT_VISIBLE_HEALTH_LIMIT = 2000000000ULL;
     constexpr uint32 ASCENSION_TRUE_STRIKE_MIN_MS = 1800;
     constexpr uint32 ASCENSION_TRUE_STRIKE_MAX_MS = 2400;
+    constexpr char ASCENSION_ADDON_PREFIX[] = "ASCENSION";
     constexpr char PLAYER_ATTRIBUTE_PANEL_ADDON_PREFIX[] = "PATTRPANEL";
+
+    std::string TrimLeft(std::string value)
+    {
+        value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](unsigned char ch)
+        {
+            return ch != ' ' && ch != '\t';
+        }));
+        return value;
+    }
+
+    std::string ToUpperAscii(std::string value)
+    {
+        for (char& ch : value)
+        {
+            if (ch >= 'a' && ch <= 'z')
+                ch = char(ch - 'a' + 'A');
+        }
+        return value;
+    }
+
+    std::string NormalizeAscensionAddonPayload(std::string value)
+    {
+        for (char& ch : value)
+        {
+            if (ch == ':' || ch == '|' || ch == ',')
+                ch = ' ';
+        }
+        return value;
+    }
+
+    void HandleAscensionAddonCommand(Player* player, std::string const& payload)
+    {
+        if (!player || !player->GetSession())
+            return;
+
+        if (!sAscensionConfig->IsEnabled())
+        {
+            ChatHandler(player->GetSession()).SendSysMessage("飞升系统已禁用。");
+            return;
+        }
+
+        std::string normalized = NormalizeAscensionAddonPayload(payload);
+        std::istringstream iss(normalized);
+
+        std::string action;
+        if (!(iss >> action))
+            return;
+
+        action = ToUpperAscii(action);
+        std::string args;
+        std::getline(iss, args);
+        args = TrimLeft(args);
+
+        if (action == "REQ_VIEW" || action == "VIEW" || action == "REQ")
+        {
+            sAscensionManager->SendAscensionDataToClient(player);
+            return;
+        }
+
+        ChatHandler handler(player->GetSession());
+
+        if (action == "UNLOCK")
+        {
+            AscensionCommandScript::HandleAscensionUnlock(&handler, args.c_str());
+            return;
+        }
+
+        if (action == "EQUIP")
+        {
+            AscensionCommandScript::HandleAscensionEquip(&handler, args.c_str());
+            return;
+        }
+
+        if (action == "UNEQUIP")
+        {
+            AscensionCommandScript::HandleAscensionUnequip(&handler, args.c_str());
+            return;
+        }
+
+        if (action == "USE")
+        {
+            AscensionCommandScript::HandleAscensionUse(&handler, args.c_str());
+            return;
+        }
+
+        if (action == "REFRESH")
+        {
+            AscensionCommandScript::HandleAscensionRefresh(&handler, args.c_str());
+            return;
+        }
+    }
 
     void NotifyPlayerAttributePanelRefresh(Player* player)
     {
         if (!player || !player->GetSession())
             return;
 
+        if (HermesBridge_SendAddonMessage(player, PLAYER_ATTRIBUTE_PANEL_ADDON_PREFIX, "REFRESH"))
+            return;
+
         WorldPacket data;
         std::string fullMessage = std::string(PLAYER_ATTRIBUTE_PANEL_ADDON_PREFIX) + "\tREFRESH";
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
+        player->SendDirectMessage(&data);
+    }
+
+    void SendAscensionAddonPayload(Player* player, std::string const& payload)
+    {
+        if (!player || !player->GetSession() || payload.empty())
+            return;
+
+        if (HermesBridge_SendAddonMessage(player, ASCENSION_ADDON_PREFIX, payload))
+            return;
+
+        WorldPacket data;
+        std::string fullMessage = std::string(ASCENSION_ADDON_PREFIX) + "\t" + payload;
         ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
         player->SendDirectMessage(&data);
     }
@@ -75,12 +238,12 @@ namespace
         return static_cast<int32>(value);
     }
 
-    int64 ToAscensionInt64Saturated(int128 const& value)
+    int64 ToAscensionInt64Saturated(int256 const& value)
     {
         return Acore::Number::ToInt64Saturated(value);
     }
 
-    int32 ClampAscensionInt128ToInt32(int128 const& value)
+    int32 ClampAscensionInt256ToInt32(int256 const& value)
     {
         return ClampAscensionInt64ToInt32(ToAscensionInt64Saturated(value));
     }
@@ -294,20 +457,20 @@ namespace
         return entry - ASCENSION_CHAIN_BOSS_FIRST;
     }
 
-    uint32 ToAscensionClientHealth(uint128 const& value)
+    uint32 ToAscensionClientHealth(uint256 const& value)
     {
         return value > ASCENSION_CLIENT_VISIBLE_HEALTH_LIMIT ? static_cast<uint32>(ASCENSION_CLIENT_VISIBLE_HEALTH_LIMIT) : Acore::Number::ToUInt32Saturated(value);
     }
 
-    uint128 GetAscensionBossMaxHealth(uint32 entry)
+    uint256 GetAscensionBossMaxHealth(uint32 entry)
     {
-        return static_cast<uint128>(ASCENSION_BOSS_HEALTH_BASE) + static_cast<uint128>(GetAscensionBossSequenceIndex(entry)) * static_cast<uint128>(ASCENSION_BOSS_HEALTH_STEP);
+        return static_cast<uint256>(ASCENSION_BOSS_HEALTH_BASE) + static_cast<uint256>(GetAscensionBossSequenceIndex(entry)) * static_cast<uint256>(ASCENSION_BOSS_HEALTH_STEP);
     }
 
-    uint128 GetAscensionBossTrueStrikeDamage(uint32 entry)
+    uint256 GetAscensionBossTrueStrikeDamage(uint32 entry)
     {
-        uint128 maxHealth = GetAscensionBossMaxHealth(entry);
-        return std::max<uint128>(25000u, maxHealth / 25000u);
+        uint256 maxHealth = GetAscensionBossMaxHealth(entry);
+        return std::max<uint256>(25000u, maxHealth / 25000u);
     }
 
     AscensionBossCombatProfile MakeAscensionBossCombatProfile(
@@ -786,7 +949,6 @@ bool AscensionManager::Initialize()
         return false;
 
     LoadSlotControls();
-    LoadRestrictedItems();
     return true;
 }
 
@@ -829,27 +991,6 @@ void AscensionManager::LoadSlotControls()
         _slotControls[ctrl.slot] = ctrl;
         count++;
     } while (result->NextRow());
-}
-
-void AscensionManager::LoadRestrictedItems()
-{
-    _restrictedItemIds.clear();
-
-    QueryResult result = WorldDatabase.Query(
-        "SELECT `物品模板ID` FROM `_深渊装备模板` WHERE `是否启用` = 1");
-
-    if (!result)
-        return;
-
-    do
-    {
-        _restrictedItemIds.insert(result->Fetch()[0].Get<uint32>());
-    } while (result->NextRow());
-
-    if (sAscensionConfig->IsDebugMode())
-    {
-        LOG_INFO("module", "飞升系统: 已加载 {} 个只能穿戴到飞升槽的深渊装备", _restrictedItemIds.size());
-    }
 }
 
 void AscensionManager::LoadPlayerData(Player* player)
@@ -950,10 +1091,6 @@ void AscensionManager::SavePlayerData(Player* player)
         "REPLACE INTO `_飞升系统_数据` (`玩家GUID`, `已解锁槽位`, `装备数据`) VALUES ({}, '{}', '{}')",
         playerGuid, unlockStr.str(), equipStr.str());
 
-    if (sAscensionConfig->IsDebugMode())
-    {
-        LOG_INFO("module", "飞升系统: 玩家 {} 数据已保存", player->GetName());
-    }
 }
 
 void AscensionManager::ClearPlayerData(uint32 playerGuid)
@@ -1204,6 +1341,7 @@ void AscensionManager::ValidateEquippedItems(Player* player)
         return;
 
     std::vector<uint8> slotsToRemove;
+    std::vector<uint8> xianmenArtifactSlotsToUnequip;
     bool needSave = false;
 
     for (auto& pair : status->slots)
@@ -1239,6 +1377,16 @@ void AscensionManager::ValidateEquippedItems(Player* player)
 
             LOG_WARN("module", "飞升系统: 玩家 {} 槽位 {} 的物品(GUID:{}) 已被删除，将移除记录",
                 player->GetName(), slot, slotData.itemGuid);
+            continue;
+        }
+
+        std::string wearControlError;
+        if (!CanEquipByWearControl(player, slotData.itemId, slot, wearControlError)
+            || IsXianmenArtifactItemForSlotRestriction(slotData.itemId))
+        {
+            xianmenArtifactSlotsToUnequip.push_back(slot);
+            LOG_WARN("module", "飞升系统: 玩家 {} 槽位 {} 检测到不允许穿戴的装备 itemId={} reason={}，将自动卸下",
+                player->GetName(), slot, slotData.itemId, wearControlError);
         }
     }
 
@@ -1295,6 +1443,13 @@ void AscensionManager::ValidateEquippedItems(Player* player)
     if (!slotsToRemove.empty())
     {
         UpdatePlayerStats(player);
+    }
+
+    for (uint8 slot : xianmenArtifactSlotsToUnequip)
+    {
+        UnequipItem(player, slot);
+        if (player->GetSession())
+            ChatHandler(player->GetSession()).SendSysMessage("检测到错误穿戴在飞升槽位的装备，已自动卸下并返还。");
     }
 
     // 如果有变动，保存数据
@@ -1425,6 +1580,19 @@ bool AscensionManager::EquipItem(Player* player, uint8 slot, uint32 itemId, uint
     if (!IsSlotUnlocked(player, slot))
     {
         ChatHandler(player->GetSession()).SendSysMessage("该槽位尚未解锁。");
+        return false;
+    }
+
+    std::string wearControlError;
+    if (!CanEquipByWearControl(player, itemId, slot, wearControlError))
+    {
+        ChatHandler(player->GetSession()).PSendSysMessage("|cffff0000[飞升系统]|r {}", wearControlError);
+        return false;
+    }
+
+    if (IsXianmenArtifactItemForSlotRestriction(itemId))
+    {
+        ChatHandler(player->GetSession()).SendSysMessage("仙器装备只能穿戴到仙器槽位，不能穿戴到飞升装备槽位。");
         return false;
     }
 
@@ -1933,11 +2101,11 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
         if (i >= proto->StatsCount)
             break;
 
-        int128 val = proto->ItemStatValue128[i];
+        int256 val = proto->ItemStatValue256[i];
         if (val != 0)
         {
-            val = Acore::Number::ToInt128Saturated(Acore::Number::ToLongDouble(val) * static_cast<long double>(totalMultiplier));
-            int128 legacyVal = val;
+            val = Acore::Number::ToInt256Saturated(Acore::Number::ToLongDouble(val) * static_cast<long double>(totalMultiplier));
+            int256 legacyVal = val;
             float statModValue = Acore::Number::ToFloat(val);
             uint32 statType = proto->ItemStat[i].ItemStatType;
 
@@ -2064,7 +2232,7 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
                     player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, statModValue, apply);
                     break;
                 case ITEM_MOD_MANA_REGENERATION:
-                    player->ApplyManaRegenBonus(ClampAscensionInt128ToInt32(val), apply);
+                    player->ApplyManaRegenBonus(ClampAscensionInt256ToInt32(val), apply);
                     break;
                 case ITEM_MOD_ARMOR_PENETRATION_RATING:
                     player->ApplyRatingMod(CR_ARMOR_PENETRATION, legacyVal, apply);
@@ -2073,10 +2241,10 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
                     player->ApplySpellPowerBonus(val, apply);
                     break;
                 case ITEM_MOD_HEALTH_REGEN:
-                    player->ApplyHealthRegenBonus(ClampAscensionInt128ToInt32(val), apply);
+                    player->ApplyHealthRegenBonus(ClampAscensionInt256ToInt32(val), apply);
                     break;
                 case ITEM_MOD_SPELL_PENETRATION:
-                    player->ApplySpellPenetrationBonus(ClampAscensionInt128ToInt32(val), apply);
+                    player->ApplySpellPenetrationBonus(ClampAscensionInt256ToInt32(val), apply);
                     break;
                 case ITEM_MOD_BLOCK_VALUE:
                     player->HandleBaseModValue(SHIELD_BLOCK_VALUE, FLAT_MOD, statModValue, apply);
@@ -2097,10 +2265,10 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
     }
 
     // 【修复】应用护甲值
-    if (proto->Armor128 > 0)
+    if (proto->Armor256 > 0)
     {
-        uint128 armorValue = Acore::Number::ToUInt128Saturated(Acore::Number::ToLongDouble(proto->Armor128) * static_cast<long double>(totalMultiplier));
-        int128 armorVal = Acore::Number::ToInt128Saturated(armorValue);
+        uint256 armorValue = Acore::Number::ToUInt256Saturated(Acore::Number::ToLongDouble(proto->Armor256) * static_cast<long double>(totalMultiplier));
+        int256 armorVal = Acore::Number::ToInt256Saturated(armorValue);
         player->HandleStatModifier(UNIT_MOD_ARMOR, BASE_VALUE, Acore::Number::ToFloat(armorVal), apply);
         if (apply)
         {
@@ -2323,6 +2491,17 @@ bool AscensionManager::CanEquipItemInSlot(Player* player, uint8 slot, uint32 ite
         LOG_ERROR("module", "飞升系统: CanEquipItemInSlot 物品模板未找到 itemId={}", itemId);
         return false;
     }
+
+    std::string wearControlError;
+    if (!CanEquipByWearControl(player, itemId, slot, wearControlError))
+    {
+        if (sAscensionConfig->IsDebugMode())
+            LOG_INFO("module", "飞升系统: 穿戴控制拒绝 itemId={} slot={} reason={}", itemId, slot, wearControlError);
+        return false;
+    }
+
+    if (IsXianmenArtifactItemForSlotRestriction(itemId))
+        return false;
 
     // 检查物品等级要求
     if (proto->RequiredLevel > player->GetLevel())
@@ -2580,7 +2759,12 @@ uint8 AscensionManager::GetSlotForItemClass(uint32 itemClass, uint32 itemSubClas
 
 bool AscensionManager::IsAscensionOnlyItem(uint32 itemId) const
 {
-    return _restrictedItemIds.find(itemId) != _restrictedItemIds.end();
+#ifdef MODULE_WEAR_CONTROL
+    return WearControl::IsLimitedTo(itemId, WEAR_LIMIT_ASCENSION);
+#else
+    (void)itemId;
+    return false;
+#endif
 }
 
 PlayerAscensionStatus* AscensionManager::GetPlayerStatus(uint32 playerGuid)
@@ -2803,14 +2987,14 @@ void AscensionManager::RemoveAscensionItemSet(Player* player, uint32 itemSetId, 
 
 }
 
-void AscensionManager::ApplyEnchantStatMod(Player* player, uint32 statType, int128 const& amount, bool apply)
+void AscensionManager::ApplyEnchantStatMod(Player* player, uint32 statType, int256 const& amount, bool apply)
 {
     if (!player || amount == 0)
         return;
 
     float statModValue = Acore::Number::ToFloat(amount);
-    int128 legacyAmount = amount;
-    int32 legacyInt32 = ClampAscensionInt128ToInt32(amount);
+    int256 legacyAmount = amount;
+    int32 legacyInt32 = ClampAscensionInt256ToInt32(amount);
 
     switch (statType)
     {
@@ -2923,12 +3107,12 @@ void AscensionManager::ApplyEnchantStatMod(Player* player, uint32 statType, int1
     }
 }
 
-void AscensionManager::RemoveStatEffect(Player* player, uint32 statType, int128 statValue)
+void AscensionManager::RemoveStatEffect(Player* player, uint32 statType, int256 statValue)
 {
     if (!player || statValue == 0)
         return;
 
-    int128 legacyValue = statValue;
+    int256 legacyValue = statValue;
     float statModValue = Acore::Number::ToFloat(statValue);
 
     // 处理标准物品属性类型
@@ -3021,7 +3205,7 @@ void AscensionManager::RemoveStatEffect(Player* player, uint32 statType, int128 
             player->HandleStatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, statModValue, false);
             break;
         case ITEM_MOD_MANA_REGENERATION:
-            player->ApplyManaRegenBonus(ClampAscensionInt128ToInt32(statValue), false);
+            player->ApplyManaRegenBonus(ClampAscensionInt256ToInt32(statValue), false);
             break;
         case ITEM_MOD_ARMOR_PENETRATION_RATING:
             player->ApplyRatingMod(CR_ARMOR_PENETRATION, legacyValue, false);
@@ -3030,10 +3214,10 @@ void AscensionManager::RemoveStatEffect(Player* player, uint32 statType, int128 
             player->ApplySpellPowerBonus(statValue, false);
             break;
         case ITEM_MOD_HEALTH_REGEN:
-            player->ApplyHealthRegenBonus(ClampAscensionInt128ToInt32(statValue), false);
+            player->ApplyHealthRegenBonus(ClampAscensionInt256ToInt32(statValue), false);
             break;
         case ITEM_MOD_SPELL_PENETRATION:
-            player->ApplySpellPenetrationBonus(ClampAscensionInt128ToInt32(statValue), false);
+            player->ApplySpellPenetrationBonus(ClampAscensionInt256ToInt32(statValue), false);
             break;
         case ITEM_MOD_BLOCK_VALUE:
             player->HandleBaseModValue(SHIELD_BLOCK_VALUE, FLAT_MOD, statModValue, false);
@@ -3199,41 +3383,33 @@ void AscensionManager::SendAscensionDataToClient(Player* player)
     std::ostringstream dataStr;
     dataStr << "U=" << unlockedBitmap << ";E=" << equipStr.str();
 
-    // 【关键】WoTLK 3.3.5 的 Addon 消息格式：PREFIX<TAB>DATA
-    // 使用 "ASCENSION" 作为前缀，与客户端注册的前缀一致
-    std::string fullMessage = "ASCENSION\t" + dataStr.str();
+    std::string payload = dataStr.str();
 
     // 【修复】检查消息长度，如果超过255字节则拆分发送
     const size_t MAX_ADDON_MSG_LEN = 250;  // 留一些余量
 
-    if (fullMessage.length() <= MAX_ADDON_MSG_LEN)
+    if (payload.length() + sizeof(ASCENSION_ADDON_PREFIX) <= MAX_ADDON_MSG_LEN)
     {
-        // 消息长度正常，直接发送
-        WorldPacket data;
-        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
-        player->SendDirectMessage(&data);
+        SendAscensionAddonPayload(player, payload);
     }
     else
     {
         // 消息过长，分两部分发送：先发解锁数据，再发装备数据
         // 第一条消息：解锁数据
-        std::string msg1 = "ASCENSION\tU=" + std::to_string(unlockedBitmap);
-        WorldPacket data1;
-        ChatHandler::BuildChatPacket(data1, CHAT_MSG_WHISPER, LANG_ADDON, player, player, msg1, 0);
-        player->SendDirectMessage(&data1);
+        SendAscensionAddonPayload(player, "U=" + std::to_string(unlockedBitmap));
 
         // 第二条消息：装备数据
         std::string equipData = equipStr.str();
         if (!equipData.empty())
         {
-            std::string msg2 = "ASCENSION\tE=" + equipData;
+            std::string msg2 = "E=" + equipData;
 
             // 如果装备数据仍然太长，继续拆分
-            while (msg2.length() > MAX_ADDON_MSG_LEN)
+            while (msg2.length() + sizeof(ASCENSION_ADDON_PREFIX) > MAX_ADDON_MSG_LEN)
             {
                 // 找到最后一个逗号位置作为分割点
-                size_t cutPos = msg2.rfind(',', MAX_ADDON_MSG_LEN - 1);
-                if (cutPos == std::string::npos || cutPos < 12)  // "ASCENSION\tE=" 长度约12
+                size_t cutPos = msg2.rfind(',', MAX_ADDON_MSG_LEN - sizeof(ASCENSION_ADDON_PREFIX));
+                if (cutPos == std::string::npos || cutPos < 2)  // "E=" 长度约2
                 {
                     // 无法再拆分，记录警告
                     LOG_WARN("module", "飞升系统: 单条装备数据过长，可能导致客户端解析失败");
@@ -3241,17 +3417,13 @@ void AscensionManager::SendAscensionDataToClient(Player* player)
                 }
 
                 std::string partMsg = msg2.substr(0, cutPos);
-                WorldPacket partData;
-                ChatHandler::BuildChatPacket(partData, CHAT_MSG_WHISPER, LANG_ADDON, player, player, partMsg, 0);
-                player->SendDirectMessage(&partData);
+                SendAscensionAddonPayload(player, partMsg);
 
-                msg2 = "ASCENSION\tE=" + msg2.substr(cutPos + 1);
+                msg2 = "E=" + msg2.substr(cutPos + 1);
             }
 
             // 发送最后一部分
-            WorldPacket data2;
-            ChatHandler::BuildChatPacket(data2, CHAT_MSG_WHISPER, LANG_ADDON, player, player, msg2, 0);
-            player->SendDirectMessage(&data2);
+            SendAscensionAddonPayload(player, msg2);
         }
     }
 
@@ -3274,7 +3446,9 @@ void AscensionWorldScript::OnAfterConfigLoad(bool reload)
     if (reload && _initialized)
     {
         sAscensionManager->LoadSlotControls();
-        sAscensionManager->LoadRestrictedItems();
+#ifdef MODULE_WEAR_CONTROL
+        WearControl::Reload();
+#endif
         LOG_INFO("module", "飞升系统: 配置已重新加载");
     }
 }
@@ -3304,6 +3478,7 @@ AscensionPlayerScript::AscensionPlayerScript() : PlayerScript("AscensionPlayerSc
     PLAYERHOOK_ON_LOGIN,
     PLAYERHOOK_ON_LOGOUT,
     PLAYERHOOK_ON_DELETE,
+    PLAYERHOOK_ON_CHAT_WITH_RECEIVER,
     PLAYERHOOK_CAN_EQUIP_ITEM,
     PLAYERHOOK_CAN_CAST_ITEM_COMBAT_SPELL
 })
@@ -3334,10 +3509,25 @@ void AscensionPlayerScript::OnPlayerLogin(Player* player)
     if (restrictedEquippedCount > 0 && player->GetSession())
     {
         ChatHandler(player->GetSession()).PSendSysMessage(
-            "检测到 {} 件深渊修仙装备仍在官方装备栏。后续不能再直接穿戴，请手动卸下后放入飞升装备槽。",
+            "检测到 {} 件飞升专属装备仍在官方装备栏。后续不能再直接穿戴，请手动卸下后放入飞升装备槽。",
             restrictedEquippedCount);
     }
 
+}
+
+void AscensionPlayerScript::OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg, Player* /*receiver*/)
+{
+    if (!player || type != CHAT_MSG_WHISPER || lang != LANG_ADDON)
+        return;
+
+    std::size_t tab = msg.find('\t');
+    if (tab == std::string::npos)
+        return;
+
+    if (msg.substr(0, tab) != ASCENSION_ADDON_PREFIX)
+        return;
+
+    HandleAscensionAddonCommand(player, msg.substr(tab + 1));
 }
 
 void AscensionPlayerScript::OnPlayerLogout(Player* player)
@@ -3377,10 +3567,6 @@ void AscensionPlayerScript::OnPlayerLogout(Player* player)
     sAscensionManager->ClearPlayerData(player->GetGUID().GetCounter());
     step("ClearPlayerData");
 
-    if (sAscensionConfig->IsDebugMode())
-    {
-        LOG_INFO("module", "飞升系统: 玩家 {} 登出，已保存飞升数据并清理内存", player->GetName());
-    }
 }
 
 void AscensionPlayerScript::OnPlayerDelete(ObjectGuid guid, uint32 accountId)
@@ -3406,16 +3592,27 @@ bool AscensionPlayerScript::OnPlayerCanEquipItem(Player* player, uint8 slot, uin
     if (!sAscensionConfig->IsEnabled() || !player || !pItem || !not_loading)
         return true;
 
-    if (!sAscensionManager->IsAscensionOnlyItem(pItem->GetEntry()))
-        return true;
-
-    if (player->GetSession())
+    if (IsWearControlOfficialSlotRestricted(pItem->GetEntry()))
     {
-        ChatHandler(player->GetSession()).SendSysMessage(
-            "深渊修仙装备只能穿戴到飞升装备槽位，不能直接装备到官方装备栏。");
-    }
+        if (player->GetSession())
+        {
+#ifdef MODULE_WEAR_CONTROL
+            if (WearControl::IsLimitedTo(pItem->GetEntry(), WEAR_LIMIT_ASCENSION))
+            {
+                ChatHandler(player->GetSession()).SendSysMessage(
+                    "飞升装备只能穿戴到飞升装备槽位，不能直接装备到官方装备栏。");
+            }
+            else
+#endif
+            {
+                ChatHandler(player->GetSession()).SendSysMessage(
+                    "该物品只能穿戴到对应专属系统槽位，不能直接装备到官方装备栏。");
+            }
+        }
 
-    return false;
+        return false;
+    }
+    return true;
 }
 
 bool AscensionPlayerScript::OnPlayerCanCastItemCombatSpell(Player* player, Unit* target, WeaponAttackType attType, uint32 procVictim, uint32 procEx, Item* item, ItemTemplate const* proto)
@@ -3493,13 +3690,13 @@ public:
         aura->SetDuration(-1);
     }
 
-    void OnDamage(Unit* attacker, Unit* victim, uint128& damage) override
+    void OnDamage(Unit* attacker, Unit* victim, uint256& damage) override
     {
         TriggerDamageItemProcs(victim, attacker, damage);
     }
 
 private:
-    static void TriggerDamageItemProcs(Unit* target, Unit* attacker, uint128& damage)
+    static void TriggerDamageItemProcs(Unit* target, Unit* attacker, uint256& damage)
     {
         if (!sAscensionConfig->IsEnabled() || !target || !attacker)
             return;
@@ -3866,7 +4063,9 @@ bool AscensionCommandScript::HandleAscensionUnlock(ChatHandler* handler, const c
 bool AscensionCommandScript::HandleAscensionReload(ChatHandler* handler, const char* args)
 {
     sAscensionManager->LoadSlotControls();
-    sAscensionManager->LoadRestrictedItems();
+#ifdef MODULE_WEAR_CONTROL
+    WearControl::Reload();
+#endif
     handler->SendSysMessage("飞升系统配置已重新加载。");
     return true;
 }
@@ -3998,7 +4197,7 @@ public:
             _phaseTwoTriggered = false;
             _phaseThreeTriggered = false;
 
-            uint128 maxHealth = GetAscensionBossMaxHealth(me->GetEntry());
+            uint256 maxHealth = GetAscensionBossMaxHealth(me->GetEntry());
             if (maxHealth > 0)
             {
                 uint32 clientHealth = ToAscensionClientHealth(maxHealth);
@@ -4006,11 +4205,11 @@ public:
                 me->SetModifierValue(UNIT_MOD_HEALTH, BASE_VALUE, Acore::Number::ToFloat(maxHealth));
                 me->SetMaxHealth(clientHealth);
                 me->SetExtendedMaxHealth(maxHealth);
-                me->SetHealthForCombat128(maxHealth);
+                me->SetHealthForCombat256(maxHealth);
             }
 
             // 扩展血量首领会把核心半血伤害需求抬得过高，这里只解除奖励判定门槛，掉落仍由 creature_template.lootid 正常生成。
-            me->LowerPlayerDamageReq(me->GetMaxHealthForCombat128(), true);
+            me->LowerPlayerDamageReq(me->GetMaxHealthForCombat256(), true);
 
             if (me->HasWeapon(OFF_ATTACK))
                 me->SetCanDualWield(true);
@@ -4089,12 +4288,12 @@ public:
             if (!victim || !victim->IsAlive())
                 return;
 
-            uint128 damage = GetAscensionBossTrueStrikeDamage(me->GetEntry());
+            uint256 damage = GetAscensionBossTrueStrikeDamage(me->GetEntry());
             if (comboFinisher)
             {
-                uint128 comboDamage = damage > std::numeric_limits<uint128>::max() / 3 ? std::numeric_limits<uint128>::max() : damage * 3;
-                uint128 healthDamage = Acore::Number::CalculatePct(victim->GetMaxHealthForCombat128(), 75);
-                damage = std::max<uint128>(comboDamage, healthDamage);
+                uint256 comboDamage = damage > std::numeric_limits<uint256>::max() / 3 ? std::numeric_limits<uint256>::max() : damage * 3;
+                uint256 healthDamage = Acore::Number::CalculatePct(victim->GetMaxHealthForCombat256(), 75);
+                damage = std::max<uint256>(comboDamage, healthDamage);
             }
 
             Unit::DealDamage(me, victim, damage, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_SHADOW, nullptr, false);

@@ -421,7 +421,7 @@ class spell_black_temple_consuming_strikes_aura : public AuraScript
     void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
     {
         PreventDefaultAction();
-        GetTarget()->CastCustomSpell(GetSpellInfo()->Effects[EFFECT_1].CalcValue(), SPELLVALUE_BASE_POINT0, Acore::Number::ToInt32Saturated(Acore::Number::ToInt128Saturated(eventInfo.GetDamageInfo()->GetDamage())), GetTarget(), true);
+        GetTarget()->CastCustomSpell(GetSpellInfo()->Effects[EFFECT_1].CalcValue(), SPELLVALUE_BASE_POINT0, Acore::Number::ToInt32Saturated(Acore::Number::ToInt256Saturated(eventInfo.GetDamageInfo()->GetDamage())), GetTarget(), true);
     }
 
     void Register() override

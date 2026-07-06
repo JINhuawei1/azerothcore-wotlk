@@ -66,12 +66,12 @@ namespace
 {
 constexpr uint64 CREATURE_CLIENT_VISIBLE_HEALTH_LIMIT = 2147483520ULL;
 
-uint32 ToCreatureUpdateFieldValue(uint128 const& value)
+uint32 ToCreatureUpdateFieldValue(uint256 const& value)
 {
     return value > CREATURE_CLIENT_VISIBLE_HEALTH_LIMIT ? static_cast<uint32>(CREATURE_CLIENT_VISIBLE_HEALTH_LIMIT) : Acore::Number::ToUInt32Saturated(value);
 }
 
-uint32 ScaleExtendedValueToClient(uint128 const& currentValue, uint128 const& maxValue, uint32 clientMaxValue)
+uint32 ScaleExtendedValueToClient(uint256 const& currentValue, uint256 const& maxValue, uint32 clientMaxValue)
 {
     if (currentValue == 0 || maxValue == 0)
         return 0;
@@ -93,7 +93,7 @@ uint32 ScaleExtendedValueToClient(uint128 const& currentValue, uint128 const& ma
     return clientValue > clientMaxValue ? clientMaxValue : clientValue;
 }
 
-uint128 ScaleClientValueToExtended(uint32 clientValue, uint32 clientMaxValue, uint128 const& extendedMaxValue)
+uint256 ScaleClientValueToExtended(uint32 clientValue, uint32 clientMaxValue, uint256 const& extendedMaxValue)
 {
     if (!clientValue || !clientMaxValue || extendedMaxValue == 0)
         return 0;
@@ -105,7 +105,7 @@ uint128 ScaleClientValueToExtended(uint32 clientValue, uint32 clientMaxValue, ui
         return extendedMaxValue;
 
     long double scaled = (Acore::Number::ToLongDouble(extendedMaxValue) * static_cast<long double>(clientValue)) / static_cast<long double>(clientMaxValue);
-    uint128 extendedValue = Acore::Number::ToUInt128Saturated(scaled + 0.5L);
+    uint256 extendedValue = Acore::Number::ToUInt256Saturated(scaled + 0.5L);
     if (extendedValue == 0)
         return 1;
 
@@ -364,7 +364,7 @@ Creature::~Creature()
     i_AI = nullptr;
 }
 
-void Creature::SetExtendedMaxHealth(uint128 value)
+void Creature::SetExtendedMaxHealth(uint256 value)
 {
     if (value <= GetMaxHealth())
     {
@@ -378,7 +378,7 @@ void Creature::SetExtendedMaxHealth(uint128 value)
         m_extendedHealth = m_extendedMaxHealth;
 }
 
-void Creature::SetExtendedHealth(uint128 value)
+void Creature::SetExtendedHealth(uint256 value)
 {
     if (m_extendedMaxHealth == 0)
         return;
@@ -410,7 +410,7 @@ void Creature::ApplyPendingClientHealthSync()
         return;
 
     uint32 clientMaxHealth = GetMaxHealth();
-    if (!clientMaxHealth || GetExtendedHealth128() <= clientMaxHealth)
+    if (!clientMaxHealth || GetExtendedHealth256() <= clientMaxHealth)
         return;
 
     m_syncingClientHealthFromExtended = true;
@@ -418,7 +418,7 @@ void Creature::ApplyPendingClientHealthSync()
     m_syncingClientHealthFromExtended = false;
 }
 
-uint128 Creature::GetExtendedPower128(Powers power) const
+uint256 Creature::GetExtendedPower256(Powers power) const
 {
     if (power < POWER_MANA || power >= MAX_POWERS)
         return 0;
@@ -426,7 +426,7 @@ uint128 Creature::GetExtendedPower128(Powers power) const
     return m_extendedMaxPowers[power] != 0 ? m_extendedPowers[power] : GetPower(power);
 }
 
-uint128 Creature::GetExtendedMaxPower128(Powers power) const
+uint256 Creature::GetExtendedMaxPower256(Powers power) const
 {
     if (power < POWER_MANA || power >= MAX_POWERS)
         return 0;
@@ -434,7 +434,7 @@ uint128 Creature::GetExtendedMaxPower128(Powers power) const
     return m_extendedMaxPowers[power] != 0 ? m_extendedMaxPowers[power] : GetMaxPower(power);
 }
 
-void Creature::SetExtendedMaxPower(Powers power, uint128 value)
+void Creature::SetExtendedMaxPower(Powers power, uint256 value)
 {
     if (power < POWER_MANA || power >= MAX_POWERS)
         return;
@@ -451,7 +451,7 @@ void Creature::SetExtendedMaxPower(Powers power, uint128 value)
         m_extendedPowers[power] = m_extendedMaxPowers[power];
 }
 
-void Creature::SetExtendedPower(Powers power, uint128 value)
+void Creature::SetExtendedPower(Powers power, uint256 value)
 {
     if (power < POWER_MANA || power >= MAX_POWERS || m_extendedMaxPowers[power] == 0)
         return;
@@ -480,8 +480,8 @@ void Creature::SyncClientPowerFromExtended(Powers power, bool withPowerUpdate /*
         return;
 
     uint32 clientMaxPower = GetMaxPower(power);
-    uint128 extendedMaxPower = GetExtendedMaxPower128(power);
-    uint128 extendedPower = GetExtendedPower128(power);
+    uint256 extendedMaxPower = GetExtendedMaxPower256(power);
+    uint256 extendedPower = GetExtendedPower256(power);
 
     uint32 clientPower = ScaleExtendedValueToClient(extendedPower, extendedMaxPower, clientMaxPower);
 
@@ -758,21 +758,21 @@ bool Creature::UpdateEntry(uint32 Entry, const CreatureData* data, bool changele
     SetAttackTime(OFF_ATTACK,    cInfo->BaseAttackTime);
     SetAttackTime(RANGED_ATTACK, cInfo->RangeAttackTime);
 
-    uint128 previousHealth = GetHealthForCombat128();
-    uint128 previousMaxHealth = GetMaxHealthForCombat128();
-    uint128 previousPlayerDamageReq = _playerDamageReq;
+    uint256 previousHealth = GetHealthForCombat256();
+    uint256 previousMaxHealth = GetMaxHealthForCombat256();
+    uint256 previousPlayerDamageReq = _playerDamageReq;
 
     SelectLevel(changelevel);
     if (previousHealth > 0)
     {
-        uint128 currentMaxHealth = GetMaxHealthForCombat128();
-        uint128 restoredHealth = previousHealth > currentMaxHealth ? currentMaxHealth : previousHealth;
-        SetHealthForCombat128(restoredHealth);
+        uint256 currentMaxHealth = GetMaxHealthForCombat256();
+        uint256 restoredHealth = previousHealth > currentMaxHealth ? currentMaxHealth : previousHealth;
+        SetHealthForCombat256(restoredHealth);
 
         if (previousMaxHealth != 0 && previousMaxHealth > currentMaxHealth)
         {
             long double scaledReq = (Acore::Number::ToLongDouble(previousPlayerDamageReq) * Acore::Number::ToLongDouble(currentMaxHealth)) / Acore::Number::ToLongDouble(previousMaxHealth);
-            _playerDamageReq = Acore::Number::ToUInt128Saturated(scaledReq);
+            _playerDamageReq = Acore::Number::ToUInt256Saturated(scaledReq);
         }
         else
         {
@@ -1141,8 +1141,8 @@ void Creature::Regenerate(Powers power)
     if (power < POWER_MANA || power >= MAX_POWERS)
         return;
 
-    uint128 curValue = GetPowerForCombat128(power);
-    uint128 maxValue = GetMaxPowerForCombat128(power);
+    uint256 curValue = GetPowerForCombat256(power);
+    uint256 maxValue = GetMaxPowerForCombat256(power);
 
     // Xinef: implement power regeneration flag
     if (!HasUnitFlag2(UNIT_FLAG2_REGENERATE_POWER) && !GetOwnerGUID().IsPlayer())
@@ -1205,15 +1205,15 @@ void Creature::Regenerate(Powers power)
 
     addvalue += static_cast<long double>(GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_POWER_REGEN, power)) * static_cast<long double>(power == POWER_FOCUS ? PET_FOCUS_REGEN_INTERVAL.count() : CREATURE_REGEN_INTERVAL) / static_cast<long double>(5 * IN_MILLISECONDS);
 
-    uint128 missing = maxValue - curValue;
-    uint128 restore = 0;
+    uint256 missing = maxValue - curValue;
+    uint256 restore = 0;
     if (addvalue > 0.0L && !std::isnan(static_cast<double>(addvalue)))
-        restore = Acore::Number::ToUInt128Saturated(addvalue);
+        restore = Acore::Number::ToUInt256Saturated(addvalue);
     if (restore > missing)
         restore = missing;
 
     if (restore != 0)
-        SetPowerForCombat128(power, curValue + restore);
+        SetPowerForCombat256(power, curValue + restore);
 }
 
 void Creature::RegenerateHealth()
@@ -1221,13 +1221,13 @@ void Creature::RegenerateHealth()
     if (!isRegeneratingHealth())
         return;
 
-    uint128 curValue = GetHealthForCombat128();
-    uint128 maxValue = GetMaxHealthForCombat128();
+    uint256 curValue = GetHealthForCombat256();
+    uint256 maxValue = GetMaxHealthForCombat256();
 
     if (curValue >= maxValue)
         return;
 
-    uint128 addvalue = 0;
+    uint256 addvalue = 0;
 
     // Not only pet, but any controlled creature
     // Xinef: fix polymorph rapid regen
@@ -1239,9 +1239,9 @@ void Creature::RegenerateHealth()
         float Spirit = GetStat(STAT_SPIRIT);
 
         if (GetPower(POWER_MANA) > 0)
-            addvalue = Acore::Number::ToUInt128Saturated(static_cast<long double>(Spirit) * 0.25L * static_cast<long double>(HealthIncreaseRate));
+            addvalue = Acore::Number::ToUInt256Saturated(static_cast<long double>(Spirit) * 0.25L * static_cast<long double>(HealthIncreaseRate));
         else
-            addvalue = Acore::Number::ToUInt128Saturated(static_cast<long double>(Spirit) * 0.80L * static_cast<long double>(HealthIncreaseRate));
+            addvalue = Acore::Number::ToUInt256Saturated(static_cast<long double>(Spirit) * 0.80L * static_cast<long double>(HealthIncreaseRate));
     }
 
     // Apply modifiers (if any).
@@ -1254,19 +1254,19 @@ void Creature::RegenerateHealth()
         addvalue += static_cast<uint32>(regenMod);
     else
     {
-        uint128 reduction = static_cast<uint64>(-regenMod);
+        uint256 reduction = static_cast<uint64>(-regenMod);
         addvalue = reduction > addvalue ? 0 : addvalue - reduction;
     }
 
     // 安全限制：治疗量不能超过缺失生命值，避免 uint32 溢出后在 ModifyHealth(int32) 中变成负值
-    uint128 const missing = maxValue - curValue;
+    uint256 const missing = maxValue - curValue;
     if (addvalue > missing)
         addvalue = missing;
 
     if (addvalue == 0)
         return;
 
-    SetHealthForCombat128(curValue + addvalue);
+    SetHealthForCombat256(curValue + addvalue);
 }
 
 void Creature::DoFleeToGetAssistance()
@@ -1677,8 +1677,8 @@ void Creature::SaveToDB(uint32 mapid, uint8 spawnMask, uint32 phaseMask)
     // prevent add data integrity problems
     data.wander_distance = GetDefaultMovementType() == IDLE_MOTION_TYPE ? 0.0f : m_wanderDistance;
     data.currentwaypoint = 0;
-    data.curhealth = GetHealthForCombat128();
-    data.curmana = GetPowerForCombat128(POWER_MANA);
+    data.curhealth = GetHealthForCombat256();
+    data.curmana = GetPowerForCombat256(POWER_MANA);
     // prevent add data integrity problems
     data.movementType = !m_wanderDistance && GetDefaultMovementType() == RANDOM_MOTION_TYPE
                         ? IDLE_MOTION_TYPE : GetDefaultMovementType();
@@ -1712,8 +1712,8 @@ void Creature::SaveToDB(uint32 mapid, uint8 spawnMask, uint32 phaseMask)
     stmt->SetData(index++, m_respawnDelay);
     stmt->SetData(index++, m_wanderDistance);
     stmt->SetData(index++, 0);
-    stmt->SetData(index++, GetHealthForCombat128());
-    stmt->SetData(index++, GetPowerForCombat128(POWER_MANA));
+    stmt->SetData(index++, GetHealthForCombat256());
+    stmt->SetData(index++, GetPowerForCombat256(POWER_MANA));
     stmt->SetData(index++, uint8(GetDefaultMovementType()));
     stmt->SetData(index++, npcflag);
     stmt->SetData(index++, unit_flags);
@@ -1745,10 +1745,10 @@ void Creature::SelectLevel(bool changelevel)
     // health
     float healthmod = _GetHealthMod(rank);
 
-    uint128 basehp = stats->GenerateHealth(cInfo);
+    uint256 basehp = stats->GenerateHealth(cInfo);
     if (basehp < 1)
         basehp = 1;
-    uint128 health64 = Acore::Number::ToUInt128Saturated(Acore::Number::ToLongDouble(basehp) * static_cast<long double>(healthmod));
+    uint256 health64 = Acore::Number::ToUInt256Saturated(Acore::Number::ToLongDouble(basehp) * static_cast<long double>(healthmod));
     uint32 health = ToCreatureUpdateFieldValue(health64);
 
     m_extendedCreateHealth = health64;
@@ -1761,7 +1761,7 @@ void Creature::SelectLevel(bool changelevel)
     ResetPlayerDamageReq();
 
     // mana
-    uint128 mana64 = stats->GenerateMana(cInfo);
+    uint256 mana64 = stats->GenerateMana(cInfo);
     uint32 mana = ToCreatureUpdateFieldValue(mana64);
 
     m_extendedCreateMana = mana64;
@@ -1989,15 +1989,15 @@ bool Creature::LoadCreatureFromDB(ObjectGuid::LowType spawnId, Map* map, bool ad
         }
     }
 
-    uint128 curhealth;
-    uint128 curmana;
+    uint256 curhealth;
+    uint256 curmana;
 
     if (!m_regenHealth)
     {
         curhealth = data->curhealth;
         if (curhealth != 0)
         {
-            curhealth = Acore::Number::ToUInt128Saturated(Acore::Number::ToLongDouble(curhealth) * static_cast<long double>(_GetHealthMod(GetCreatureTemplate()->rank)));
+            curhealth = Acore::Number::ToUInt256Saturated(Acore::Number::ToLongDouble(curhealth) * static_cast<long double>(_GetHealthMod(GetCreatureTemplate()->rank)));
             if (curhealth < 1)
                 curhealth = 1;
         }
@@ -2005,12 +2005,12 @@ bool Creature::LoadCreatureFromDB(ObjectGuid::LowType spawnId, Map* map, bool ad
     }
     else
     {
-        curhealth = GetMaxHealthForCombat128();
-        curmana = GetMaxPowerForCombat128(POWER_MANA);
+        curhealth = GetMaxHealthForCombat256();
+        curmana = GetMaxPowerForCombat256(POWER_MANA);
     }
 
-    SetHealthForCombat128(m_deathState == DeathState::Alive ? curhealth : 0);
-    SetPowerForCombat128(POWER_MANA, curmana);
+    SetHealthForCombat256(m_deathState == DeathState::Alive ? curhealth : 0);
+    SetPowerForCombat256(POWER_MANA, curmana);
 
     // checked at creature_template loading
     m_defaultMovementType = MovementGeneratorType(data->movementType);
@@ -4042,7 +4042,7 @@ bool Creature::IsDamageEnoughForLootingAndReward() const
     return m_creatureInfo->HasFlagsExtra(CREATURE_FLAG_EXTRA_NO_PLAYER_DAMAGE_REQ) || (_playerDamageReq == 0 && _damagedByPlayer);
 }
 
-void Creature::LowerPlayerDamageReq(uint128 const& unDamage, bool damagedByPlayer /*= true*/)
+void Creature::LowerPlayerDamageReq(uint256 const& unDamage, bool damagedByPlayer /*= true*/)
 {
     if (_playerDamageReq)
         _playerDamageReq > unDamage ? _playerDamageReq -= unDamage : _playerDamageReq = 0;
@@ -4055,11 +4055,11 @@ void Creature::LowerPlayerDamageReq(uint128 const& unDamage, bool damagedByPlaye
 
 void Creature::ResetPlayerDamageReq()
 {
-    _playerDamageReq = GetHealthForCombat128() / 2;
+    _playerDamageReq = GetHealthForCombat256() / 2;
     _damagedByPlayer = false;
 }
 
-uint128 const& Creature::GetPlayerDamageReq() const
+uint256 const& Creature::GetPlayerDamageReq() const
 {
     return _playerDamageReq;
 }
@@ -4067,7 +4067,7 @@ uint128 const& Creature::GetPlayerDamageReq() const
 bool Creature::CanCastSpell(uint32 spellID) const
 {
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellID);
-    uint128 currentPower = GetPowerForCombat128(getPowerType());
+    uint256 currentPower = GetPowerForCombat256(getPowerType());
 
     if (HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_SILENCED) || IsSpellProhibited(spellInfo->GetSchoolMask()))
     {
@@ -4076,8 +4076,8 @@ bool Creature::CanCastSpell(uint32 spellID) const
 
     if (spellInfo)
     {
-        int128 powerCost = spellInfo->CalcPowerCost(this, spellInfo->GetSchoolMask());
-        if (powerCost > 0 && currentPower < Acore::Number::ToUInt128Saturated(powerCost))
+        int256 powerCost = spellInfo->CalcPowerCost(this, spellInfo->GetSchoolMask());
+        if (powerCost > 0 && currentPower < Acore::Number::ToUInt256Saturated(powerCost))
             return false;
     }
 

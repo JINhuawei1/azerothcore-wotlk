@@ -610,12 +610,12 @@ public:
         }
 
         int64 moneyToAdd = *moneyToAddO;
-        int128 targetMoney = target->GetMoney();
+        int256 targetMoney = target->GetMoney();
 
         if (moneyToAdd < 0)
         {
             uint64 reduction = moneyToAdd == std::numeric_limits<int64>::min() ? static_cast<uint64>(std::numeric_limits<int64>::max()) + 1 : static_cast<uint64>(-moneyToAdd);
-            int128 newMoney = targetMoney > reduction ? targetMoney - reduction : 0;
+            int256 newMoney = targetMoney > reduction ? targetMoney - reduction : 0;
 
             LOG_DEBUG("chat.system", handler->GetAcoreString(LANG_CURRENT_MONEY), Acore::ToString(targetMoney), moneyToAdd, Acore::ToString(newMoney));
             if (targetMoney <= reduction)

@@ -271,15 +271,15 @@ class spell_hun_generic_scaling : public AuraScript
             {
                 if (aurEff->GetMiscValue() == STAT_STAMINA)
                 {
-                    uint128 actStat = GetUnitOwner()->GetHealthForCombat128();
+                    uint256 actStat = GetUnitOwner()->GetHealthForCombat256();
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetHealthForCombat128(std::min<uint128>(GetUnitOwner()->GetMaxHealthForCombat128(), actStat));
+                    GetUnitOwner()->SetHealthForCombat256(std::min<uint256>(GetUnitOwner()->GetMaxHealthForCombat256(), actStat));
                 }
                 else
                 {
-                    uint128 actStat = GetUnitOwner()->GetPowerForCombat128(POWER_MANA);
+                    uint256 actStat = GetUnitOwner()->GetPowerForCombat256(POWER_MANA);
                     GetEffect(aurEff->GetEffIndex())->ChangeAmount(newAmount, false);
-                    GetUnitOwner()->SetPowerForCombat128(POWER_MANA, std::min<uint128>(GetUnitOwner()->GetMaxPowerForCombat128(POWER_MANA), actStat));
+                    GetUnitOwner()->SetPowerForCombat256(POWER_MANA, std::min<uint256>(GetUnitOwner()->GetMaxPowerForCombat256(POWER_MANA), actStat));
                 }
             }
         }
@@ -415,7 +415,7 @@ class spell_hun_ascpect_of_the_viper : public AuraScript
     {
         PreventDefaultAction();
 
-        long double manaValue = Acore::Number::ToLongDouble(GetTarget()->GetMaxPowerForCombat128(POWER_MANA)) * (static_cast<long double>(GetTarget()->GetAttackTime(RANGED_ATTACK)) / 1000.0L) / 100.0L;
+        long double manaValue = Acore::Number::ToLongDouble(GetTarget()->GetMaxPowerForCombat256(POWER_MANA)) * (static_cast<long double>(GetTarget()->GetAttackTime(RANGED_ATTACK)) / 1000.0L) / 100.0L;
 
         if (AuraEffect const* glyph = GetTarget()->GetAuraEffect(SPELL_HUNTER_GLYPH_OF_ASPECT_OF_THE_VIPER, EFFECT_0))
             manaValue += manaValue * static_cast<long double>(glyph->GetAmount()) / 100.0L;
@@ -484,7 +484,7 @@ class spell_hun_chimera_shot : public SpellScript
                         spellId = SPELL_HUNTER_CHIMERA_SHOT_SERPENT;
                         basePoint = aurEff->GetAmount();
                         ApplyPct(basePoint, TickCount * 40);
-                        basePoint = Acore::Number::ToInt32Saturated(Acore::Number::ToInt128Saturated(unitTarget->SpellDamageBonusTaken(caster, aura->GetSpellInfo(), basePoint, DOT, aura->GetStackAmount())));
+                        basePoint = Acore::Number::ToInt32Saturated(Acore::Number::ToInt256Saturated(unitTarget->SpellDamageBonusTaken(caster, aura->GetSpellInfo(), basePoint, DOT, aura->GetStackAmount())));
                     }
                     // Viper Sting - Instantly restores mana to you equal to 60% of the total amount drained by your Viper Sting.
                     else if (familyFlag[1] & 0x00000080)
@@ -493,7 +493,7 @@ class spell_hun_chimera_shot : public SpellScript
                         spellId = SPELL_HUNTER_CHIMERA_SHOT_VIPER;
 
                         // Amount of one aura tick
-                        long double targetMaxMana = Acore::Number::ToLongDouble(unitTarget->GetMaxPowerForCombat128(POWER_MANA));
+                        long double targetMaxMana = Acore::Number::ToLongDouble(unitTarget->GetMaxPowerForCombat256(POWER_MANA));
                         long double basePointValue = targetMaxMana * static_cast<long double>(aurEff->GetAmount()) / 100.0L;
                         long double casterBasePoint = targetMaxMana * static_cast<long double>(aurEff->GetAmount()) / 50.0L; /// @todo: Caster uses unitTarget?
                         if (basePointValue > casterBasePoint)
@@ -1113,7 +1113,7 @@ class spell_hun_glyph_of_arcane_shot : public AuraScript
             return;
         }
 
-        int128 powerCost = procSpell->CalcPowerCost(GetTarget(), procSpell->GetSchoolMask());
+        int256 powerCost = procSpell->CalcPowerCost(GetTarget(), procSpell->GetSchoolMask());
         int32 mana = powerCost > 0 ? ToInt32Saturated(Acore::Number::ToLongDouble(powerCost) * static_cast<long double>(aurEff->GetAmount()) / 100.0L) : 0;
 
         GetTarget()->CastCustomSpell(SPELL_HUNTER_GLYPH_OF_ARCANE_SHOT, SPELLVALUE_BASE_POINT0, mana, GetTarget());

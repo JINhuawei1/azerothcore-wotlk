@@ -2,6 +2,7 @@
 #include "Chat.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
+#include "HermesBridgeAddonApi.h"
 #include "Log.h"
 #include "ObjectMgr.h"
 #include "Player.h"
@@ -10,6 +11,13 @@
 #include "RewardTemplate.h"
 #include "ScriptMgr.h"
 #include "WorldPacket.h"
+
+#if __has_include("WearControl.h")
+    #include "WearControl.h"
+    #define SYNTHESIS_HAS_WEAR_CONTROL 1
+#else
+    #define SYNTHESIS_HAS_WEAR_CONTROL 0
+#endif
 
 #include <algorithm>
 #include <cstdlib>
@@ -30,12 +38,14 @@ struct SynthesisEntry
 {
     uint32 itemId = 0;
     uint32 upgradeLevel = 0;
+    uint8 classType = 0;
     uint32 requirementId = 0;
     uint32 rewardId = 0;
     float successChance = 100.0f;
     uint32 boosterItemId = 0;
     float boosterChance = 0.0f;
     bool destroyOnFail = false;
+    uint32 unlockWearLevel = 0;
 };
 
 std::string TrimAddonText(std::string value)
@@ -214,6 +224,47 @@ std::string BuildRequirementSummary(uint32 requirementId)
     return summary.str();
 }
 
+std::string BuildRequirementItems(Player* player, uint32 requirementId)
+{
+    if (!player || requirementId == 0)
+        return "";
+
+    QueryResult result = WorldDatabase.Query(
+        "SELECT `消耗物品` FROM `_模板_需求` WHERE `id` = {}", requirementId);
+    if (!result)
+        return "";
+
+    std::string items = TrimAddonText((*result)[0].Get<std::string>());
+    if (items.empty())
+        return "";
+
+    std::ostringstream details;
+    bool first = true;
+    std::istringstream itemPairs(items);
+    std::string itemPair;
+    while (std::getline(itemPairs, itemPair, ','))
+    {
+        std::istringstream itemStream(itemPair);
+        uint32 itemId = 0;
+        uint32 count = 0;
+        itemStream >> itemId >> count;
+        if (!itemId)
+            continue;
+
+        if (!first)
+            details << ';';
+        first = false;
+
+        details << itemId << ':'
+                << (count ? count : 1) << ':'
+                << player->GetItemCount(itemId, true) << ':'
+                << LimitAddonText(GetItemName(itemId), 64) << ':'
+                << GetItemIconPath(itemId);
+    }
+
+    return details.str();
+}
+
 void SendSynthesisPayload(Player* player, std::string const& payload)
 {
     if (!player || payload.empty())
@@ -230,6 +281,8 @@ void SendSynthesisPayload(Player* player, std::string const& payload)
             std::ostringstream chunkPayload;
             chunkPayload << "CHUNK:" << (index + 1) << ':' << totalChunks << ':'
                          << payload.substr(start, length);
+            if (HermesBridge_SendAddonMessage(player, SYNTHESIS_ADDON_PREFIX, chunkPayload.str()))
+                continue;
 
             std::string fullChunkMessage = std::string(SYNTHESIS_ADDON_PREFIX) + '\t' + chunkPayload.str();
             WorldPacket chunkData;
@@ -238,6 +291,9 @@ void SendSynthesisPayload(Player* player, std::string const& payload)
         }
         return;
     }
+
+    if (HermesBridge_SendAddonMessage(player, SYNTHESIS_ADDON_PREFIX, payload))
+        return;
 
     std::string fullMessage = std::string(SYNTHESIS_ADDON_PREFIX) + '\t' + payload;
     WorldPacket data;
@@ -258,6 +314,41 @@ std::vector<std::string> SplitFields(std::string const& text, char delimiter)
 uint32 ToUInt32(std::string const& value)
 {
     return static_cast<uint32>(std::strtoul(value.c_str(), nullptr, 10));
+}
+
+bool SynthesisColumnExists(char const* columnName)
+{
+    QueryResult result = WorldDatabase.Query(
+        "SELECT COUNT(*) FROM `information_schema`.`COLUMNS` "
+        "WHERE `TABLE_SCHEMA` = DATABASE() AND `TABLE_NAME` = '_物品合成' AND `COLUMN_NAME` = '{}'",
+        columnName);
+
+    if (!result)
+        return false;
+
+    return result->Fetch()[0].Get<uint64>() > 0;
+}
+
+bool UnlockWearLevelFromSynthesis(Player* player, uint32 wearLevel, std::string& message)
+{
+    if (wearLevel == 0)
+        return true;
+
+#if SYNTHESIS_HAS_WEAR_CONTROL
+    if (WearControl::UnlockPlayerWearLevel(player, wearLevel, true))
+    {
+        std::ostringstream ss;
+        ss << "合成成功，已解锁穿戴等级 " << wearLevel;
+        message = ss.str();
+        return true;
+    }
+
+    message = "合成成功，但穿戴等级解锁失败，请检查 `_穿戴等级权限` 表";
+    return false;
+#else
+    message = "合成成功，但当前未编译穿戴控制模块，无法解锁穿戴等级";
+    return false;
+#endif
 }
 
 class SynthesisSystemMgr
@@ -283,10 +374,19 @@ public:
         std::lock_guard<std::mutex> guard(_mutex);
         _entries.clear();
 
-        QueryResult result = WorldDatabase.Query(
-            "SELECT `物品id`, `升级等级`, `需求id`, `升级成功奖励id`, `成功几率`, "
-            "`合成几率物品id`, `合成几率提升`, `失败是否摧毁` "
-            "FROM `_物品合成` ORDER BY `物品id`, `升级等级`");
+        bool const hasUnlockWearLevelColumn = SynthesisColumnExists("解锁穿戴等级");
+        if (!hasUnlockWearLevelColumn)
+            LOG_INFO("server.loading", "合成系统: `_物品合成`.`解锁穿戴等级` 字段不存在，合成成功不授予穿戴等级");
+
+        QueryResult result = hasUnlockWearLevelColumn
+            ? WorldDatabase.Query(
+                "SELECT `物品id`, `升级等级`, `职业类型`, `需求id`, `升级成功奖励id`, `成功几率`, "
+                "`合成几率物品id`, `合成几率提升`, `失败是否摧毁`, `解锁穿戴等级` "
+                "FROM `_物品合成` ORDER BY `物品id`, `升级等级`")
+            : WorldDatabase.Query(
+                "SELECT `物品id`, `升级等级`, `职业类型`, `需求id`, `升级成功奖励id`, `成功几率`, "
+                "`合成几率物品id`, `合成几率提升`, `失败是否摧毁`, 0 AS `解锁穿戴等级` "
+                "FROM `_物品合成` ORDER BY `物品id`, `升级等级`");
 
         if (!result)
             return 0;
@@ -299,12 +399,14 @@ public:
             SynthesisEntry entry;
             entry.itemId = fields[0].Get<uint32>();
             entry.upgradeLevel = fields[1].Get<uint32>();
-            entry.requirementId = fields[2].Get<uint32>();
-            entry.rewardId = fields[3].Get<uint32>();
-            entry.successChance = std::clamp(fields[4].Get<float>(), 0.0f, 100.0f);
-            entry.boosterItemId = fields[5].Get<uint32>();
-            entry.boosterChance = std::clamp(fields[6].Get<float>(), 0.0f, 100.0f);
-            entry.destroyOnFail = fields[7].Get<uint8>() != 0;
+            entry.classType = fields[2].Get<uint8>();
+            entry.requirementId = fields[3].Get<uint32>();
+            entry.rewardId = fields[4].Get<uint32>();
+            entry.successChance = std::clamp(fields[5].Get<float>(), 0.0f, 100.0f);
+            entry.boosterItemId = fields[6].Get<uint32>();
+            entry.boosterChance = std::clamp(fields[7].Get<float>(), 0.0f, 100.0f);
+            entry.destroyOnFail = fields[8].Get<uint8>() != 0;
+            entry.unlockWearLevel = fields[9].Get<uint32>();
 
             if (!sObjectMgr->GetItemTemplate(entry.itemId))
             {
@@ -373,6 +475,7 @@ public:
             auto [nextItemId, nextItemCount] = ParseFirstRewardItem(rewardItems);
             std::string nextItemName = nextItemId ? GetItemName(nextItemId) : rewardText;
             std::string requirementSummary = BuildRequirementSummary(entry.requirementId);
+            std::string requirementItems = BuildRequirementItems(player, entry.requirementId);
 
             if (!first)
                 payload << '~';
@@ -396,7 +499,10 @@ public:
                     << sourceCount << '^'
                     << boosterCount << '^'
                     << LimitAddonText(requirementSummary, 180) << '^'
-                    << LimitAddonText(rewardText, 110);
+                    << LimitAddonText(rewardText, 110) << '^'
+                    << static_cast<uint32>(entry.classType) << '^'
+                    << requirementItems << '^'
+                    << entry.unlockWearLevel;
         }
 
         SendSynthesisPayload(player, payload.str());
@@ -472,26 +578,25 @@ public:
             }
         }
 
-        if (useBooster && entry.boosterItemId != 0)
-            player->DestroyItemCount(entry.boosterItemId, 1, true);
-
         float finalChance = std::clamp(entry.successChance + (useBooster ? entry.boosterChance : 0.0f), 0.0f, 100.0f);
         bool success = roll_chance_f(finalChance);
 
         if (success)
         {
-            player->DestroyItemCount(entry.itemId, 1, true);
             bool rewarded = sRewardTemplate->GiveReward(player, entry.rewardId, false, true);
             if (rewarded)
-                SendResult(player, true, entry.itemId, entry.upgradeLevel, "合成成功");
+            {
+                std::string resultMessage = "合成成功";
+                if (entry.unlockWearLevel > 0)
+                    UnlockWearLevelFromSynthesis(player, entry.unlockWearLevel, resultMessage);
+                SendResult(player, true, entry.itemId, entry.upgradeLevel, resultMessage);
+            }
             else
                 SendResult(player, false, entry.itemId, entry.upgradeLevel, "合成成功但发放奖励失败，请检查奖励模板或背包空间");
         }
         else
         {
-            if (entry.destroyOnFail)
-                player->DestroyItemCount(entry.itemId, 1, true);
-            SendResult(player, false, entry.itemId, entry.upgradeLevel, entry.destroyOnFail ? "合成失败，物品已摧毁" : "合成失败，物品未摧毁");
+            SendResult(player, false, entry.itemId, entry.upgradeLevel, "合成失败");
         }
 
         SendList(player);
@@ -605,4 +710,5 @@ public:
 void AddSC_mod_synthesis_system()
 {
     new SynthesisSystemWorldScript();
+    new SynthesisSystemPlayerScript();
 }

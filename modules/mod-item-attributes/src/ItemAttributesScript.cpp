@@ -202,7 +202,7 @@ static Item* FindPlayerItemByPosition(Player* player, uint32 itemId, int32 bag, 
 static std::string FormatAttributesForClient(const std::string& attrIds, const std::string& attrVals)
 {
     std::vector<uint32> ids;
-    std::vector<int128> vals;
+    std::vector<int256> vals;
     
     // 解析ID列表
     std::istringstream idsStream(attrIds);
@@ -223,7 +223,7 @@ static std::string FormatAttributesForClient(const std::string& attrIds, const s
     {
         if (!val.empty())
         {
-            if (Optional<int128> parsedValue = Acore::StringTo<int128>(val))
+            if (Optional<int256> parsedValue = Acore::StringTo<int256>(val))
                 vals.push_back(*parsedValue);
         }
     }
@@ -564,24 +564,24 @@ public:
         }
 
         // 计算属性值（如果未指定）
-        int128 attributeValue = 0;
+        int256 attributeValue = 0;
         if (!attributeValueStr.empty())
         {
-            if (Optional<int128> parsedValue = Acore::StringTo<int128>(attributeValueStr))
+            if (Optional<int256> parsedValue = Acore::StringTo<int256>(attributeValueStr))
                 attributeValue = *parsedValue;
         }
         else
         {
             // 使用模板中的随机范围生成属性值
             uint32 itemLevel = item->GetTemplate()->ItemLevel;
-            int128 minPercent = attrTemplate->minPercent;
-            int128 maxPercent = attrTemplate->maxPercent;
+            int256 minPercent = attrTemplate->minPercent;
+            int256 maxPercent = attrTemplate->maxPercent;
             if (minPercent > maxPercent)
                 std::swap(minPercent, maxPercent);
             
             if (attrTemplate->calcType == 1) // 乘以物品等级
             {
-                int128 baseValue = minPercent + ((maxPercent - minPercent) / 2);
+                int256 baseValue = minPercent + ((maxPercent - minPercent) / 2);
                 attributeValue = Acore::Number::CalculatePct(baseValue, itemLevel);
             }
             else if (attrTemplate->calcType == 2) // 固定值
@@ -1137,7 +1137,7 @@ public:
             ItemAttributeTemplate const* attrTemplate = templates[index];
             
             // 计算属性值
-            int128 attributeValue = sItemAttributesLoader->CalculateAttributeValue(item, attrTemplate);
+            int256 attributeValue = sItemAttributesLoader->CalculateAttributeValue(item, attrTemplate);
 
             // 添加属性
             // 【审计修复】保存属性类型而不是模板ID，确保与效果系统一致

@@ -370,10 +370,10 @@ private:
     void Absorb(AuraEffect* aurEff, DamageInfo& dmgInfo, uint32& absorbAmount)
     {
         Unit* victim = GetTarget();
-        uint128 victimHealth = victim->GetHealthForCombat128();
-        uint128 damageTaken = dmgInfo.GetDamage();
-        uint128 remainingHealth = victimHealth > damageTaken ? victimHealth - damageTaken : 0;
-        uint128 allowedHealth = victim->CountPctFromMaxHealth128(35);
+        uint256 victimHealth = victim->GetHealthForCombat256();
+        uint256 damageTaken = dmgInfo.GetDamage();
+        uint256 remainingHealth = victimHealth > damageTaken ? victimHealth - damageTaken : 0;
+        uint256 allowedHealth = victim->CountPctFromMaxHealth256(35);
         // If damage kills us
         if (remainingHealth == 0 && !victim->ToPlayer()->HasAura(PAL_SPELL_ARDENT_DEFENDER_DEBUFF))
         {
@@ -389,23 +389,23 @@ private:
                                     ? 1.0f
                                     : float(defenseSkillValue) / float(reqDefForMaxHeal);
 
-            uint128 healAmount128 = victim->CountPctFromMaxHealth128(uint32(healPct * pctFromDefense));
-            int32 healAmount = ToSpellValueInt32(Acore::Number::ToLongDouble(healAmount128));
+            uint256 healAmount256 = victim->CountPctFromMaxHealth256(uint32(healPct * pctFromDefense));
+            int32 healAmount = ToSpellValueInt32(Acore::Number::ToLongDouble(healAmount256));
             victim->CastCustomSpell(PAL_SPELL_ARDENT_DEFENDER_HEAL, SPELLVALUE_BASE_POINT0, healAmount, victim, true, nullptr, aurEff);
             if (Player* player = victim->ToPlayer())
-                if (player->GetExtendedMaxHealth128() > player->GetMaxHealth() && player->GetExtendedHealth128() < healAmount128)
+                if (player->GetExtendedMaxHealth256() > player->GetMaxHealth() && player->GetExtendedHealth256() < healAmount256)
                 {
-                    player->SetExtendedHealth(healAmount128);
+                    player->SetExtendedHealth(healAmount256);
                     player->SyncClientHealthFromExtended();
                 }
         }
         else if (remainingHealth < allowedHealth)
         {
             // Reduce damage that brings us under 35% (or full damage if we are already under 35%) by x%
-            uint128 damageToReduce = (victimHealth < allowedHealth)
+            uint256 damageToReduce = (victimHealth < allowedHealth)
                                     ? dmgInfo.GetDamage()
                                     : allowedHealth - remainingHealth;
-            uint128 amountToAbsorb = Acore::Number::CalculatePct(damageToReduce, absorbPct);
+            uint256 amountToAbsorb = Acore::Number::CalculatePct(damageToReduce, absorbPct);
             dmgInfo.AbsorbDamage(amountToAbsorb);
             absorbAmount = 0;
         }
@@ -1177,7 +1177,7 @@ class spell_pal_seal_of_vengeance : public SpellScript
         uint32 auraId = (spellId == SPELL_PALADIN_SEAL_OF_VENGEANCE_EFFECT)
             ? SPELL_PALADIN_HOLY_VENGEANCE
             : SPELL_PALADIN_BLOOD_CORRUPTION;
-        uint128 damage = GetHitDamage128();
+        uint256 damage = GetHitDamage256();
         uint8 stacks = 0;
 
         if (target)
@@ -1186,9 +1186,9 @@ class spell_pal_seal_of_vengeance : public SpellScript
             if (aura)
                 stacks = aura->GetStackAmount();
 
-            damage = Acore::Number::ToUInt128Saturated(Acore::Number::ToLongDouble(damage) * static_cast<long double>(stacks) / 5.0L);
+            damage = Acore::Number::ToUInt256Saturated(Acore::Number::ToLongDouble(damage) * static_cast<long double>(stacks) / 5.0L);
 
-            SetHitDamage128(damage);
+            SetHitDamage256(damage);
         }
     }
 

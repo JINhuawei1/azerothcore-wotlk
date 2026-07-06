@@ -142,43 +142,43 @@ namespace
         return false;
     }
 
-    Optional<int128> GetRawInt128(char const* value, uint32 length, DatabaseFieldTypes type)
+    Optional<int256> GetRawInt256(char const* value, uint32 length, DatabaseFieldTypes type)
     {
         switch (type)
         {
             case DatabaseFieldTypes::Int8:
                 ASSERT(length == sizeof(int8), "Expected {}-byte int8 raw field, got {} bytes instead", sizeof(int8), length);
-                return static_cast<int128>(*reinterpret_cast<int8 const*>(value));
+                return static_cast<int256>(*reinterpret_cast<int8 const*>(value));
             case DatabaseFieldTypes::Int16:
                 ASSERT(length == sizeof(int16), "Expected {}-byte int16 raw field, got {} bytes instead", sizeof(int16), length);
-                return static_cast<int128>(*reinterpret_cast<int16 const*>(value));
+                return static_cast<int256>(*reinterpret_cast<int16 const*>(value));
             case DatabaseFieldTypes::Int32:
                 ASSERT(length == sizeof(int32), "Expected {}-byte int32 raw field, got {} bytes instead", sizeof(int32), length);
-                return static_cast<int128>(*reinterpret_cast<int32 const*>(value));
+                return static_cast<int256>(*reinterpret_cast<int32 const*>(value));
             case DatabaseFieldTypes::Int64:
                 ASSERT(length == sizeof(int64), "Expected {}-byte int64 raw field, got {} bytes instead", sizeof(int64), length);
-                return static_cast<int128>(*reinterpret_cast<int64 const*>(value));
+                return static_cast<int256>(*reinterpret_cast<int64 const*>(value));
             default:
                 return {};
         }
     }
 
-    Optional<uint128> GetRawUInt128(char const* value, uint32 length, DatabaseFieldTypes type)
+    Optional<uint256> GetRawUInt256(char const* value, uint32 length, DatabaseFieldTypes type)
     {
         switch (type)
         {
             case DatabaseFieldTypes::Int8:
                 ASSERT(length == sizeof(uint8), "Expected {}-byte uint8 raw field, got {} bytes instead", sizeof(uint8), length);
-                return static_cast<uint128>(*reinterpret_cast<uint8 const*>(value));
+                return static_cast<uint256>(*reinterpret_cast<uint8 const*>(value));
             case DatabaseFieldTypes::Int16:
                 ASSERT(length == sizeof(uint16), "Expected {}-byte uint16 raw field, got {} bytes instead", sizeof(uint16), length);
-                return static_cast<uint128>(*reinterpret_cast<uint16 const*>(value));
+                return static_cast<uint256>(*reinterpret_cast<uint16 const*>(value));
             case DatabaseFieldTypes::Int32:
                 ASSERT(length == sizeof(uint32), "Expected {}-byte uint32 raw field, got {} bytes instead", sizeof(uint32), length);
-                return static_cast<uint128>(*reinterpret_cast<uint32 const*>(value));
+                return static_cast<uint256>(*reinterpret_cast<uint32 const*>(value));
             case DatabaseFieldTypes::Int64:
                 ASSERT(length == sizeof(uint64), "Expected {}-byte uint64 raw field, got {} bytes instead", sizeof(uint64), length);
-                return static_cast<uint128>(*reinterpret_cast<uint64 const*>(value));
+                return static_cast<uint256>(*reinterpret_cast<uint64 const*>(value));
             default:
                 return {};
         }
@@ -328,22 +328,22 @@ template int64 Field::GetData() const;
 template float Field::GetData() const;
 template double Field::GetData() const;
 
-int128 Field::GetInt128() const
+int256 Field::GetInt256() const
 {
     if (!data.value)
         return 0;
 
     if (data.raw)
     {
-        Optional<int128> rawResult = GetRawInt128(data.value, data.length, meta->Type);
+        Optional<int256> rawResult = GetRawInt256(data.value, data.length, meta->Type);
         if (rawResult)
             return *rawResult;
     }
 
-    Optional<int128> result = Acore::StringTo<int128>(std::string_view(data.value, data.length));
+    Optional<int256> result = Acore::StringTo<int256>(std::string_view(data.value, data.length));
     if (!result)
     {
-        LOG_FATAL("sql.sql", "> Incorrect value '{}' for type 'int128'. Value is raw ? '{}'", std::string_view(data.value, data.length), data.raw);
+        LOG_FATAL("sql.sql", "> Incorrect value '{}' for type 'int256'. Value is raw ? '{}'", std::string_view(data.value, data.length), data.raw);
         LOG_FATAL("sql.sql", "> Table name '{}'. Field name '{}'", meta->TableName, meta->Name);
         return 0;
     }
@@ -351,22 +351,22 @@ int128 Field::GetInt128() const
     return *result;
 }
 
-uint128 Field::GetUInt128() const
+uint256 Field::GetUInt256() const
 {
     if (!data.value)
         return 0;
 
     if (data.raw)
     {
-        Optional<uint128> rawResult = GetRawUInt128(data.value, data.length, meta->Type);
+        Optional<uint256> rawResult = GetRawUInt256(data.value, data.length, meta->Type);
         if (rawResult)
             return *rawResult;
     }
 
-    Optional<uint128> result = Acore::StringTo<uint128>(std::string_view(data.value, data.length));
+    Optional<uint256> result = Acore::StringTo<uint256>(std::string_view(data.value, data.length));
     if (!result)
     {
-        LOG_FATAL("sql.sql", "> Incorrect value '{}' for type 'uint128'. Value is raw ? '{}'", std::string_view(data.value, data.length), data.raw);
+        LOG_FATAL("sql.sql", "> Incorrect value '{}' for type 'uint256'. Value is raw ? '{}'", std::string_view(data.value, data.length), data.raw);
         LOG_FATAL("sql.sql", "> Table name '{}'. Field name '{}'", meta->TableName, meta->Name);
         return 0;
     }

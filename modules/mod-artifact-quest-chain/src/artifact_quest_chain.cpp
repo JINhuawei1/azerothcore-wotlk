@@ -178,98 +178,98 @@ uint32 GetArtifactWeaponRank(ItemTemplate const* proto)
     return ARTIFACT_EXTENDED_RANK_START + proto->ItemId - ARTIFACT_EXTENDED_ITEM_START;
 }
 
-uint128 ToUInt128Positive(int128 const& value)
+uint256 ToUInt256Positive(int256 const& value)
 {
-    return value > 0 ? Acore::Number::ToUInt128Saturated(value) : 0;
+    return value > 0 ? Acore::Number::ToUInt256Saturated(value) : 0;
 }
 
-uint128 ToUInt128Positive(double value)
+uint256 ToUInt256Positive(double value)
 {
     if (value <= 0.0 || std::isnan(value))
         return 0;
 
     if (std::isinf(value))
-        return std::numeric_limits<uint128>::max();
+        return std::numeric_limits<uint256>::max();
 
-    return Acore::Number::ToUInt128Saturated(static_cast<long double>(value));
+    return Acore::Number::ToUInt256Saturated(static_cast<long double>(value));
 }
 
-uint128 GetPlayerStatPower(Player* player, Stats stat)
+uint256 GetPlayerStatPower(Player* player, Stats stat)
 {
     if (!player)
         return 0;
 
-    int128 const extended = player->GetExtendedStat128(stat);
+    int256 const extended = player->GetExtendedStat256(stat);
     if (extended > 0)
-        return ToUInt128Positive(extended);
+        return ToUInt256Positive(extended);
 
     return player->GetStatUInt32(stat);
 }
 
-uint128 GetPlayerCombatRatingPower(Player* player, CombatRating rating)
+uint256 GetPlayerCombatRatingPower(Player* player, CombatRating rating)
 {
     if (!player)
         return 0;
 
-    int128 const extended = player->GetExtendedCombatRating(rating);
+    int256 const extended = player->GetExtendedCombatRating(rating);
     if (extended > 0)
-        return ToUInt128Positive(extended);
+        return ToUInt256Positive(extended);
 
     int32 const display = player->GetInt32Value(static_cast<uint16>(PLAYER_FIELD_COMBAT_RATING_1) + static_cast<uint16>(rating));
-    return display > 0 ? static_cast<uint128>(display) : 0;
+    return display > 0 ? static_cast<uint256>(display) : 0;
 }
 
-uint128 GetPlayerArtifactPower(Player* player)
+uint256 GetPlayerArtifactPower(Player* player)
 {
     if (!player)
         return 0;
 
-    uint128 power = 0;
-    power = AddUInt128Damage(power, GetPlayerStatPower(player, STAT_STRENGTH));
-    power = AddUInt128Damage(power, GetPlayerStatPower(player, STAT_AGILITY));
-    power = AddUInt128Damage(power, GetPlayerStatPower(player, STAT_STAMINA));
-    power = AddUInt128Damage(power, GetPlayerStatPower(player, STAT_INTELLECT));
-    power = AddUInt128Damage(power, GetPlayerStatPower(player, STAT_SPIRIT));
-    power = AddUInt128Damage(power, player->GetTrueDamageBonus());
-    power = AddUInt128Damage(power, player->GetCuttingDamageBonus());
-    power = AddUInt128Damage(power, std::max({ GetPlayerCombatRatingPower(player, CR_HIT_MELEE), GetPlayerCombatRatingPower(player, CR_HIT_RANGED), GetPlayerCombatRatingPower(player, CR_HIT_SPELL) }));
-    power = AddUInt128Damage(power, ToUInt128Positive(player->GetExtendedTotalAttackPowerValue(BASE_ATTACK)));
-    power = AddUInt128Damage(power, ToUInt128Positive(player->GetExtendedSpellPowerBonus128()));
+    uint256 power = 0;
+    power = AddUInt256Damage(power, GetPlayerStatPower(player, STAT_STRENGTH));
+    power = AddUInt256Damage(power, GetPlayerStatPower(player, STAT_AGILITY));
+    power = AddUInt256Damage(power, GetPlayerStatPower(player, STAT_STAMINA));
+    power = AddUInt256Damage(power, GetPlayerStatPower(player, STAT_INTELLECT));
+    power = AddUInt256Damage(power, GetPlayerStatPower(player, STAT_SPIRIT));
+    power = AddUInt256Damage(power, player->GetTrueDamageBonus());
+    power = AddUInt256Damage(power, player->GetCuttingDamageBonus());
+    power = AddUInt256Damage(power, std::max({ GetPlayerCombatRatingPower(player, CR_HIT_MELEE), GetPlayerCombatRatingPower(player, CR_HIT_RANGED), GetPlayerCombatRatingPower(player, CR_HIT_SPELL) }));
+    power = AddUInt256Damage(power, ToUInt256Positive(player->GetExtendedTotalAttackPowerValue(BASE_ATTACK)));
+    power = AddUInt256Damage(power, ToUInt256Positive(player->GetExtendedSpellPowerBonus256()));
 
     return power;
 }
 
-uint128 ScalePercentValue(uint128 const& value, int32 percent)
+uint256 ScalePercentValue(uint256 const& value, int32 percent)
 {
     if (value == 0 || percent <= 0)
         return 0;
 
     long double scaled = Acore::Number::ToLongDouble(value) * static_cast<long double>(percent) / static_cast<long double>(ARTIFACT_PERCENT_DENOMINATOR);
-    return Acore::Number::ToUInt128Saturated(scaled);
+    return Acore::Number::ToUInt256Saturated(scaled);
 }
 
-uint128 ScaleBasisPointValue(uint128 const& value, int32 scale)
+uint256 ScaleBasisPointValue(uint256 const& value, int32 scale)
 {
     if (value == 0 || scale <= 0)
         return 0;
 
     long double scaled = Acore::Number::ToLongDouble(value) * static_cast<long double>(scale) / static_cast<long double>(ARTIFACT_SCALE_DENOMINATOR);
-    return Acore::Number::ToUInt128Saturated(scaled);
+    return Acore::Number::ToUInt256Saturated(scaled);
 }
 
-uint128 ApplyArtifactHealthGain(Unit* unit, uint128 const& value)
+uint256 ApplyArtifactHealthGain(Unit* unit, uint256 const& value)
 {
     if (!unit || value == 0)
         return 0;
 
-    uint128 currentHealth = unit->GetHealthForCombat128();
-    uint128 maxHealth = unit->GetMaxHealthForCombat128();
+    uint256 currentHealth = unit->GetHealthForCombat256();
+    uint256 maxHealth = unit->GetMaxHealthForCombat256();
     if (currentHealth >= maxHealth)
         return 0;
 
-    uint128 gain = std::min<uint128>(value, maxHealth - currentHealth);
+    uint256 gain = std::min<uint256>(value, maxHealth - currentHealth);
     if (gain)
-        unit->SetHealthForCombat128(currentHealth + gain);
+        unit->SetHealthForCombat256(currentHealth + gain);
 
     return gain;
 }
@@ -332,7 +332,7 @@ void SendArtifactEffectVisual(Player* player, Unit* victim, SpellInfo const* spe
         player->SendPlaySpellImpact(victim->GetGUID(), targetKit);
 }
 
-uint128 DealArtifactSpellDamage(Player* player, Unit* victim, SpellInfo const* spellInfo, uint128 const& damage)
+uint256 DealArtifactSpellDamage(Player* player, Unit* victim, SpellInfo const* spellInfo, uint256 const& damage)
 {
     if (!spellInfo || damage == 0 || !IsValidArtifactEffectTarget(player, victim))
         return 0;
@@ -370,13 +370,13 @@ bool ApplyArtifactEffect(Player* player, Unit* victim, SpellInfo const* spellInf
     int32 const marker = spellInfo->Effects[EFFECT_2].BasePoints;
     int32 const damagePct = spellInfo->Effects[EFFECT_0].BasePoints;
     int32 const miscValue = spellInfo->Effects[EFFECT_1].BasePoints;
-    uint128 const playerPower = GetPlayerArtifactPower(player);
-    uint128 const damage = ScalePercentValue(playerPower, damagePct);
+    uint256 const playerPower = GetPlayerArtifactPower(player);
+    uint256 const damage = ScalePercentValue(playerPower, damagePct);
 
     if (damage == 0)
         return true;
 
-    uint128 const dealt = DealArtifactSpellDamage(player, victim, spellInfo, damage);
+    uint256 const dealt = DealArtifactSpellDamage(player, victim, spellInfo, damage);
 
     if (marker == ARTIFACT_MARKER_TIME_LOCK && miscValue > 0)
     {
@@ -384,7 +384,7 @@ bool ApplyArtifactEffect(Player* player, Unit* victim, SpellInfo const* spellInf
     }
     else if (marker == ARTIFACT_MARKER_SOUL_ECHO && miscValue > 0 && dealt > 0)
     {
-        uint128 const heal = ScaleBasisPointValue(dealt, miscValue);
+        uint256 const heal = ScaleBasisPointValue(dealt, miscValue);
         if (heal > 0)
             ApplyArtifactHealthGain(player, heal);
     }
@@ -481,7 +481,7 @@ public:
             UNITHOOK_MODIFY_PERIODIC_DAMAGE_AURAS_TICK
         }) { }
 
-    void ModifyMeleeDamage(Unit* victim, Unit* attacker, uint128& damage) override
+    void ModifyMeleeDamage(Unit* victim, Unit* attacker, uint256& damage) override
     {
         if (damage == 0 || !attacker || !victim)
             return;
@@ -493,7 +493,7 @@ public:
         TriggerEquippedArtifactEffectsGuarded(player, victim);
     }
 
-    void ModifySpellDamageTaken(Unit* victim, Unit* attacker, uint128& damage, SpellInfo const* spellInfo) override
+    void ModifySpellDamageTaken(Unit* victim, Unit* attacker, uint256& damage, SpellInfo const* spellInfo) override
     {
         if (damage == 0 || !attacker || !victim || IsArtifactEffectSpell(spellInfo))
             return;
@@ -505,7 +505,7 @@ public:
         TriggerEquippedArtifactEffectsGuarded(player, victim);
     }
 
-    void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint128& damage, SpellInfo const* spellInfo) override
+    void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint256& damage, SpellInfo const* spellInfo) override
     {
         if (damage == 0 || !attacker || !target || IsArtifactEffectSpell(spellInfo))
             return;

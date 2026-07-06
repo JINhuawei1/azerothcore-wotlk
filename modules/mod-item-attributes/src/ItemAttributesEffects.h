@@ -70,13 +70,13 @@ private:
     bool ShouldUpdateImmediately(Player* player);
 
     // 属性效果处理函数类型
-    using AttributeEffectHandler = std::function<void(Player*, Item*, ItemAttributeTemplate const*, int128)>;
+    using AttributeEffectHandler = std::function<void(Player*, Item*, ItemAttributeTemplate const*, int256)>;
     
-    // 属性效果移除函数类型（添加 int128 value 参数，用于传递数据库中保存的值）
-    using AttributeEffectRemover = std::function<void(Player*, Item*, ItemAttributeTemplate const*, int128)>;
+    // 属性效果移除函数类型（添加 int256 value 参数，用于传递数据库中保存的值）
+    using AttributeEffectRemover = std::function<void(Player*, Item*, ItemAttributeTemplate const*, int256)>;
     
     // 属性描述生成函数类型
-    using AttributeDescriptionGenerator = std::function<std::string(Item*, ItemAttributeTemplate const*, int128)>;
+    using AttributeDescriptionGenerator = std::function<std::string(Item*, ItemAttributeTemplate const*, int256)>;
 
     // 注册属性效果处理器
     void RegisterAttributeEffectHandler(uint32 attributeType, AttributeEffectHandler handler, AttributeEffectRemover remover, AttributeDescriptionGenerator descGenerator);

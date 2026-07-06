@@ -69,7 +69,7 @@ namespace
         return static_cast<int32>(value);
     }
 
-    int32 CalculatePctInt32Saturated(uint128 const& base, float pct)
+    int32 CalculatePctInt32Saturated(uint256 const& base, float pct)
     {
         if (base == 0 || pct <= 0.0f)
             return 0;
@@ -81,7 +81,7 @@ namespace
         return static_cast<int32>(value);
     }
 
-    uint128 CalculatePctUInt128(uint128 const& base, float pct)
+    uint256 CalculatePctUInt256(uint256 const& base, float pct)
     {
         if (base == 0 || pct <= 0.0f)
             return 0;
@@ -89,7 +89,7 @@ namespace
         return Acore::Number::CalculatePct(base, pct);
     }
 
-    void DealTriggeredDirectSpellDamage(Unit* caster, Unit* target, uint32 spellId, uint128 const& rawDamage, AuraEffect const* triggeredByAura)
+    void DealTriggeredDirectSpellDamage(Unit* caster, Unit* target, uint32 spellId, uint256 const& rawDamage, AuraEffect const* triggeredByAura)
     {
         if (!caster || !target || !target->IsAlive() || !rawDamage)
             return;
@@ -106,7 +106,7 @@ namespace
 
         caster->SetLastDamagedTargetGuid(target->GetGUID());
 
-        uint128 finalDamage = caster->SpellDamageBonusDone(target, spellInfo, rawDamage, SPELL_DIRECT_DAMAGE, EFFECT_0);
+        uint256 finalDamage = caster->SpellDamageBonusDone(target, spellInfo, rawDamage, SPELL_DIRECT_DAMAGE, EFFECT_0);
         finalDamage = target->SpellDamageBonusTaken(caster, spellInfo, finalDamage, SPELL_DIRECT_DAMAGE);
 
         SpellNonMeleeDamage damageInfo(caster, target, spellInfo, spellInfo->GetSchoolMask());
@@ -912,7 +912,7 @@ void Aura::Update(uint32 diff, Unit* caster)
                     Powers powertype = Powers(m_spellInfo->PowerType);
                     if (powertype == POWER_HEALTH)
                     {
-                        if (caster->GetHealthForCombat128() > static_cast<uint128>(ManaPerSecond))
+                        if (caster->GetHealthForCombat256() > static_cast<uint256>(ManaPerSecond))
                             caster->ModifyHealth(-ManaPerSecond);
                         else
                         {
@@ -922,7 +922,7 @@ void Aura::Update(uint32 diff, Unit* caster)
                     }
                     else
                     {
-                        if (caster->GetPowerForCombat128(powertype) >= static_cast<uint128>(ManaPerSecond))
+                        if (caster->GetPowerForCombat256(powertype) >= static_cast<uint256>(ManaPerSecond))
                             caster->ModifyPower64(powertype, -ManaPerSecond);
                         else
                         {
@@ -1560,7 +1560,7 @@ void Aura::HandleAuraSpecificMods(AuraApplication const* aurApp, Unit* caster, b
                     // Druid T8 Restoration 4P Bonus
                     if (caster->GetAuraEffectDummy(64760))
                     {
-                        uint128 damage = GetEffect(0)->GetAmountForCombat();
+                        uint256 damage = GetEffect(0)->GetAmountForCombat();
                         damage = target->SpellHealingBonusTaken(caster, GetSpellInfo(), damage, DOT);
 
                         int32 basepoints0 = CalculatePctInt32Saturated(damage, 100.0f);
@@ -1577,15 +1577,15 @@ void Aura::HandleAuraSpecificMods(AuraApplication const* aurApp, Unit* caster, b
                     // Improved Devouring Plague
                     if (AuraEffect const* aurEff = caster->GetDummyAuraEffect(SPELLFAMILY_PRIEST, 3790, 1))
                     {
-                        uint128 damage = GetEffect(0)->GetAmountForCombat();
+                        uint256 damage = GetEffect(0)->GetAmountForCombat();
                         damage = target->SpellDamageBonusTaken(caster, GetSpellInfo(), damage, DOT);
                         uint32 totalTicks = std::max<int32>(GetEffect(0)->GetTotalTicks(), 1);
-                        uint128 totalDamage = damage > std::numeric_limits<uint128>::max() / totalTicks ? std::numeric_limits<uint128>::max() : damage * totalTicks;
-                        uint128 improvedDamage = CalculatePctUInt128(totalDamage, static_cast<float>(aurEff->GetAmount()));
+                        uint256 totalDamage = damage > std::numeric_limits<uint256>::max() / totalTicks ? std::numeric_limits<uint256>::max() : damage * totalTicks;
+                        uint256 improvedDamage = CalculatePctUInt256(totalDamage, static_cast<float>(aurEff->GetAmount()));
                         int32 basepoints0 = CalculatePctInt32Saturated(totalDamage, static_cast<float>(aurEff->GetAmount()));
                         int32 heal = CalculatePctInt32Saturated(improvedDamage, 15.0f);
 
-                        if (improvedDamage > static_cast<uint128>(std::numeric_limits<int32>::max()))
+                        if (improvedDamage > static_cast<uint256>(std::numeric_limits<int32>::max()))
                             DealTriggeredDirectSpellDamage(caster, target, 63675, improvedDamage, GetEffect(0));
                         else
                             caster->CastCustomSpell(target, 63675, &basepoints0, nullptr, nullptr, true, nullptr, GetEffect(0));
@@ -1846,7 +1846,7 @@ void Aura::HandleAuraSpecificMods(AuraApplication const* aurApp, Unit* caster, b
                             else if (aurEff->GetId() == 47537)
                                 multiplier += 0.5f;
 
-                            int32 basepoints0 = CalculatePctInt32Saturated(caster->GetMaxPowerForCombat128(POWER_MANA), multiplier);
+                            int32 basepoints0 = CalculatePctInt32Saturated(caster->GetMaxPowerForCombat256(POWER_MANA), multiplier);
                             caster->CastCustomSpell(caster, 47755, &basepoints0, nullptr, nullptr, true);
                         }
                         // effect on aura target
@@ -1860,7 +1860,7 @@ void Aura::HandleAuraSpecificMods(AuraApplication const* aurApp, Unit* caster, b
                             {
                                 case POWER_MANA:
                                     {
-                                        int32 basepoints0 = CalculatePctInt32Saturated(target->GetMaxPowerForCombat128(POWER_MANA), 2.0f);
+                                        int32 basepoints0 = CalculatePctInt32Saturated(target->GetMaxPowerForCombat256(POWER_MANA), 2.0f);
                                         caster->CastCustomSpell(target, 63654, &basepoints0, nullptr, nullptr, true);
                                         break;
                                     }

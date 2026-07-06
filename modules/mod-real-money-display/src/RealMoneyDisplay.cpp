@@ -1,4 +1,5 @@
 #include "Chat.h"
+#include "HermesBridgeAddonApi.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "StringConvert.h"
@@ -9,18 +10,21 @@ namespace
 {
     constexpr char const* REAL_MONEY_ADDON_PREFIX = "REALMONEY";
 
-    int128 NormalizeMoney(int128 value)
+    int256 NormalizeMoney(int256 value)
     {
         if (value <= 0)
             return 0;
 
-        int128 const maxMoney = Acore::Number::GetDecimal65SignedMax();
+        int256 const maxMoney = Acore::Number::GetDecimal65SignedMax();
         return value > maxMoney ? maxMoney : value;
     }
 
     void SendAddonMessage(Player* player, std::string const& payload)
     {
         if (!player || !player->GetSession() || payload.empty())
+            return;
+
+        if (HermesBridge_SendAddonMessage(player, REAL_MONEY_ADDON_PREFIX, payload))
             return;
 
         std::string full = std::string(REAL_MONEY_ADDON_PREFIX) + '\t' + payload;
@@ -38,7 +42,7 @@ namespace
         SendAddonMessage(player, "MONEY:" + Acore::ToString(NormalizeMoney(player->GetMoney())));
     }
 
-    void SendMoney(Player* player, int128 const& money)
+    void SendMoney(Player* player, int256 const& money)
     {
         SendAddonMessage(player, "MONEY:" + Acore::ToString(NormalizeMoney(money)));
     }
@@ -59,7 +63,7 @@ public:
         if (!player)
             return;
 
-        SendMoney(player, player->GetMoney() + static_cast<int128>(amount));
+        SendMoney(player, player->GetMoney() + static_cast<int256>(amount));
     }
 
     void OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg, Player* /*receiver*/) override

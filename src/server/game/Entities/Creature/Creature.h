@@ -64,35 +64,35 @@ public:
     void LoadEquipment(int8 id = 1, bool force = false);
 
     [[nodiscard]] ObjectGuid::LowType GetSpawnId() const { return m_spawnId; }
-    [[nodiscard]] uint128 GetExtendedHealth128() const { return m_extendedMaxHealth != 0 ? m_extendedHealth : GetHealth(); }
-    [[nodiscard]] uint64 GetExtendedHealth() const { return Acore::Number::ToUInt64Saturated(GetExtendedHealth128()); }
-    [[nodiscard]] uint128 GetExtendedMaxHealth128() const { return m_extendedMaxHealth != 0 ? m_extendedMaxHealth : GetMaxHealth(); }
-    [[nodiscard]] uint64 GetExtendedMaxHealth() const { return Acore::Number::ToUInt64Saturated(GetExtendedMaxHealth128()); }
-    [[nodiscard]] uint128 GetHealthForCombat128() const override { return GetExtendedHealth128(); }
-    [[nodiscard]] uint128 GetMaxHealthForCombat128() const override { return GetExtendedMaxHealth128(); }
+    [[nodiscard]] uint256 GetExtendedHealth256() const { return m_extendedMaxHealth != 0 ? m_extendedHealth : GetHealth(); }
+    [[nodiscard]] uint64 GetExtendedHealth() const { return Acore::Number::ToUInt64Saturated(GetExtendedHealth256()); }
+    [[nodiscard]] uint256 GetExtendedMaxHealth256() const { return m_extendedMaxHealth != 0 ? m_extendedMaxHealth : GetMaxHealth(); }
+    [[nodiscard]] uint64 GetExtendedMaxHealth() const { return Acore::Number::ToUInt64Saturated(GetExtendedMaxHealth256()); }
+    [[nodiscard]] uint256 GetHealthForCombat256() const override { return GetExtendedHealth256(); }
+    [[nodiscard]] uint256 GetMaxHealthForCombat256() const override { return GetExtendedMaxHealth256(); }
     [[nodiscard]] uint64 GetHealthForCombat() const override { return GetExtendedHealth(); }
     [[nodiscard]] uint64 GetMaxHealthForCombat() const override { return GetExtendedMaxHealth(); }
-    [[nodiscard]] uint128 GetCreateHealthForCombat128() const override { return m_extendedCreateHealth != 0 ? m_extendedCreateHealth : GetCreateHealth(); }
-    [[nodiscard]] uint64 GetCreateHealthForCombat() const override { return Acore::Number::ToUInt64Saturated(GetCreateHealthForCombat128()); }
-    void SetExtendedMaxHealth(uint128 value);
-    void SetExtendedHealth(uint128 value);
+    [[nodiscard]] uint256 GetCreateHealthForCombat256() const override { return m_extendedCreateHealth != 0 ? m_extendedCreateHealth : GetCreateHealth(); }
+    [[nodiscard]] uint64 GetCreateHealthForCombat() const override { return Acore::Number::ToUInt64Saturated(GetCreateHealthForCombat256()); }
+    void SetExtendedMaxHealth(uint256 value);
+    void SetExtendedHealth(uint256 value);
     void SyncClientHealthFromExtended();
     void ApplyPendingClientHealthSync();
     [[nodiscard]] bool IsSyncingClientHealthFromExtended() const { return m_syncingClientHealthFromExtended; }
-    [[nodiscard]] uint128 GetExtendedPower128(Powers power) const;
-    [[nodiscard]] uint64 GetExtendedPower(Powers power) const { return Acore::Number::ToUInt64Saturated(GetExtendedPower128(power)); }
-    [[nodiscard]] uint128 GetExtendedMaxPower128(Powers power) const;
-    [[nodiscard]] uint64 GetExtendedMaxPower(Powers power) const { return Acore::Number::ToUInt64Saturated(GetExtendedMaxPower128(power)); }
-    [[nodiscard]] uint128 GetPowerForCombat128(Powers power) const override { return GetExtendedPower128(power); }
-    [[nodiscard]] uint128 GetMaxPowerForCombat128(Powers power) const override { return GetExtendedMaxPower128(power); }
+    [[nodiscard]] uint256 GetExtendedPower256(Powers power) const;
+    [[nodiscard]] uint64 GetExtendedPower(Powers power) const { return Acore::Number::ToUInt64Saturated(GetExtendedPower256(power)); }
+    [[nodiscard]] uint256 GetExtendedMaxPower256(Powers power) const;
+    [[nodiscard]] uint64 GetExtendedMaxPower(Powers power) const { return Acore::Number::ToUInt64Saturated(GetExtendedMaxPower256(power)); }
+    [[nodiscard]] uint256 GetPowerForCombat256(Powers power) const override { return GetExtendedPower256(power); }
+    [[nodiscard]] uint256 GetMaxPowerForCombat256(Powers power) const override { return GetExtendedMaxPower256(power); }
     [[nodiscard]] uint64 GetPowerForCombat(Powers power) const override { return GetExtendedPower(power); }
     [[nodiscard]] uint64 GetMaxPowerForCombat(Powers power) const override { return GetExtendedMaxPower(power); }
-    [[nodiscard]] uint128 GetCreateManaForCombat128() const override { return m_extendedCreateMana != 0 ? m_extendedCreateMana : GetCreateMana(); }
-    [[nodiscard]] uint64 GetCreateManaForCombat() const override { return Acore::Number::ToUInt64Saturated(GetCreateManaForCombat128()); }
-    [[nodiscard]] uint128 GetCreatePowerForCombat128(Powers power) const override { return power == POWER_MANA ? GetCreateManaForCombat128() : GetCreatePowers(power); }
-    [[nodiscard]] uint64 GetCreatePowerForCombat(Powers power) const override { return Acore::Number::ToUInt64Saturated(GetCreatePowerForCombat128(power)); }
-    void SetExtendedMaxPower(Powers power, uint128 value);
-    void SetExtendedPower(Powers power, uint128 value);
+    [[nodiscard]] uint256 GetCreateManaForCombat256() const override { return m_extendedCreateMana != 0 ? m_extendedCreateMana : GetCreateMana(); }
+    [[nodiscard]] uint64 GetCreateManaForCombat() const override { return Acore::Number::ToUInt64Saturated(GetCreateManaForCombat256()); }
+    [[nodiscard]] uint256 GetCreatePowerForCombat256(Powers power) const override { return power == POWER_MANA ? GetCreateManaForCombat256() : GetCreatePowers(power); }
+    [[nodiscard]] uint64 GetCreatePowerForCombat(Powers power) const override { return Acore::Number::ToUInt64Saturated(GetCreatePowerForCombat256(power)); }
+    void SetExtendedMaxPower(Powers power, uint256 value);
+    void SetExtendedPower(Powers power, uint256 value);
     void SetExtendedPowerFromClientPower(Powers power, uint32 clientPower);
     void SyncClientPowerFromExtended(Powers power, bool withPowerUpdate = true);
     [[nodiscard]] bool IsSyncingClientPowerFromExtended(Powers power) const { return power >= POWER_MANA && power < MAX_POWERS && m_syncingClientPowerFromExtended[power]; }
@@ -398,9 +398,9 @@ public:
     void SetLootRewardDisabled(bool disable) { DisableLootReward = disable; }
     [[nodiscard]] bool IsLootRewardDisabled() const { return DisableLootReward; }
     [[nodiscard]] bool IsDamageEnoughForLootingAndReward() const;
-    void LowerPlayerDamageReq(uint128 const& unDamage, bool damagedByPlayer = true);
+    void LowerPlayerDamageReq(uint256 const& unDamage, bool damagedByPlayer = true);
     void ResetPlayerDamageReq();
-    [[nodiscard]] uint128 const& GetPlayerDamageReq() const;
+    [[nodiscard]] uint256 const& GetPlayerDamageReq() const;
 
     [[nodiscard]] uint32 GetOriginalEntry() const { return m_originalEntry; }
     void SetOriginalEntry(uint32 entry) { m_originalEntry = entry; }
@@ -521,14 +521,14 @@ protected:
     CreatureData const* m_creatureData;
 
     float m_detectionDistance;
-    uint128 m_extendedCreateHealth = 0;
-    uint128 m_extendedCreateMana = 0;
-    uint128 m_extendedHealth = 0;
-    uint128 m_extendedMaxHealth = 0;
+    uint256 m_extendedCreateHealth = 0;
+    uint256 m_extendedCreateMana = 0;
+    uint256 m_extendedHealth = 0;
+    uint256 m_extendedMaxHealth = 0;
     bool m_syncingClientHealthFromExtended = false;
     uint8 m_pendingClientHealthSyncTicks = 0;
-    std::array<uint128, MAX_POWERS> m_extendedPowers = { };
-    std::array<uint128, MAX_POWERS> m_extendedMaxPowers = { };
+    std::array<uint256, MAX_POWERS> m_extendedPowers = { };
+    std::array<uint256, MAX_POWERS> m_extendedMaxPowers = { };
     std::array<bool, MAX_POWERS> m_syncingClientPowerFromExtended = { };
     uint16 m_LootMode;  // bitmask, default LOOT_MODE_DEFAULT, determines what loot will be lootable
 
@@ -564,7 +564,7 @@ private:
 
     uint32 m_assistanceTimer;
 
-    uint128 _playerDamageReq;
+    uint256 _playerDamageReq;
     bool _damagedByPlayer;
     bool _isCombatMovementAllowed;
 };

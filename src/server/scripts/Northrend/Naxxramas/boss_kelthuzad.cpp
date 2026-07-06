@@ -35,9 +35,9 @@ namespace
         return value > static_cast<uint64>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(value);
     }
 
-    int32 ToInt32Saturated(uint128 const& value)
+    int32 ToInt32Saturated(uint256 const& value)
     {
-        return value > static_cast<uint128>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(value);
+        return value > static_cast<uint256>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(value);
     }
 }
 
@@ -686,11 +686,11 @@ class spell_kelthuzad_detonate_mana_aura : public AuraScript
     {
         PreventDefaultAction();
         Unit* target = GetTarget();
-        if (uint128 manaToDrain = target->GetMaxPowerForCombat128(POWER_MANA) / 10)
+        if (uint256 manaToDrain = target->GetMaxPowerForCombat256(POWER_MANA) / 10)
         {
-            int128 mana = target->ModifyPower128(POWER_MANA, -Acore::Number::ToInt128Saturated(manaToDrain));
-            uint128 drainedMana = mana < 0 ? Acore::Number::ToUInt128Saturated(-mana) : 0;
-            uint128 detonatedMana = drainedMana > static_cast<uint128>(std::numeric_limits<int32>::max() / 10) ? static_cast<uint128>(std::numeric_limits<int32>::max()) : drainedMana * 10;
+            int256 mana = target->ModifyPower256(POWER_MANA, -Acore::Number::ToInt256Saturated(manaToDrain));
+            uint256 drainedMana = mana < 0 ? Acore::Number::ToUInt256Saturated(-mana) : 0;
+            uint256 detonatedMana = drainedMana > static_cast<uint256>(std::numeric_limits<int32>::max() / 10) ? static_cast<uint256>(std::numeric_limits<int32>::max()) : drainedMana * 10;
             target->CastCustomSpell(SPELL_MANA_DETONATION_DAMAGE, SPELLVALUE_BASE_POINT0, ToInt32Saturated(detonatedMana), target, true, nullptr, aurEff);
         }
     }

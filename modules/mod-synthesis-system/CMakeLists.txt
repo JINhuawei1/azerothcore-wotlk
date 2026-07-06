@@ -9,6 +9,10 @@ include_directories(
   ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
+if(EXISTS "${CMAKE_SOURCE_DIR}/modules/mod-wear-control/src/WearControl.h")
+  include_directories(${CMAKE_SOURCE_DIR}/modules/mod-wear-control/src)
+endif()
+
 AC_ADD_SCRIPT("${CMAKE_CURRENT_SOURCE_DIR}/src/mod_synthesis_system.cpp")
 AC_ADD_SCRIPT("${CMAKE_CURRENT_SOURCE_DIR}/src/mod_synthesis_system_loader.cpp")
 

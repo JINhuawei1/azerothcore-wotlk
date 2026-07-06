@@ -15,6 +15,7 @@
 #include "ChatCommand.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
+#include "HermesBridgeAddonApi.h"
 #include "Log.h"
 #include "Player.h"
 #include "ScriptMgr.h"
@@ -52,7 +53,7 @@ struct HealRuneEntry
     uint32 healLevel = 0;
     uint32 requirementTemplateId = 0;
     uint8 healMode = HEAL_RUNE_MODE_VALUE;
-    uint128 healValue = 0;
+    uint256 healValue = 0;
 };
 
 struct PlayerHealRuneState
@@ -71,27 +72,27 @@ std::string SanitizeAddonText(std::string text)
     return text;
 }
 
-std::string FormatHealValue(uint128 const& value)
+std::string FormatHealValue(uint256 const& value)
 {
     return value.convert_to<std::string>();
 }
 
-uint128 GetSecondaryDisplayValue(uint128 const& value)
+uint256 GetSecondaryDisplayValue(uint256 const& value)
 {
     return value / 10;
 }
 
-uint32 GetPercentValue(uint128 const& value)
+uint32 GetPercentValue(uint256 const& value)
 {
     return value > 100 ? 100 : static_cast<uint32>(value);
 }
 
-uint128 SaturatingMultiplyUInt128(uint128 const& value, uint32 multiplier)
+uint256 SaturatingMultiplyUInt256(uint256 const& value, uint32 multiplier)
 {
     if (multiplier == 0 || value == 0)
         return 0;
 
-    uint128 const maxValue = std::numeric_limits<uint128>::max();
+    uint256 const maxValue = std::numeric_limits<uint256>::max();
     if (value > maxValue / multiplier)
         return maxValue;
 
@@ -203,7 +204,7 @@ public:
             entry.healLevel = fields[3].Get<uint32>();
             entry.requirementTemplateId = fields[4].Get<uint32>();
             entry.healMode = fields[5].Get<uint8>();
-            entry.healValue = fields[6].GetUInt128();
+            entry.healValue = fields[6].GetUInt256();
             entry.requirementText = fields[7].Get<std::string>();
 
             if (!entry.id || !entry.healLevel || entry.healLevel > 999999)
@@ -624,7 +625,7 @@ public:
     }
 
 private:
-    uint128 CalculateTickAmount(HealRuneEntry const& entry, uint128 const& maxValue) const
+    uint256 CalculateTickAmount(HealRuneEntry const& entry, uint256 const& maxValue) const
     {
         if (maxValue == 0)
             return 0;
@@ -632,7 +633,7 @@ private:
         if (entry.healMode == HEAL_RUNE_MODE_PERCENT)
         {
             uint32 percent = GetPercentValue(entry.healValue);
-            uint128 amount = Acore::Number::ToUInt128Saturated(std::ceil(Acore::Number::ToLongDouble(maxValue) * static_cast<long double>(percent) / 100.0L));
+            uint256 amount = Acore::Number::ToUInt256Saturated(std::ceil(Acore::Number::ToLongDouble(maxValue) * static_cast<long double>(percent) / 100.0L));
 
             return amount > 0 ? amount : 1;
         }
@@ -640,7 +641,7 @@ private:
         return entry.healValue > 0 ? entry.healValue : 1;
     }
 
-    uint128 CalculateSecondaryTickAmount(HealRuneEntry const& entry, uint128 const& maxValue, Powers powerType) const
+    uint256 CalculateSecondaryTickAmount(HealRuneEntry const& entry, uint256 const& maxValue, Powers powerType) const
     {
         if (maxValue == 0)
             return 0;
@@ -651,46 +652,46 @@ private:
             if (percent == 0)
                 return 0;
 
-            uint128 amount = Acore::Number::ToUInt128Saturated(std::ceil(Acore::Number::ToLongDouble(maxValue) * static_cast<long double>(percent) / 100.0L));
+            uint256 amount = Acore::Number::ToUInt256Saturated(std::ceil(Acore::Number::ToLongDouble(maxValue) * static_cast<long double>(percent) / 100.0L));
 
             return amount > 0 ? amount : 1;
         }
 
-        uint128 displayValue = GetSecondaryDisplayValue(entry.healValue);
+        uint256 displayValue = GetSecondaryDisplayValue(entry.healValue);
         if (displayValue == 0)
             return 0;
 
         if (powerType == POWER_RAGE || powerType == POWER_RUNIC_POWER)
-            return SaturatingMultiplyUInt128(displayValue, 10);
+            return SaturatingMultiplyUInt256(displayValue, 10);
 
         return displayValue;
     }
 
-    uint128 ClampRestoreAmount(uint128 const& amount, uint128 const& currentValue, uint128 const& maxValue) const
+    uint256 ClampRestoreAmount(uint256 const& amount, uint256 const& currentValue, uint256 const& maxValue) const
     {
         if (amount == 0 || currentValue >= maxValue)
             return 0;
 
-        uint128 missingValue = maxValue - currentValue;
+        uint256 missingValue = maxValue - currentValue;
         return amount > missingValue ? missingValue : amount;
     }
 
-    void TryRestoreHealth(Player* player, uint128 const& amount, bool& applied) const
+    void TryRestoreHealth(Player* player, uint256 const& amount, bool& applied) const
     {
         if (!player || amount == 0)
             return;
 
-        uint128 maxHealth = player->GetMaxHealthForCombat128();
-        uint128 currentHealth = player->GetHealthForCombat128();
-        uint128 restoreAmount = ClampRestoreAmount(amount, currentHealth, maxHealth);
+        uint256 maxHealth = player->GetMaxHealthForCombat256();
+        uint256 currentHealth = player->GetHealthForCombat256();
+        uint256 restoreAmount = ClampRestoreAmount(amount, currentHealth, maxHealth);
         if (restoreAmount == 0)
             return;
 
-        player->SetHealthForCombat128(currentHealth + restoreAmount);
+        player->SetHealthForCombat256(currentHealth + restoreAmount);
         applied = true;
     }
 
-    void TryRestorePower(Player* player, Powers powerType, uint128 const& amount, bool& applied) const
+    void TryRestorePower(Player* player, Powers powerType, uint256 const& amount, bool& applied) const
     {
         if (!player || amount == 0)
             return;
@@ -698,13 +699,13 @@ private:
         if (powerType != POWER_MANA && !player->HasActivePowerType(powerType))
             return;
 
-        uint128 maxPower = player->GetMaxPowerForCombat128(powerType);
-        uint128 currentPower = player->GetPowerForCombat128(powerType);
-        uint128 restoreAmount = ClampRestoreAmount(amount, currentPower, maxPower);
+        uint256 maxPower = player->GetMaxPowerForCombat256(powerType);
+        uint256 currentPower = player->GetPowerForCombat256(powerType);
+        uint256 restoreAmount = ClampRestoreAmount(amount, currentPower, maxPower);
         if (restoreAmount == 0)
             return;
 
-        player->SetPowerForCombat128(powerType, currentPower + restoreAmount);
+        player->SetPowerForCombat256(powerType, currentPower + restoreAmount);
 
         applied = true;
     }
@@ -713,13 +714,13 @@ private:
     {
         bool applied = false;
 
-        TryRestoreHealth(player, CalculateTickAmount(entry, player->GetMaxHealthForCombat128()), applied);
+        TryRestoreHealth(player, CalculateTickAmount(entry, player->GetMaxHealthForCombat256()), applied);
 
-        TryRestorePower(player, POWER_MANA, CalculateTickAmount(entry, player->GetMaxPowerForCombat128(POWER_MANA)), applied);
+        TryRestorePower(player, POWER_MANA, CalculateTickAmount(entry, player->GetMaxPowerForCombat256(POWER_MANA)), applied);
 
-        TryRestorePower(player, POWER_ENERGY, CalculateSecondaryTickAmount(entry, player->GetMaxPowerForCombat128(POWER_ENERGY), POWER_ENERGY), applied);
-        TryRestorePower(player, POWER_RAGE, CalculateSecondaryTickAmount(entry, player->GetMaxPowerForCombat128(POWER_RAGE), POWER_RAGE), applied);
-        TryRestorePower(player, POWER_RUNIC_POWER, CalculateSecondaryTickAmount(entry, player->GetMaxPowerForCombat128(POWER_RUNIC_POWER), POWER_RUNIC_POWER), applied);
+        TryRestorePower(player, POWER_ENERGY, CalculateSecondaryTickAmount(entry, player->GetMaxPowerForCombat256(POWER_ENERGY), POWER_ENERGY), applied);
+        TryRestorePower(player, POWER_RAGE, CalculateSecondaryTickAmount(entry, player->GetMaxPowerForCombat256(POWER_RAGE), POWER_RAGE), applied);
+        TryRestorePower(player, POWER_RUNIC_POWER, CalculateSecondaryTickAmount(entry, player->GetMaxPowerForCombat256(POWER_RUNIC_POWER), POWER_RUNIC_POWER), applied);
 
         if (applied && IsDebugEnabled())
         {
@@ -744,6 +745,9 @@ void SendHealRunePayload(Player* player, std::string const& payload)
 
     if (payload.length() <= MAX_ADDON_PAYLOAD)
     {
+        if (HermesBridge_SendAddonMessage(player, HEAL_RUNE_ADDON_PREFIX, payload))
+            return;
+
         std::string fullMessage = std::string(HEAL_RUNE_ADDON_PREFIX) + '\t' + payload;
         WorldPacket data;
         ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, fullMessage, 0);
@@ -760,6 +764,8 @@ void SendHealRunePayload(Player* player, std::string const& payload)
 
         std::ostringstream chunkMessage;
         chunkMessage << "CHUNK:" << (index + 1) << ":" << totalChunks << ":" << chunk;
+        if (HermesBridge_SendAddonMessage(player, HEAL_RUNE_ADDON_PREFIX, chunkMessage.str()))
+            continue;
 
         std::string fullMessage = std::string(HEAL_RUNE_ADDON_PREFIX) + '\t' + chunkMessage.str();
         WorldPacket data;

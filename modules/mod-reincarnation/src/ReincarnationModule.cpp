@@ -35,22 +35,22 @@ void RefreshReincarnationEnabled()
     sReincarnationEnabled = sConfigMgr->GetOption<bool>("Reincarnation.Enable", true);
 }
 
-int128 ScaleRatingForReincarnation(int128 const& amount, float bonusPercent)
+int256 ScaleRatingForReincarnation(int256 const& amount, float bonusPercent)
 {
     long double scaled = Acore::Number::ToLongDouble(amount) * (1.0L + static_cast<long double>(bonusPercent) / 100.0L);
     if (scaled <= 0.0L)
         return 0;
 
-    return Acore::Number::ToInt128Saturated(scaled);
+    return Acore::Number::ToInt256Saturated(scaled);
 }
 
-int128 ScaleSpellPowerForReincarnation(int128 const& amount, float bonusPercent)
+int256 ScaleSpellPowerForReincarnation(int256 const& amount, float bonusPercent)
 {
     long double scaled = Acore::Number::ToLongDouble(amount) * (1.0L + static_cast<long double>(bonusPercent) / 100.0L);
     if (scaled <= 0.0L)
         return 0;
 
-    return Acore::Number::ToInt128Saturated(scaled);
+    return Acore::Number::ToInt256Saturated(scaled);
 }
 }
 
@@ -325,7 +325,7 @@ public:
     // CR_HIT_TAKEN_MELEE, CR_HIT_TAKEN_RANGED, CR_HIT_TAKEN_SPELL, CR_CRIT_TAKEN_MELEE,
     // CR_CRIT_TAKEN_RANGED, CR_CRIT_TAKEN_SPELL, CR_HASTE_MELEE, CR_HASTE_RANGED, CR_HASTE_SPELL,
     // CR_WEAPON_SKILL_MAINHAND, CR_WEAPON_SKILL_OFFHAND, CR_WEAPON_SKILL_RANGED, CR_EXPERTISE, CR_ARMOR_PENETRATION
-    void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int128& amount) override
+    void OnPlayerAfterUpdateRating(Player* player, CombatRating cr, int256& amount) override
     {
         if (!player || !IsReincarnationEnabled())
             return;
@@ -339,7 +339,7 @@ public:
     }
 
     // 计算法术强度和治疗强度时调用
-    void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int128& healingBonus, int128 spellDamage[7]) override
+    void OnPlayerAfterUpdateSpellDamageAndHealing(Player* player, int256& healingBonus, int256 spellDamage[7]) override
     {
         if (!player || !IsReincarnationEnabled())
             return;

@@ -47,10 +47,10 @@ bool ItemAttributesGenerator::GenerateRandomAttributes(Item* item, ItemAttribute
         for (ItemAttributeTemplate const* attributeTemplate : suitableAttributes)
         {
             // 检查属性模板的值范围是否与要求的范围有交集
-            int128 attrMin = attributeTemplate->minPercent;
-            int128 attrMax = attributeTemplate->maxPercent;
-            int128 reqMin = options.minItemLevel;
-            int128 reqMax = options.maxItemLevel;
+            int256 attrMin = attributeTemplate->minPercent;
+            int256 attrMax = attributeTemplate->maxPercent;
+            int256 reqMin = options.minItemLevel;
+            int256 reqMax = options.maxItemLevel;
             if (attrMin > attrMax)
                 std::swap(attrMin, attrMax);
             if (reqMin > reqMax)

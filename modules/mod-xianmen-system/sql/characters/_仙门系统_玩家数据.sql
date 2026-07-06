@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS `_仙门_玩家` (
   `门派ID` tinyint UNSIGNED NOT NULL DEFAULT 0,
   `修为等级` smallint UNSIGNED NOT NULL DEFAULT 1,
   `当日贡献` bigint UNSIGNED NOT NULL DEFAULT 0,
-  `历史贡献` decimal(39,0) NOT NULL DEFAULT 0,
+  `历史贡献` decimal(65,0) NOT NULL DEFAULT 0,
   `已解锁技能` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '逗号分隔技能ID，最多10个',
   `个人生效技能` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '成员自选实际生效技能ID，逗号分隔，最多5个',
   `加入时间` int UNSIGNED NOT NULL DEFAULT 0,
@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS `_仙门_玩家` (
 
 SET @xianmen_add_history_contribution_column = IF(
   (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '_仙门_玩家' AND COLUMN_NAME = '历史贡献') = 0,
-  'ALTER TABLE `_仙门_玩家` ADD COLUMN `历史贡献` decimal(39,0) NOT NULL DEFAULT 0 AFTER `当日贡献`',
+  'ALTER TABLE `_仙门_玩家` ADD COLUMN `历史贡献` decimal(65,0) NOT NULL DEFAULT 0 AFTER `当日贡献`',
   'SELECT 1'
 );
 PREPARE xianmen_add_history_contribution_column_stmt FROM @xianmen_add_history_contribution_column;

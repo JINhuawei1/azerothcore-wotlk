@@ -302,7 +302,7 @@ public:
         void Reset() override
         {
             _events.Reset();
-            me->SetHealthForCombat128(me->CountPctFromMaxHealth128(50)); // starts at 50% health
+            me->SetHealthForCombat256(me->CountPctFromMaxHealth256(50)); // starts at 50% health
             me->LoadCreaturesAddon(true);
             // immune to percent heals
             me->ApplySpellImmune(0, IMMUNITY_STATE, SPELL_AURA_OBS_MOD_HEALTH, true);
@@ -374,7 +374,7 @@ public:
                 _events.ScheduleEvent(EVENT_BERSERK, 7min);
         }
 
-        void HealReceived(Unit* healer, uint128& heal) override
+        void HealReceived(Unit* healer, uint256& heal) override
         {
             if (!me->hasLootRecipient())
                 me->SetLootRecipient(healer);
@@ -467,9 +467,9 @@ public:
             // does not enter combat
             if (_instance->GetBossState(DATA_VALITHRIA_DREAMWALKER) == NOT_STARTED)
             {
-                uint128 startingHealth = me->CountPctFromMaxHealth128(50);
-                if (me->GetHealthForCombat128() != startingHealth) // healing when boss cannot be engaged (lower spire not finished, cheating) doesn't start the fight, prevent winning this way
-                    me->SetHealthForCombat128(startingHealth);
+                uint256 startingHealth = me->CountPctFromMaxHealth256(50);
+                if (me->GetHealthForCombat256() != startingHealth) // healing when boss cannot be engaged (lower spire not finished, cheating) doesn't start the fight, prevent winning this way
+                    me->SetHealthForCombat256(startingHealth);
                 return;
             }
 
@@ -479,13 +479,13 @@ public:
                 if (_autoHealTimer <= diff)
                 {
                     _autoHealTimer = 1000;
-                    uint128 maxHealth = me->GetMaxHealthForCombat128();
-                    uint128 currentHealth = me->GetHealthForCombat128();
-                    uint128 healAmount = maxHealth / 20;
-                    uint128 headroom = currentHealth < maxHealth ? maxHealth - currentHealth : 0;
+                    uint256 maxHealth = me->GetMaxHealthForCombat256();
+                    uint256 currentHealth = me->GetHealthForCombat256();
+                    uint256 healAmount = maxHealth / 20;
+                    uint256 headroom = currentHealth < maxHealth ? maxHealth - currentHealth : 0;
                     if (healAmount >= headroom)
                     {
-                        me->SetHealthForCombat128(maxHealth);
+                        me->SetHealthForCombat256(maxHealth);
                         if (!_over75PercentTalkDone)
                         {
                             _over75PercentTalkDone = true;
@@ -495,7 +495,7 @@ public:
                     }
                     else
                     {
-                        me->SetHealthForCombat128(currentHealth + healAmount);
+                        me->SetHealthForCombat256(currentHealth + healAmount);
                         if (!_over75PercentTalkDone && me->GetHealthPct() >= 75.0f)
                         {
                             _over75PercentTalkDone = true;

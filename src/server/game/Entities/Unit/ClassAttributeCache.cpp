@@ -12,16 +12,16 @@
 
 namespace
 {
-uint128 GetUInt128Compatible(Field& field)
+uint256 GetUInt256Compatible(Field& field)
 {
     switch (field.GetType())
     {
         case DatabaseFieldTypes::Float:
-            return Acore::Number::ToUInt128Saturated(static_cast<long double>(field.Get<float>()));
+            return Acore::Number::ToUInt256Saturated(static_cast<long double>(field.Get<float>()));
         case DatabaseFieldTypes::Double:
-            return Acore::Number::ToUInt128Saturated(static_cast<long double>(field.Get<double>()));
+            return Acore::Number::ToUInt256Saturated(static_cast<long double>(field.Get<double>()));
         default:
-            return field.GetUInt128();
+            return field.GetUInt256();
     }
 }
 }
@@ -69,25 +69,25 @@ void ClassAttributeCache::Load()
             continue;
 
         ClassAttributeData& d = _data[classId];
-        d.力量上限           = f[1].GetUInt128();
-        d.敏捷上限           = f[2].GetUInt128();
-        d.耐力上限           = f[3].GetUInt128();
-        d.智力上限           = f[4].GetUInt128();
-        d.精神上限           = f[5].GetUInt128();
-        d.血量上限           = f[6].GetUInt128();
-        d.法力上限           = f[7].GetUInt128();
-        d.护甲上限           = f[8].GetUInt128();
-        d.主手伤害上限       = GetUInt128Compatible(f[9]);
-        d.副手伤害上限       = GetUInt128Compatible(f[10]);
-        d.远程伤害上限       = GetUInt128Compatible(f[11]);
+        d.力量上限           = f[1].GetUInt256();
+        d.敏捷上限           = f[2].GetUInt256();
+        d.耐力上限           = f[3].GetUInt256();
+        d.智力上限           = f[4].GetUInt256();
+        d.精神上限           = f[5].GetUInt256();
+        d.血量上限           = f[6].GetUInt256();
+        d.法力上限           = f[7].GetUInt256();
+        d.护甲上限           = f[8].GetUInt256();
+        d.主手伤害上限       = GetUInt256Compatible(f[9]);
+        d.副手伤害上限       = GetUInt256Compatible(f[10]);
+        d.远程伤害上限       = GetUInt256Compatible(f[11]);
         d.耐力转生命转换率   = f[12].Get<float>();
         d.智力转法力转换率   = f[13].Get<float>();
         d.力量转攻强转换率   = f[14].Get<float>();
         d.敏捷转攻强转换率   = f[15].Get<float>();
         d.攻强倍率           = f[16].Get<float>();
-        d.攻强上限           = f[17].GetUInt128();
+        d.攻强上限           = f[17].GetUInt256();
         d.远程攻强倍率       = f[18].Get<float>();
-        d.远程攻强上限       = f[19].GetUInt128();
+        d.远程攻强上限       = f[19].GetUInt256();
         d.法强倍率           = f[20].Get<float>();
         d.治疗倍率           = f[21].Get<float>();
         d.暴击几率上限       = f[22].Get<float>();

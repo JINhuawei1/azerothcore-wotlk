@@ -31,24 +31,24 @@
 
 namespace
 {
-    int64 ToPositiveInt64(uint128 const& value)
+    int64 ToPositiveInt64(uint256 const& value)
     {
-        return value > static_cast<uint128>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(value);
+        return value > static_cast<uint256>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(value);
     }
 
-    uint128 ApplyHealthGain128(Unit* unit, uint128 const& amount)
+    uint256 ApplyHealthGain256(Unit* unit, uint256 const& amount)
     {
         if (!unit || amount == 0)
             return 0;
 
-        uint128 currentHealth = unit->GetHealthForCombat128();
-        uint128 maxHealth = unit->GetMaxHealthForCombat128();
+        uint256 currentHealth = unit->GetHealthForCombat256();
+        uint256 maxHealth = unit->GetMaxHealthForCombat256();
         if (currentHealth >= maxHealth)
             return 0;
 
-        uint128 gain = std::min<uint128>(amount, maxHealth - currentHealth);
+        uint256 gain = std::min<uint256>(amount, maxHealth - currentHealth);
         if (gain)
-            unit->SetHealthForCombat128(currentHealth + gain);
+            unit->SetHealthForCombat256(currentHealth + gain);
 
         return gain;
     }
@@ -282,7 +282,7 @@ public:
             _darnavanGUID.Clear();
             _waveCounter = 0;
             _Reset();
-            me->SetPowerForCombat128(POWER_MANA, me->GetMaxPowerForCombat128(POWER_MANA));
+            me->SetPowerForCombat256(POWER_MANA, me->GetMaxPowerForCombat256(POWER_MANA));
             events.SetPhase(PHASE_ONE);
             me->CastSpell(me, SPELL_SHADOW_CHANNELING, false);
             me->ApplySpellImmune(0, IMMUNITY_STATE, SPELL_AURA_MOD_TAUNT, false);
@@ -1157,11 +1157,11 @@ class spell_deathwhisper_mana_barrier_aura : public AuraScript
         PreventDefaultAction();
         if (Unit* caster = GetCaster())
         {
-            uint128 maxHealth = caster->GetMaxHealthForCombat128();
-            uint128 currentHealth = caster->GetHealthForCombat128();
-            uint128 missingHealth = maxHealth > currentHealth ? maxHealth - currentHealth : 0;
-            ApplyHealthGain128(caster, missingHealth);
-            caster->ModifyPower128(POWER_MANA, -Acore::Number::ToInt128Saturated(missingHealth));
+            uint256 maxHealth = caster->GetMaxHealthForCombat256();
+            uint256 currentHealth = caster->GetHealthForCombat256();
+            uint256 missingHealth = maxHealth > currentHealth ? maxHealth - currentHealth : 0;
+            ApplyHealthGain256(caster, missingHealth);
+            caster->ModifyPower256(POWER_MANA, -Acore::Number::ToInt256Saturated(missingHealth));
         }
     }
 

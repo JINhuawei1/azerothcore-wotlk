@@ -124,10 +124,10 @@ bool PetAI::_canMeleeAttack()
                         case WATER_ELEMENTAL_WATERBOLT_2:
                             {
                                 SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellID);
-                                uint128 mana = me->GetPowerForCombat128(POWER_MANA);
-                                int128 powerCost = spellInfo->CalcPowerCost(me, spellInfo->GetSchoolMask());
+                                uint256 mana = me->GetPowerForCombat256(POWER_MANA);
+                                int256 powerCost = spellInfo->CalcPowerCost(me, spellInfo->GetSchoolMask());
 
-                                if (powerCost <= 0 || mana >= Acore::Number::ToUInt128Saturated(powerCost))
+                                if (powerCost <= 0 || mana >= Acore::Number::ToUInt256Saturated(powerCost))
                                 {
                                     combatRange = spellInfo->GetMaxRange();
                                     return true;

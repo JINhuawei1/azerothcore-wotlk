@@ -89,6 +89,126 @@ enum BossKind : uint8
     BOSS_ABYSS
 };
 
+char const* BoolText(bool value)
+{
+    return value ? "true" : "false";
+}
+
+char const* BossKindName(BossKind kind)
+{
+    switch (kind)
+    {
+        case BOSS_VENOM:
+            return "venom";
+        case BOSS_COLOSSUS:
+            return "colossus";
+        case BOSS_BEAST:
+            return "beast";
+        case BOSS_PROPHET:
+            return "prophet";
+        case BOSS_ABYSS:
+            return "abyss";
+    }
+
+    return "unknown";
+}
+
+char const* EvadeReasonName(CreatureAI::EvadeReason why)
+{
+    switch (why)
+    {
+        case CreatureAI::EVADE_REASON_NO_HOSTILES:
+            return "NO_HOSTILES";
+        case CreatureAI::EVADE_REASON_BOUNDARY:
+            return "BOUNDARY";
+        case CreatureAI::EVADE_REASON_SEQUENCE_BREAK:
+            return "SEQUENCE_BREAK";
+        case CreatureAI::EVADE_REASON_NO_PATH:
+            return "NO_PATH";
+        case CreatureAI::EVADE_REASON_OTHER:
+            return "OTHER";
+    }
+
+    return "UNKNOWN";
+}
+
+uint32 GetCreatureInstanceId(Creature const* creature)
+{
+    if (!creature)
+        return 0;
+
+    Map const* map = creature->GetMap();
+    return map ? map->GetInstanceId() : 0;
+}
+
+uint64 GetUnitGuidCounter(Unit const* unit)
+{
+    return unit ? unit->GetGUID().GetCounter() : 0;
+}
+
+uint32 GetUnitTypeId(Unit const* unit)
+{
+    return unit ? uint32(unit->GetTypeId()) : 0;
+}
+
+void LogGundrakBossState(char const* eventName, Creature* creature, BossKind kind, Unit const* related = nullptr)
+{
+    if (!creature)
+        return;
+
+    Unit* victim = creature->GetVictim();
+    LOG_DEBUG("module.challenge_mirage",
+        "[ChallengeMirageDebug] {} bossKind={} entry={} guid={} map={} inst={} layer={} health={} maxHealth={} inCombat={} victimGuid={} relatedGuid={} relatedType={} canThreat={} threatSize={} threatEmpty={} pos={:.2f},{:.2f},{:.2f}",
+        eventName, BossKindName(kind), creature->GetEntry(), creature->GetGUID().GetCounter(), creature->GetMapId(),
+        GetCreatureInstanceId(creature), sChallengeMirageMgr->GetCreatureLayer(creature), creature->GetHealth(), creature->GetMaxHealth(),
+        BoolText(creature->IsInCombat()), GetUnitGuidCounter(victim), GetUnitGuidCounter(related), GetUnitTypeId(related),
+        BoolText(creature->CanHaveThreatList()), creature->GetThreatMgr().GetThreatListSize(), BoolText(creature->GetThreatMgr().isThreatListEmpty()),
+        creature->GetPositionX(), creature->GetPositionY(), creature->GetPositionZ());
+}
+
+void LogGundrakBossEvade(Creature* creature, BossKind kind, CreatureAI::EvadeReason why)
+{
+    if (!creature)
+        return;
+
+    Unit* victim = creature->GetVictim();
+    LOG_DEBUG("module.challenge_mirage",
+        "[ChallengeMirageDebug] AI_EVADE bossKind={} reason={} entry={} guid={} map={} inst={} layer={} health={} maxHealth={} inCombat={} victimGuid={} canThreat={} threatSize={} threatEmpty={} pos={:.2f},{:.2f},{:.2f}",
+        BossKindName(kind), EvadeReasonName(why), creature->GetEntry(), creature->GetGUID().GetCounter(), creature->GetMapId(),
+        GetCreatureInstanceId(creature), sChallengeMirageMgr->GetCreatureLayer(creature), creature->GetHealth(), creature->GetMaxHealth(),
+        BoolText(creature->IsInCombat()), GetUnitGuidCounter(victim), BoolText(creature->CanHaveThreatList()), creature->GetThreatMgr().GetThreatListSize(),
+        BoolText(creature->GetThreatMgr().isThreatListEmpty()), creature->GetPositionX(), creature->GetPositionY(), creature->GetPositionZ());
+}
+
+void LogGundrakMinionState(char const* eventName, Creature* creature, Unit const* related = nullptr)
+{
+    if (!creature)
+        return;
+
+    Unit* victim = creature->GetVictim();
+    LOG_DEBUG("module.challenge_mirage",
+        "[ChallengeMirageDebug] {} minion entry={} guid={} map={} inst={} layer={} health={} maxHealth={} inCombat={} victimGuid={} relatedGuid={} relatedType={} canThreat={} threatSize={} threatEmpty={} pos={:.2f},{:.2f},{:.2f}",
+        eventName, creature->GetEntry(), creature->GetGUID().GetCounter(), creature->GetMapId(), GetCreatureInstanceId(creature),
+        sChallengeMirageMgr->GetCreatureLayer(creature), creature->GetHealth(), creature->GetMaxHealth(), BoolText(creature->IsInCombat()),
+        GetUnitGuidCounter(victim), GetUnitGuidCounter(related), GetUnitTypeId(related), BoolText(creature->CanHaveThreatList()),
+        creature->GetThreatMgr().GetThreatListSize(), BoolText(creature->GetThreatMgr().isThreatListEmpty()), creature->GetPositionX(), creature->GetPositionY(),
+        creature->GetPositionZ());
+}
+
+void LogGundrakMinionEvade(Creature* creature, CreatureAI::EvadeReason why)
+{
+    if (!creature)
+        return;
+
+    Unit* victim = creature->GetVictim();
+    LOG_DEBUG("module.challenge_mirage",
+        "[ChallengeMirageDebug] AI_EVADE minion reason={} entry={} guid={} map={} inst={} layer={} health={} maxHealth={} inCombat={} victimGuid={} canThreat={} threatSize={} threatEmpty={} pos={:.2f},{:.2f},{:.2f}",
+        EvadeReasonName(why), creature->GetEntry(), creature->GetGUID().GetCounter(), creature->GetMapId(), GetCreatureInstanceId(creature),
+        sChallengeMirageMgr->GetCreatureLayer(creature), creature->GetHealth(), creature->GetMaxHealth(), BoolText(creature->IsInCombat()),
+        GetUnitGuidCounter(victim), BoolText(creature->CanHaveThreatList()), creature->GetThreatMgr().GetThreatListSize(), BoolText(creature->GetThreatMgr().isThreatListEmpty()),
+        creature->GetPositionX(), creature->GetPositionY(), creature->GetPositionZ());
+}
+
 enum BossEvents : uint32
 {
     EVENT_OPENER = 1,
@@ -145,18 +265,32 @@ void EngageVisiblePlayers(Creature* me, Unit* engager)
     if (!map)
         return;
 
-    if (map->IsDungeon())
+    auto engagePlayer = [me](Player* player, float threat, bool attackStart) -> bool
     {
-        me->SetInCombatWithZone();
-        return;
-    }
+        if (!player || !player->IsAlive())
+            return false;
 
-    if (Player* player = engager ? engager->ToPlayer() : nullptr)
-    {
+        if (!sChallengeMirageMgr->IsCreatureVisibleForPlayer(me, player))
+            return false;
+
+        if (!me->IsValidAttackTarget(player))
+            return false;
+
         me->SetInCombatWith(player);
         player->SetInCombatWith(me);
-        me->AddThreat(player, 1.0f);
-    }
+        me->AddThreat(player, threat);
+
+        if (attackStart)
+        {
+            if (CreatureAI* ai = me->AI())
+                ai->AttackStart(player);
+        }
+
+        return true;
+    };
+
+    Player* engagerPlayer = engager ? engager->GetCharmerOrOwnerPlayerOrPlayerItself() : nullptr;
+    bool hasPrimaryTarget = engagePlayer(engagerPlayer, 100.0f, true);
 
     Map::PlayerList const& players = map->GetPlayers();
     for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
@@ -165,13 +299,200 @@ void EngageVisiblePlayers(Creature* me, Unit* engager)
         if (!player || !player->IsAlive() || me->GetDistance(player) > 100.0f)
             continue;
 
-        if (!sChallengeMirageMgr->IsCreatureVisibleForPlayer(me, player))
+        bool attackStart = !hasPrimaryTarget && (!engagerPlayer || player == engagerPlayer);
+        if (engagePlayer(player, 1.0f, attackStart))
+            hasPrimaryTarget = true;
+    }
+}
+
+bool IsSameLayerLivePlayer(Creature* me, Player* player)
+{
+    if (!me || !player || !player->IsInWorld() || !player->IsAlive())
+        return false;
+
+    return sChallengeMirageMgr->GetPlayerLayer(player) == sChallengeMirageMgr->GetCreatureLayer(me)
+        && sChallengeMirageMgr->IsCreatureVisibleForPlayer(me, player);
+}
+
+bool IsSameLayerPlayerInInstance(Creature* me, Player* player)
+{
+    if (!me || !player || !player->IsInWorld())
+        return false;
+
+    return sChallengeMirageMgr->GetPlayerLayer(player) == sChallengeMirageMgr->GetCreatureLayer(me)
+        && sChallengeMirageMgr->IsCreatureVisibleForPlayer(me, player);
+}
+
+void LogGundrakEvadePlayers(char const* aiKind, Creature* me, CreatureAI::EvadeReason why)
+{
+    if (!me)
+        return;
+
+    Map* map = me->GetMap();
+    if (!map)
+    {
+        LOG_DEBUG("module.challenge_mirage",
+            "[ChallengeMirageDebug] AI_EVADE_PLAYERS ai={} reason={} entry={} guid={} map={} inst={} layer={} mapMissing=true",
+            aiKind ? aiKind : "unknown", EvadeReasonName(why), me->GetEntry(), me->GetGUID().GetCounter(), me->GetMapId(),
+            GetCreatureInstanceId(me), sChallengeMirageMgr->GetCreatureLayer(me));
+        return;
+    }
+
+    uint32 playerCount = 0;
+    Map::PlayerList const& players = map->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+    {
+        Player* player = itr->GetSource();
+        if (!player)
             continue;
 
-        me->SetInCombatWith(player);
-        player->SetInCombatWith(me);
-        me->AddThreat(player, 1.0f);
+        ++playerCount;
+        bool sameLayer = sChallengeMirageMgr->GetPlayerLayer(player) == sChallengeMirageMgr->GetCreatureLayer(me);
+        bool visible = sChallengeMirageMgr->IsCreatureVisibleForPlayer(me, player);
+        bool samePhase = me->InSamePhase(player);
+        bool validAttack = me->IsValidAttackTarget(player);
+        bool canSee = me->CanSeeOrDetect(player, false, true);
+        bool los = me->IsWithinLOSInMap(player);
+
+        LOG_DEBUG("module.challenge_mirage",
+            "[ChallengeMirageDebug] AI_EVADE_PLAYER ai={} reason={} entry={} guid={} map={} inst={} layer={} inCombat={} victimGuid={} threatSize={} threatEmpty={} player={} playerGuid={} playerLevel={} playerMap={} playerInst={} alive={} inWorld={} gm={} teleporting={} sameLayer={} samePhase={} visible={} validAttack={} canSee={} los={} playerCombat={} playerHealth={} playerMaxHealth={} dist={:.2f} dist2d={:.2f} cpos={:.2f},{:.2f},{:.2f} ppos={:.2f},{:.2f},{:.2f}",
+            aiKind ? aiKind : "unknown", EvadeReasonName(why), me->GetEntry(), me->GetGUID().GetCounter(), me->GetMapId(),
+            GetCreatureInstanceId(me), sChallengeMirageMgr->GetCreatureLayer(me), BoolText(me->IsInCombat()), GetUnitGuidCounter(me->GetVictim()),
+            me->GetThreatMgr().GetThreatListSize(), BoolText(me->GetThreatMgr().isThreatListEmpty()), player->GetName(), GetUnitGuidCounter(player),
+            sChallengeMirageMgr->GetPlayerLayer(player), player->GetMapId(), player->GetInstanceId(), BoolText(player->IsAlive()),
+            BoolText(player->IsInWorld()), BoolText(player->IsGameMaster()), BoolText(player->IsBeingTeleported()), BoolText(sameLayer),
+            BoolText(samePhase), BoolText(visible), BoolText(validAttack), BoolText(canSee), BoolText(los), BoolText(player->IsInCombat()),
+            player->GetHealth(), player->GetMaxHealth(), me->GetDistance(player), me->GetExactDist2d(player), me->GetPositionX(), me->GetPositionY(),
+            me->GetPositionZ(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
     }
+
+    if (!playerCount)
+    {
+        LOG_DEBUG("module.challenge_mirage",
+            "[ChallengeMirageDebug] AI_EVADE_PLAYERS ai={} reason={} entry={} guid={} map={} inst={} layer={} mapPlayers=0",
+            aiKind ? aiKind : "unknown", EvadeReasonName(why), me->GetEntry(), me->GetGUID().GetCounter(), me->GetMapId(),
+            GetCreatureInstanceId(me), sChallengeMirageMgr->GetCreatureLayer(me));
+    }
+}
+
+bool HasSameLayerLivePlayer(Creature* me)
+{
+    if (!me)
+        return false;
+
+    Map* map = me->GetMap();
+    if (!map)
+        return false;
+
+    Map::PlayerList const& players = map->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+        if (IsSameLayerLivePlayer(me, itr->GetSource()))
+            return true;
+
+    return false;
+}
+
+bool HasSameLayerPlayerInInstance(Creature* me)
+{
+    if (!me)
+        return false;
+
+    Map* map = me->GetMap();
+    if (!map)
+        return false;
+
+    Map::PlayerList const& players = map->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+        if (IsSameLayerPlayerInInstance(me, itr->GetSource()))
+            return true;
+
+    return false;
+}
+
+Player* FindEvadeRecoveryTarget(Creature* me)
+{
+    if (!me)
+        return nullptr;
+
+    Map* map = me->GetMap();
+    if (!map)
+        return nullptr;
+
+    Player* bestTarget = nullptr;
+    float bestDistance = 1000000.0f;
+    Map::PlayerList const& players = map->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+    {
+        Player* player = itr->GetSource();
+        if (!IsSameLayerLivePlayer(me, player))
+            continue;
+
+        if (!me->IsValidAttackTarget(player))
+            continue;
+
+        float distance = me->GetDistance(player);
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            bestTarget = player;
+        }
+    }
+
+    return bestTarget;
+}
+
+bool TryHandleGundrakEvadeWithoutReset(char const* aiKind, Creature* me, CreatureAI::EvadeReason why)
+{
+    if (!me || !me->IsAlive())
+        return false;
+
+    Map* map = me->GetMap();
+    uint32 layer = sChallengeMirageMgr->GetCreatureLayer(me);
+    if (!map || !map->IsDungeon() || layer == sChallengeMirageMgr->GetDefaultLayer())
+        return false;
+
+    me->SetRegeneratingHealth(false);
+    LogGundrakEvadePlayers(aiKind, me, why);
+
+    bool wasInCombat = me->IsInCombat();
+    uint64 victimBefore = GetUnitGuidCounter(me->GetVictim());
+    uint32 threatBefore = me->GetThreatMgr().GetThreatListSize();
+    bool hadCombatState = wasInCombat || victimBefore != 0 || threatBefore != 0;
+    bool hasLayerLivePlayer = HasSameLayerLivePlayer(me);
+    bool hasLayerPlayer = HasSameLayerPlayerInInstance(me);
+    Player* target = hadCombatState ? FindEvadeRecoveryTarget(me) : nullptr;
+
+    if (target)
+    {
+        EngageVisiblePlayers(me, target);
+        LOG_DEBUG("module.challenge_mirage",
+            "[ChallengeMirageDebug] AI_EVADE_RECOVER ai={} reason={} entry={} guid={} map={} inst={} layer={} target={} targetGuid={} targetDist={:.2f} inCombatBefore={} inCombatAfter={} victimBefore={} victimAfter={} threatBefore={} threatAfter={} health={} maxHealth={}",
+            aiKind ? aiKind : "unknown", EvadeReasonName(why), me->GetEntry(), me->GetGUID().GetCounter(), me->GetMapId(),
+            GetCreatureInstanceId(me), layer, target->GetName(), GetUnitGuidCounter(target), me->GetDistance(target), BoolText(wasInCombat),
+            BoolText(me->IsInCombat()), victimBefore, GetUnitGuidCounter(me->GetVictim()), threatBefore, me->GetThreatMgr().GetThreatListSize(),
+            me->GetHealth(), me->GetMaxHealth());
+        return true;
+    }
+
+    if (hasLayerPlayer)
+    {
+        if (hadCombatState)
+            me->CombatStop(true);
+
+        LOG_DEBUG("module.challenge_mirage",
+            "[ChallengeMirageDebug] AI_EVADE_SUPPRESS ai={} reason={} entry={} guid={} map={} inst={} layer={} action={} hasLayerLivePlayer={} inCombatBefore={} inCombatAfter={} victimBefore={} threatBefore={} threatAfter={} health={} maxHealth={}",
+            aiKind ? aiKind : "unknown", EvadeReasonName(why), me->GetEntry(), me->GetGUID().GetCounter(), me->GetMapId(),
+            GetCreatureInstanceId(me), layer, hadCombatState ? "combat_stop_no_reset" : "idle_no_reset", BoolText(hasLayerLivePlayer),
+            BoolText(wasInCombat), BoolText(me->IsInCombat()), victimBefore, threatBefore, me->GetThreatMgr().GetThreatListSize(), me->GetHealth(),
+            me->GetMaxHealth());
+        return true;
+    }
+
+    LOG_DEBUG("module.challenge_mirage",
+        "[ChallengeMirageDebug] AI_EVADE_ALLOW_RESET ai={} reason={} entry={} guid={} map={} inst={} layer={} noLayerPlayer=true health={} maxHealth={}",
+        aiKind ? aiKind : "unknown", EvadeReasonName(why), me->GetEntry(), me->GetGUID().GetCounter(), me->GetMapId(),
+        GetCreatureInstanceId(me), layer, me->GetHealth(), me->GetMaxHealth());
+    return false;
 }
 
 Creature* SummonMirageAdd(Creature* me, uint32 entry, uint8 index)
@@ -198,11 +519,20 @@ Creature* SummonMirageAdd(Creature* me, uint32 entry, uint8 index)
     if (!summon)
         return nullptr;
 
+    summon->SetRegeneratingHealth(false);
     sChallengeMirageMgr->SetCreatureLayer(summon, sChallengeMirageMgr->GetCreatureLayer(me));
     EngageVisiblePlayers(summon, me->GetVictim());
 
     if (Unit* victim = me->GetVictim())
         summon->AI()->AttackStart(victim);
+
+    TempSummon const* tempSummon = summon->ToTempSummon();
+    LOG_DEBUG("module.challenge_mirage",
+        "[ChallengeMirageDebug] AI_SUMMON_ADD ownerEntry={} ownerGuid={} ownerMap={} ownerInst={} ownerLayer={} addEntry={} addGuid={} addMap={} addInst={} addLayer={} summonType={} summonerGuid={} health={} maxHealth={} pos={:.2f},{:.2f},{:.2f}",
+        me->GetEntry(), me->GetGUID().GetCounter(), me->GetMapId(), GetCreatureInstanceId(me), sChallengeMirageMgr->GetCreatureLayer(me),
+        summon->GetEntry(), summon->GetGUID().GetCounter(), summon->GetMapId(), GetCreatureInstanceId(summon), sChallengeMirageMgr->GetCreatureLayer(summon),
+        tempSummon ? uint32(tempSummon->GetSummonType()) : 0, summon->GetSummonerGUID().GetCounter(), summon->GetHealth(), summon->GetMaxHealth(),
+        summon->GetPositionX(), summon->GetPositionY(), summon->GetPositionZ());
 
     return summon;
 }
@@ -222,6 +552,15 @@ public:
 
         void Reset() override
         {
+            uint64 previousHealth = _healthTracked ? _lastObservedHealth : me->GetHealth();
+            me->SetRegeneratingHealth(false);
+            LogGundrakBossState(_initialResetDone ? "AI_RESET" : "AI_SPAWN_INIT", me, _kind);
+            if (_initialResetDone && _healthTracked && me->GetHealth() > previousHealth)
+                LogBossHealthDelta("AI_HEALTH_INCREASE", "Reset", previousHealth, me->GetHealth());
+
+            _healthTracked = true;
+            _lastObservedHealth = me->GetHealth();
+            _initialResetDone = true;
             _events.Reset();
             _summons.DespawnAll();
             _phase75 = false;
@@ -234,12 +573,38 @@ public:
         void JustEngagedWith(Unit* who) override
         {
             EngageVisiblePlayers(me, who);
+            LogGundrakBossState("AI_ENGAGE", me, _kind, who);
+            TrackBossHealth("JustEngaged");
             ScheduleCombat();
+        }
+
+        void DamageTaken(Unit* attacker, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        {
+            uint64 currentHealth = me->GetHealth();
+
+            LOG_DEBUG("module.challenge_mirage",
+                "[ChallengeMirageDebug] AI_DAMAGE_TAKEN bossKind={} entry={} guid={} rawGuid={} map={} inst={} layer={} attackerGuid={} attackerType={} damage={} healthBefore={} trackedHealth={} maxHealth={} inCombat={} victimGuid={} threatSize={} threatEmpty={} pos={:.2f},{:.2f},{:.2f}",
+                BossKindName(_kind), me->GetEntry(), me->GetGUID().GetCounter(), me->GetGUID().GetRawValue(), me->GetMapId(),
+                GetCreatureInstanceId(me), sChallengeMirageMgr->GetCreatureLayer(me), GetUnitGuidCounter(attacker), GetUnitTypeId(attacker), damage,
+                currentHealth, _lastObservedHealth, me->GetMaxHealth(), BoolText(me->IsInCombat()), GetUnitGuidCounter(me->GetVictim()),
+                me->GetThreatMgr().GetThreatListSize(), BoolText(me->GetThreatMgr().isThreatListEmpty()), me->GetPositionX(), me->GetPositionY(),
+                me->GetPositionZ());
         }
 
         void JustDied(Unit*) override
         {
+            LogGundrakBossState("AI_DIED", me, _kind);
             _summons.DespawnAll();
+        }
+
+        void EnterEvadeMode(EvadeReason why = EVADE_REASON_OTHER) override
+        {
+            TrackBossHealth("EnterEvadeMode");
+            LogGundrakBossEvade(me, _kind, why);
+            if (TryHandleGundrakEvadeWithoutReset("boss", me, why))
+                return;
+
+            CreatureAI::EnterEvadeMode(why);
         }
 
         void JustSummoned(Creature* summon) override
@@ -256,6 +621,8 @@ public:
 
         void UpdateAI(uint32 diff) override
         {
+            TrackBossHealth("UpdateAI_Start");
+
             if (!UpdateVictim())
                 return;
 
@@ -277,9 +644,46 @@ public:
             }
 
             DoMeleeAttackIfReady();
+            TrackBossHealth("UpdateAI_End");
         }
 
     private:
+        void LogBossHealthDelta(char const* eventName, char const* reason, uint64 previousHealth, uint64 currentHealth, Unit const* related = nullptr)
+        {
+            uint64 delta = currentHealth > previousHealth ? currentHealth - previousHealth : previousHealth - currentHealth;
+            Unit* victim = me->GetVictim();
+            LOG_DEBUG("module.challenge_mirage",
+                "[ChallengeMirageDebug] {} bossKind={} reason={} entry={} guid={} rawGuid={} map={} inst={} layer={} prevHealth={} health={} maxHealth={} delta={} direction={} inCombat={} victimGuid={} relatedGuid={} relatedType={} threatSize={} threatEmpty={} pos={:.2f},{:.2f},{:.2f}",
+                eventName ? eventName : "AI_HEALTH_CHANGE", BossKindName(_kind), reason ? reason : "unknown", me->GetEntry(),
+                me->GetGUID().GetCounter(), me->GetGUID().GetRawValue(), me->GetMapId(), GetCreatureInstanceId(me),
+                sChallengeMirageMgr->GetCreatureLayer(me), previousHealth, currentHealth, me->GetMaxHealth(), delta,
+                currentHealth > previousHealth ? "up" : "down", BoolText(me->IsInCombat()), GetUnitGuidCounter(victim),
+                GetUnitGuidCounter(related), GetUnitTypeId(related), me->GetThreatMgr().GetThreatListSize(),
+                BoolText(me->GetThreatMgr().isThreatListEmpty()), me->GetPositionX(), me->GetPositionY(), me->GetPositionZ());
+        }
+
+        void TrackBossHealth(char const* reason)
+        {
+            uint64 currentHealth = me->GetHealth();
+            if (!_healthTracked)
+            {
+                _healthTracked = true;
+                _lastObservedHealth = currentHealth;
+                return;
+            }
+
+            if (currentHealth == _lastObservedHealth)
+                return;
+
+            uint64 previousHealth = _lastObservedHealth;
+            _lastObservedHealth = currentHealth;
+
+            bool increased = currentHealth > previousHealth;
+            uint64 delta = increased ? currentHealth - previousHealth : previousHealth - currentHealth;
+            if (increased || delta >= 1000000 || currentHealth == 0 || currentHealth == me->GetMaxHealth())
+                LogBossHealthDelta(increased ? "AI_HEALTH_INCREASE" : "AI_HEALTH_CHANGE", reason, previousHealth, currentHealth);
+        }
+
         void ScheduleCombat()
         {
             _events.Reset();
@@ -670,6 +1074,9 @@ public:
         bool _phase50 = false;
         bool _phase25 = false;
         bool _hardBerserk = false;
+        bool _initialResetDone = false;
+        bool _healthTracked = false;
+        uint64 _lastObservedHealth = 0;
         uint8 _summonIndex = 0;
     };
 
@@ -693,12 +1100,30 @@ public:
 
         void Reset() override
         {
+            me->SetRegeneratingHealth(false);
+            LogGundrakMinionState(_initialResetDone ? "AI_RESET" : "AI_SPAWN_INIT", me);
+            _initialResetDone = true;
             _timer = 2000;
         }
 
         void JustEngagedWith(Unit* who) override
         {
             EngageVisiblePlayers(me, who);
+            LogGundrakMinionState("AI_ENGAGE", me, who);
+        }
+
+        void JustDied(Unit*) override
+        {
+            LogGundrakMinionState("AI_DIED", me);
+        }
+
+        void EnterEvadeMode(EvadeReason why = EVADE_REASON_OTHER) override
+        {
+            LogGundrakMinionEvade(me, why);
+            if (TryHandleGundrakEvadeWithoutReset("minion", me, why))
+                return;
+
+            CreatureAI::EnterEvadeMode(why);
         }
 
         void UpdateAI(uint32 diff) override
@@ -758,6 +1183,7 @@ public:
         }
 
         uint32 _timer = 2000;
+        bool _initialResetDone = false;
     };
 
     CreatureAI* GetAI(Creature* creature) const override

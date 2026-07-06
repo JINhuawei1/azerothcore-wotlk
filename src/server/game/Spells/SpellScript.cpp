@@ -519,7 +519,7 @@ int64 SpellScript::GetHitDamage()
         LOG_ERROR("spells.scripts", "Script: `{}` Spell: `{}`: function SpellScript::GetHitDamage was called, but function has no effect in current hook!", m_scriptName->c_str(), m_scriptSpellId);
         return 0;
     }
-    return m_spell->m_damage > static_cast<uint128>(std::numeric_limits<int64>::max())
+    return m_spell->m_damage > static_cast<uint256>(std::numeric_limits<int64>::max())
         ? std::numeric_limits<int64>::max()
         : static_cast<int64>(Acore::Number::ToUInt64Saturated(m_spell->m_damage));
 }
@@ -531,24 +531,24 @@ void SpellScript::SetHitDamage(int64 damage)
         LOG_ERROR("spells.scripts", "Script: `{}` Spell: `{}`: function SpellScript::SetHitDamage was called, but function has no effect in current hook!", m_scriptName->c_str(), m_scriptSpellId);
         return;
     }
-    m_spell->m_damage = damage > 0 ? static_cast<uint128>(static_cast<uint64>(damage)) : uint128(0);
+    m_spell->m_damage = damage > 0 ? static_cast<uint256>(static_cast<uint64>(damage)) : uint256(0);
 }
 
-uint128 SpellScript::GetHitDamage128()
+uint256 SpellScript::GetHitDamage256()
 {
     if (!IsInTargetHook())
     {
-        LOG_ERROR("spells.scripts", "Script: `{}` Spell: `{}`: function SpellScript::GetHitDamage128 was called, but function has no effect in current hook!", m_scriptName->c_str(), m_scriptSpellId);
+        LOG_ERROR("spells.scripts", "Script: `{}` Spell: `{}`: function SpellScript::GetHitDamage256 was called, but function has no effect in current hook!", m_scriptName->c_str(), m_scriptSpellId);
         return 0;
     }
     return m_spell->m_damage;
 }
 
-void SpellScript::SetHitDamage128(uint128 const& damage)
+void SpellScript::SetHitDamage256(uint256 const& damage)
 {
     if (!IsInTargetHook())
     {
-        LOG_ERROR("spells.scripts", "Script: `{}` Spell: `{}`: function SpellScript::SetHitDamage128 was called, but function has no effect in current hook!", m_scriptName->c_str(), m_scriptSpellId);
+        LOG_ERROR("spells.scripts", "Script: `{}` Spell: `{}`: function SpellScript::SetHitDamage256 was called, but function has no effect in current hook!", m_scriptName->c_str(), m_scriptSpellId);
         return;
     }
     m_spell->m_damage = damage;
@@ -561,7 +561,7 @@ int64 SpellScript::GetHitHeal()
         LOG_ERROR("spells.scripts", "Script: `{}` Spell: `{}`: function SpellScript::GetHitHeal was called, but function has no effect in current hook!", m_scriptName->c_str(), m_scriptSpellId);
         return 0;
     }
-    return m_spell->m_healing > static_cast<uint128>(std::numeric_limits<int64>::max())
+    return m_spell->m_healing > static_cast<uint256>(std::numeric_limits<int64>::max())
         ? std::numeric_limits<int64>::max()
         : static_cast<int64>(Acore::Number::ToUInt64Saturated(m_spell->m_healing));
 }
@@ -573,24 +573,24 @@ void SpellScript::SetHitHeal(int64 heal)
         LOG_ERROR("spells.scripts", "Script: `{}` Spell: `{}`: function SpellScript::SetHitHeal was called, but function has no effect in current hook!", m_scriptName->c_str(), m_scriptSpellId);
         return;
     }
-    m_spell->m_healing = heal > 0 ? static_cast<uint128>(static_cast<uint64>(heal)) : uint128(0);
+    m_spell->m_healing = heal > 0 ? static_cast<uint256>(static_cast<uint64>(heal)) : uint256(0);
 }
 
-uint128 SpellScript::GetHitHeal128()
+uint256 SpellScript::GetHitHeal256()
 {
     if (!IsInTargetHook())
     {
-        LOG_ERROR("spells.scripts", "Script: `{}` Spell: `{}`: function SpellScript::GetHitHeal128 was called, but function has no effect in current hook!", m_scriptName->c_str(), m_scriptSpellId);
+        LOG_ERROR("spells.scripts", "Script: `{}` Spell: `{}`: function SpellScript::GetHitHeal256 was called, but function has no effect in current hook!", m_scriptName->c_str(), m_scriptSpellId);
         return 0;
     }
     return m_spell->m_healing;
 }
 
-void SpellScript::SetHitHeal128(uint128 const& heal)
+void SpellScript::SetHitHeal256(uint256 const& heal)
 {
     if (!IsInTargetHook())
     {
-        LOG_ERROR("spells.scripts", "Script: `{}` Spell: `{}`: function SpellScript::SetHitHeal128 was called, but function has no effect in current hook!", m_scriptName->c_str(), m_scriptSpellId);
+        LOG_ERROR("spells.scripts", "Script: `{}` Spell: `{}`: function SpellScript::SetHitHeal256 was called, but function has no effect in current hook!", m_scriptName->c_str(), m_scriptSpellId);
         return;
     }
     m_spell->m_healing = heal;

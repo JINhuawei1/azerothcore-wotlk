@@ -880,7 +880,7 @@ void SmartAI::DamageTaken(Unit* doneBy, uint32& damage, DamageEffectType damaget
         damage = me->GetHealth() - mInvincibilityHpLevel; // damage should not be nullified, because of player damage req.
 }
 
-void SmartAI::HealReceived(Unit* doneBy, uint128& addhealth)
+void SmartAI::HealReceived(Unit* doneBy, uint256& addhealth)
 {
     GetScript()->ProcessEventsFor(SMART_EVENT_RECEIVE_HEAL, doneBy, Acore::Number::ToUInt32Saturated(addhealth));
 }

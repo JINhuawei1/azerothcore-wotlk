@@ -134,7 +134,7 @@ public:
             if (!me->IsAlive() || !victim->HasAura(SPELL_LEECH_POISON))
                 return;
 
-            Unit::DealHeal(me, me, me->CountPctFromMaxHealth128(10));
+            Unit::DealHeal(me, me, me->CountPctFromMaxHealth256(10));
         }
 
         void JustDied(Unit* killer) override

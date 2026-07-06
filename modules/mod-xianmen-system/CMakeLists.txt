@@ -10,6 +10,10 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/modules/mod-magic-hit-system/src/MagicHitSystem.h
   include_directories(${CMAKE_SOURCE_DIR}/modules/mod-magic-hit-system/src)
 endif()
 
+if(EXISTS "${CMAKE_SOURCE_DIR}/modules/mod-wear-control/src/WearControl.h")
+  include_directories(${CMAKE_SOURCE_DIR}/modules/mod-wear-control/src)
+endif()
+
 AC_ADD_SCRIPT("${CMAKE_CURRENT_LIST_DIR}/src/mod_xianmen_system.cpp")
 AC_ADD_SCRIPT("${CMAKE_CURRENT_LIST_DIR}/src/XianmenArtifactSlots.cpp")
 AC_ADD_SCRIPT("${CMAKE_CURRENT_LIST_DIR}/src/XianqiFeatureSpells.cpp")
