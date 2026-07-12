@@ -96,7 +96,7 @@ struct boss_twinemperorsAI : public BossAI
         return instance->GetCreature(IAmVeklor() ? DATA_VEKNILASH : DATA_VEKLOR);
     }
 
-    void DamageTaken(Unit* attacker, uint32& damage, DamageEffectType, SpellSchoolMask) override
+    void DamageTaken(Unit* attacker, uint256& damage, DamageEffectType, SpellSchoolMask) override
     {
         if (attacker)
         {
@@ -108,8 +108,9 @@ struct boss_twinemperorsAI : public BossAI
 
             if (Creature* twin = GetTwin())
             {
-                float dmgPct = damage / (float)me->GetMaxHealth();
-                int32 actualDmg = dmgPct * twin->GetMaxHealth();
+                long double dmgPct = Acore::Number::ToLongDouble(damage) / static_cast<long double>(me->GetMaxHealth());
+                long double actualDmgWide = dmgPct * static_cast<long double>(twin->GetMaxHealth());
+                int32 actualDmg = actualDmgWide > static_cast<long double>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(actualDmgWide);
                 twin->CastCustomSpell(twin, SPELL_TWIN_EMPATHY, &actualDmg, nullptr, nullptr, true);
             }
         }

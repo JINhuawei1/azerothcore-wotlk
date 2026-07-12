@@ -42,6 +42,7 @@
 #include <iomanip>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -72,6 +73,9 @@ constexpr TriggerCastFlags WUHUN_SPELL_CAST_FLAGS = TriggerCastFlags(
     TRIGGERED_CAST_DIRECTLY |
     TRIGGERED_IGNORE_EQUIPPED_ITEM_REQUIREMENT);
 constexpr float WUHUN_FOLLOW_ANGLE = 1.57079632679f;
+// 万魂之主(382050)多武魂：召唤总数上限与额外武魂环绕主人的角度间隔(2π/5)
+constexpr uint32 WUHUN_MAX_SUMMON_COUNT = 5;
+constexpr float WUHUN_EXTRA_FOLLOW_STEP = 1.25663706144f;
 
 RequirementInterface* GetRequirementModule()
 {
@@ -162,6 +166,7 @@ struct PlayerWuhunData
     std::unordered_map<uint32, uint32> skillLevels;
     std::map<uint8, WuhunEquipmentSlot> equipment;
     ObjectGuid avatarGuid;
+    std::vector<ObjectGuid> extraAvatarGuids; // 万魂之主额外召唤的武魂
     ObjectGuid targetGuid;
     ObjectGuid rangedMirrorTargetGuid;
     uint32 targetHoldTimer = 0;
@@ -637,6 +642,15 @@ uint32 GetXianmenYulingVirtualSpiritCount(uint32 mask, uint32 level)
     return count;
 }
 
+// 万魂之主(382050，序号10)：每200修为多召唤1只武魂，召唤总数上限5只
+uint32 GetXianmenYulingSummonCount(uint32 mask, uint32 level)
+{
+    if (!HasXianmenYulingSkill(mask, 10))
+        return 1;
+
+    return std::min<uint32>(WUHUN_MAX_SUMMON_COUNT, 1 + level / 200);
+}
+
 float GetXianmenYulingInheritanceBonusPct(uint32 mask, uint32 level)
 {
     float bonus = 0.0f;
@@ -911,9 +925,12 @@ public:
             return;
 
         uint32 playerGuid = player->GetGUID().GetCounter();
-        auto old = _players.find(playerGuid);
-        if (old != _players.end())
-            ClearEquipmentItems(old->second);
+        {
+            std::lock_guard<std::mutex> lock(_playersMutex);
+            auto old = _players.find(playerGuid);
+            if (old != _players.end())
+                ClearEquipmentItems(old->second);
+        }
 
         PlayerWuhunData data;
         data.wuhunId = GetUIntParam("DEFAULT_WUHUN_ID", 1);
@@ -983,7 +1000,10 @@ public:
             } while (result->NextRow());
         }
 
-        _players[playerGuid] = std::move(data);
+        {
+            std::lock_guard<std::mutex> lock(_playersMutex);
+            _players[playerGuid] = std::move(data);
+        }
         LoadWuhunItems(player);
 
     }
@@ -1057,6 +1077,7 @@ public:
 
     void UnloadPlayerData(uint32 playerGuid)
     {
+        std::lock_guard<std::mutex> lock(_playersMutex);
         auto itr = _players.find(playerGuid);
         if (itr == _players.end())
             return;
@@ -1067,11 +1088,14 @@ public:
 
     void DeletePlayerData(uint32 playerGuid)
     {
-        auto itr = _players.find(playerGuid);
-        if (itr != _players.end())
         {
-            ClearEquipmentItems(itr->second);
-            _players.erase(itr);
+            std::lock_guard<std::mutex> lock(_playersMutex);
+            auto itr = _players.find(playerGuid);
+            if (itr != _players.end())
+            {
+                ClearEquipmentItems(itr->second);
+                _players.erase(itr);
+            }
         }
 
         if (QueryResult result = CharacterDatabase.Query(
@@ -1119,44 +1143,67 @@ public:
         WuhunDefinition const* definition = GetDefinition(data->wuhunId);
         uint32 entry = definition ? definition->creatureEntry : GetUIntParam("AVATAR_ENTRY", 930001);
 
-        float o = player->GetOrientation();
-        float x = player->GetPositionX() + 2.0f * std::cos(o);
-        float y = player->GetPositionY() + 2.0f * std::sin(o);
-        float z = player->GetPositionZ();
+        // 万魂之主：按御灵修为决定本次召唤的武魂数量
+        RefreshXianmenYulingState(player, *data);
+        uint32 summonCount = GetXianmenYulingSummonCount(data->xianmenYulingMask, data->xianmenYulingLevel);
 
-        Creature* avatar = player->SummonCreature(entry, x, y, z, o, TEMPSUMMON_MANUAL_DESPAWN, 0);
-        if (!avatar)
+        float o = player->GetOrientation();
+        Creature* mainAvatar = nullptr;
+
+        for (uint32 index = 0; index < summonCount; ++index)
         {
-            if (!silent)
-                SendResult(player, "SUMMON", false, "武魂生物模板不存在或召唤失败");
-            return nullptr;
+            // 主武魂在主人面前，额外武魂环绕分散，避免重叠
+            float spawnAngle = o + static_cast<float>(index) * WUHUN_EXTRA_FOLLOW_STEP;
+            float x = player->GetPositionX() + 2.0f * std::cos(spawnAngle);
+            float y = player->GetPositionY() + 2.0f * std::sin(spawnAngle);
+            float z = player->GetPositionZ();
+
+            Creature* avatar = player->SummonCreature(entry, x, y, z, o, TEMPSUMMON_MANUAL_DESPAWN, 0);
+            if (!avatar)
+            {
+                if (index == 0)
+                {
+                    if (!silent)
+                        SendResult(player, "SUMMON", false, "武魂生物模板不存在或召唤失败");
+                    return nullptr;
+                }
+                break;
+            }
+
+            avatar->SetOwnerGUID(player->GetGUID());
+            avatar->SetCreatorGUID(player->GetGUID());
+            avatar->SetFaction(player->GetFaction());
+            avatar->SetUnitFlag(UNIT_FLAG_PLAYER_CONTROLLED);
+            avatar->SetLevel(player->GetLevel());
+            // 模型直接用 creature_template 的 modelid——玩家 displayid 套在生物上缺少
+            // CreatureDisplayInfoExtra 贴图数据，客户端会渲染成全白裸模
+            avatar->SetObjectScale(definition ? definition->scale : player->GetObjectScale());
+            avatar->SetReactState(REACT_PASSIVE);
+            avatar->SetPvP(player->IsPvP());
+            avatar->setPowerType(POWER_MANA);
+
+            if (index == 0)
+            {
+                mainAvatar = avatar;
+                data->summonRequested = true;
+                data->avatarGuid = avatar->GetGUID();
+            }
+            else
+                data->extraAvatarGuids.push_back(avatar->GetGUID());
+
+            avatar->GetMotionMaster()->MoveFollow(player, GetFloatParam("FOLLOW_DISTANCE", 2.5f), GetFollowAngleFor(avatar));
+            UpdateAvatarVisuals(player, avatar);
+
+            if (Unit* target = ResolveOwnerTarget(player))
+                avatar->AI()->AttackStart(target);
         }
 
-        avatar->SetOwnerGUID(player->GetGUID());
-        avatar->SetCreatorGUID(player->GetGUID());
-        avatar->SetFaction(player->GetFaction());
-        avatar->SetUnitFlag(UNIT_FLAG_PLAYER_CONTROLLED);
-        avatar->SetLevel(player->GetLevel());
-        // 模型直接用 creature_template 的 modelid——玩家 displayid 套在生物上缺少
-        // CreatureDisplayInfoExtra 贴图数据，客户端会渲染成全白裸模
-        avatar->SetObjectScale(definition ? definition->scale : player->GetObjectScale());
-        avatar->SetReactState(REACT_PASSIVE);
-        avatar->SetPvP(player->IsPvP());
-        avatar->setPowerType(POWER_MANA);
-        avatar->GetMotionMaster()->MoveFollow(player, GetFloatParam("FOLLOW_DISTANCE", 2.5f), WUHUN_FOLLOW_ANGLE);
-
-        data->summonRequested = true;
-        data->avatarGuid = avatar->GetGUID();
-        UpdateAvatarVisuals(player, avatar);
         UpdateAvatarStats(player);
 
-        if (Unit* target = ResolveOwnerTarget(player))
-            avatar->AI()->AttackStart(target);
-
         if (!silent)
-            SendResult(player, "SUMMON", true, "武魂已召唤");
+            SendResult(player, "SUMMON", true, summonCount > 1 ? "武魂已召唤（万魂之主多武魂生效）" : "武魂已召唤");
         SendState(player);
-        return avatar;
+        return mainAvatar;
     }
 
     bool ActivateAvatar(Player* player)
@@ -1246,6 +1293,11 @@ public:
                 avatar->DespawnOrUnsummon();
         }
 
+        for (ObjectGuid extraGuid : data->extraAvatarGuids)
+            if (Creature* extra = ObjectAccessor::GetCreature(*player, extraGuid))
+                extra->DespawnOrUnsummon();
+        data->extraAvatarGuids.clear();
+
         if (clearSummonRequest)
             data->summonRequested = false;
 
@@ -1280,11 +1332,19 @@ public:
             return;
 
         PlayerWuhunData* data = GetPlayerData(ownerGuid.GetCounter());
-        if (data && data->avatarGuid == avatarGuid)
+        if (!data)
+            return;
+
+        if (data->avatarGuid == avatarGuid)
         {
             data->avatarGuid.Clear();
             data->summonRequested = false;
+            return;
         }
+
+        data->extraAvatarGuids.erase(
+            std::remove(data->extraAvatarGuids.begin(), data->extraAvatarGuids.end(), avatarGuid),
+            data->extraAvatarGuids.end());
     }
 
     Creature* GetAvatar(Player* player)
@@ -1297,6 +1357,52 @@ public:
             return nullptr;
 
         return ObjectAccessor::GetCreature(*player, data->avatarGuid);
+    }
+
+    std::vector<Creature*> GetExtraAvatars(Player* player)
+    {
+        std::vector<Creature*> extras;
+        if (!player)
+            return extras;
+
+        PlayerWuhunData* data = GetPlayerData(player->GetGUID().GetCounter());
+        if (!data)
+            return extras;
+
+        for (ObjectGuid guid : data->extraAvatarGuids)
+            if (Creature* extra = ObjectAccessor::GetCreature(*player, guid))
+                extras.push_back(extra);
+
+        return extras;
+    }
+
+    bool IsOwnedAvatarGuid(PlayerWuhunData const& data, ObjectGuid guid) const
+    {
+        if (guid.IsEmpty())
+            return false;
+
+        if (data.avatarGuid == guid)
+            return true;
+
+        return std::find(data.extraAvatarGuids.begin(), data.extraAvatarGuids.end(), guid) != data.extraAvatarGuids.end();
+    }
+
+    // 主武魂保持原固定角度，额外武魂按序号环绕主人分散站位
+    float GetFollowAngleFor(Creature* avatar)
+    {
+        if (!avatar)
+            return WUHUN_FOLLOW_ANGLE;
+
+        ObjectGuid ownerGuid = avatar->GetOwnerGUID();
+        if (!ownerGuid.IsPlayer())
+            return WUHUN_FOLLOW_ANGLE;
+
+        if (PlayerWuhunData* data = GetPlayerData(ownerGuid.GetCounter()))
+            for (size_t i = 0; i < data->extraAvatarGuids.size(); ++i)
+                if (data->extraAvatarGuids[i] == avatar->GetGUID())
+                    return WUHUN_FOLLOW_ANGLE + static_cast<float>(i + 1) * WUHUN_EXTRA_FOLLOW_STEP;
+
+        return WUHUN_FOLLOW_ANGLE;
     }
 
     void RefreshXianmenYulingState(Player* player, PlayerWuhunData& data)
@@ -1325,9 +1431,30 @@ public:
         if (!player)
             return;
 
-        Creature* avatar = GetAvatar(player);
         PlayerWuhunData* data = GetPlayerData(player->GetGUID().GetCounter());
-        if (!avatar || !data)
+        if (!data)
+            return;
+
+        bool updated = false;
+        if (Creature* avatar = GetAvatar(player))
+        {
+            UpdateSingleAvatarStats(player, data, avatar);
+            updated = true;
+        }
+
+        for (Creature* extra : GetExtraAvatars(player))
+        {
+            UpdateSingleAvatarStats(player, data, extra);
+            updated = true;
+        }
+
+        if (updated)
+            SendAvatarState(player);
+    }
+
+    void UpdateSingleAvatarStats(Player* player, PlayerWuhunData* data, Creature* avatar)
+    {
+        if (!player || !data || !avatar)
             return;
 
         RefreshXianmenYulingState(player, *data);
@@ -1485,7 +1612,6 @@ public:
         }
 
         UpdateAvatarVisuals(player, avatar);
-        SendAvatarState(player);
     }
 
     void SetOwnerTarget(Player* player, Unit* target, uint32 holdMs = 3000)
@@ -1514,6 +1640,7 @@ public:
             data->rangedMirrorHoldTimer = std::max<uint32>(holdMs, WUHUN_RANGED_MIRROR_MELEE_DELAY_MS);
         }
 
+        std::vector<Creature*> avatars;
         if (Creature* avatar = GetAvatar(player))
         {
             if (IsDebug())
@@ -1529,11 +1656,19 @@ public:
                     avatar->GetDistance(target));
             }
 
+            avatars.push_back(avatar);
+        }
+
+        for (Creature* extra : GetExtraAvatars(player))
+            avatars.push_back(extra);
+
+        for (Creature* avatar : avatars)
+        {
             if (!allowMeleeAssist)
             {
                 if (avatar->GetVictim() == target)
                     avatar->AttackStop();
-                return;
+                continue;
             }
 
             if (avatar->GetVictim() != target)
@@ -1569,8 +1704,15 @@ public:
         if (IsAutoSkillMode(player))
             return;
 
-        Creature* avatar = GetAvatar(player);
-        if (!avatar || !avatar->IsAlive())
+        std::vector<Creature*> avatars;
+        if (Creature* mainAvatar = GetAvatar(player))
+            if (mainAvatar->IsAlive())
+                avatars.push_back(mainAvatar);
+        for (Creature* extra : GetExtraAvatars(player))
+            if (extra->IsAlive())
+                avatars.push_back(extra);
+
+        if (avatars.empty())
             return;
 
         SpellInfo const* spellInfo = spell->GetSpellInfo();
@@ -1606,45 +1748,49 @@ public:
         bool rangedMirror = IsRangedMirrorSpell(spellInfo);
         TriggerCastFlags mirrorFlags = WUHUN_SPELL_CAST_FLAGS;
         Unit* originalTarget = spell->m_targets.GetUnitTarget();
-        Unit* logTarget = originalTarget;
         if (originalTarget && IsLegalOwnerTarget(player, originalTarget))
             SetOwnerTarget(player, originalTarget, rangedMirror ? WUHUN_RANGED_MIRROR_MELEE_DELAY_MS : 3000, !rangedMirror);
 
-        SpellCastResult result = SPELL_FAILED_BAD_TARGETS;
-
-        if (originalTarget)
+        for (Creature* avatar : avatars)
         {
-            Unit* unitTarget = originalTarget == player ? avatar : originalTarget;
-            logTarget = unitTarget;
-            result = avatar->CastSpell(unitTarget, spellInfo, mirrorFlags, nullptr, nullptr, ObjectGuid::Empty);
-        }
-        else
-        {
-            SpellCastTargets mirrorTargets = spell->m_targets;
-            mirrorTargets.SetSrc(*avatar);
+            Unit* logTarget = originalTarget;
+            SpellCastResult result = SPELL_FAILED_BAD_TARGETS;
+            uint32 castTargetMask = targetMask;
 
-            if (!mirrorTargets.GetObjectTarget() && !mirrorTargets.GetItemTarget() && !mirrorTargets.HasDst())
+            if (originalTarget)
             {
-                mirrorTargets.SetUnitTarget(avatar);
-                mirrorTargets.SetDst(*avatar);
-                logTarget = avatar;
+                Unit* unitTarget = originalTarget == player ? avatar : originalTarget;
+                logTarget = unitTarget;
+                result = avatar->CastSpell(unitTarget, spellInfo, mirrorFlags, nullptr, nullptr, ObjectGuid::Empty);
+            }
+            else
+            {
+                SpellCastTargets mirrorTargets = spell->m_targets;
+                mirrorTargets.SetSrc(*avatar);
+
+                if (!mirrorTargets.GetObjectTarget() && !mirrorTargets.GetItemTarget() && !mirrorTargets.HasDst())
+                {
+                    mirrorTargets.SetUnitTarget(avatar);
+                    mirrorTargets.SetDst(*avatar);
+                    logTarget = avatar;
+                }
+
+                castTargetMask = mirrorTargets.GetTargetMask();
+                result = avatar->CastSpell(mirrorTargets, spellInfo, nullptr, mirrorFlags, nullptr, nullptr, ObjectGuid::Empty);
             }
 
-            targetMask = mirrorTargets.GetTargetMask();
-            result = avatar->CastSpell(mirrorTargets, spellInfo, nullptr, mirrorFlags, nullptr, nullptr, ObjectGuid::Empty);
-        }
-
-        if (result != SPELL_CAST_OK && IsDebug())
-        {
-            LOG_INFO("server.loading",
-                "武魂系统: 同步施法失败，主人={}，SpellID={}，目标={}，目标掩码={}，远程模式={}，触发={}，结果={}",
-                player->GetName(),
-                spellInfo->Id,
-                logTarget ? logTarget->GetName() : "非单位目标",
-                targetMask,
-                rangedMirror ? 1 : 0,
-                spell->IsTriggered() ? 1 : 0,
-                static_cast<uint32>(result));
+            if (result != SPELL_CAST_OK && IsDebug())
+            {
+                LOG_INFO("server.loading",
+                    "武魂系统: 同步施法失败，主人={}，SpellID={}，目标={}，目标掩码={}，远程模式={}，触发={}，结果={}",
+                    player->GetName(),
+                    spellInfo->Id,
+                    logTarget ? logTarget->GetName() : "非单位目标",
+                    castTargetMask,
+                    rangedMirror ? 1 : 0,
+                    spell->IsTriggered() ? 1 : 0,
+                    static_cast<uint32>(result));
+            }
         }
     }
 
@@ -1775,6 +1921,11 @@ public:
                         data->targetGuid.Clear();
                         avatar->AttackStop();
                         avatar->GetMotionMaster()->MoveFollow(player, GetFloatParam("FOLLOW_DISTANCE", 2.5f), WUHUN_FOLLOW_ANGLE);
+                        for (Creature* extra : GetExtraAvatars(player))
+                        {
+                            extra->AttackStop();
+                            extra->GetMotionMaster()->MoveFollow(player, GetFloatParam("FOLLOW_DISTANCE", 2.5f), GetFollowAngleFor(extra));
+                        }
                     }
                 }
                 else
@@ -2381,11 +2532,16 @@ public:
     std::vector<WuhunSkillRuntime> GetEquippedSkills(uint32 playerGuid) const
     {
         std::vector<WuhunSkillRuntime> skills;
-        auto dataItr = _players.find(playerGuid);
-        if (dataItr == _players.end())
-            return skills;
+        PlayerWuhunData const* dataPtr = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(_playersMutex);
+            auto dataItr = _players.find(playerGuid);
+            if (dataItr == _players.end())
+                return skills;
+            dataPtr = &dataItr->second;
+        }
 
-        PlayerWuhunData const& data = dataItr->second;
+        PlayerWuhunData const& data = *dataPtr;
         for (uint8 slot = 0; slot < data.skillSlots.size(); ++slot)
         {
             uint32 skillId = data.skillSlots[slot];
@@ -2438,7 +2594,7 @@ public:
             return;
 
         PlayerWuhunData* data = GetPlayerData(ownerGuid.GetCounter());
-        if (!data || data->avatarGuid != avatar->GetGUID())
+        if (!data || !IsOwnedAvatarGuid(*data, avatar->GetGUID()))
             return;
 
         if (Player* owner = ObjectAccessor::FindPlayer(ownerGuid))
@@ -2502,11 +2658,16 @@ public:
 
     std::string BuildSkillDebugSummary(uint32 playerGuid) const
     {
-        auto dataItr = _players.find(playerGuid);
-        if (dataItr == _players.end())
-            return "playerData=missing";
+        PlayerWuhunData const* dataPtr = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(_playersMutex);
+            auto dataItr = _players.find(playerGuid);
+            if (dataItr == _players.end())
+                return "playerData=missing";
+            dataPtr = &dataItr->second;
+        }
 
-        PlayerWuhunData const& data = dataItr->second;
+        PlayerWuhunData const& data = *dataPtr;
         std::ostringstream out;
         uint32 equippedCount = 0;
         uint32 validCount = 0;
@@ -3119,6 +3280,7 @@ private:
 
     PlayerWuhunData* GetPlayerData(uint32 playerGuid)
     {
+        std::lock_guard<std::mutex> lock(_playersMutex);
         auto itr = _players.find(playerGuid);
         return itr != _players.end() ? &itr->second : nullptr;
     }
@@ -3655,6 +3817,10 @@ private:
     std::unordered_map<std::string, int64> _intParams;
     std::unordered_map<std::string, uint256> _UInt256Params;
     std::unordered_map<std::string, float> _floatParams;
+    // _players 可能在地图线程（OnPlayerUpdate/击杀钩子经 EnsurePlayerData→LoadPlayerData 插入）
+    // 与其他地图线程的伤害钩子（GetPlayerData 查找）间并发访问，结构性操作必须持锁；
+    // unordered_map 节点地址稳定，持锁查找后返回的元素指针可安全使用
+    mutable std::mutex _playersMutex;
     std::unordered_map<uint32, PlayerWuhunData> _players;
 };
 
@@ -3665,12 +3831,18 @@ class WuhunAvatarAI : public CreatureAI
 public:
     explicit WuhunAvatarAI(Creature* creature) : CreatureAI(creature) { }
 
+    // 多武魂时每只按自己的序号取环绕角度，避免叠在同一位置
+    float FollowAngle() const
+    {
+        return sWuhunMgr->GetFollowAngleFor(me);
+    }
+
     void JustDied(Unit* /*killer*/) override
     {
         sWuhunMgr->ForgetAvatar(me->GetOwnerGUID(), me->GetGUID());
     }
 
-    void DamageDealt(Unit* victim, uint32& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
+    void DamageDealt(Unit* victim, uint256& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
     {
         if (!victim || !victim->IsCreature() || !damage)
             return;
@@ -3742,7 +3914,7 @@ public:
         float recallDistance = sWuhunMgr->GetRecallDistance();
         if (!me->IsWithinDistInMap(owner, recallDistance))
         {
-            float angle = owner->GetOrientation() + WUHUN_FOLLOW_ANGLE;
+            float angle = owner->GetOrientation() + FollowAngle();
             float x = owner->GetPositionX() + std::cos(angle) * 2.0f;
             float y = owner->GetPositionY() + std::sin(angle) * 2.0f;
             me->NearTeleportTo(x, y, owner->GetPositionZ(), owner->GetOrientation());
@@ -3753,7 +3925,7 @@ public:
                 UpdateOwnerFlightFollow(owner, 0);
             }
             else
-                me->GetMotionMaster()->MoveFollow(owner, sWuhunMgr->GetFollowDistance(), WUHUN_FOLLOW_ANGLE);
+                me->GetMotionMaster()->MoveFollow(owner, sWuhunMgr->GetFollowDistance(), FollowAngle());
         }
 
         Unit* target = sWuhunMgr->ResolveAvatarTarget(owner, me);
@@ -3780,7 +3952,7 @@ public:
             }
 
             if (!me->IsWithinDistInMap(owner, sWuhunMgr->GetFollowDistance() + 1.5f))
-                me->GetMotionMaster()->MoveFollow(owner, sWuhunMgr->GetFollowDistance(), WUHUN_FOLLOW_ANGLE);
+                me->GetMotionMaster()->MoveFollow(owner, sWuhunMgr->GetFollowDistance(), FollowAngle());
             return;
         }
 
@@ -3808,7 +3980,7 @@ public:
             }
 
             if (!me->IsWithinDistInMap(owner, sWuhunMgr->GetFollowDistance() + 1.5f))
-                me->GetMotionMaster()->MoveFollow(owner, sWuhunMgr->GetFollowDistance(), WUHUN_FOLLOW_ANGLE);
+                me->GetMotionMaster()->MoveFollow(owner, sWuhunMgr->GetFollowDistance(), FollowAngle());
 
             if (CanLogAiDebug())
             {
@@ -3866,12 +4038,12 @@ private:
             _hasFlightFollowDest = false;
             _flightFollowTimer = 0;
 
-            float angle = owner->GetOrientation() + WUHUN_FOLLOW_ANGLE;
+            float angle = owner->GetOrientation() + FollowAngle();
             float x = owner->GetPositionX() + std::cos(angle) * sWuhunMgr->GetFollowDistance();
             float y = owner->GetPositionY() + std::sin(angle) * sWuhunMgr->GetFollowDistance();
             me->StopMoving();
             me->NearTeleportTo(x, y, owner->GetPositionZ(), owner->GetOrientation());
-            me->GetMotionMaster()->MoveFollow(owner, sWuhunMgr->GetFollowDistance(), WUHUN_FOLLOW_ANGLE);
+            me->GetMotionMaster()->MoveFollow(owner, sWuhunMgr->GetFollowDistance(), FollowAngle());
             return;
         }
 
@@ -3886,7 +4058,7 @@ private:
                 UpdateOwnerFlightFollow(owner, 0);
             }
             else
-                me->GetMotionMaster()->MoveFollow(owner, sWuhunMgr->GetFollowDistance(), WUHUN_FOLLOW_ANGLE);
+                me->GetMotionMaster()->MoveFollow(owner, sWuhunMgr->GetFollowDistance(), FollowAngle());
         }
     }
 
@@ -3895,7 +4067,7 @@ private:
         if (!owner)
             return;
 
-        float angle = owner->GetOrientation() + WUHUN_FOLLOW_ANGLE;
+        float angle = owner->GetOrientation() + FollowAngle();
         float x = owner->GetPositionX() + std::cos(angle) * sWuhunMgr->GetFollowDistance();
         float y = owner->GetPositionY() + std::sin(angle) * sWuhunMgr->GetFollowDistance();
         me->StopMoving();
@@ -3919,7 +4091,7 @@ private:
         _flightFollowTimer = 250;
 
         float followDistance = sWuhunMgr->GetFollowDistance();
-        float angle = owner->GetOrientation() + WUHUN_FOLLOW_ANGLE;
+        float angle = owner->GetOrientation() + FollowAngle();
         float x = owner->GetPositionX() + std::cos(angle) * followDistance;
         float y = owner->GetPositionY() + std::sin(angle) * followDistance;
         float z = owner->GetPositionZ();

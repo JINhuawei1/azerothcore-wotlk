@@ -385,7 +385,7 @@ public:
             events.ScheduleEvent(EVENT_BETRAYAL_COMBAT_TALK, 20s);
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (damage >= me->GetHealth() && !me->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE))
             {

@@ -62,7 +62,7 @@ struct boss_isalien : public BossAI
             });
     }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& /*damage*/, DamageEffectType /*type*/, SpellSchoolMask /*school*/) override
+    void DamageTaken(Unit* /*attacker*/, uint256& /*damage*/, DamageEffectType /*type*/, SpellSchoolMask /*school*/) override
     {
         if (_phase != PHASE_REGROWTH && me->HealthBelowPct(80.f))
         {

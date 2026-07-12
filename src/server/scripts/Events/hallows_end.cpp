@@ -1106,7 +1106,7 @@ struct boss_headless_horseman : public ScriptedAI
     void JustEngagedWith(Unit*) override { me->SetInCombatWithZone(); }
     void MoveInLineOfSight(Unit*  /*who*/) override {}
 
-    void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+    void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
     {
         // We die... :(
         if (damage >= me->GetHealth())
@@ -1338,7 +1338,7 @@ struct boss_headless_horseman_head : public ScriptedAI
         return nullptr;
     }
 
-    void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+    void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
     {
         // We die... :(
         if (damage >= me->GetHealth())

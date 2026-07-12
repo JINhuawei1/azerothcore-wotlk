@@ -132,7 +132,7 @@ public:
             return (Creature*)nullptr;
         }
 
-        void DamageTaken(Unit* /*doneBy*/, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit* /*doneBy*/, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (damage >= me->GetHealth())
                 if (Creature* krick = GetKrick())

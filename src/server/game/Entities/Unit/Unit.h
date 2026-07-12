@@ -352,6 +352,7 @@ public:
     DamageInfo(SpellNonMeleeDamage const& spellNonMeleeDamage, DamageEffectType damageType);
 
     void ModifyDamage(int64 amount);
+    void SetDamage(uint256 const& amount);
     void AbsorbDamage(uint256 const& amount);
     void ResistDamage(uint256 const& amount);
     void BlockDamage(uint256 const& amount);
@@ -1034,7 +1035,26 @@ public:
     }
 
     bool HandleStatModifier(UnitMods unitMod, UnitModifierType modifierType, double amount, bool apply);
-    void SetModifierValue(UnitMods unitMod, UnitModifierType modifierType, double value) { m_auraModifiersGroup[unitMod][modifierType] = value; }
+    // 【精度修复】平值修正的 int256 定点(×2^20)精确累加，见 Unit.cpp HandleStatModifier 注释
+    static int256 FlatModToExact(double value)
+    {
+        double scaled = value * 1048576.0; // 2^20 定点，保留约 1e-6 小数精度
+        return int256(scaled >= 0.0 ? scaled + 0.5 : scaled - 0.5);
+    }
+    static double ExactToFlatMod(int256 const& exact)
+    {
+        return exact.convert_to<double>() / 1048576.0;
+    }
+    void SetModifierValue(UnitMods unitMod, UnitModifierType modifierType, double value)
+    {
+        if (modifierType == BASE_VALUE || modifierType == TOTAL_VALUE)
+        {
+            m_flatModExact[unitMod][modifierType] = FlatModToExact(value);
+            m_auraModifiersGroup[unitMod][modifierType] = ExactToFlatMod(m_flatModExact[unitMod][modifierType]);
+        }
+        else
+            m_auraModifiersGroup[unitMod][modifierType] = value;
+    }
     [[nodiscard]] double GetModifierValue(UnitMods unitMod, UnitModifierType modifierType) const;
     [[nodiscard]] float GetTotalStatValue(Stats stat, float additionalValue = 0.0f) const;
 
@@ -1227,6 +1247,7 @@ public:
     void CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, uint256 const& damage, SpellInfo const* spellInfo, WeaponAttackType attackType = BASE_ATTACK, bool crit = false);
     int32 CalculateSpellDamage(Unit const* target, SpellInfo const* spellProto, uint8 effect_index, int32 const* basePoints = nullptr) const;
     float CalculateDefaultCoefficient(SpellInfo const* spellInfo, DamageEffectType damagetype) const;
+    uint256 DealTriggeredSpellDamage256(Unit* target, uint32 spellId, uint256 const& rawDamage, AuraEffect const* triggeredByAura = nullptr, DamageEffectType damageType = SPELL_DIRECT_DAMAGE, uint8 effIndex = EFFECT_0, bool durabilityLoss = true);
 
     // Melee damage bonus
     uint256 MeleeDamageBonusDone(Unit* pVictim, uint256 const& damage, WeaponAttackType attType, SpellInfo const* spellProto = nullptr, SpellSchoolMask damageSchoolMask = SPELL_SCHOOL_MASK_NORMAL);
@@ -1598,6 +1619,7 @@ public:
     static uint256 DealHeal(Unit* healer, Unit* victim, uint256 const& addhealth);
     void SendHealSpellLog(HealInfo const& healInfo, bool critical = false);
     uint256 HealBySpell(HealInfo& healInfo, bool critical = false);
+    uint256 DealTriggeredSpellHeal256(Unit* target, uint32 spellId, uint256 const& rawHeal, AuraEffect const* triggeredByAura = nullptr, DamageEffectType healType = HEAL, uint8 effIndex = EFFECT_0, bool critical = false);
 
     int32 SpellBaseHealingBonusDone(SpellSchoolMask schoolMask);
     int32 SpellBaseHealingBonusTaken(SpellSchoolMask schoolMask);
@@ -2145,6 +2167,8 @@ protected:
     // double 存储：float 精度不足以表达 1e12 级别的属性值
     // (float32 在 1e12 附近 ULP≈65536，add/remove 小值会被吞掉导致卸装后属性残留)
     double m_auraModifiersGroup[UNIT_MOD_END][MODIFIER_TYPE_END];
+    // 【精度修复】BASE_VALUE/TOTAL_VALUE 的精确累加器（2^20 定点），m_auraModifiersGroup 对应行是其镜像
+    int256 m_flatModExact[UNIT_MOD_END][MODIFIER_TYPE_END];
     float m_weaponDamage[MAX_ATTACK][MAX_WEAPON_DAMAGE_RANGE][MAX_ITEM_PROTO_DAMAGES];
     int256 m_extendedWeaponDamage[MAX_ATTACK][MAX_WEAPON_DAMAGE_RANGE];
     bool m_canModifyStats;

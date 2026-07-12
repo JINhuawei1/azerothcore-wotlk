@@ -139,7 +139,7 @@ public:
                 me->CastSpell(me, 68197, true);
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (damage >= me->GetHealth())
             {
@@ -279,7 +279,7 @@ public:
             }
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             //if (me->HasAura(SPELL_SHIELD))
             //  return;
@@ -611,7 +611,7 @@ public:
             uiWaypoint = uiType;
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (bCheck && damage >= me->GetHealth())
             {

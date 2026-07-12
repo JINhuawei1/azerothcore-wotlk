@@ -106,7 +106,7 @@ public:
                 pInstance->SetData(DATA_BRONJAHM, IN_PROGRESS);
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (!me->HasUnitFlag(UNIT_FLAG_DISABLE_MOVE) && me->HealthBelowPctDamaged(35, damage))
             {

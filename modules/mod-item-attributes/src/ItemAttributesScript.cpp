@@ -236,7 +236,8 @@ static std::string FormatAttributesForClient(const std::string& attrIds, const s
             result += ",";
         
         // 【重要】ids中存的是属性类型，不是模板ID
-        ItemAttributeTemplate const* tpl = sItemAttributesLoader->GetItemAttributeTemplateByType(ids[i]);
+        // 【审计修复】SafeInstance 在模板表缺失时返回 nullptr，判空后走"未知属性"分支
+        ItemAttributeTemplate const* tpl = sItemAttributesLoader ? sItemAttributesLoader->GetItemAttributeTemplateByType(ids[i]) : nullptr;
         if (tpl)
             result += tpl->clientDisplay + "+" + Acore::ToString(vals[i]);
         else
@@ -497,7 +498,8 @@ public:
         }
         
         // 验证属性是否存在
-        ItemAttributeTemplate const* attrTemplate = sItemAttributesLoader->GetItemAttributeTemplate(attributeId);
+        // 【审计修复】SafeInstance 可为空，判空后走下方"属性ID无效"分支
+        ItemAttributeTemplate const* attrTemplate = sItemAttributesLoader ? sItemAttributesLoader->GetItemAttributeTemplate(attributeId) : nullptr;
         if (!attrTemplate)
         {
             handler->PSendSysMessage("属性ID {} 无效", attributeId);
@@ -695,7 +697,8 @@ public:
         }
         
         // 验证属性是否存在
-        ItemAttributeTemplate const* attrTemplate = sItemAttributesLoader->GetItemAttributeTemplate(attributeId);
+        // 【审计修复】SafeInstance 可为空，判空后走下方"属性ID无效"分支
+        ItemAttributeTemplate const* attrTemplate = sItemAttributesLoader ? sItemAttributesLoader->GetItemAttributeTemplate(attributeId) : nullptr;
         if (!attrTemplate)
         {
             handler->PSendSysMessage("属性ID {} 无效", attributeId);
@@ -987,7 +990,7 @@ public:
             for (size_t i = 0; i < data->baseAttributeIds.size(); ++i)
             {
                 // 【重要】baseAttributeIds中存的是属性类型，不是模板ID
-                ItemAttributeTemplate const* attrTemplate = sItemAttributesLoader->GetItemAttributeTemplateByType(data->baseAttributeIds[i]);
+                ItemAttributeTemplate const* attrTemplate = sItemAttributesLoader ? sItemAttributesLoader->GetItemAttributeTemplateByType(data->baseAttributeIds[i]) : nullptr; // 【审计修复】判空
                 if (attrTemplate)
                 {
                     handler->PSendSysMessage("  {}: {} +{} (ID: {})", 
@@ -1008,7 +1011,7 @@ public:
             for (size_t i = 0; i < data->additionalAttributeIds.size(); ++i)
             {
                 // 【重要】additionalAttributeIds中存的是属性类型，不是模板ID
-                ItemAttributeTemplate const* attrTemplate = sItemAttributesLoader->GetItemAttributeTemplateByType(data->additionalAttributeIds[i]);
+                ItemAttributeTemplate const* attrTemplate = sItemAttributesLoader ? sItemAttributesLoader->GetItemAttributeTemplateByType(data->additionalAttributeIds[i]) : nullptr; // 【审计修复】判空
                 if (attrTemplate)
                 {
                     handler->PSendSysMessage("  {}: {} +{} (ID: {})", 
@@ -1109,13 +1112,17 @@ public:
 
         // 获取属性模板列表
         std::vector<ItemAttributeTemplate const*> templates;
-        if (groupId > 0)
+        // 【审计修复】SafeInstance 可为空，判空后走下方空列表提示分支（后面的 CalculateAttributeValue 仅在列表非空时可达）
+        if (sItemAttributesLoader)
         {
-            templates = sItemAttributesLoader->GetItemAttributeTemplatesByGroup(groupId);
-        }
-        else
-        {
-            templates = sItemAttributesLoader->GetAllItemAttributeTemplates();
+            if (groupId > 0)
+            {
+                templates = sItemAttributesLoader->GetItemAttributeTemplatesByGroup(groupId);
+            }
+            else
+            {
+                templates = sItemAttributesLoader->GetAllItemAttributeTemplates();
+            }
         }
 
         if (templates.empty())

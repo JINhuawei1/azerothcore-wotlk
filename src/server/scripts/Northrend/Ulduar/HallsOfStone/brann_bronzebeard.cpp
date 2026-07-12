@@ -348,7 +348,7 @@ public:
 
         bool leftEye = true;
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (damage && pInstance)
                 pInstance->SetData(DATA_BRANN_ACHIEVEMENT, false);

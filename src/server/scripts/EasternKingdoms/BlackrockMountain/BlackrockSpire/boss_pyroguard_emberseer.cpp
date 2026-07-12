@@ -342,7 +342,7 @@ public:
             _fleedForAssistance = false;
         }
 
-        void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*type*/, SpellSchoolMask /*school*/) override
+        void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*type*/, SpellSchoolMask /*school*/) override
         {
             if (!_fleedForAssistance && me->HealthBelowPctDamaged(30, damage))
             {

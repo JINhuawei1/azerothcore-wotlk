@@ -276,7 +276,7 @@ public:
             UnkorUnfriendly_Timer = 60000;
         }
 
-        void DamageTaken(Unit* done_by, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit* done_by, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (!done_by)
                 return;

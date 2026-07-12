@@ -69,7 +69,7 @@ public:
             events.ScheduleEvent(EVENT_LIVING_BOMB, 11s, 16s);
         }
 
-        void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*dmgType*/, SpellSchoolMask /*school*/) override
+        void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*dmgType*/, SpellSchoolMask /*school*/) override
         {
             // If boss is below 2% hp - cast Armageddon
             if (!armageddonCasted && damage < me->GetHealth() && me->HealthBelowPctDamaged(2, damage))

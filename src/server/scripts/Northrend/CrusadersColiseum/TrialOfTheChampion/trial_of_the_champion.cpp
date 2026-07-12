@@ -124,7 +124,7 @@ public:
             me->SetUnitFlag(UNIT_FLAG_NON_ATTACKABLE); // removed during black knight scene
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (damage >= me->GetHealth()) // for bk scene so strangulate doesn't kill him
                 damage = me->GetHealth() - 1;

@@ -1858,6 +1858,22 @@ private:
                 player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, BASE_VALUE, statModValue, apply);
                 player->ApplyStatBuffMod(STAT_STAMINA, statModValue, apply);
                 break;
+            case ITEM_MOD_TRUE_DAMAGE:
+                // 自定义属性：真实伤害
+                player->ApplyTrueDamageBonus(Acore::Number::ToInt64Saturated(value), apply);
+                break;
+            case ITEM_MOD_CUTTING_DAMAGE:
+                // 自定义属性：切割伤害
+                player->ApplyCuttingDamageBonus(Acore::Number::ToInt64Saturated(value), apply);
+                break;
+            case ITEM_MOD_COOLDOWN_REDUCTION:
+                // 自定义属性：冷却缩减
+                player->ApplyCooldownReductionBonus(Acore::Number::ToInt64Saturated(value), apply);
+                break;
+            case ITEM_MOD_SKILL_DAMAGE:
+                // 自定义属性：技能伤害
+                player->ApplySkillDamageBonus(Acore::Number::ToInt64Saturated(value), apply);
+                break;
             case ITEM_MOD_DEFENSE_SKILL_RATING:
                 player->ApplyRatingMod(CR_DEFENSE_SKILL, legacyVal, apply);
                 break;

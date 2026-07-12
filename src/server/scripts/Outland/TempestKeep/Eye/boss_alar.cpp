@@ -190,7 +190,7 @@ struct boss_alar : public BossAI
 
     void MoveInLineOfSight(Unit* /*who*/) override { }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*damagetype*/, SpellSchoolMask /*damageSchoolMask*/) override
+    void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*damagetype*/, SpellSchoolMask /*damageSchoolMask*/) override
     {
         if (damage >= me->GetHealth() && _platform < POINT_MIDDLE)
         {

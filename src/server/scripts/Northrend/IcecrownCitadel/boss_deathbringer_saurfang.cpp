@@ -346,7 +346,7 @@ public:
                 Talk(SAY_KILL);
         }
 
-        void DamageTaken(Unit*, uint32& /*damage*/, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& /*damage*/, DamageEffectType, SpellSchoolMask) override
         {
             if (!_frenzied && HealthBelowPct(31)) // AT 30%, not below
             {

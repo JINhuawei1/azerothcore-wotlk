@@ -332,7 +332,7 @@ public:
                     Unit::Kill(controller, controller);
         }
 
-        void DamageTaken(Unit* attacker, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit* attacker, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (events.GetNextEventTime(EVENT_CHECK_HEALTH) != 0)
                 return;
@@ -341,7 +341,7 @@ public:
                 return;
 
             if (Creature* controller = ObjectAccessor::GetCreature(*me, instance->GetGuidData(NPC_HALION_CONTROLLER)))
-                controller->AI()->SetData(DATA_MATERIAL_DAMAGE_TAKEN, damage);
+                controller->AI()->SetData(DATA_MATERIAL_DAMAGE_TAKEN, Acore::Number::ToUInt32Saturated(damage));
         }
 
         void UpdateAI(uint32 diff) override
@@ -503,13 +503,13 @@ public:
             me->CastSpell(me, SPELL_CLEAR_DEBUFFS, false);
         }
 
-        void DamageTaken(Unit* attacker, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit* attacker, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (!attacker || !me->InSamePhase(attacker))
                 return;
 
             if (Creature* controller = ObjectAccessor::GetCreature(*me, _instance->GetGuidData(NPC_HALION_CONTROLLER)))
-                controller->AI()->SetData(DATA_TWILIGHT_DAMAGE_TAKEN, damage);
+                controller->AI()->SetData(DATA_TWILIGHT_DAMAGE_TAKEN, Acore::Number::ToUInt32Saturated(damage));
         }
 
         void UpdateAI(uint32 diff) override

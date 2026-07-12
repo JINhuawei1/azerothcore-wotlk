@@ -281,13 +281,13 @@ struct boss_taldaram : public BossAI
         }
     }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*school*/) override
+    void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*school*/) override
     {
         if (vanishTarget_GUID)
         {
             if (me->FindCurrentSpellBySpellId(SPELL_EMBRACE_OF_THE_VAMPYR))
             {
-                vanishDamage += damage;
+                vanishDamage += Acore::Number::ToUInt32Saturated(damage);
                 if (vanishDamage >= DUNGEON_MODE<uint32>(MAX_EMBRACE_DMG, MAX_EMBRACE_DMG_H))
                 {
                     ScheduleCombatEvents();

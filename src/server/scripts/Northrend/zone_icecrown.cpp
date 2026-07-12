@@ -1265,7 +1265,7 @@ public:
             me->SetFaction(player->GetFaction());
         }
 
-        void DamageTaken(Unit* who, uint32&, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit* who, uint256&, DamageEffectType, SpellSchoolMask) override
         {
             if (who != me)
                 if (me->HealthBelowPct(80) && urand(0, 1))
@@ -1583,7 +1583,7 @@ public:
             Reset();
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             damage = 0;
             events.RescheduleEvent(EVENT_DUMMY_RESET, 10s);

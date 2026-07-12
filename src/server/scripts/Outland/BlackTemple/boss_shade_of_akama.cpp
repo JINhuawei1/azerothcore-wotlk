@@ -270,7 +270,7 @@ struct npc_akama_shade : public ScriptedAI
         }
     }
 
-    void DamageTaken(Unit* /*unit*/, uint32& damage, DamageEffectType, SpellSchoolMask) override
+    void DamageTaken(Unit* /*unit*/, uint256& damage, DamageEffectType, SpellSchoolMask) override
     {
         if (me->HealthBelowPctDamaged(20, damage) && !_sayLowHealth)
         {

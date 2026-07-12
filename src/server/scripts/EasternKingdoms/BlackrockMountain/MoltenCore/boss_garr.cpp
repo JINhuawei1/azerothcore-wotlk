@@ -150,7 +150,7 @@ public:
     {
         npc_garr_fireswornAI(Creature* creature) : ScriptedAI(creature) {}
 
-        void DamageTaken(Unit* attacker, uint32& damage, DamageEffectType /*damagetype*/, SpellSchoolMask /*damageSchoolMask*/ ) override
+        void DamageTaken(Unit* attacker, uint256& damage, DamageEffectType /*damagetype*/, SpellSchoolMask /*damageSchoolMask*/ ) override
         {
             if (damage >= me->GetHealth())
             {

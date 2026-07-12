@@ -424,7 +424,7 @@ struct npc_anubisath_guardian : public ScriptedAI
         });
     }
 
-    void DamageTaken(Unit* /*doneBy*/, uint32& damage, DamageEffectType /* damagetype */, SpellSchoolMask /*damageSchoolMask*/) override
+    void DamageTaken(Unit* /*doneBy*/, uint256& damage, DamageEffectType /* damagetype */, SpellSchoolMask /*damageSchoolMask*/) override
     {
         if (!_enraged && me->HealthBelowPctDamaged(10, damage))
         {

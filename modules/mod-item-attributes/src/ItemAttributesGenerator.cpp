@@ -131,11 +131,15 @@ bool ItemAttributesGenerator::GenerateRandomAttributes(Item* item, ItemAttribute
     std::shuffle(suitableAttributes.begin(), suitableAttributes.end(), gen);
 
     // 应用选中的属性
-    for (uint32 i = 0; i < attributeCount; ++i)
+    // 【审计修复】SafeInstance 在模板表缺失时返回 nullptr，先判空
+    if (ItemAttributesLoader* loader = sItemAttributesLoader)
     {
-        ItemAttributeTemplate const* attributeTemplate = suitableAttributes[i];
-        // 传递自定义值范围（如果有）
-        sItemAttributesLoader->ApplyAttributeToItem(item, attributeTemplate->id, nullptr, options.category, options.minItemLevel, options.maxItemLevel);
+        for (uint32 i = 0; i < attributeCount; ++i)
+        {
+            ItemAttributeTemplate const* attributeTemplate = suitableAttributes[i];
+            // 传递自定义值范围（如果有）
+            loader->ApplyAttributeToItem(item, attributeTemplate->id, nullptr, options.category, options.minItemLevel, options.maxItemLevel);
+        }
     }
 
     return true;
@@ -231,13 +235,17 @@ std::vector<ItemAttributeTemplate const*> ItemAttributesGenerator::GetSuitableAt
 
     // 修复：attributeGroup为0时也应该按组筛选，而不是获取所有组
     // 只有当attributeGroup为特殊值（如-1或999）时才获取所有组
-    if (attributeGroup == 999 || attributeGroup == static_cast<uint32>(-1))
+    // 【审计修复】SafeInstance 可为空（模板表缺失/为空），判空后返回空列表
+    if (ItemAttributesLoader* loader = sItemAttributesLoader)
     {
-        allAttributes = sItemAttributesLoader->GetAllItemAttributeTemplates();
-    }
-    else
-    {
-        allAttributes = sItemAttributesLoader->GetItemAttributeTemplatesByGroup(attributeGroup);
+        if (attributeGroup == 999 || attributeGroup == static_cast<uint32>(-1))
+        {
+            allAttributes = loader->GetAllItemAttributeTemplates();
+        }
+        else
+        {
+            allAttributes = loader->GetItemAttributeTemplatesByGroup(attributeGroup);
+        }
     }
 
     for (ItemAttributeTemplate const* attributeTemplate : allAttributes)

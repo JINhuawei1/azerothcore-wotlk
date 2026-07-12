@@ -131,7 +131,7 @@ struct boss_viscidus : public BossAI
         me->RemoveAurasDueToSpell(SPELL_INVIS_SELF);
     }
 
-    void DamageTaken(Unit* attacker, uint32& damage, DamageEffectType effType, SpellSchoolMask spellSchoolMask) override
+    void DamageTaken(Unit* attacker, uint256& damage, DamageEffectType effType, SpellSchoolMask spellSchoolMask) override
     {
         if (me->HealthBelowPct(5))
             damage = 0;

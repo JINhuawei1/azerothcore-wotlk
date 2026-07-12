@@ -915,7 +915,7 @@ public:
                 AttackStart(target);
         }
 
-        void DamageTaken(Unit* who, uint32&, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit* who, uint256&, DamageEffectType, SpellSchoolMask) override
         {
             if (who && who->IsPlayer())
             {

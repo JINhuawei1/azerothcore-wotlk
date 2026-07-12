@@ -9,6 +9,7 @@
 
 #include "Define.h"
 #include "ObjectGuid.h"
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -97,6 +98,11 @@ private:
     std::unordered_map<uint32, ChallengeMirageLevelTemplate> _levelTemplates;
     std::vector<ChallengeMirageCreatureTemplate> _creatureTemplates;
     std::unordered_map<uint32, uint32> _creatureEntryLayers;
+
+    // 以下运行期容器会被多个地图更新线程并发读写（OnPlayerUpdate/OnPlayerCanSeeCreature/
+    // OnCreatureRemoveWorld 均在地图线程执行），必须持 _stateMutex 访问；
+    // 锁只包住容器操作本身，不得跨越 SummonCreature/UpdateObjectVisibility 等可能重入本模块钩子的核心调用
+    mutable std::shared_mutex _stateMutex;
     std::unordered_map<uint32, uint32> _playerLevels;
     std::unordered_map<uint32, uint32> _playerSpawnTimers;
     std::unordered_map<std::string, uint32> _creatureLayers;

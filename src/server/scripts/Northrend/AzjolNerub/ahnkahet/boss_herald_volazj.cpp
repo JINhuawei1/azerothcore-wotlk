@@ -184,7 +184,7 @@ struct boss_volazj : public BossAI
         }
     }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*damagetype*/, SpellSchoolMask /*damageSchoolMask*/) override
+    void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*damagetype*/, SpellSchoolMask /*damageSchoolMask*/) override
     {
         // Do not perform insanity recast if boss is casting Insanity already
         if (me->FindCurrentSpellBySpellId(SPELL_INSANITY))

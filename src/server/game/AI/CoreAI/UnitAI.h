@@ -359,14 +359,14 @@ public:
     virtual void JustExitedCombat() { }
 
     /// @brief Called at any Damage to any victim (before damage apply)
-    virtual void DamageDealt(Unit* /*victim*/, uint32& /*damage*/, DamageEffectType /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) {}
+    virtual void DamageDealt(Unit* /*victim*/, uint256& /*damage*/, DamageEffectType /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) {}
 
     /** @brief Called at any Damage from any attacker (before damage apply)
      *
      *  @note It use for recalculation damage or special reaction at damage
      *  for attack reaction use AttackedBy called for non DOT damage in Unit::DealDamage also
      */
-    virtual void DamageTaken(Unit* /*attacker*/, uint32& /*damage*/, DamageEffectType /*damagetype*/, SpellSchoolMask /*damageSchoolMask*/) {}
+    virtual void DamageTaken(Unit* /*attacker*/, uint256& /*damage*/, DamageEffectType /*damagetype*/, SpellSchoolMask /*damageSchoolMask*/) {}
 
     /// @brief Called when the creature receives heal
     virtual void HealReceived(Unit* /*done_by*/, uint256& /*addhealth*/) {}
@@ -378,11 +378,11 @@ public:
     virtual void HealDone(Unit* /*done_to*/, uint256& /*addhealth*/) {}
 
     /// @brief Called during damage calculations
-    virtual void OnCalculateMeleeDamageReceived(uint32& /*damage*/, Unit* /*attacker*/) {}
-    virtual void OnCalculateSpellDamageReceived(int64& /*damage*/, Unit* /*attacker*/) {}
+    virtual void OnCalculateMeleeDamageReceived(uint256& /*damage*/, Unit* /*attacker*/) {}
+    virtual void OnCalculateSpellDamageReceived(uint256& /*damage*/, Unit* /*attacker*/) {}
 
     /// @brief Called during calculation when receiving periodic healing or damage (DoT or HoT)
-    virtual void OnCalculatePeriodicTickReceived(uint32& /*damage*/, Unit* /*attacker*/) {}
+    virtual void OnCalculatePeriodicTickReceived(uint256& /*damage*/, Unit* /*attacker*/) {}
 
     void AttackStartCaster(Unit* victim, float dist);
 

@@ -368,7 +368,7 @@ public:
             return false;
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (!secondPhase)
             {
@@ -646,7 +646,7 @@ public:
         void EnterEvadeMode(EvadeReason /*why*/) override {}
         void UpdateAI(uint32 /*diff*/) override {}
         void JustEngagedWith(Unit* /*who*/) override {}
-        void DamageTaken(Unit* /*who*/, uint32& damage, DamageEffectType /*damagetype*/, SpellSchoolMask /*damageSchoolMask*/) override { damage = 0; }
+        void DamageTaken(Unit* /*who*/, uint256& damage, DamageEffectType /*damagetype*/, SpellSchoolMask /*damageSchoolMask*/) override { damage = 0; }
 
         Creature* SelectRandomSkullPile()
         {

@@ -57,7 +57,7 @@ public:
     {
         _itemUseConditions.clear();
 
-        QueryResult result = WorldDatabase.Query("SELECT * FROM `_物品_使用条件`");
+        QueryResult result = WorldDatabase.Query("SELECT `注释`, `entry`, `物品使用需求` FROM `_物品_使用条件`");
         if (!result)
         {
             LOG_INFO("server.loading", ">> _物品_使用条件表不存在或为空，请确保已手动导入SQL文件");

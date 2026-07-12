@@ -400,7 +400,7 @@ public:
             }
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (me->HealthBelowPctDamaged(25, damage))
             {
@@ -1090,7 +1090,7 @@ public:
         uint16 timer;
         bool casted;
 
-        void DamageTaken(Unit*, uint32& dmg, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& dmg, DamageEffectType, SpellSchoolMask) override
         {
             if (dmg >= me->GetHealth())
             {

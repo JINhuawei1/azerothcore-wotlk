@@ -1972,7 +1972,7 @@ public:
             }
         }
 
-        void DamageTaken(Unit*, uint32& dmg, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& dmg, DamageEffectType, SpellSchoolMask) override
         {
             if (dmg >= me->GetHealth())
                 dmg = me->GetHealth() - 1;

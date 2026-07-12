@@ -624,7 +624,7 @@ struct npc_dark_iron_guzzler : public ScriptedAI
     void MoveInLineOfSight(Unit*) override {}
     void AttackStart(Unit*) override {}
 
-    void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+    void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
     {
         damage = 0;
     }
@@ -1616,7 +1616,7 @@ struct npc_coren_direbrew : public ScriptedAI
         }
     }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
+    void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
     {
         if (me->HealthBelowPctDamaged(66, damage) && _events.IsInPhase(PHASE_ONE))
         {

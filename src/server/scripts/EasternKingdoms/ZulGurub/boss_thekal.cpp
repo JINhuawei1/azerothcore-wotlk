@@ -172,7 +172,7 @@ struct boss_thekal : public BossAI
         });
     }
 
-    void DamageTaken(Unit* attacker, uint32& damage, DamageEffectType damageEffectType, SpellSchoolMask spellSchoolMask) override
+    void DamageTaken(Unit* attacker, uint256& damage, DamageEffectType damageEffectType, SpellSchoolMask spellSchoolMask) override
     {
         if (!me->HasAura(SPELL_TIGER_FORM) && damage >= me->GetHealth())
         {

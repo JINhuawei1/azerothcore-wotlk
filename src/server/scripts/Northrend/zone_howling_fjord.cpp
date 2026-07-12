@@ -109,7 +109,7 @@ public:
             DoMeleeAttackIfReady();
         }
 
-        void DamageTaken(Unit*, uint32& /*damage*/, DamageEffectType  /*damagetype*/, SpellSchoolMask  /*damageSchoolMask*/) override
+        void DamageTaken(Unit*, uint256& /*damage*/, DamageEffectType  /*damagetype*/, SpellSchoolMask  /*damageSchoolMask*/) override
         {
             if (HealthBelowPct(50) && !health50)
             {

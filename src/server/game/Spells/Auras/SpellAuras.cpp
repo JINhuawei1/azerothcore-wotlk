@@ -80,54 +80,6 @@ namespace
 
         return static_cast<int32>(value);
     }
-
-    uint256 CalculatePctUInt256(uint256 const& base, float pct)
-    {
-        if (base == 0 || pct <= 0.0f)
-            return 0;
-
-        return Acore::Number::CalculatePct(base, pct);
-    }
-
-    void DealTriggeredDirectSpellDamage(Unit* caster, Unit* target, uint32 spellId, uint256 const& rawDamage, AuraEffect const* triggeredByAura)
-    {
-        if (!caster || !target || !target->IsAlive() || !rawDamage)
-            return;
-
-        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
-        if (!spellInfo)
-            return;
-
-        if (target->IsImmunedToDamageOrSchool(spellInfo))
-        {
-            caster->SendSpellDamageImmune(target, spellId);
-            return;
-        }
-
-        caster->SetLastDamagedTargetGuid(target->GetGUID());
-
-        uint256 finalDamage = caster->SpellDamageBonusDone(target, spellInfo, rawDamage, SPELL_DIRECT_DAMAGE, EFFECT_0);
-        finalDamage = target->SpellDamageBonusTaken(caster, spellInfo, finalDamage, SPELL_DIRECT_DAMAGE);
-
-        SpellNonMeleeDamage damageInfo(caster, target, spellInfo, spellInfo->GetSchoolMask());
-        caster->CalculateSpellDamageTaken(&damageInfo, finalDamage, spellInfo);
-        caster->SendSpellNonMeleeDamageLog(&damageInfo);
-        caster->DealSpellDamage(&damageInfo, true);
-
-        if (!target->CanProc())
-            return;
-
-        uint32 procAttacker = 0;
-        uint32 procVictim = 0;
-        createProcFlags(spellInfo, BASE_ATTACK, false, procAttacker, procVictim);
-        if (damageInfo.damage)
-            procVictim |= PROC_FLAG_TAKEN_DAMAGE;
-
-        uint32 procEx = createProcExtendMask(&damageInfo, SPELL_MISS_NONE) | PROC_EX_INTERNAL_TRIGGERED;
-        DamageInfo dmgInfo(damageInfo, SPELL_DIRECT_DAMAGE);
-        Unit::ProcDamageAndSpell(caster, target, procAttacker, procVictim, procEx, damageInfo.damage, BASE_ATTACK, spellInfo,
-            triggeredByAura ? triggeredByAura->GetSpellInfo() : nullptr, triggeredByAura ? triggeredByAura->GetEffIndex() : -1, nullptr, &dmgInfo);
-    }
 }
 
 /// @todo: this import is not necessary for compilation and marked as unused by the IDE
@@ -1579,18 +1531,18 @@ void Aura::HandleAuraSpecificMods(AuraApplication const* aurApp, Unit* caster, b
                     {
                         uint256 damage = GetEffect(0)->GetAmountForCombat();
                         damage = target->SpellDamageBonusTaken(caster, GetSpellInfo(), damage, DOT);
-                        uint32 totalTicks = std::max<int32>(GetEffect(0)->GetTotalTicks(), 1);
-                        uint256 totalDamage = damage > std::numeric_limits<uint256>::max() / totalTicks ? std::numeric_limits<uint256>::max() : damage * totalTicks;
-                        uint256 improvedDamage = CalculatePctUInt256(totalDamage, static_cast<float>(aurEff->GetAmount()));
+                        uint32 totalTicks = GetEffect(0)->GetUnhastedTotalTicks(caster);
+                        uint256 totalDamage = MultiplyUInt256Damage(damage, static_cast<uint256>(totalTicks));
+                        uint256 improvedDamage = CalculatePctUInt256Damage(totalDamage, aurEff->GetAmount());
                         int32 basepoints0 = CalculatePctInt32Saturated(totalDamage, static_cast<float>(aurEff->GetAmount()));
-                        int32 heal = CalculatePctInt32Saturated(improvedDamage, 15.0f);
+                        uint256 heal = CalculatePctUInt256Damage(improvedDamage, 15);
 
                         if (improvedDamage > static_cast<uint256>(std::numeric_limits<int32>::max()))
-                            DealTriggeredDirectSpellDamage(caster, target, 63675, improvedDamage, GetEffect(0));
+                            caster->DealTriggeredSpellDamage256(target, 63675, improvedDamage, GetEffect(0));
                         else
                             caster->CastCustomSpell(target, 63675, &basepoints0, nullptr, nullptr, true, nullptr, GetEffect(0));
 
-                        caster->CastCustomSpell(caster, 75999, &heal, nullptr, nullptr, true, nullptr, GetEffect(0));
+                        caster->DealTriggeredSpellHeal256(caster, 75999, heal, GetEffect(0));
                     }
                 }
                 // Power Word: Shield
@@ -1722,9 +1674,10 @@ void Aura::HandleAuraSpecificMods(AuraApplication const* aurApp, Unit* caster, b
                     case 72369:
                         if (AuraEffect* aurEff = GetEffect(0))
                         {
-                            int32 remainingDamage = aurEff->GetAmount() * (aurEff->GetTotalTicks() - aurEff->GetTickNumber());
+                            uint32 remainingTicks = aurEff->GetTotalTicks() > int32(aurEff->GetTickNumber()) ? uint32(aurEff->GetTotalTicks() - aurEff->GetTickNumber()) : 0;
+                            uint256 remainingDamage = MultiplyUInt256Damage(aurEff->GetAmountForCombat(), static_cast<uint256>(remainingTicks));
                             if (remainingDamage > 0)
-                                caster->CastCustomSpell(caster, 72373, nullptr, &remainingDamage, nullptr, true);
+                                caster->DealTriggeredSpellDamage256(caster, 72373, remainingDamage, aurEff, SPELL_DIRECT_DAMAGE, EFFECT_1);
                         }
                         break;
                 }

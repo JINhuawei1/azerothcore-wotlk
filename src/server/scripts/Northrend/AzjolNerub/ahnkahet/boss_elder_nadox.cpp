@@ -158,7 +158,7 @@ struct boss_elder_nadox : public BossAI
         Talk(SAY_DEATH);
     }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*school*/) override
+    void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*school*/) override
     {
         if (!guardianSummoned && me->HealthBelowPctDamaged(55, damage))
         {

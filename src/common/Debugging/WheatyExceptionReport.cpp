@@ -25,6 +25,9 @@
 #include "Errors.h"
 #include "GitRevision.h"
 #include <algorithm>
+#include <csignal>
+#include <cstring>
+#include <exception>
 
 #define CrashFolder _T("Crashes")
 #pragma comment(linker, "/DEFAULTLIB:dbghelp.lib")
@@ -54,6 +57,50 @@ inline LPTSTR ErrorMessage(DWORD dw)
 
 //============================== Global Variables =============================
 
+namespace
+{
+    // Uncaught C++ exceptions (std::terminate) and direct abort() calls take the
+    // CRT fast-fail path on modern MSVC, which bypasses SetUnhandledExceptionFilter:
+    // the process dies without writing anything to the Crashes folder. These hooks
+    // raise a real SEH exception first so WheatyUnhandledExceptionFilter can produce
+    // its report/dump. MSVC invokes terminate before unwinding, so the report still
+    // contains the full call stack of the original throw site.
+    constexpr DWORD WHEATY_TERMINATE_EXCEPTION_CODE = 0xE0000042;
+
+    void WheatyAbortSignalHandler(int /*sigNum*/)
+    {
+        RaiseException(WHEATY_TERMINATE_EXCEPTION_CODE, EXCEPTION_NONCONTINUABLE, 0, nullptr);
+    }
+
+    void WheatyTerminateHandler()
+    {
+        char message[1024] = "(no active exception)";
+        if (std::exception_ptr current = std::current_exception())
+        {
+            try
+            {
+                std::rethrow_exception(current);
+            }
+            catch (std::exception const& e)
+            {
+                strncpy(message, e.what(), sizeof(message) - 1);
+                message[sizeof(message) - 1] = '\0';
+            }
+            catch (...)
+            {
+                strncpy(message, "(non-standard exception)", sizeof(message) - 1);
+                message[sizeof(message) - 1] = '\0';
+            }
+        }
+
+        fprintf(stderr, "std::terminate called, uncaught exception: %s\n", message);
+        fflush(stderr);
+
+        RaiseException(WHEATY_TERMINATE_EXCEPTION_CODE, EXCEPTION_NONCONTINUABLE, 0, nullptr);
+        _exit(3);
+    }
+}
+
 //
 // Declare the static variables of the WheatyExceptionReport class
 //
@@ -81,6 +128,9 @@ WheatyExceptionReport::WheatyExceptionReport()             // Constructor
     // Install the unhandled exception filter function
     m_previousFilter = SetUnhandledExceptionFilter(WheatyUnhandledExceptionFilter);
     m_previousCrtHandler = _set_invalid_parameter_handler(WheatyCrtHandler);
+    // Route std::terminate/abort into the SEH filter above so they leave a crash report
+    std::set_terminate(WheatyTerminateHandler);
+    signal(SIGABRT, WheatyAbortSignalHandler);
     m_hProcess = GetCurrentProcess();
     stackOverflowException = false;
     alreadyCrashed = false;

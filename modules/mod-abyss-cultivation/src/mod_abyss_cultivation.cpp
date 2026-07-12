@@ -35,6 +35,7 @@
 #include <initializer_list>
 #include <list>
 #include <limits>
+#include <mutex> // 【审计修复】多地图线程并发访问容器所需
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -2065,7 +2066,11 @@ public:
                 data.hasDatabaseRow = true;
             }
 
-            _playerData[guid] = data;
+            {
+                // 【审计修复】结构性插入加锁。
+                std::lock_guard<std::mutex> lock(_playerStateMutex);
+                _playerData[guid] = data;
+            }
 
             if (IsDebugEnabled())
             {
@@ -2098,7 +2103,11 @@ public:
         data.lastUpdated = fields[18].Get<uint32>();
         data.hasDatabaseRow = true;
 
-        _playerData[guid] = data;
+        {
+            // 【审计修复】结构性插入加锁。
+            std::lock_guard<std::mutex> lock(_playerStateMutex);
+            _playerData[guid] = data;
+        }
 
         if (IsDebugEnabled())
         {
@@ -2143,7 +2152,11 @@ public:
             return left.itemId < right.itemId;
         });
 
-        _playerCollections[guid] = std::move(entries);
+        {
+            // 【审计修复】结构性插入加锁。
+            std::lock_guard<std::mutex> lock(_playerStateMutex);
+            _playerCollections[guid] = std::move(entries);
+        }
     }
 
     void LoadPlayerChapterModeUnlocks(Player* player)
@@ -2169,7 +2182,11 @@ public:
             } while (result->NextRow());
         }
 
-        _playerChapterModeUnlocks[guid] = std::move(unlocks);
+        {
+            // 【审计修复】结构性插入加锁。
+            std::lock_guard<std::mutex> lock(_playerStateMutex);
+            _playerChapterModeUnlocks[guid] = std::move(unlocks);
+        }
     }
 
     void EnsurePlayerData(Player* player)
@@ -2178,11 +2195,19 @@ public:
             return;
 
         uint32 guid = player->GetGUID().GetCounter();
-        auto itr = _playerData.find(guid);
-        if (itr == _playerData.end() || !itr->second.hasDatabaseRow)
+        // 【审计修复】与结构性写并发的查找加锁；Load*（内部自行加锁）在锁外调用。
+        bool needLoadData = false;
+        bool needLoadUnlocks = false;
+        {
+            std::lock_guard<std::mutex> lock(_playerStateMutex);
+            auto itr = _playerData.find(guid);
+            needLoadData = itr == _playerData.end() || !itr->second.hasDatabaseRow;
+            needLoadUnlocks = _playerChapterModeUnlocks.find(guid) == _playerChapterModeUnlocks.end();
+        }
+        if (needLoadData)
             LoadPlayerData(player, true);
 
-        if (_playerChapterModeUnlocks.find(guid) == _playerChapterModeUnlocks.end())
+        if (needLoadUnlocks)
             LoadPlayerChapterModeUnlocks(player);
     }
 
@@ -2289,7 +2314,14 @@ public:
             return false;
 
         uint32 guid = player->GetGUID().GetCounter();
-        auto& chapterUnlocks = _playerChapterModeUnlocks[guid];
+        // 【审计修复】operator[] 结构性插入加锁；外层 map 元素引用跨 rehash 稳定，
+        // 锁外继续操作该玩家的内层 map（仅本玩家线程访问）。
+        std::unordered_map<uint16, PlayerAbyssChapterModeUnlock>* chapterUnlocksPtr = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(_playerStateMutex);
+            chapterUnlocksPtr = &_playerChapterModeUnlocks[guid];
+        }
+        auto& chapterUnlocks = *chapterUnlocksPtr;
         PlayerAbyssChapterModeUnlock& entry = chapterUnlocks[chapterId];
         entry.chapterId = chapterId;
 
@@ -2314,6 +2346,8 @@ public:
         QueryResult result = CharacterDatabase.Query(kLoadPlayerRunStateSql, guid);
         if (!result)
         {
+            // 【审计修复】结构性 erase 加锁。
+            std::lock_guard<std::mutex> lock(_playerStateMutex);
             _playerRunStates.erase(guid);
             return;
         }
@@ -2335,7 +2369,11 @@ public:
         state.cacheBossSummoned = fields[13].Get<bool>();
         state.startTime = fields[14].Get<uint32>();
         state.hasDatabaseRow = true;
-        _playerRunStates[guid] = state;
+        {
+            // 【审计修复】结构性插入加锁（DB 查询已在锁外完成）。
+            std::lock_guard<std::mutex> lock(_playerStateMutex);
+            _playerRunStates[guid] = state;
+        }
     }
 
     void SavePlayerRunState(Player* player)
@@ -2344,12 +2382,17 @@ public:
             return;
 
         uint32 guid = player->GetGUID().GetCounter();
-        auto itr = _playerRunStates.find(guid);
-        if (itr == _playerRunStates.end())
-            return;
+        PlayerAbyssRunState state;
+        {
+            // 【审计修复】锁内查找并拷贝，避免持锁执行 DB 语句、也避免锁外持迭代器跨结构性写。
+            std::lock_guard<std::mutex> lock(_playerStateMutex);
+            auto itr = _playerRunStates.find(guid);
+            if (itr == _playerRunStates.end())
+                return;
 
-        PlayerAbyssRunState& state = itr->second;
-        state.hasDatabaseRow = true;
+            itr->second.hasDatabaseRow = true;
+            state = itr->second;
+        }
         CharacterDatabase.Execute(
             kSavePlayerRunStateSql,
             guid,
@@ -2371,21 +2414,29 @@ public:
 
     void ClearPlayerRunState(uint32 guid)
     {
+        // 【审计修复】结构性 erase 加锁。
+        std::lock_guard<std::mutex> lock(_playerStateMutex);
         _playerRunStates.erase(guid);
     }
 
     void ClearPlayerSuspendedRunState(uint32 guid)
     {
+        // 【审计修复】结构性 erase 加锁。
+        std::lock_guard<std::mutex> lock(_playerStateMutex);
         _suspendedRunStates.erase(guid);
     }
 
     void ClearPlayerCollections(uint32 guid)
     {
+        // 【审计修复】结构性 erase 加锁。
+        std::lock_guard<std::mutex> lock(_playerStateMutex);
         _playerCollections.erase(guid);
     }
 
     void ClearPlayerChapterModeUnlocks(uint32 guid)
     {
+        // 【审计修复】结构性 erase 加锁。
+        std::lock_guard<std::mutex> lock(_playerStateMutex);
         _playerChapterModeUnlocks.erase(guid);
     }
 
@@ -2397,7 +2448,11 @@ public:
 
     void ClearPlayerData(uint32 guid)
     {
-        _playerData.erase(guid);
+        {
+            // 【审计修复】结构性 erase 加锁；锁作用域不覆盖后续 Clear*（它们各自加锁，防同线程重入）。
+            std::lock_guard<std::mutex> lock(_playerStateMutex);
+            _playerData.erase(guid);
+        }
         ClearPlayerCollections(guid);
         ClearPlayerChapterModeUnlocks(guid);
         ClearPlayerSuspendedRunState(guid);
@@ -2416,6 +2471,8 @@ public:
 
     bool HasCachedPlayerData(uint32 guid) const
     {
+        // 【审计修复】与结构性写并发的查找加锁。
+        std::lock_guard<std::mutex> lock(_playerStateMutex);
         return _playerData.find(guid) != _playerData.end();
     }
 
@@ -2543,6 +2600,8 @@ public:
 
     PlayerAbyssData const* GetPlayerData(uint32 guid) const
     {
+        // 【审计修复】查找加锁；返回的指针跨 rehash 稳定，仅同玩家登出路径 erase 才失效（见 _playerStateMutex 注释）。
+        std::lock_guard<std::mutex> lock(_playerStateMutex);
         auto itr = _playerData.find(guid);
         if (itr != _playerData.end())
             return &itr->second;
@@ -2552,6 +2611,8 @@ public:
 
     PlayerAbyssRunState const* GetPlayerRunState(uint32 guid) const
     {
+        // 【审计修复】他图线程（OnAllCreatureUpdate）并发调用，查找加锁；指针使用窗口同上。
+        std::lock_guard<std::mutex> lock(_playerStateMutex);
         auto itr = _playerRunStates.find(guid);
         if (itr != _playerRunStates.end())
             return &itr->second;
@@ -3655,11 +3716,16 @@ public:
 
     void ClearPlayerProcState(uint32 guid)
     {
+        // 【审计修复】结构性 erase 加锁。
+        std::lock_guard<std::mutex> lock(_playerStateMutex);
         _playerProcStates.erase(guid);
     }
 
     PlayerAbyssProcState& GetOrCreatePlayerProcState(uint32 guid)
     {
+        // 【审计修复】operator[] 可能结构性插入，加锁；返回引用跨 rehash 稳定，
+        // 仅同玩家登出/结束路径 erase 才失效，调用方在自身线程内短窗口使用。
+        std::lock_guard<std::mutex> lock(_playerStateMutex);
         return _playerProcStates[guid];
     }
 
@@ -5939,11 +6005,16 @@ public:
             return false;
 
         uint32 guid = player->GetGUID().GetCounter();
-        auto itr = _playerRunStates.find(guid);
-        if (itr == _playerRunStates.end())
-            return false;
+        {
+            // 【审计修复】find + 拷贝插入在同一锁内完成；DeletePlayerRunState/ClearPlayerProcState
+            // 内部各自加锁，须在本锁释放后调用（防同线程重入死锁）。
+            std::lock_guard<std::mutex> lock(_playerStateMutex);
+            auto itr = _playerRunStates.find(guid);
+            if (itr == _playerRunStates.end())
+                return false;
 
-        _suspendedRunStates[guid] = itr->second;
+            _suspendedRunStates[guid] = itr->second;
+        }
         DeletePlayerRunState(guid);
         ClearPlayerProcState(guid);
         return true;
@@ -5975,26 +6046,47 @@ public:
                 return false;
         }
 
-        auto suspendedItr = _suspendedRunStates.find(guid);
-        if (suspendedItr != _suspendedRunStates.end())
+        // 【审计修复】挂起态的 find/拷贝/插入/erase 全部收拢到一个锁作用域内完成；
+        // SavePlayerRunState / Schedule* 在锁外调用（其内部自行加锁，防同线程重入）。
+        uint32 instanceSignature = GetPlayerInstanceSignature(player, chapter->mapId);
+        bool hadSuspended = false;
+        bool restored = false;
+        PlayerAbyssRunState suspendedState;
+        PlayerAbyssRunState* activeState = nullptr;
         {
-            uint32 instanceSignature = GetPlayerInstanceSignature(player, chapter->mapId);
-            PlayerAbyssRunState suspendedState = suspendedItr->second;
-
-            if (suspendedState.currentChapterId == chapter->chapterId &&
-                suspendedState.currentMapId == chapter->mapId &&
-                suspendedState.currentInstanceId != 0 &&
-                suspendedState.currentInstanceId == instanceSignature)
+            std::lock_guard<std::mutex> lock(_playerStateMutex);
+            auto suspendedItr = _suspendedRunStates.find(guid);
+            if (suspendedItr != _suspendedRunStates.end())
             {
-                suspendedState.currentInstanceId = instanceSignature;
-                _playerRunStates[guid] = suspendedState;
+                hadSuspended = true;
+                suspendedState = suspendedItr->second;
+
+                if (suspendedState.currentChapterId == chapter->chapterId &&
+                    suspendedState.currentMapId == chapter->mapId &&
+                    suspendedState.currentInstanceId != 0 &&
+                    suspendedState.currentInstanceId == instanceSignature)
+                {
+                    suspendedState.currentInstanceId = instanceSignature;
+                    _playerRunStates[guid] = suspendedState;
+                    restored = true;
+                    // 元素引用跨 rehash 稳定，锁外短窗口使用安全（仅同玩家 erase 才失效）。
+                    activeState = &_playerRunStates[guid];
+                }
+
                 _suspendedRunStates.erase(suspendedItr);
+            }
+        }
+
+        if (hadSuspended)
+        {
+            if (restored)
+            {
                 SavePlayerRunState(player);
 
                 if (suspendedState.pendingAbyssModeType != 0)
-                    ScheduleDelayedModeBossSummon(player, *chapter, _playerRunStates[guid], suspendedState.pendingAbyssModeType);
+                    ScheduleDelayedModeBossSummon(player, *chapter, *activeState, suspendedState.pendingAbyssModeType);
                 if (suspendedState.pendingCacheSummon)
-                    ScheduleDelayedCacheBossSummon(player, *chapter, _playerRunStates[guid]);
+                    ScheduleDelayedCacheBossSummon(player, *chapter, *activeState);
 
                 if (player->GetSession())
                 {
@@ -6006,8 +6098,6 @@ public:
 
                 return true;
             }
-
-            _suspendedRunStates.erase(suspendedItr);
         }
 
         std::string failureReason;
@@ -7181,7 +7271,14 @@ public:
 
         CharacterDatabase.Execute(kInsertPlayerCollectionSql, guid, collectionType, itemId, relatedChapterId, level, awakenLevel, sourceType, unlockTime);
 
-        std::vector<PlayerAbyssCollectionEntry>& entries = _playerCollections[guid];
+        // 【审计修复】operator[] 结构性插入加锁；元素（vector）引用跨 rehash 稳定，
+        // 锁外仅由本玩家线程读写。
+        std::vector<PlayerAbyssCollectionEntry>* entriesPtr = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(_playerStateMutex);
+            entriesPtr = &_playerCollections[guid];
+        }
+        std::vector<PlayerAbyssCollectionEntry>& entries = *entriesPtr;
         auto existingItr = std::find_if(entries.begin(), entries.end(), [&](PlayerAbyssCollectionEntry const& entry)
         {
             return entry.itemId == itemId;
@@ -7783,7 +7880,14 @@ public:
             return false;
         }
 
-        PlayerAbyssRunState& state = _playerRunStates[guid];
+        // 【审计修复】operator[] 结构性插入加锁；引用跨 rehash 稳定，锁外填充字段安全
+        // （仅同玩家 erase 才失效，且本函数在该玩家所在线程执行）。
+        PlayerAbyssRunState* statePtr = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(_playerStateMutex);
+            statePtr = &_playerRunStates[guid];
+        }
+        PlayerAbyssRunState& state = *statePtr;
         state.currentMapId = chapterConfig->mapId;
         state.currentChapterId = chapterId;
         state.modeType = requestedMode;
@@ -7817,9 +7921,13 @@ public:
             return false;
 
         uint32 guid = player->GetGUID().GetCounter();
-        auto itr = _playerRunStates.find(guid);
-        if (itr == _playerRunStates.end())
-            return false;
+        {
+            // 【审计修复】查找加锁；后续 Delete/Clear* 内部自行加锁，须在锁外调用。
+            std::lock_guard<std::mutex> lock(_playerStateMutex);
+            auto itr = _playerRunStates.find(guid);
+            if (itr == _playerRunStates.end())
+                return false;
+        }
 
         DeletePlayerRunState(guid);
         ClearPlayerSuspendedRunState(guid);
@@ -8539,6 +8647,12 @@ private:
     std::unordered_map<uint32, PlayerAbyssRunState> _playerRunStates;
     std::unordered_map<uint32, PlayerAbyssRunState> _suspendedRunStates;
     std::unordered_map<uint32, PlayerAbyssProcState> _playerProcStates;
+    // 【审计修复】保护玩家态容器（_playerData/_playerRunStates/_suspendedRunStates/_playerProcStates/
+    // _playerCollections/_playerChapterModeUnlocks）的结构性插入/erase 与查找。
+    // 仅在最内层容器操作处加锁（临界区内不施法/发包/查库），调用链上层不再持有本锁，避免同线程重入死锁。
+    // unordered_map 元素引用跨 rehash 稳定，仅本键 erase 才失效；erase 只发生在该玩家自身的
+    // 登出/结束副本路径，与同玩家的引用使用窗口在同一线程串行，故锁外持有元素引用是安全的。
+    mutable std::mutex _playerStateMutex;
     bool _worldDataLoaded = false;
 };
 
@@ -9320,6 +9434,8 @@ public:
 
         if (sAbyssCultivationMgr->ApplyBossRuntimeTuning(creature))
         {
+            // 【审计修复】MapUpdate.Threads>1 时多地图线程并发增删本容器，加锁保护结构性写。
+            std::lock_guard<std::mutex> lock(_stateMutex);
             _scaledCreatures[creature->GetGUID().GetCounter()] = true;
             _phaseState[creature->GetGUID().GetCounter()] = 0;
         }
@@ -9331,6 +9447,8 @@ public:
             return;
 
         uint32 key = creature->GetGUID().GetCounter();
+        // 【审计修复】并发 erase 加锁。
+        std::lock_guard<std::mutex> lock(_stateMutex);
         _scaledCreatures.erase(key);
         _phaseState.erase(key);
     }
@@ -9350,14 +9468,29 @@ public:
 
         if (!HasActiveAbyssContext(creature, bossConfig->chapterId))
         {
+            // 【审计修复】并发结构性写加锁。
+            std::lock_guard<std::mutex> lock(_stateMutex);
             _scaledCreatures.erase(key);
             _phaseState.erase(key);
             return;
         }
 
-        if (_scaledCreatures.find(key) == _scaledCreatures.end())
-            _scaledCreatures[key] = sAbyssCultivationMgr->ApplyBossRuntimeTuning(creature);
+        // 【审计修复】先在锁内判断是否已记录；ApplyBossRuntimeTuning 在锁外执行（可能改动生物属性）。
+        // 同一生物只由其所属地图线程更新，同 key 不会并发到达此处，锁外调用无二次施加风险。
+        bool needTuning = false;
+        {
+            std::lock_guard<std::mutex> lock(_stateMutex);
+            needTuning = _scaledCreatures.find(key) == _scaledCreatures.end();
+        }
+        if (needTuning)
+        {
+            bool tuned = sAbyssCultivationMgr->ApplyBossRuntimeTuning(creature);
+            std::lock_guard<std::mutex> lock(_stateMutex);
+            _scaledCreatures[key] = tuned;
+        }
 
+        // 【审计修复】相位读改写全程持锁（仅读取生物血量，不施法/发包/查库）。
+        std::lock_guard<std::mutex> lock(_stateMutex);
         if (!creature->IsInCombat())
         {
             _phaseState[key] = 0;
@@ -9436,6 +9569,8 @@ private:
 
     mutable std::unordered_map<uint32, bool> _scaledCreatures;
     mutable std::unordered_map<uint32, uint8> _phaseState;
+    // 【审计修复】保护上述两容器在多地图线程下的并发读写。
+    mutable std::mutex _stateMutex;
 };
 
 class AbyssCultivationWorldScript : public WorldScript
@@ -9511,6 +9646,14 @@ private:
     bool _initialized = false;
     uint32 _startupTimer = 0;
 };
+
+namespace
+{
+    // 【审计修复】每玩家的深渊状态检查节流计时（原为类成员，多地图线程并发写不安全）。
+    // 改为文件级 thread_local：每线程独立副本、零锁开销。登出/删号的 erase 只清理
+    // 当前线程副本，其他线程的残留条目仅是过期的计时值（下次命中会正常倒计时），无害。
+    thread_local std::unordered_map<uint32, uint32> s_abyssRunCheckTimers;
+}
 
 class AbyssCultivationPlayerScript : public PlayerScript
 {
@@ -9594,7 +9737,7 @@ public:
             return;
 
         uint32 guid = player->GetGUID().GetCounter();
-        _runCheckTimers.erase(guid);
+        s_abyssRunCheckTimers.erase(guid);
         if (!sAbyssCultivationMgr->HasCachedPlayerData(guid))
             return;
 
@@ -9625,7 +9768,7 @@ public:
 
     void OnPlayerDelete(ObjectGuid guid, uint32 /*accountId*/) override
     {
-        _runCheckTimers.erase(guid.GetCounter());
+        s_abyssRunCheckTimers.erase(guid.GetCounter());
         sAbyssCultivationMgr->DeletePlayerData(guid.GetCounter());
     }
 
@@ -9876,7 +10019,8 @@ public:
             return;
 
         uint32 guid = player->GetGUID().GetCounter();
-        uint32& timer = _runCheckTimers[guid];
+        // 【审计修复】节流计时容器为文件级 thread_local（见类定义前的声明）
+        uint32& timer = s_abyssRunCheckTimers[guid];
         if (timer > diff)
         {
             timer -= diff;
@@ -10279,8 +10423,7 @@ public:
         sAbyssCultivationMgr->HandleQuestCompletion(player, quest);
     }
 
-private:
-    std::unordered_map<uint32, uint32> _runCheckTimers;
+    // 【审计修复】_runCheckTimers 已改为文件级 thread_local（s_abyssRunCheckTimers，见类定义前）。
 };
 
 class AbyssCultivationUnitScript : public UnitScript
@@ -13439,11 +13582,18 @@ class spell_abyss_void_hole : public AuraScript
 // ============================================
 // [7] 尸爆连锁 - 击杀后尸体爆炸，连锁最多5次
 // ============================================
+namespace
+{
+    // 【审计修复】原实现把连锁计数放在 SpellScript 实例成员上，而 CastSpell 触发的
+    // 新施法会创建新实例、计数归零，"最多连锁5次"从未生效；密集怪堆中同步嵌套
+    // 施法+击杀回调会一直递归到线程栈耗尽（静默崩溃无宕机日志）。
+    // 改用线程局部深度计数，跨嵌套施法实例仍然有效。
+    thread_local uint32 s_corpseExplodeChainDepth = 0;
+}
+
 class spell_abyss_corpse_explode : public SpellScript
 {
     PrepareSpellScript(spell_abyss_corpse_explode);
-
-    uint32 _chainCount = 0;
 
     void HandleScript(SpellEffIndex /*effIndex*/)
     {
@@ -13453,7 +13603,7 @@ class spell_abyss_corpse_explode : public SpellScript
             return;
 
         // 伤害=目标最大生命值的25%，每次连锁递减15%
-        float reduction = 1.0f - (_chainCount * 0.15f);
+        float reduction = 1.0f - (s_corpseExplodeChainDepth * 0.15f);
         if (reduction < 0.25f)
             reduction = 0.25f;
         int256 damage = ScaleUInt256ToInt256(target->GetMaxHealthForCombat256(), 0.25L * static_cast<long double>(reduction));
@@ -13461,10 +13611,11 @@ class spell_abyss_corpse_explode : public SpellScript
         caster->DealDamage(caster, target, ToAbyssUInt64Damage(damage), nullptr, SPELL_DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL);
 
         // 如果目标死亡且还有连锁次数，再次触发爆炸
-        if (!target->IsAlive() && _chainCount < 5)
+        if (!target->IsAlive() && s_corpseExplodeChainDepth < 5)
         {
-            ++_chainCount;
+            ++s_corpseExplodeChainDepth;
             caster->CastSpell(caster, SPELL_ABYSS_CORPSE_EXPLODE, true);
+            --s_corpseExplodeChainDepth;
         }
     }
 

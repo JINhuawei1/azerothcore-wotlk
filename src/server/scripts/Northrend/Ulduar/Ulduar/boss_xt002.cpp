@@ -430,9 +430,9 @@ public:
                 if (owner->IsCreature())
                     owner->ToCreature()->AI()->JustSummoned(cr);
         }
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
-            _damageDone += damage;
+            _damageDone += Acore::Number::ToUInt32Saturated(damage);
         }
 
         void SummonPiles()
@@ -777,7 +777,7 @@ public:
             me->m_Events.AddEvent(new BoomEvent(me), me->m_Events.CalculateTime(1 * IN_MILLISECONDS));
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (_boomed)
                 damage = 0;

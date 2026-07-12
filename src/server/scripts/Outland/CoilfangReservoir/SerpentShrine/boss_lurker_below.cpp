@@ -91,7 +91,7 @@ struct boss_the_lurker_below : public BossAI
         me->DespawnOrUnsummon(2000);
     }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*type*/, SpellSchoolMask /*school*/) override
+    void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*type*/, SpellSchoolMask /*school*/) override
     {
         if (damage >= me->GetHealth())
         {

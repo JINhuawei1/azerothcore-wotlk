@@ -554,15 +554,21 @@ void Spell::EffectSchoolDMG(SpellEffIndex effIndex)
                         // found Immolate or Shadowflame
                         if (aura)
                         {
-                            uint32 pdamage = uint32(std::max(aura->GetAmount(), 0));
-                            pdamage = ToUInt32Damage(unitTarget->SpellDamageBonusTaken(m_caster, aura->GetSpellInfo(), pdamage, DOT, aura->GetBase()->GetStackAmount()));
-                            uint32 pct_dir = m_caster->CalculateSpellDamage(unitTarget, m_spellInfo, (effIndex + 1));
-                            uint8 baseTotalTicks = uint8(m_caster->CalcSpellDuration(aura->GetSpellInfo()) / aura->GetSpellInfo()->Effects[EFFECT_0].Amplitude);
+                            uint256 pdamage = aura->GetAmountForCombat();
+                            pdamage = unitTarget->SpellDamageBonusTaken(m_caster, aura->GetSpellInfo(), pdamage, DOT, aura->GetBase()->GetStackAmount());
+                            int32 pct_dir = m_caster->CalculateSpellDamage(unitTarget, m_spellInfo, (effIndex + 1));
+                            uint32 baseTotalTicks = aura->GetUnhastedTotalTicks(m_caster);
+                            uint256 totalPeriodicDamage = MultiplyUInt256Damage(pdamage, static_cast<uint256>(baseTotalTicks));
 
-                            damage += int32(CalculatePct(pdamage * baseTotalTicks, pct_dir));
+                            uint256 directDamage = CalculatePctUInt256Damage(totalPeriodicDamage, pct_dir);
+                            if (damage > 0)
+                                directDamage = AddUInt256Damage(directDamage, static_cast<uint256>(static_cast<uint64>(damage)));
+                            m_damage = AddUInt256Damage(m_damage, directDamage);
+                            damage = 0;
 
-                            uint32 pct_dot = m_caster->CalculateSpellDamage(unitTarget, m_spellInfo, (effIndex + 2)) / 3;
-                            m_spellValue->EffectBasePoints[1] = m_spellInfo->Effects[EFFECT_1].CalcBaseValue(int32(CalculatePct(pdamage * baseTotalTicks, pct_dot)));
+                            int32 pct_dot = m_caster->CalculateSpellDamage(unitTarget, m_spellInfo, (effIndex + 2)) / 3;
+                            uint256 dotDamage = CalculatePctUInt256Damage(totalPeriodicDamage, pct_dot);
+                            m_spellValue->EffectBasePoints[1] = m_spellInfo->Effects[EFFECT_1].CalcBaseValue(Acore::Number::ToInt32Saturated(Acore::Number::ToInt256Saturated(dotDamage)));
 
                             apply_direct_bonus = false;
                             // Glyph of Conflagrate

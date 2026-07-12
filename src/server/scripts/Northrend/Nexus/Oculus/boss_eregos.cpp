@@ -146,7 +146,7 @@ public:
             me->SummonGameObject(GO_SPOTLIGHT, 1018.06f, 1051.09f, 605.619019f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0);
         }
 
-        void DamageTaken(Unit*, uint32& /*damage*/, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& /*damage*/, DamageEffectType, SpellSchoolMask) override
         {
             if (!me->GetMap()->IsHeroic())
                 return;

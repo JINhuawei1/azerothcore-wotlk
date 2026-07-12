@@ -41,6 +41,35 @@ void ItemAttributesEvents::OnPlayerLogin(Player* player)
     auto step1End = std::chrono::high_resolution_clock::now();
     auto step1Duration = std::chrono::duration_cast<std::chrono::milliseconds>(step1End - step1Start).count();
 
+    // 【审计修复·卸装备属性不移除】重建装备槽位快照：
+    // 登录加载期间 OnPlayerEquip 可能因物品 GUID 尚未初始化而提前返回、漏记槽位；
+    // 之后卸下该装备时 OnPlayerAfterSetVisibleItemSlot 查快照不中会静默跳过属性移除
+    //（表现为"卸下装备属性还在，小退后才正常"）。登录完成后按实际装备重建快照兜底。
+    {
+        uint64 playerGuid = player->GetGUID().GetCounter();
+        std::lock_guard<std::mutex> lock(_equippedItemsMutex);
+        auto& playerEquipMap = _equippedItems[playerGuid];
+        for (uint8 eqSlot = EQUIPMENT_SLOT_START; eqSlot < EQUIPMENT_SLOT_END; ++eqSlot)
+        {
+            if (Item* equipped = player->GetItemByPos(INVENTORY_SLOT_BAG_0, eqSlot))
+            {
+                ObjectGuid equippedGuid = equipped->GetGUID();
+                if (!equippedGuid.IsEmpty())
+                {
+                    playerEquipMap[eqSlot] = equippedGuid.GetCounter();
+                }
+            }
+        }
+    }
+
+    // 【审计修复·上线偶发少属性】登录后自兜底一次合并的全量属性刷新：
+    // 装备加载阶段所有属性应用都按 isBeingLoaded() 跳过了派生属性刷新，
+    // 此前依赖其他模块（幻境/鉴定系统）在各自 OnPlayerLogin 里补偿刷新，
+    // 属跨模块隐藏依赖，任一模块禁用或时序变化即出现上线少属性。
+    // 此时 isBeingLoaded 已为 false，请求会正常排程（1ms 合并事件，开销可忽略）。
+    if (sItemAttributesEffects)
+        sItemAttributesEffects->RequestDeferredStatsUpdate(player);
+
     // 可以在这里添加登录消息
     if (sConfigMgr->GetOption<bool>("ItemAttributes.LoginMessage", false))
     {
@@ -74,6 +103,12 @@ void ItemAttributesEvents::OnPlayerLogout(Player* player)
         std::lock_guard<std::mutex> lock(_equippedItemsMutex);
         _equippedItems.erase(playerGuid);
     }
+
+    // 【审计修复·上线偶发少属性】清理"已排程刷新/批量更新中"标记：
+    // 1ms 合并刷新事件若因玩家对象销毁未执行，其回调里的 erase 不会运行，
+    // 标记跨会话残留后，该角色所有后续刷新请求都被"已排程"判定拦下，属性永不再刷新
+    if (sItemAttributesEffects)
+        sItemAttributesEffects->ClearPlayerPendingUpdateFlags(playerGuid);
 
     // 不在登出流程做全表孤立属性清理。
     // 登出时核心正在保存 item_instance，清理线程读取/删除同表会与保存事务竞争，
@@ -124,7 +159,8 @@ void ItemAttributesEvents::OnPlayerEquip(Player* player, Item* item, uint8 bag, 
     if (itemGuidObj.IsEmpty())
     {
         // 物品尚未初始化，跳过此次处理
-        // 注意：这不是错误，只是初始化顺序问题，后续会再次触发OnPlayerEquip
+        // 注意：这不是错误，只是初始化顺序问题，后续会再次触发OnPlayerEquip；
+        // 登录完成后的快照重建会兜底补登记该槽位
         return;
     }
 

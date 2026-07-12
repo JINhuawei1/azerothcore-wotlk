@@ -121,7 +121,7 @@ struct npc_ancient_wisp : public ScriptedAI
 
     void JustEngagedWith(Unit* /*who*/) override { }
 
-    void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+    void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
     {
         damage = 0;
     }

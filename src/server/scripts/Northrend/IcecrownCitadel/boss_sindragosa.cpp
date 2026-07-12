@@ -449,7 +449,7 @@ public:
             }
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (!damage || me->IsInEvadeMode())
                 return;
@@ -706,7 +706,7 @@ public:
                 _trappedPlayerGUID = guid;
         }
 
-        void DamageTaken(Unit*, uint32& dmg, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& dmg, DamageEffectType, SpellSchoolMask) override
         {
             if (dmg >= me->GetHealth())
                 me->m_positionZ = me->GetPositionZ() - 5.0f;

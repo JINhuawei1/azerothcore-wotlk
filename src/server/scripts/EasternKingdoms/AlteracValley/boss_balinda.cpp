@@ -115,7 +115,7 @@ struct boss_balinda : public ScriptedAI
         summons.Summon(summoned);
     }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*type*/, SpellSchoolMask /*school*/) override
+    void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*type*/, SpellSchoolMask /*school*/) override
     {
         if (me->HealthBelowPctDamaged(40, damage) && !_hasCastIceBlock)
         {

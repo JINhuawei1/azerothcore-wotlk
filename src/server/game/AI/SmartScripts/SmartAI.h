@@ -113,7 +113,7 @@ public:
     void SpellHitTarget(Unit* target, SpellInfo const* spellInfo) override;
 
     // Called at any Damage from any attacker (before damage apply)
-    void DamageTaken(Unit* done_by, uint32& damage, DamageEffectType damagetype, SpellSchoolMask damageSchoolMask) override;
+    void DamageTaken(Unit* done_by, uint256& damage, DamageEffectType damagetype, SpellSchoolMask damageSchoolMask) override;
 
     // Called when the creature receives heal
     void HealReceived(Unit* doneBy, uint256& addhealth) override;
@@ -131,7 +131,7 @@ public:
     void IsSummonedBy(WorldObject* summoner) override;
 
     // Called at any Damage to any victim (before damage apply)
-    void DamageDealt(Unit* doneTo, uint32& damage, DamageEffectType damagetyp, SpellSchoolMask damageSchoolMask) override;
+    void DamageDealt(Unit* doneTo, uint256& damage, DamageEffectType damagetyp, SpellSchoolMask damageSchoolMask) override;
 
     // Called when a summoned creature dissapears (UnSommoned)
     void SummonedCreatureDespawn(Creature* unit) override;

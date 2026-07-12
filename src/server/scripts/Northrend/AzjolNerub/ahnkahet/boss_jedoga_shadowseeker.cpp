@@ -291,7 +291,7 @@ struct boss_jedoga_shadowseeker : public BossAI
         summons.Despawn(summon);
     }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*school*/) override
+    void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*school*/) override
     {
         if (!ritualTriggered && me->HealthBelowPctDamaged(55, damage) && events.IsInPhase(PHASE_NORMAL))
         {

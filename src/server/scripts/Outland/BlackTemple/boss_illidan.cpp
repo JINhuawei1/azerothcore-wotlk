@@ -663,7 +663,7 @@ struct boss_illidan_stormrage : public BossAI
         }
     }
 
-    void DamageTaken(Unit* attacker, uint32& damage, DamageEffectType damagetype, SpellSchoolMask damageSchoolMask) override
+    void DamageTaken(Unit* attacker, uint256& damage, DamageEffectType damagetype, SpellSchoolMask damageSchoolMask) override
     {
         if (damage >= me->GetHealth())
         {
@@ -1054,7 +1054,7 @@ struct npc_akama_illidan : public ScriptedAI
         }, 5s, 10s);
     }
 
-    void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+    void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
     {
         if (damage >= me->GetHealth())
             damage = me->GetHealth() - 1;
@@ -1206,7 +1206,7 @@ struct npc_maiev_illidan : public ScriptedAI
         }
     }
 
-    void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+    void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
     {
         if (damage >= me->GetHealth())
             damage = me->GetHealth() - 1;

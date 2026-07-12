@@ -867,10 +867,12 @@ void SmartAI::SpellHitTarget(Unit* target, SpellInfo const* spellInfo)
     GetScript()->ProcessEventsFor(SMART_EVENT_SPELLHIT_TARGET, target, 0, 0, false, spellInfo);
 }
 
-void SmartAI::DamageTaken(Unit* doneBy, uint32& damage, DamageEffectType damagetype, SpellSchoolMask /*damageSchoolMask*/)
+void SmartAI::DamageTaken(Unit* doneBy, uint256& damage, DamageEffectType damagetype, SpellSchoolMask /*damageSchoolMask*/)
 {
+    uint32 eventDamage = Acore::Number::ToUInt32Saturated(damage);
+
     if (doneBy)
-        GetScript()->ProcessEventsFor(SMART_EVENT_DAMAGED, doneBy, damage);
+        GetScript()->ProcessEventsFor(SMART_EVENT_DAMAGED, doneBy, eventDamage);
 
     if (!IsAIControlled()) // don't allow players to use unkillable units
         return;
@@ -895,9 +897,9 @@ void SmartAI::IsSummonedBy(WorldObject* summoner)
     GetScript()->ProcessEventsFor(SMART_EVENT_JUST_SUMMONED, summoner->ToUnit(), 0, 0, false, nullptr, summoner->ToGameObject());
 }
 
-void SmartAI::DamageDealt(Unit* doneTo, uint32& damage, DamageEffectType /*damagetype*/, SpellSchoolMask /*damageSchoolMask*/)
+void SmartAI::DamageDealt(Unit* doneTo, uint256& damage, DamageEffectType /*damagetype*/, SpellSchoolMask /*damageSchoolMask*/)
 {
-    GetScript()->ProcessEventsFor(SMART_EVENT_DAMAGED_TARGET, doneTo, damage);
+    GetScript()->ProcessEventsFor(SMART_EVENT_DAMAGED_TARGET, doneTo, Acore::Number::ToUInt32Saturated(damage));
 }
 
 void SmartAI::SummonedCreatureDespawn(Creature* unit)

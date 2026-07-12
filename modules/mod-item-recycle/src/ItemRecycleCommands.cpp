@@ -313,12 +313,19 @@ bool HandleRecycleGroupCommand(ChatHandler* handler, Acore::ChatCommands::Tail a
                         bool isNumber = !numStr.empty();
                         for (char c : numStr)
                         {
-                            if (!std::isdigit(c)) { isNumber = false; break; }
+                            if (!std::isdigit(static_cast<unsigned char>(c))) { isNumber = false; break; }
                         }
                         if (isNumber)
                         {
-                            baseDesc = desc.substr(0, xPos);
-                            singleCount = std::stoul(numStr);
+                            try
+                            {
+                                singleCount = std::stoul(numStr);
+                                baseDesc = desc.substr(0, xPos);
+                            }
+                            catch (std::exception const&)
+                            {
+                                singleCount = 1;
+                            }
                         }
                     }
                     rewardSummary[baseDesc] += singleCount * count;
@@ -605,7 +612,16 @@ bool HandleRecycleSetCommand(ChatHandler* handler, Acore::ChatCommands::Tail arg
         else
         {
             // 处理具体类型设置
-            uint32 typeId = std::stoul(typeParam);
+            uint32 typeId = 0;
+            try
+            {
+                typeId = std::stoul(typeParam);
+            }
+            catch (std::exception const&)
+            {
+                handler->SendSysMessage("类型ID必须在1-6之间，或使用'all'表示所有类型 (1=装备 2=消耗品 3=任务物品 4=垃圾 5=宝石 6=附魔材料)");
+                return false;
+            }
             if (typeId < 1 || typeId > 6)
             {
                 handler->SendSysMessage("类型ID必须在1-6之间，或使用'all'表示所有类型 (1=装备 2=消耗品 3=任务物品 4=垃圾 5=宝石 6=附魔材料)");
@@ -1044,12 +1060,19 @@ bool HandleRecycleExecuteCommand(ChatHandler* handler)
                     bool isNumber = !numStr.empty();
                     for (char c : numStr)
                     {
-                        if (!std::isdigit(c)) { isNumber = false; break; }
+                        if (!std::isdigit(static_cast<unsigned char>(c))) { isNumber = false; break; }
                     }
                     if (isNumber)
                     {
-                        baseDesc = desc.substr(0, xPos);
-                        singleCount = std::stoul(numStr);
+                        try
+                        {
+                            singleCount = std::stoul(numStr);
+                            baseDesc = desc.substr(0, xPos);
+                        }
+                        catch (std::exception const&)
+                        {
+                            singleCount = 1;
+                        }
                     }
                 }
                 rewardSummary[baseDesc] += singleCount * count;

@@ -287,7 +287,7 @@ struct npc_inner_demon : public ScriptedAI
         return attacker && attacker->GetGUID() == me->GetSummonerGUID();
     }
 
-    void OnCalculateMeleeDamageReceived(uint32& damage, Unit* attacker) override
+    void OnCalculateMeleeDamageReceived(uint256& damage, Unit* attacker) override
     {
         if (!CanReceiveDamage(attacker))
         {
@@ -295,7 +295,7 @@ struct npc_inner_demon : public ScriptedAI
         }
     }
 
-    void OnCalculateSpellDamageReceived(int64& damage, Unit* attacker) override
+    void OnCalculateSpellDamageReceived(uint256& damage, Unit* attacker) override
     {
         if (!CanReceiveDamage(attacker))
         {
@@ -303,7 +303,7 @@ struct npc_inner_demon : public ScriptedAI
         }
     }
 
-    void OnCalculatePeriodicTickReceived(uint32& damage, Unit* attacker) override
+    void OnCalculatePeriodicTickReceived(uint256& damage, Unit* attacker) override
     {
         if (!CanReceiveDamage(attacker))
         {

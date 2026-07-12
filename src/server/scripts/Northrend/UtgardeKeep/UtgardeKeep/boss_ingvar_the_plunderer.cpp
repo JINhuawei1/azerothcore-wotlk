@@ -129,7 +129,7 @@ struct boss_ingvar_the_plunderer : public ScriptedAI
             pInstance->SetData(DATA_INGVAR, NOT_STARTED);
     }
 
-    void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+    void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
     {
         if (me->GetDisplayId() == DISPLAYID_DEFAULT && damage >= me->GetHealth())
         {

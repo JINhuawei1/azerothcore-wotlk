@@ -526,7 +526,7 @@ public:
             //me->CastSpell(me, SPELL_TOUCH_OF_DOMINION, true);
         }
 
-        void DamageTaken(Unit* who, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit* who, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (who && _isHitAllowed && who->GetPositionZ() > 430 && who->IsPlayer())
             {
@@ -1109,7 +1109,7 @@ public:
                     AttackStart(cr);
         }
 
-        void DamageTaken(Unit* who, uint32&, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit* who, uint256&, DamageEffectType, SpellSchoolMask) override
         {
             if (!_playerAttack && who && (who->IsPlayer() || who->GetOwnerGUID().IsPlayer()))
             {

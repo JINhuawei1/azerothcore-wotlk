@@ -355,7 +355,7 @@ public:
             }
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (damage >= me->GetHealth() && !me->HasUnitFlag(UNIT_FLAG_DISABLE_MOVE)) // allow dying only in phase 3!
             {
@@ -959,7 +959,7 @@ public:
 
         void AttackStart(Unit*  /*who*/) override {}
         void MoveInLineOfSight(Unit*  /*who*/) override {}
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override { damage = 0; }
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override { damage = 0; }
     };
 };
 
@@ -1003,7 +1003,7 @@ public:
             }
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (damage >= me->GetHealth())
             {

@@ -20,6 +20,23 @@
 
 // 使用已经在Config.h中定义的sConfigMgr宏
 
+namespace
+{
+    // 需求_模板.需要人物等级 来自数据库，可能存在脏数据；stoi 抛出的异常若未捕获会直接终止进程
+    bool TryParseLevelReq(std::string const& value, int& out)
+    {
+        try
+        {
+            out = std::stoi(value);
+            return true;
+        }
+        catch (std::exception const&)
+        {
+            return false;
+        }
+    }
+}
+
 // 定义一个函数指针类型，用于动态调用RequirementTemplateManager的CheckRequirements方法
 typedef bool (*CheckRequirementsFunc)(void*, Player*, uint32, bool);
 
@@ -129,34 +146,55 @@ bool ItemPurchaseConditionMgr::CheckWithRequirementTemplate(Player* player, uint
         // 检查等级要求
         if (!levelReq.empty() && levelReq != "0")
         {
+            int reqLevel = 0;
             // 简单处理：只检查大于等于
             if (levelReq[0] == '>')
             {
-                int reqLevel = std::stoi(levelReq.substr(1));
+                if (!TryParseLevelReq(levelReq.substr(1), reqLevel))
+                {
+                    LOG_ERROR("module", "需求_模板 id={} 的 需要人物等级 字段格式非法: '{}'，按不满足条件处理", templateId, levelReq);
+                    return false;
+                }
                 if (player->GetLevel() <= reqLevel)
                     return false;
             }
             else if (levelReq[0] == '<')
             {
-                int reqLevel = std::stoi(levelReq.substr(1));
-                if (player->GetLevel() >= reqLevel)
+                if (!TryParseLevelReq(levelReq.substr(1), reqLevel))
+                {
+                    LOG_ERROR("module", "需求_模板 id={} 的 需要人物等级 字段格式非法: '{}'，按不满足条件处理", templateId, levelReq);
                     return false;
-            }
-            else if (levelReq[0] == '=')
-            {
-                int reqLevel = std::stoi(levelReq.substr(1));
-                if (player->GetLevel() != reqLevel)
+                }
+                if (player->GetLevel() >= reqLevel)
                     return false;
             }
             else if (levelReq.substr(0, 2) == "!=")
             {
-                int reqLevel = std::stoi(levelReq.substr(2));
+                if (!TryParseLevelReq(levelReq.substr(2), reqLevel))
+                {
+                    LOG_ERROR("module", "需求_模板 id={} 的 需要人物等级 字段格式非法: '{}'，按不满足条件处理", templateId, levelReq);
+                    return false;
+                }
                 if (player->GetLevel() == reqLevel)
+                    return false;
+            }
+            else if (levelReq[0] == '=')
+            {
+                if (!TryParseLevelReq(levelReq.substr(1), reqLevel))
+                {
+                    LOG_ERROR("module", "需求_模板 id={} 的 需要人物等级 字段格式非法: '{}'，按不满足条件处理", templateId, levelReq);
+                    return false;
+                }
+                if (player->GetLevel() != reqLevel)
                     return false;
             }
             else
             {
-                int reqLevel = std::stoi(levelReq);
+                if (!TryParseLevelReq(levelReq, reqLevel))
+                {
+                    LOG_ERROR("module", "需求_模板 id={} 的 需要人物等级 字段格式非法: '{}'，按不满足条件处理", templateId, levelReq);
+                    return false;
+                }
                 if (player->GetLevel() < reqLevel)
                     return false;
             }

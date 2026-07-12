@@ -144,7 +144,7 @@ struct npc_anubisath_defender : public ScriptedAI
         DoCastSelf(SPELL_SUMMON_LARGE_OBSIDIAN_CHUNK, true);
     }
 
-    void DamageTaken(Unit* /*doneBy*/, uint32& damage, DamageEffectType /*damagetype*/, SpellSchoolMask /*damageSchoolMask*/) override
+    void DamageTaken(Unit* /*doneBy*/, uint256& damage, DamageEffectType /*damagetype*/, SpellSchoolMask /*damageSchoolMask*/) override
     {
         if (!_enraged && me->HealthBelowPctDamaged(10, damage))
         {

@@ -834,6 +834,21 @@ namespace
         return false;
     }
 
+    // 飞升槽位物品不在核心背包体系中（无背包/槽位定位）。若其使用型法术带消耗性充能
+    // （SpellCharges<0），核心 Spell::TakeCastItem 在充能耗尽时会按 bag/slot 调用
+    // DestroyItemCount——重登后重建的飞升物品 slot=0 会被解析为头部装备栏，误删头部装备
+    bool AscensionItemUseSpellConsumesCharges(Item* item, ItemTemplate const* proto)
+    {
+        if (!item || !proto)
+            return false;
+
+        for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+            if (proto->Spells[i].SpellId && proto->Spells[i].SpellTrigger == ITEM_SPELLTRIGGER_ON_USE && proto->Spells[i].SpellCharges < 0)
+                return true;
+
+        return false;
+    }
+
     void ApplyAscensionEquipSpell(Player* player, Item* item, SpellInfo const* spellInfo)
     {
         if (!player || !spellInfo)
@@ -2138,6 +2153,22 @@ void AscensionManager::ApplyItemEffect(Player* player, uint32 itemId, uint8 slot
                     player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, BASE_VALUE, statModValue, apply);
                     player->ApplyStatBuffMod(STAT_STAMINA, statModValue, apply);
                     break;
+                case ITEM_MOD_TRUE_DAMAGE:
+                    // 自定义属性：真实伤害
+                    player->ApplyTrueDamageBonus(Acore::Number::ToInt64Saturated(val), apply);
+                    break;
+                case ITEM_MOD_CUTTING_DAMAGE:
+                    // 自定义属性：切割伤害
+                    player->ApplyCuttingDamageBonus(Acore::Number::ToInt64Saturated(val), apply);
+                    break;
+                case ITEM_MOD_COOLDOWN_REDUCTION:
+                    // 自定义属性：冷却缩减
+                    player->ApplyCooldownReductionBonus(Acore::Number::ToInt64Saturated(val), apply);
+                    break;
+                case ITEM_MOD_SKILL_DAMAGE:
+                    // 自定义属性：技能伤害
+                    player->ApplySkillDamageBonus(Acore::Number::ToInt64Saturated(val), apply);
+                    break;
                 case ITEM_MOD_DEFENSE_SKILL_RATING:
                     player->ApplyRatingMod(CR_DEFENSE_SKILL, legacyVal, apply);
                     break;
@@ -3024,6 +3055,22 @@ void AscensionManager::ApplyEnchantStatMod(Player* player, uint32 statType, int2
             player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, BASE_VALUE, statModValue, apply);
             player->ApplyStatBuffMod(STAT_STAMINA, statModValue, apply);
             break;
+        case ITEM_MOD_TRUE_DAMAGE:
+            // 自定义属性：真实伤害
+            player->ApplyTrueDamageBonus(Acore::Number::ToInt64Saturated(amount), apply);
+            break;
+        case ITEM_MOD_CUTTING_DAMAGE:
+            // 自定义属性：切割伤害
+            player->ApplyCuttingDamageBonus(Acore::Number::ToInt64Saturated(amount), apply);
+            break;
+        case ITEM_MOD_COOLDOWN_REDUCTION:
+            // 自定义属性：冷却缩减
+            player->ApplyCooldownReductionBonus(Acore::Number::ToInt64Saturated(amount), apply);
+            break;
+        case ITEM_MOD_SKILL_DAMAGE:
+            // 自定义属性：技能伤害
+            player->ApplySkillDamageBonus(Acore::Number::ToInt64Saturated(amount), apply);
+            break;
         case ITEM_MOD_DEFENSE_SKILL_RATING:
             player->ApplyRatingMod(CR_DEFENSE_SKILL, legacyAmount, apply);
             break;
@@ -3143,6 +3190,22 @@ void AscensionManager::RemoveStatEffect(Player* player, uint32 statType, int256 
         case ITEM_MOD_STAMINA:
             player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, BASE_VALUE, statModValue, false);
             player->ApplyStatBuffMod(STAT_STAMINA, statModValue, false);
+            break;
+        case ITEM_MOD_TRUE_DAMAGE:
+            // 自定义属性：真实伤害
+            player->ApplyTrueDamageBonus(Acore::Number::ToInt64Saturated(statValue), false);
+            break;
+        case ITEM_MOD_CUTTING_DAMAGE:
+            // 自定义属性：切割伤害
+            player->ApplyCuttingDamageBonus(Acore::Number::ToInt64Saturated(statValue), false);
+            break;
+        case ITEM_MOD_COOLDOWN_REDUCTION:
+            // 自定义属性：冷却缩减
+            player->ApplyCooldownReductionBonus(Acore::Number::ToInt64Saturated(statValue), false);
+            break;
+        case ITEM_MOD_SKILL_DAMAGE:
+            // 自定义属性：技能伤害
+            player->ApplySkillDamageBonus(Acore::Number::ToInt64Saturated(statValue), false);
             break;
         case ITEM_MOD_DEFENSE_SKILL_RATING:
             player->ApplyRatingMod(CR_DEFENSE_SKILL, legacyValue, false);
@@ -3969,6 +4032,12 @@ bool AscensionCommandScript::HandleAscensionUse(ChatHandler* handler, const char
     if (!HasAscensionItemUseSpell(item, proto))
     {
         handler->SendSysMessage("该飞升装备没有使用触发效果。");
+        return true;
+    }
+
+    if (AscensionItemUseSpellConsumesCharges(item, proto))
+    {
+        handler->SendSysMessage("该飞升装备的使用效果带消耗性充能，无法在飞升槽位中使用。");
         return true;
     }
 

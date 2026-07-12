@@ -918,12 +918,19 @@ void ItemRecycleScript::PerformAutoRecycle(Player* player)
                         bool isNumber = !numStr.empty();
                         for (char c : numStr)
                         {
-                            if (!std::isdigit(c)) { isNumber = false; break; }
+                            if (!std::isdigit(static_cast<unsigned char>(c))) { isNumber = false; break; }
                         }
                         if (isNumber)
                         {
-                            baseDesc = desc.substr(0, xPos);
-                            singleCount = std::stoul(numStr);
+                            try
+                            {
+                                singleCount = std::stoul(numStr);
+                                baseDesc = desc.substr(0, xPos);
+                            }
+                            catch (std::exception const&)
+                            {
+                                singleCount = 1;
+                            }
                         }
                     }
                     rewardSummary[baseDesc] += singleCount * count;

@@ -704,7 +704,7 @@ public:
             me->CastSpell(me, SPELL_SHATTERED_ILLUSION, true);
         }
 
-        void DamageTaken(Unit* who, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit* who, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (who && who->GetEntry() == NPC_GUARDIAN_OF_YS && !_secondPhase)
             {
@@ -1451,7 +1451,7 @@ public:
             return 0;
         }
 
-        void DamageTaken(Unit* who, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit* who, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (_tentacleCount < 7) // if all tentacles aren't killed
             {
@@ -1551,7 +1551,7 @@ public:
             me->SetInCombatWithZone();
         }
 
-        void DamageTaken(Unit* who, uint32&, DamageEffectType damagetype, SpellSchoolMask) override
+        void DamageTaken(Unit* who, uint256&, DamageEffectType damagetype, SpellSchoolMask) override
         {
             if (who && damagetype == DIRECT_DAMAGE)
             {
@@ -1837,7 +1837,7 @@ public:
             me->CastSpell(me, SPELL_GRIM_REPRISAL, true);
         }
 
-        void DamageTaken(Unit*, uint32&, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256&, DamageEffectType, SpellSchoolMask) override
         {
             if (me->GetEntry() != NPC_INFLUENCE_TENTACLE)
                 me->UpdateEntry(NPC_INFLUENCE_TENTACLE, 0, false);
@@ -1885,7 +1885,7 @@ public:
             me->SetInCombatWithZone();
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (damage >= me->GetHealth())
                 damage = me->GetHealth() - 1;

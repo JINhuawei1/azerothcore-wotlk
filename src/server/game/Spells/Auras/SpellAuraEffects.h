@@ -88,6 +88,7 @@ public:
 
     uint32 GetTickNumber() const { return m_tickNumber; }
     int32 GetTotalTicks() const;
+    uint32 GetUnhastedTotalTicks(Unit* caster = nullptr) const;
     void ResetPeriodic(bool resetPeriodicTimer = false) { if (resetPeriodicTimer) m_periodicTimer = m_amplitude; m_tickNumber = 0;}
     void ResetTicks() { m_tickNumber = 0; }
 

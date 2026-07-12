@@ -464,6 +464,8 @@ class spell_hun_chimera_shot : public SpellScript
         {
             uint32 spellId = 0;
             int32 basePoint = 0;
+            uint256 directDamage = 0;
+            AuraEffect const* triggeredByAura = nullptr;
             Unit::AuraApplicationMap& Auras = unitTarget->GetAppliedAuras();
             for (Unit::AuraApplicationMap::iterator i = Auras.begin(); i != Auras.end(); ++i)
             {
@@ -480,25 +482,27 @@ class spell_hun_chimera_shot : public SpellScript
                     // Serpent Sting - Instantly deals 40% of the damage done by your Serpent Sting.
                     if (familyFlag[0] & 0x4000)
                     {
-                        int32 TickCount = aurEff->GetTotalTicks();
                         spellId = SPELL_HUNTER_CHIMERA_SHOT_SERPENT;
-                        basePoint = aurEff->GetAmount();
-                        ApplyPct(basePoint, TickCount * 40);
-                        basePoint = Acore::Number::ToInt32Saturated(Acore::Number::ToInt256Saturated(unitTarget->SpellDamageBonusTaken(caster, aura->GetSpellInfo(), basePoint, DOT, aura->GetStackAmount())));
+                        uint32 tickCount = aurEff->GetUnhastedTotalTicks(caster);
+                        uint256 tickDamage = aurEff->GetAmountForCombat();
+                        tickDamage = unitTarget->SpellDamageBonusTaken(caster, aura->GetSpellInfo(), tickDamage, DOT, aura->GetStackAmount());
+                        directDamage = CalculatePctUInt256Damage(MultiplyUInt256Damage(tickDamage, static_cast<uint256>(tickCount)), 40);
+                        basePoint = SpellScriptCombat::ToClientSpellValue(Acore::Number::ToLongDouble(directDamage));
+                        triggeredByAura = aurEff;
                     }
                     // Viper Sting - Instantly restores mana to you equal to 60% of the total amount drained by your Viper Sting.
                     else if (familyFlag[1] & 0x00000080)
                     {
-                        int32 TickCount = aura->GetEffect(0)->GetTotalTicks();
+                        uint32 TickCount = aurEff->GetUnhastedTotalTicks(caster);
                         spellId = SPELL_HUNTER_CHIMERA_SHOT_VIPER;
 
                         // Amount of one aura tick
-                        long double targetMaxMana = Acore::Number::ToLongDouble(unitTarget->GetMaxPowerForCombat256(POWER_MANA));
-                        long double basePointValue = targetMaxMana * static_cast<long double>(aurEff->GetAmount()) / 100.0L;
-                        long double casterBasePoint = targetMaxMana * static_cast<long double>(aurEff->GetAmount()) / 50.0L; /// @todo: Caster uses unitTarget?
+                        uint256 targetMaxMana = unitTarget->GetMaxPowerForCombat256(POWER_MANA);
+                        uint256 basePointValue = CalculatePctUInt256Damage(targetMaxMana, aurEff->GetAmount());
+                        uint256 casterBasePoint = CalculatePctUInt256Damage(targetMaxMana, static_cast<int64>(aurEff->GetAmount()) * 2); /// @todo: Caster uses unitTarget?
                         if (basePointValue > casterBasePoint)
                             basePointValue = casterBasePoint;
-                        basePoint = ToInt32Saturated(basePointValue * static_cast<long double>(TickCount * 60) / 100.0L);
+                        basePoint = SpellScriptCombat::ToClientSpellValue(Acore::Number::ToLongDouble(CalculatePctUInt256Damage(MultiplyUInt256Damage(basePointValue, static_cast<uint256>(TickCount)), 60)));
                     }
                     // Scorpid Sting - Attempts to Disarm the target for 10 sec. This effect cannot occur more than once per 1 minute.
                     else if (familyFlag[0] & 0x00008000)
@@ -522,7 +526,12 @@ class spell_hun_chimera_shot : public SpellScript
             }
 
             if (spellId)
-                caster->CastCustomSpell(unitTarget, spellId, &basePoint, 0, 0, true);
+            {
+                if (directDamage > static_cast<uint256>(std::numeric_limits<int32>::max()))
+                    caster->DealTriggeredSpellDamage256(unitTarget, spellId, directDamage, triggeredByAura);
+                else
+                    caster->CastCustomSpell(unitTarget, spellId, &basePoint, 0, 0, true);
+            }
         }
     }
 

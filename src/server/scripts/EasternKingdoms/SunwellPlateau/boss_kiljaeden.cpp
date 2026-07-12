@@ -472,7 +472,7 @@ struct boss_kiljaeden : public BossAI
         ScriptedAI::AttackStart(who);
     }
 
-    void DamageTaken(Unit* unit, uint32& damage, DamageEffectType damageType, SpellSchoolMask schoolMask) override
+    void DamageTaken(Unit* unit, uint256& damage, DamageEffectType damageType, SpellSchoolMask schoolMask) override
     {
         BossAI::DamageTaken(unit, damage, damageType, schoolMask);
 

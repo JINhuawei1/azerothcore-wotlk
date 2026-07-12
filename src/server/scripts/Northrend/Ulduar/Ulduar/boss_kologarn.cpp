@@ -387,11 +387,11 @@ public:
             }
         }
 
-        void DamageTaken(Unit* who, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit* who, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (who && who->GetEntry() == me->GetEntry() && me->GetHealth())
             {
-                damage = std::min(damage, me->GetHealth() - 1);
+                damage = std::min<uint256>(damage, static_cast<uint256>(me->GetHealth() - 1));
                 me->LowerPlayerDamageReq(damage);
             }
         }
@@ -558,7 +558,7 @@ public:
             }
         }
 
-        void DamageTaken(Unit* who, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit* who, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (!_combatStarted)
                 if (InstanceScript* instance = me->GetInstanceScript())
@@ -571,7 +571,7 @@ public:
 
             if (_damageDone > 0)
             {
-                _damageDone -= damage;
+                _damageDone -= damage > static_cast<uint256>(std::numeric_limits<int32>::max()) ? std::numeric_limits<int32>::max() : static_cast<int32>(damage);
                 if (_damageDone <= 0 || damage >= me->GetHealth())
                     me->RemoveAurasByType(SPELL_AURA_CONTROL_VEHICLE);
             }
@@ -638,7 +638,7 @@ public:
         uint32 _timer;
         bool _damaged;
 
-        void DamageDealt(Unit* /*victim*/, uint32& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
+        void DamageDealt(Unit* /*victim*/, uint256& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
         {
             if (damage > 0 && !_damaged && me->GetInstanceScript())
             {

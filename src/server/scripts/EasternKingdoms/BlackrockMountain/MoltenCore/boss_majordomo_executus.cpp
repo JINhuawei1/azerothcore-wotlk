@@ -307,7 +307,7 @@ public:
             }
         }
 
-        void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*dmgType*/, SpellSchoolMask /*school*/) override
+        void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*dmgType*/, SpellSchoolMask /*school*/) override
         {
             if (events.IsInPhase(PHASE_COMBAT) && me->GetHealth() <= damage)
             {

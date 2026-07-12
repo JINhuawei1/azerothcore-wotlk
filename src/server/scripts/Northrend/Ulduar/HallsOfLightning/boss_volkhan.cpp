@@ -346,7 +346,7 @@ public:
             events.ScheduleEvent(EVENT_IMMOLATION, 3s);
         }
 
-        void DamageTaken(Unit*, uint32& uiDamage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& uiDamage, DamageEffectType, SpellSchoolMask) override
         {
             if (me->GetEntry() == NPC_BRITTLE_GOLEM)
             {

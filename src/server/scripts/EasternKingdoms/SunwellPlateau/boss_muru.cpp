@@ -111,7 +111,7 @@ struct boss_muru : public BossAI
             BossAI::JustSummoned(creature);
     }
 
-    void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+    void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
     {
         if (damage >= me->GetHealth())
         {
@@ -264,10 +264,13 @@ struct npc_dark_fiend : public ScriptedAI
         }, 1s, 2s);
     }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*damagetype*/, SpellSchoolMask /*schoolMask*/) override
+    void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*damagetype*/, SpellSchoolMask /*schoolMask*/) override
     {
         if (damage >= me->GetHealth())
-            damage = me->GetHealth() - me->GetMaxHealth() * 0.01f;
+        {
+            uint256 savedHealth = Acore::Number::CalculatePct(static_cast<uint256>(me->GetMaxHealth()), 1);
+            damage = static_cast<uint256>(me->GetHealth()) > savedHealth ? static_cast<uint256>(me->GetHealth()) - savedHealth : 0;
+        }
     }
 
     void UpdateAI(uint32 /*diff*/) override

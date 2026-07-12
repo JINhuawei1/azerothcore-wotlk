@@ -37,6 +37,14 @@ public:
     // 更新物品属性效果
     void UpdateItemAttributeEffects(Player* player);
 
+    // 【审计修复】合并式全量属性刷新请求（公开给登录兜底刷新使用）
+    void RequestDeferredStatsUpdate(Player* player);
+
+    // 【审计修复】登出时清理该玩家的"已排程刷新/批量更新中"标记：
+    // 刷新事件若因玩家对象销毁而未执行，标记会永久残留（登出不清理时甚至跨会话残留），
+    // 此后该角色的所有刷新请求都被"已排程"判定挡掉，属性永不再刷新（表现为上线少属性）
+    void ClearPlayerPendingUpdateFlags(uint64 playerGuid);
+
     // 获取物品属性描述
     std::string GetAttributeDescription(Item* item, uint32 attributeId);
 
@@ -63,8 +71,6 @@ private:
     // 【性能优化】合并短时间内重复的属性刷新请求
     std::mutex _deferredUpdateMutex;
     std::unordered_set<uint64> _deferredUpdatePlayers;
-
-    void RequestDeferredStatsUpdate(Player* player);
 
     // 【性能优化-防抖】检查是否需要立即更新
     bool ShouldUpdateImmediately(Player* player);

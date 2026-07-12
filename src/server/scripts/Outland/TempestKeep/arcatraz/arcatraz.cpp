@@ -130,7 +130,7 @@ public:
             events.ScheduleEvent(EVENT_MILL_BASE_SPELL, 2000);
         }
 
-        void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*type*/, SpellSchoolMask /*school*/) override
+        void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*type*/, SpellSchoolMask /*school*/) override
         {
             if (me->HealthBelowPctDamaged(50, damage) && !_usedIceblock)
             {
@@ -383,7 +383,7 @@ public:
             instance->SetBossState(DATA_WARDEN_MELLICHAR, NOT_STARTED);
         }
 
-        void DamageTaken(Unit* attacker, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit* attacker, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (attacker && attacker->GetCharmerOrOwnerOrOwnGUID().IsPlayer() && damage > 0 && !me->isActiveObject())
             {

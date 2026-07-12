@@ -813,11 +813,9 @@ class spell_pri_renew : public AuraScript
                 uint256 heal = GetEffect(EFFECT_0)->GetAmountForCombat();
                 heal = GetTarget()->SpellHealingBonusTaken(caster, GetSpellInfo(), heal, DOT);
 
-                int32 basepoints0 = SpellScriptCombat::ToClientSpellValue(
-                    static_cast<long double>(empoweredRenewAurEff->GetAmount()) *
-                    static_cast<long double>(GetEffect(EFFECT_0)->GetTotalTicks()) *
-                    Acore::Number::ToLongDouble(heal) / 100.0L);
-                caster->CastCustomSpell(GetTarget(), SPELL_PRIEST_EMPOWERED_RENEW, &basepoints0, nullptr, nullptr, true, nullptr, aurEff);
+                uint256 totalHeal = MultiplyUInt256Damage(heal, static_cast<uint256>(GetEffect(EFFECT_0)->GetUnhastedTotalTicks(caster)));
+                uint256 triggeredHeal = CalculatePctUInt256Damage(totalHeal, empoweredRenewAurEff->GetAmount());
+                caster->DealTriggeredSpellHeal256(GetTarget(), SPELL_PRIEST_EMPOWERED_RENEW, triggeredHeal, aurEff);
             }
         }
     }

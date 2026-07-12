@@ -650,17 +650,17 @@ void ItemIdentificationSystem::LoadIdentificationTemplates()
 // 检查物品是否可以鉴定
 bool ItemIdentificationSystem::CanIdentify(Player* player, Item* item, bool sendError)
 {
+    if (!player || !item)
+    {
+        DebugLog("CanIdentify检查失败: 玩家或物品为空");
+        return false;
+    }
+
     if (!_enabled)
     {
         if (sendError)
             ChatHandler(player->GetSession()).SendNotification("物品鉴定系统当前已禁用");
         DebugLog("CanIdentify检查失败: 系统已禁用");
-        return false;
-    }
-
-    if (!player || !item)
-    {
-        DebugLog("CanIdentify检查失败: 玩家或物品为空");
         return false;
     }
     
@@ -4038,6 +4038,9 @@ private:
         uint32 skipCount = 0;
         std::vector<uint32> processedGuids;
         std::unordered_map<uint32, Item*> itemsByGuid = BuildPlayerItemGuidIndex(player);
+        // IdentifyItem 可能消耗背包材料或按配置销毁物品，销毁的物品可能仍在本批列表中，
+        // 索引缓存的 Item* 会变成悬垂指针；发生过鉴定后必须重建索引再取指针
+        bool itemIndexDirty = false;
 
         do
         {
@@ -4049,6 +4052,11 @@ private:
             uint32 identificationGroupId = fields[4].Get<uint32>();
 
             // 从本次请求的一次性背包索引中查找物品，避免每个GUID重复扫描背包
+            if (itemIndexDirty)
+            {
+                itemsByGuid = BuildPlayerItemGuidIndex(player);
+                itemIndexDirty = false;
+            }
             auto itemItr = itemsByGuid.find(itemGuid);
             Item* item = itemItr != itemsByGuid.end() ? itemItr->second : nullptr;
             if (!item || item->GetEntry() != itemId)
@@ -4075,6 +4083,7 @@ private:
             if (identificationGroupId > 0)
             {
                 success = sItemIdentificationSystem->IdentifyItem(player, item, identificationGroupId);
+                itemIndexDirty = true;
             }
 
             if (success)
@@ -5990,6 +5999,9 @@ bool ItemIdentificationCommandScript::HandleBatchIdentifyCommand(ChatHandler* ha
     uint32 skipCount = 0;
     std::vector<uint32> processedGuids;
     std::unordered_map<uint32, Item*> itemsByGuid = BuildPlayerItemGuidIndex(player);
+    // IdentifyItem 可能消耗背包材料或按配置销毁物品，销毁的物品可能仍在本批列表中，
+    // 索引缓存的 Item* 会变成悬垂指针；发生过鉴定后必须重建索引再取指针
+    bool itemIndexDirty = false;
 
     do
     {
@@ -6001,6 +6013,11 @@ bool ItemIdentificationCommandScript::HandleBatchIdentifyCommand(ChatHandler* ha
         uint32 identificationGroupId = fields[4].Get<uint32>();
 
         // 从本次请求的一次性背包索引中查找物品，避免每个GUID重复扫描背包
+        if (itemIndexDirty)
+        {
+            itemsByGuid = BuildPlayerItemGuidIndex(player);
+            itemIndexDirty = false;
+        }
         auto itemItr = itemsByGuid.find(itemGuid);
         Item* item = itemItr != itemsByGuid.end() ? itemItr->second : nullptr;
         if (!item)
@@ -6036,6 +6053,7 @@ bool ItemIdentificationCommandScript::HandleBatchIdentifyCommand(ChatHandler* ha
         if (identificationGroupId > 0)
         {
             success = sItemIdentificationSystem->IdentifyItem(player, item, identificationGroupId);
+            itemIndexDirty = true;
         }
 
         if (success)

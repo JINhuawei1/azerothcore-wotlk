@@ -299,7 +299,7 @@ public:
             }
         }
 
-        void DamageTaken(Unit* attacker, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit* attacker, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (attacker && _duelInProgress && attacker->IsControlledByPlayer())
             {

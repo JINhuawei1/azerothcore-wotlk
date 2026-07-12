@@ -119,7 +119,7 @@ struct boss_attumen : public BossAI
         });
     }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
+    void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
     {
         // Attumen does not die until he mounts Midnight, let health fall to 1 and prevent further damage.
         if (damage >= me->GetHealth() && _phase != PHASE_MOUNTED)
@@ -295,7 +295,7 @@ struct boss_midnight : public BossAI
         return me->GetVictim() && (me->GetVictim()->GetPositionZ() < 53.0f || me->GetVictim()->GetDistance(me->GetHomePosition()) < 50.0f);
     }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
+    void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
     {
         // Midnight never dies, let health fall to 1 and prevent further damage.
         if (damage >= me->GetHealth())

@@ -160,7 +160,7 @@ public:
             return false;
         }
 
-        void DamageTaken(Unit* who, uint32& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
+        void DamageTaken(Unit* who, uint256& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
         {
             if ((!who || !who->IsControlledByPlayer()) && me->HealthBelowPct(70))
             {
@@ -170,7 +170,8 @@ public:
                 }
                 else
                 {
-                    damage *= (me->GetHealthPct() - 5.0f) / 65.0f;
+                    long double scale = (static_cast<long double>(me->GetHealthPct()) - 5.0L) / 65.0L;
+                    damage = Acore::Number::ToUInt256Saturated(Acore::Number::ToInt256Saturated(Acore::Number::ToLongDouble(damage) * scale));
                 }
             }
         }

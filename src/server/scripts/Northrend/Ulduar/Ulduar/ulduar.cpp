@@ -420,7 +420,7 @@ public:
             me->SetReactState(REACT_PASSIVE);
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (!_spawnedMechanic && me->HealthBelowPctDamaged(20, damage))
             {

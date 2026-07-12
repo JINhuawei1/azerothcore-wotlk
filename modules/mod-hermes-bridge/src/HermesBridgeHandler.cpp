@@ -16,6 +16,7 @@
 #include "Util.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
+#include "WorldSessionMgr.h"
 #include "../../mod-boundary/src/BoundaryMgr.h"
 #include "../../mod-breakthrough/src/BreakthroughSystem.h"
 #include "../../mod-breakthrough/src/BreakthroughSkillSystem.h"
@@ -34,6 +35,8 @@
 #include <deque>
 #include <exception>
 #include <limits>
+#include <mutex>
+#include <shared_mutex>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -331,6 +334,8 @@ namespace
     struct HermesOutboundFrame
     {
         WorldSession* Session = nullptr;
+        // 【审计修复】记录会话对应的账号 ID，flush 发送前用于验证会话是否仍然存活，避免 use-after-free
+        uint32 AccountId = 0;
         uint8 Lane = HERMES_LANE_RPC;
         uint8 MessageType = HERMES_MESSAGE_RESPONSE;
         uint8 Codec = HERMES_CODEC_JSON;
@@ -341,8 +346,17 @@ namespace
         std::string Payload;
     };
 
+    // 【审计修复】g_HermesStateMutex 保护出站队列/队列统计/分片缓冲/限速桶/调试统计等跨线程共享容器
+    // （世界线程 opcode 处理、地图线程 CanPacketSend、跨模块 API 均会并发访问）。
+    // 约定：持有该锁期间禁止调用 session->SendPacket / 查库，发送必须先将帧 swap 到局部容器再解锁执行。
+    std::mutex g_HermesStateMutex;
+    // 【审计修复】g_HermesReadyMutex（读多写少）保护插件就绪表 g_HermesAddonReadyPlayers / g_HermesAddonReadyPrefixes
+    std::shared_mutex g_HermesReadyMutex;
+
     std::deque<HermesOutboundFrame> g_HermesOutboundQueue;
-    uint32 g_HermesOutboundBatchDepth = 0;
+    // 【审计修复】批量守卫仅用于"同线程批量处理期间暂缓 flush"，改为 thread_local 使语义线程内自洽，
+    // 避免跨线程非原子 ++/-- 导致计数错乱、队列滞留
+    thread_local uint32 g_HermesOutboundBatchDepth = 0;
     std::atomic<uint32> g_HermesServerEventSequence{1};
     std::atomic<uint64> g_HermesAddonTakeoverBlockedLegacySmsg{0};
     std::atomic<int> g_HermesDebugRecvLogBudget{200};
@@ -3239,8 +3253,13 @@ namespace
     {
         if (Player* player = session.GetPlayer())
         {
-            auto const result = g_HermesAddonReadyPlayers.insert(player->GetGUID().GetCounter());
-            if (result.second && ConsumeHermesTraceBudget(g_HermesTraceReadyLogBudget))
+            bool inserted = false;
+            {
+                // 【审计修复】就绪表写路径加独占锁（世界线程写，地图线程经 CanPacketSend 读）
+                std::unique_lock<std::shared_mutex> guard(g_HermesReadyMutex);
+                inserted = g_HermesAddonReadyPlayers.insert(player->GetGUID().GetCounter()).second;
+            }
+            if (inserted && ConsumeHermesTraceBudget(g_HermesTraceReadyLogBudget))
                 LOG_INFO("server.loading", "HermesBridge TRACE server ready-mark account={} player={} guid={} reason={}", session.GetAccountId(), player->GetName(), player->GetGUID().GetCounter(), reason ? reason : "");
         }
     }
@@ -3253,9 +3272,13 @@ namespace
         if (Player* player = session.GetPlayer())
         {
             uint32 const guid = player->GetGUID().GetCounter();
-            auto& prefixes = g_HermesAddonReadyPrefixes[guid];
-            auto const result = prefixes.insert(prefix);
-            if (result.second && ConsumeHermesTraceBudget(g_HermesTraceReadyLogBudget))
+            bool inserted = false;
+            {
+                // 【审计修复】就绪前缀表写路径加独占锁
+                std::unique_lock<std::shared_mutex> guard(g_HermesReadyMutex);
+                inserted = g_HermesAddonReadyPrefixes[guid].insert(prefix).second;
+            }
+            if (inserted && ConsumeHermesTraceBudget(g_HermesTraceReadyLogBudget))
                 LOG_INFO("server.loading", "HermesBridge TRACE server prefix-ready-mark account={} player={} guid={} prefix={} reason={}", session.GetAccountId(), player->GetName(), guid, prefix, reason ? reason : "");
         }
     }
@@ -3266,8 +3289,14 @@ namespace
             return;
 
         uint32 const guid = player->GetGUID().GetCounter();
-        auto const erasedPlayer = g_HermesAddonReadyPlayers.erase(guid);
-        auto const erasedPrefixes = g_HermesAddonReadyPrefixes.erase(guid);
+        std::size_t erasedPlayer = 0;
+        std::size_t erasedPrefixes = 0;
+        {
+            // 【审计修复】就绪表清除路径加独占锁
+            std::unique_lock<std::shared_mutex> guard(g_HermesReadyMutex);
+            erasedPlayer = g_HermesAddonReadyPlayers.erase(guid);
+            erasedPrefixes = g_HermesAddonReadyPrefixes.erase(guid);
+        }
         if ((erasedPlayer || erasedPrefixes) && ConsumeHermesTraceBudget(g_HermesTraceReadyLogBudget))
             LOG_INFO("server.loading", "HermesBridge TRACE server ready-clear player={} guid={} prefixes={} reason={}", player->GetName(), guid, erasedPrefixes ? 1 : 0, reason ? reason : "");
     }
@@ -3279,7 +3308,12 @@ namespace
 
     bool IsHermesAddonReady(Player const* player)
     {
-        return player && g_HermesAddonReadyPlayers.find(player->GetGUID().GetCounter()) != g_HermesAddonReadyPlayers.end();
+        if (!player)
+            return false;
+
+        // 【审计修复】就绪表读路径加共享锁（地图线程 CanPacketSend 并发读取）
+        std::shared_lock<std::shared_mutex> guard(g_HermesReadyMutex);
+        return g_HermesAddonReadyPlayers.find(player->GetGUID().GetCounter()) != g_HermesAddonReadyPlayers.end();
     }
 
     bool IsHermesAddonPrefixReady(Player const* player, std::string const& prefix)
@@ -3287,6 +3321,8 @@ namespace
         if (!player || prefix.empty())
             return false;
 
+        // 【审计修复】就绪前缀表读路径加共享锁
+        std::shared_lock<std::shared_mutex> guard(g_HermesReadyMutex);
         auto const playerItr = g_HermesAddonReadyPrefixes.find(player->GetGUID().GetCounter());
         return playerItr != g_HermesAddonReadyPrefixes.end() && playerItr->second.find(prefix) != playerItr->second.end();
     }
@@ -3340,6 +3376,10 @@ namespace
 
         std::ostringstream key;
         key << session.GetAccountId() << ':' << prefix;
+
+        // 【审计修复】分片缓冲被地图线程(CanPacketSend)与世界线程(跨模块 API)并发访问，整段读改写加锁；
+        // 本函数持锁期间不发包，调用方在返回后才调用 SendHermesAddonMessageEvent，无锁嵌套
+        std::lock_guard<std::mutex> stateGuard(g_HermesStateMutex);
 
         HermesAddonChunkBuffer& buffer = g_HermesAddonChunkBuffers[key.str()];
         if (index == 1 || buffer.Total != total || buffer.Parts.size() != total)
@@ -3598,6 +3638,8 @@ namespace
             return;
 
         uint32 const now = getMSTime();
+        // 【审计修复】调试统计容器可能被多线程并发写入，整段加锁（仅内存操作与日志，无发包/查库）
+        std::lock_guard<std::mutex> stateGuard(g_HermesStateMutex);
         if (!g_HermesOutboundDebugStats.WindowStartMs)
             g_HermesOutboundDebugStats.WindowStartMs = now;
 
@@ -3707,6 +3749,8 @@ namespace
 
         uint32 const now = getMSTime();
         uint32 const accountId = session.GetAccountId();
+        // 【审计修复】限速桶 operator[] 并发插入会破坏 unordered_map，读改写整段加锁
+        std::lock_guard<std::mutex> stateGuard(g_HermesStateMutex);
         HermesOutboundRateBucket& bucket = g_HermesOutboundRateBuckets[accountId];
         if (!bucket.WindowStartMs || getMSTimeDiff(bucket.WindowStartMs, now) >= 1000)
         {
@@ -3731,6 +3775,7 @@ namespace
         return false;
     }
 
+    // 【审计修复】以下 Track*/Finish*Locked 统计函数要求调用方已持有 g_HermesStateMutex
     void TrackHermesOutboundDrop(WorldSession& session, uint8 lane, uint16 methodId, uint32 requestId, uint32 payloadSize)
     {
         uint8 const index = HermesLaneStatsIndex(lane);
@@ -3766,7 +3811,7 @@ namespace
             laneStats.HighWatermark = laneStats.Depth;
     }
 
-    void FinishHermesOutboundSend(uint8 lane)
+    void FinishHermesOutboundSendLocked(uint8 lane)
     {
         uint8 const index = HermesLaneStatsIndex(lane);
         HermesOutboundLaneStats& laneStats = g_HermesOutboundQueueStats.Lanes[index];
@@ -3780,9 +3825,23 @@ namespace
         ++laneStats.Sent;
     }
 
+    // 【审计修复】发送路径在锁外执行，统计回写时自行加锁
+    void FinishHermesOutboundSend(uint8 lane)
+    {
+        std::lock_guard<std::mutex> stateGuard(g_HermesStateMutex);
+        FinishHermesOutboundSendLocked(lane);
+    }
+
     void SendQueuedHermesOutboundFrame(HermesOutboundFrame const& frame)
     {
         if (!frame.Session)
+        {
+            FinishHermesOutboundSend(frame.Lane);
+            return;
+        }
+
+        // 【审计修复】发送前按账号 ID 验证会话仍存活且指针未被复用，防止会话析构后 SendPacket use-after-free
+        if (sWorldSessionMgr->FindSession(frame.AccountId) != frame.Session)
         {
             FinishHermesOutboundSend(frame.Lane);
             return;
@@ -3812,14 +3871,21 @@ namespace
 
     void FlushHermesOutboundQueue()
     {
-        while (!g_HermesOutboundQueue.empty())
+        // 【审计修复】持锁把待发帧 swap 到局部容器后立即解锁，再逐帧 SendPacket，
+        // 避免持锁发包：SendPacket 会再触发 CanPacketSend 钩子（SMSG_HERMES_BRIDGE 在
+        // TryReadAddonChatPacket 的 opcode 判断处直接放行，不会再进入加锁路径），
+        // 且防止极端情况下重入本模块时二次抢同一把锁造成死锁
+        std::deque<HermesOutboundFrame> pending;
         {
-            HermesOutboundFrame frame = std::move(g_HermesOutboundQueue.front());
-            g_HermesOutboundQueue.pop_front();
-            SendQueuedHermesOutboundFrame(frame);
+            std::lock_guard<std::mutex> stateGuard(g_HermesStateMutex);
+            pending.swap(g_HermesOutboundQueue);
         }
+
+        for (HermesOutboundFrame const& frame : pending)
+            SendQueuedHermesOutboundFrame(frame);
     }
 
+    // 【审计修复】要求调用方已持有 g_HermesStateMutex
     bool CoalesceHermesOutboundFrame(HermesOutboundFrame const& candidate)
     {
         if (candidate.Lane != HERMES_LANE_SNAPSHOT)
@@ -3842,6 +3908,8 @@ namespace
     {
         HermesOutboundFrame frame;
         frame.Session = &session;
+        // 【审计修复】入队时记录账号 ID 供发送前会话存活校验
+        frame.AccountId = session.GetAccountId();
         frame.Lane = requestFrame.Lane;
         frame.MessageType = messageType;
         frame.Codec = codec;
@@ -3851,6 +3919,9 @@ namespace
         frame.Sequence = requestFrame.Sequence;
         frame.Payload = responsePayload;
 
+        // 【审计修复】队列与统计的读改写全程持锁；中途需要 flush 时先解锁（flush 内部自行加锁并在锁外发包）
+        std::unique_lock<std::mutex> stateGuard(g_HermesStateMutex);
+
         if (CoalesceHermesOutboundFrame(frame))
             return true;
 
@@ -3859,7 +3930,11 @@ namespace
         if (g_HermesOutboundQueueStats.Depth >= HERMES_SERVER_OUTBOUND_QUEUE_CAPACITY)
         {
             if (reliableFrame)
+            {
+                stateGuard.unlock();
                 FlushHermesOutboundQueue();
+                stateGuard.lock();
+            }
             else if (CoalesceHermesOutboundFrame(frame))
                 return true;
         }
@@ -3875,6 +3950,8 @@ namespace
         return true;
     }
 
+    // 【审计修复】RAII 批量守卫，g_HermesOutboundBatchDepth 已为 thread_local：
+    // 仅暂缓本线程的 flush，析构（含异常展开路径）时保证配对递减并在归零时 flush
     struct HermesOutboundBatchScope
     {
         HermesOutboundBatchScope()
@@ -3891,8 +3968,29 @@ namespace
         }
     };
 
+    // 【审计修复】会话登出时清除其滞留在出站队列中的帧，防止之后 flush 对已析构会话发包
+    void PurgeHermesOutboundFramesForSession(WorldSession* session)
+    {
+        if (!session)
+            return;
+
+        std::lock_guard<std::mutex> stateGuard(g_HermesStateMutex);
+        for (auto itr = g_HermesOutboundQueue.begin(); itr != g_HermesOutboundQueue.end();)
+        {
+            if (itr->Session == session)
+            {
+                FinishHermesOutboundSendLocked(itr->Lane);
+                itr = g_HermesOutboundQueue.erase(itr);
+            }
+            else
+                ++itr;
+        }
+    }
+
     void AppendHermesOutboundQueueJson(std::ostringstream& out)
     {
+        // 【审计修复】统计读取同样持锁，避免读到撕裂数据
+        std::lock_guard<std::mutex> stateGuard(g_HermesStateMutex);
         out << "\"outboundQueue\":{\"capacity\":" << HERMES_SERVER_OUTBOUND_QUEUE_CAPACITY
             << ",\"depth\":" << g_HermesOutboundQueueStats.Depth
             << ",\"highWatermark\":" << g_HermesOutboundQueueStats.HighWatermark
@@ -5491,12 +5589,23 @@ namespace
             out << "}";
         }
 
+        // 【审计修复】持锁快照统计值后再拼接 JSON
+        uint32 outboundDepth = 0;
+        uint32 outboundHighWatermark = 0;
+        uint64 outboundDropped = 0;
+        {
+            std::lock_guard<std::mutex> stateGuard(g_HermesStateMutex);
+            outboundDepth = g_HermesOutboundQueueStats.Depth;
+            outboundHighWatermark = g_HermesOutboundQueueStats.HighWatermark;
+            outboundDropped = g_HermesOutboundQueueStats.Dropped;
+        }
+
         out << ",\"modules\":[{\"name\":\"PlayerAttributePanel\",\"status\":\"active\",\"methods\":[\"ui.getModuleStatus\",\"player.getAttributes\",\"player.getTargetSnapshot\",\"player.getVitals\",\"player.getSnapshot\"],\"stateSections\":[\"attributes\",\"vitals\",\"basic\",\"position\"]}]"
             << ",\"queues\":{\"pendingLimit\":128,\"streamQueueLimit\":512,\"nativeSendQueue\":256,\"nativeRecvQueue\":8192"
             << ",\"serverOutboundCapacity\":" << HERMES_SERVER_OUTBOUND_QUEUE_CAPACITY
-            << ",\"serverOutboundDepth\":" << g_HermesOutboundQueueStats.Depth
-            << ",\"serverOutboundHighWatermark\":" << g_HermesOutboundQueueStats.HighWatermark
-            << ",\"serverOutboundDropped\":" << g_HermesOutboundQueueStats.Dropped
+            << ",\"serverOutboundDepth\":" << outboundDepth
+            << ",\"serverOutboundHighWatermark\":" << outboundHighWatermark
+            << ",\"serverOutboundDropped\":" << outboundDropped
             << "}"
             << ",\"features\":{\"rpc\":true,\"stateCache\":true,\"binaryEvents\":true,\"bulkChunks\":true,\"debugPanel\":true}"
             << "}}";
@@ -6476,7 +6585,11 @@ namespace
         void OnPlayerLogout(Player* player) override
         {
             if (player)
+            {
                 ClearHermesAddonReady(player, "logout");
+                // 【审计修复】登出时清除该会话滞留的出站帧，防止会话析构后 flush 发包导致 use-after-free
+                PurgeHermesOutboundFramesForSession(player->GetSession());
+            }
         }
     };
 }

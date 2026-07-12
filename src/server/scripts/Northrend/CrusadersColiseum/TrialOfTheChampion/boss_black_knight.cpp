@@ -135,7 +135,7 @@ public:
             ScriptedAI::EnterEvadeMode(why);
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (me->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE))
             {

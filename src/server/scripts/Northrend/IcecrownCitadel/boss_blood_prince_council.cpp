@@ -332,7 +332,7 @@ public:
             summons.Summon(summon);
         }
 
-        void DamageTaken(Unit* attacker, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit* attacker, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (!_isEmpowered)
             {
@@ -342,7 +342,7 @@ public:
             }
         }
 
-        void DamageDealt(Unit* target, uint32& damage, DamageEffectType  /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
+        void DamageDealt(Unit* target, uint256& damage, DamageEffectType  /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
         {
             if (!target->IsPlayer())
                 return;
@@ -602,7 +602,7 @@ public:
             summons.Despawn(s);
         }
 
-        void DamageTaken(Unit* attacker, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit* attacker, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (!_isEmpowered)
             {
@@ -612,7 +612,7 @@ public:
             }
         }
 
-        void DamageDealt(Unit* target, uint32& damage, DamageEffectType  /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
+        void DamageDealt(Unit* target, uint256& damage, DamageEffectType  /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
         {
             if (!target->IsPlayer())
                 return;
@@ -896,7 +896,7 @@ public:
             }
         }
 
-        void DamageTaken(Unit* attacker, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit* attacker, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (!_isEmpowered)
             {
@@ -906,7 +906,7 @@ public:
             }
         }
 
-        void DamageDealt(Unit* target, uint32& damage, DamageEffectType  /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
+        void DamageDealt(Unit* target, uint256& damage, DamageEffectType  /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
         {
             if (!target->IsPlayer())
                 return;
@@ -1202,7 +1202,7 @@ public:
             ScriptedAI::AttackStart(who);
         }
 
-        void DamageTaken(Unit* attacker, uint32& /*damage*/, DamageEffectType det, SpellSchoolMask) override
+        void DamageTaken(Unit* attacker, uint256& /*damage*/, DamageEffectType det, SpellSchoolMask) override
         {
             if (!attacker || attacker == me || attacker == me->GetVictim() || (det != DIRECT_DAMAGE && det != SPELL_DIRECT_DAMAGE))
                 return;
@@ -1334,7 +1334,7 @@ public:
             me->DespawnOrUnsummon(1);
         }
 
-        void DamageDealt(Unit* target, uint32& damage, DamageEffectType  /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
+        void DamageDealt(Unit* target, uint256& damage, DamageEffectType  /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
         {
             if (!target->IsPlayer())
             {

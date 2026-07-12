@@ -1306,6 +1306,10 @@ std::string ItemEnhancementMgr::GetStatTypeName(uint32 statType) const
         case ITEM_MOD_INTELLECT: return "智力";                                 // 5
         case ITEM_MOD_SPIRIT: return "精神";                                    // 6
         case ITEM_MOD_STAMINA: return "耐力";                                   // 7
+        case ITEM_MOD_TRUE_DAMAGE: return "真实伤害";                           // 8
+        case ITEM_MOD_CUTTING_DAMAGE: return "切割伤害";                        // 9
+        case ITEM_MOD_COOLDOWN_REDUCTION: return "冷却缩减";                    // 10
+        case ITEM_MOD_SKILL_DAMAGE: return "技能伤害";                          // 11
         case ITEM_MOD_DEFENSE_SKILL_RATING: return "防御等级";                  // 12
         case ITEM_MOD_DODGE_RATING: return "躲闪等级";                          // 13
         case ITEM_MOD_PARRY_RATING: return "招架等级";                          // 14
@@ -2192,6 +2196,22 @@ void ItemEnhancementMgr::ApplyStatModifier(Player* player, uint32 statType, int2
             player->UpdateMaxHealth();
             break;
         }
+        case ITEM_MOD_TRUE_DAMAGE:
+            // 自定义属性：真实伤害（与核心 Player::_ApplyItemStats 保持一致）
+            player->ApplyTrueDamageBonus(Acore::Number::ToInt64Saturated(value), apply);
+            break;
+        case ITEM_MOD_CUTTING_DAMAGE:
+            // 自定义属性：切割伤害
+            player->ApplyCuttingDamageBonus(Acore::Number::ToInt64Saturated(value), apply);
+            break;
+        case ITEM_MOD_COOLDOWN_REDUCTION:
+            // 自定义属性：冷却缩减
+            player->ApplyCooldownReductionBonus(Acore::Number::ToInt64Saturated(value), apply);
+            break;
+        case ITEM_MOD_SKILL_DAMAGE:
+            // 自定义属性：技能伤害
+            player->ApplySkillDamageBonus(Acore::Number::ToInt64Saturated(value), apply);
+            break;
         case ITEM_MOD_DEFENSE_SKILL_RATING:
             player->ApplyRatingMod(CR_DEFENSE_SKILL, legacyValue, apply);
             break;
@@ -2316,6 +2336,22 @@ void ItemEnhancementMgr::ApplyStatModifierBatch(Player* player, uint32 statType,
         case ITEM_MOD_STAMINA:
             player->HandleStatModifier(UNIT_MOD_STAT_STAMINA, BASE_VALUE, statModValue, apply);
             player->ApplyStatBuffMod(STAT_STAMINA, statModValue, apply);
+            break;
+        case ITEM_MOD_TRUE_DAMAGE:
+            // 自定义属性：真实伤害
+            player->ApplyTrueDamageBonus(Acore::Number::ToInt64Saturated(value), apply);
+            break;
+        case ITEM_MOD_CUTTING_DAMAGE:
+            // 自定义属性：切割伤害
+            player->ApplyCuttingDamageBonus(Acore::Number::ToInt64Saturated(value), apply);
+            break;
+        case ITEM_MOD_COOLDOWN_REDUCTION:
+            // 自定义属性：冷却缩减
+            player->ApplyCooldownReductionBonus(Acore::Number::ToInt64Saturated(value), apply);
+            break;
+        case ITEM_MOD_SKILL_DAMAGE:
+            // 自定义属性：技能伤害
+            player->ApplySkillDamageBonus(Acore::Number::ToInt64Saturated(value), apply);
             break;
         case ITEM_MOD_DEFENSE_SKILL_RATING:
             player->ApplyRatingMod(CR_DEFENSE_SKILL, legacyValue, apply);

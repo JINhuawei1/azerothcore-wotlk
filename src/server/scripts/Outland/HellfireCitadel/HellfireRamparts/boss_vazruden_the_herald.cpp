@@ -290,7 +290,7 @@ struct boss_vazruden : public ScriptedAI
         });
     }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*type*/, SpellSchoolMask /*school*/) override
+    void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*type*/, SpellSchoolMask /*school*/) override
     {
         if (!_nazanCalled && me->HealthBelowPctDamaged(35, damage))
         {

@@ -1040,7 +1040,7 @@ struct boss_julianne : public ScriptedAI
         }
     }
 
-    void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+    void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
     {
         if (damage < me->GetHealth())
         {
@@ -1161,7 +1161,7 @@ struct boss_romulo : public ScriptedAI
         }
     }
 
-    void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+    void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
     {
         if (damage < me->GetHealth())
         {

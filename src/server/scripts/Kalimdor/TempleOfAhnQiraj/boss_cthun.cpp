@@ -301,7 +301,7 @@ struct boss_eye_of_cthun : public BossAI
             });
     }
 
-    void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+    void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
     {
         //Only if it will kill
         if (damage < me->GetHealth() || !me->GetHealth())

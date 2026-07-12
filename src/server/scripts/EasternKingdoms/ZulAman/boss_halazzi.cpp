@@ -113,7 +113,7 @@ struct boss_halazzi : public BossAI
         EnterPhase(PHASE_LYNX);
     }
 
-    void DamageTaken(Unit* attacker, uint32& damage, DamageEffectType damagetype, SpellSchoolMask damageSchoolMask) override
+    void DamageTaken(Unit* attacker, uint256& damage, DamageEffectType damagetype, SpellSchoolMask damageSchoolMask) override
     {
         BossAI::DamageTaken(attacker, damage, damagetype, damageSchoolMask);
 

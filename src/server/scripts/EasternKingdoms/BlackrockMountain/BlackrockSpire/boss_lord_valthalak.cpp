@@ -114,7 +114,7 @@ public:
             DoZoneInCombat();
         }
 
-        void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*type*/, SpellSchoolMask /*school*/) override
+        void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*type*/, SpellSchoolMask /*school*/) override
         {
             if (!frenzy40 && me->HealthBelowPctDamaged(40, damage))
             {

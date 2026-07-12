@@ -194,7 +194,7 @@ struct boss_shade_of_aran : public BossAI
         }
     }
 
-    void DamageTaken(Unit* doneBy, uint32& damage, DamageEffectType damagetype, SpellSchoolMask damageSchoolMask) override
+    void DamageTaken(Unit* doneBy, uint256& damage, DamageEffectType damagetype, SpellSchoolMask damageSchoolMask) override
     {
         BossAI::DamageTaken(doneBy, damage, damagetype, damageSchoolMask);
 

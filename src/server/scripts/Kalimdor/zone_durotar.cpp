@@ -193,7 +193,7 @@ public:
             me->DespawnOrUnsummon();
         }
 
-        void DamageTaken(Unit* attacker, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit* attacker, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (!attacker || !attacker->IsSummon())
                 return;

@@ -73,7 +73,7 @@ public:
             events.ScheduleEvent(EVENT_THROW_AXE, 1s, GROUP_BRAWLER, PHASE_BRAWLER);
         }
 
-        void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*type*/, SpellSchoolMask /*school*/) override
+        void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*type*/, SpellSchoolMask /*school*/) override
         {
             if (me->HealthBelowPctDamaged(65, damage) && events.IsInPhase(PHASE_BRAWLER))
             {

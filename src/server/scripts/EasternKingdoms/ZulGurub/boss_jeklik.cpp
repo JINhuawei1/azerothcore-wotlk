@@ -356,7 +356,7 @@ struct npc_batrider : public CreatureAI
         }
     }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType, SpellSchoolMask) override
+    void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType, SpellSchoolMask) override
     {
         if (_mode == BATRIDER_MODE_TRASH)
         {

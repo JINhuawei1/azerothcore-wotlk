@@ -36,6 +36,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <mutex>
 #include <unordered_map>
 #include <vector>
 #include <string>
@@ -637,12 +638,16 @@ public:
             return;
 
         uint32 bossGuid = creature->GetGUID().GetCounter();
-        auto itr = _tribBosses.find(bossGuid);
-        if (itr == _tribBosses.end())
-            return;
+        uint32 playerGuid = 0;
+        {
+            std::lock_guard<std::mutex> lock(_tribBossesMutex);
+            auto itr = _tribBosses.find(bossGuid);
+            if (itr == _tribBosses.end())
+                return;
 
-        uint32 playerGuid = itr->second;
-        _tribBosses.erase(itr);
+            playerGuid = itr->second;
+            _tribBosses.erase(itr);
+        }
 
         if (player->GetGUID().GetCounter() != playerGuid)
             return;
@@ -658,6 +663,7 @@ public:
         if (!bossGuid || !playerGuid)
             return;
 
+        std::lock_guard<std::mutex> lock(_tribBossesMutex);
         _tribBosses[bossGuid] = playerGuid;
     }
 
@@ -670,15 +676,24 @@ public:
         uint32 guid = player->GetGUID().GetCounter();
 
         // 检查是否在渡劫中（通过Boss映射反查）
-        for (auto itr = _tribBosses.begin(); itr != _tribBosses.end(); ++itr)
+        bool wasTribulating = false;
         {
-            if (itr->second == guid)
+            std::lock_guard<std::mutex> lock(_tribBossesMutex);
+            for (auto itr = _tribBosses.begin(); itr != _tribBosses.end(); ++itr)
             {
-                _tribBosses.erase(itr);
-                ChatHandler(player->GetSession()).PSendSysMessage(
-                    "|cffff0000[修仙系统]|r 渡劫失败！修为未损，待冷却后可再次挑战。");
-                break;
+                if (itr->second == guid)
+                {
+                    _tribBosses.erase(itr);
+                    wasTribulating = true;
+                    break;
+                }
             }
+        }
+
+        if (wasTribulating)
+        {
+            ChatHandler(player->GetSession()).PSendSysMessage(
+                "|cffff0000[修仙系统]|r 渡劫失败！修为未损，待冷却后可再次挑战。");
         }
     }
 
@@ -749,6 +764,8 @@ private:
     std::array<float, 101> _statBonusByLevel = {};
     std::vector<CultivationSkillConfig> _skillConfigs;
     std::unordered_map<uint32, PlayerCultivationData> _playerData;
+    // _tribBosses 会在不同地图线程的击杀/死亡/续召回调中并发读写，访问必须持锁
+    std::mutex _tribBossesMutex;
     std::unordered_map<uint32, uint32> _tribBosses; // bossGuid → playerGuid
 };
 
@@ -1769,14 +1786,8 @@ static void DealCultivationPeriodicAuraDamage(Unit* caster, Unit* target, AuraEf
     if (scriptDamage != tickDamage)
         tickDamage = scriptDamage;
 
-    if (target->GetAI() && tickDamage <= static_cast<uint256>(std::numeric_limits<uint32>::max()))
-    {
-        uint32 aiDamage = Acore::Number::ToUInt32Saturated(tickDamage);
-        uint32 originalAiDamage = aiDamage;
-        target->GetAI()->OnCalculatePeriodicTickReceived(aiDamage, caster);
-        if (aiDamage != originalAiDamage)
-            tickDamage = aiDamage;
-    }
+    if (target->GetAI())
+        target->GetAI()->OnCalculatePeriodicTickReceived(tickDamage, caster);
 
     uint8 effIndex = aurEff ? aurEff->GetEffIndex() : EFFECT_0;
     if (Unit::IsDamageReducedByArmor(schoolMask, spellInfo, effIndex))

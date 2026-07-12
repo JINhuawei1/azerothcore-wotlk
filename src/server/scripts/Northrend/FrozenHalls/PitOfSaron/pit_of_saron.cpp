@@ -447,7 +447,7 @@ public:
                 c->AI()->SetData(DATA_START_INTRO, 0);
         }
 
-        void DamageTaken(Unit* /*doneBy*/, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit* /*doneBy*/, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (isInvincible && damage >= me->GetHealth())
                 damage = me->GetHealth() - 1;

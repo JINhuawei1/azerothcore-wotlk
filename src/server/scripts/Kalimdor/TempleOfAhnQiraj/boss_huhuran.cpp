@@ -72,7 +72,7 @@ struct boss_huhuran : public BossAI
         events.ScheduleEvent(EVENT_HARD_ENRAGE, 5min);
     }
 
-    void DamageTaken(Unit*, uint32& /*damage*/, DamageEffectType, SpellSchoolMask) override
+    void DamageTaken(Unit*, uint256& /*damage*/, DamageEffectType, SpellSchoolMask) override
     {
         if (!_berserk && HealthBelowPct(30))
         {

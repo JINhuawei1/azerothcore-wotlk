@@ -270,7 +270,7 @@ struct npc_amanitar_mushrooms : public ScriptedAI
         }
     }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*damagetype*/, SpellSchoolMask /*damageSchoolMask*/) override
+    void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*damagetype*/, SpellSchoolMask /*damageSchoolMask*/) override
     {
         if (me->GetEntry() == NPC_HEALTHY_MUSHROOM && damage >= me->GetHealth())
         {

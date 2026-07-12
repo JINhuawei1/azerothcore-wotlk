@@ -57,7 +57,7 @@ public:
             events.ScheduleEvent(SPELL_SHIELD, 0.2 * (int) TIMER_SHIELD);
         }
 
-        void DamageTaken(Unit* /* doneBy */, uint32& /* damage */, DamageEffectType /* damagetype */, SpellSchoolMask damageSchoolMask) override
+        void DamageTaken(Unit* /* doneBy */, uint256& /* damage */, DamageEffectType /* damagetype */, SpellSchoolMask damageSchoolMask) override
         {
             if ((damageSchoolMask & SPELL_SCHOOL_MASK_MAGIC) && SpellShieldReady)
             {

@@ -744,7 +744,7 @@ struct advisor_baseAI : public ScriptedAI
 
     void JustEngagedWith(Unit* /*who*/) override { ScheduleEvents(); }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*damageEffectType*/, SpellSchoolMask /*spellSchoolMask*/) override
+    void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*damageEffectType*/, SpellSchoolMask /*spellSchoolMask*/) override
     {
         if (!_preventDeath)
             return;

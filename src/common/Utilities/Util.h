@@ -342,6 +342,41 @@ inline uint256 AddUInt256Damage(uint256 const& left, uint256 const& right)
     return left > maxV - right ? maxV : left + right;
 }
 
+inline uint256 MultiplyUInt256Damage(uint256 const& left, uint256 const& right)
+{
+    if (!left || !right)
+        return 0;
+
+    uint256 const maxV = std::numeric_limits<uint256>::max();
+    return left > maxV / right ? maxV : left * right;
+}
+
+inline uint256 CalculatePctUInt256Damage(uint256 const& base, uint64 pct)
+{
+    if (!base || !pct)
+        return 0;
+
+    return MultiplyUInt256Damage(base, static_cast<uint256>(pct)) / 100;
+}
+
+inline uint256 CalculatePctUInt256Damage(uint256 const& base, uint32 pct)
+{
+    return CalculatePctUInt256Damage(base, static_cast<uint64>(pct));
+}
+
+inline uint256 CalculatePctUInt256Damage(uint256 const& base, int64 pct)
+{
+    if (pct <= 0)
+        return 0;
+
+    return CalculatePctUInt256Damage(base, static_cast<uint64>(pct));
+}
+
+inline uint256 CalculatePctUInt256Damage(uint256 const& base, int32 pct)
+{
+    return CalculatePctUInt256Damage(base, static_cast<int64>(pct));
+}
+
 // UTF8 handling
 AC_COMMON_API bool Utf8toWStr(std::string_view utf8str, std::wstring& wstr);
 

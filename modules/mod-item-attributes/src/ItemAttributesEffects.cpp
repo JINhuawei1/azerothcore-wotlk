@@ -604,6 +604,19 @@ void ItemAttributesEffects::SetBatchUpdateInProgress(uint64 playerGuid, bool inP
         _batchUpdatePlayers.erase(playerGuid);
 }
 
+// 【审计修复】登出时清理该玩家的待处理标记，防止未执行的刷新事件导致标记永久残留
+void ItemAttributesEffects::ClearPlayerPendingUpdateFlags(uint64 playerGuid)
+{
+    {
+        std::lock_guard<std::mutex> lock(_deferredUpdateMutex);
+        _deferredUpdatePlayers.erase(playerGuid);
+    }
+    {
+        std::lock_guard<std::mutex> lock(_batchUpdateMutex);
+        _batchUpdatePlayers.erase(playerGuid);
+    }
+}
+
 void ItemAttributesEffects::RequestDeferredStatsUpdate(Player* player)
 {
     if (!player)
@@ -866,7 +879,9 @@ void ItemAttributesEffects::RemoveItemAttributeEffectsByGuid(Player* player, uin
     auto data = ItemAttributesDBHelper::LoadItemAttributes(itemGuid);  // 【智能指针修复】自动管理内存
 
     if (!data)
+    {
         return;
+    }
 
     // 合并基础属性和追加属性
     std::vector<uint32> attributes;
@@ -881,7 +896,9 @@ void ItemAttributesEffects::RemoveItemAttributeEffectsByGuid(Player* player, uin
     // 【智能指针修复】移除手动 delete，unique_ptr 自动清理
 
     if (attributes.empty())
+    {
         return;
+    }
 
     // 确保属性和值的数量匹配
     if (attributes.size() != values.size())
@@ -903,7 +920,9 @@ void ItemAttributesEffects::RemoveItemAttributeEffectsByGuid(Player* player, uin
         int256 value = values[i];
 
         // 使用属性类型查询属性模板（因为数据库中保存的是属性类型）
-        ItemAttributeTemplate const* attributeTemplate = sItemAttributesLoader->GetItemAttributeTemplateByType(attributeId);
+        // 【审计修复】SafeInstance 在模板表缺失/为空时返回 nullptr，先判空
+        ItemAttributesLoader* loader = sItemAttributesLoader;
+        ItemAttributeTemplate const* attributeTemplate = loader ? loader->GetItemAttributeTemplateByType(attributeId) : nullptr;
         if (!attributeTemplate)
         {
             LOG_WARN("module.itemattributes", "未找到属性类型对应的属性模板 类型ID: {}", attributeId);
@@ -944,7 +963,9 @@ std::string ItemAttributesEffects::GetAttributeDescription(Item* item, uint32 at
         return "";
 
     // 【重要】attributeId实际上是属性类型，不是模板ID
-    ItemAttributeTemplate const* attributeTemplate = sItemAttributesLoader->GetItemAttributeTemplateByType(attributeId);
+    // 【审计修复】SafeInstance 可能返回 nullptr，先判空
+    ItemAttributesLoader* loader = sItemAttributesLoader;
+    ItemAttributeTemplate const* attributeTemplate = loader ? loader->GetItemAttributeTemplateByType(attributeId) : nullptr;
     if (!attributeTemplate)
         return "";
 

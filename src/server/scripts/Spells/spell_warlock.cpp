@@ -751,7 +751,10 @@ class spell_warl_seed_of_corruption_aura: public AuraScript
             return;
 
         // effect 1 scales with 14% of caster's SP (DBC data)
-        amount = Acore::Number::ToInt32Saturated(Acore::Number::ToInt256Saturated(GetCaster()->SpellDamageBonusDone(GetUnitOwner(), GetSpellInfo(), amount, DOT, aurEff->GetEffIndex(), aurEff->GetPctMods())));
+        uint256 amountForCombat = amount > 0 ? static_cast<uint256>(amount) : 0;
+        amountForCombat = GetCaster()->SpellDamageBonusDone(GetUnitOwner(), GetSpellInfo(), amountForCombat, DOT, aurEff->GetEffIndex(), aurEff->GetPctMods());
+        aurEff->SetScriptAmountForCombat(amountForCombat);
+        amount = SpellScriptCombat::ToClientSpellValue(Acore::Number::ToLongDouble(amountForCombat));
     }
 
     void Detonate(AuraEffect const* aurEff)
@@ -770,12 +773,18 @@ class spell_warl_seed_of_corruption_aura: public AuraScript
         if (!damageInfo || !damageInfo->GetDamage())
             return;
 
-        int32 currentAmount = aurEff->GetAmount();
-        uint64 currentAmountForCombat = currentAmount > 0 ? static_cast<uint64>(currentAmount) : 0;
+        uint256 currentAmountForCombat = aurEff->GetAmountForCombat();
+        if (!currentAmountForCombat && aurEff->GetAmount() > 0)
+            currentAmountForCombat = static_cast<uint256>(aurEff->GetAmount());
+
         if (damageInfo->GetDamage() < currentAmountForCombat)
         {
-            int32 remainingDamage = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(currentAmountForCombat - damageInfo->GetDamage()));
-            GetAura()->GetEffect(EFFECT_1)->SetAmount(remainingDamage);
+            uint256 remainingDamage = currentAmountForCombat - damageInfo->GetDamage();
+            if (AuraEffect* threshold = GetAura()->GetEffect(EFFECT_1))
+            {
+                threshold->SetAmount(SpellScriptCombat::ToClientSpellValue(Acore::Number::ToLongDouble(remainingDamage)));
+                threshold->SetScriptAmountForCombat(remainingDamage);
+            }
         }
         else // damage threshold has been reached
         {
@@ -831,12 +840,18 @@ class spell_warl_seed_of_corruption_generic_aura: public AuraScript
         if (!damageInfo || !damageInfo->GetDamage())
             return;
 
-        int32 currentAmount = aurEff->GetAmount();
-        uint64 currentAmountForCombat = currentAmount > 0 ? static_cast<uint64>(currentAmount) : 0;
+        uint256 currentAmountForCombat = aurEff->GetAmountForCombat();
+        if (!currentAmountForCombat && aurEff->GetAmount() > 0)
+            currentAmountForCombat = static_cast<uint256>(aurEff->GetAmount());
+
         if (damageInfo->GetDamage() < currentAmountForCombat)
         {
-            int32 remainingDamage = SpellScriptCombat::ToClientSpellValue(static_cast<long double>(currentAmountForCombat - damageInfo->GetDamage()));
-            GetAura()->GetEffect(EFFECT_1)->SetAmount(remainingDamage);
+            uint256 remainingDamage = currentAmountForCombat - damageInfo->GetDamage();
+            if (AuraEffect* threshold = GetAura()->GetEffect(EFFECT_1))
+            {
+                threshold->SetAmount(SpellScriptCombat::ToClientSpellValue(Acore::Number::ToLongDouble(remainingDamage)));
+                threshold->SetScriptAmountForCombat(remainingDamage);
+            }
         }
         else // damage threshold has been reached
         {

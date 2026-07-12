@@ -57,7 +57,7 @@ struct boss_quartermaster_zigris : public BossAI
         events.ScheduleEvent(EVENT_SHOOT, 1s);
     }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*effType*/, SpellSchoolMask /*schoolMask*/) override
+    void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*effType*/, SpellSchoolMask /*schoolMask*/) override
     {
         if (!_hasDrunkPotion && me->HealthBelowPctDamaged(50, damage))
         {

@@ -111,7 +111,7 @@ struct boss_kormok : public ScriptedAI
         _summons.Despawn(summon);
     }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
+    void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
     {
         if (!_mages && me->HealthBelowPctDamaged(25, damage))
         {

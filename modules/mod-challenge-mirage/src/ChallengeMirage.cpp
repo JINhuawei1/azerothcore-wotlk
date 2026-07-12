@@ -21,6 +21,7 @@
 #include "WorldPacket.h"
 
 #include <algorithm>
+#include <mutex>
 #include <sstream>
 #include <vector>
 
@@ -340,7 +341,10 @@ void ChallengeMirageMgr::LoadPlayer(Player* player)
     if (level > _maxLevel)
         level = _defaultLayer;
 
-    _playerLevels[guid] = level;
+    {
+        std::unique_lock<std::shared_mutex> lock(_stateMutex);
+        _playerLevels[guid] = level;
+    }
 }
 
 void ChallengeMirageMgr::SavePlayer(Player* player)
@@ -365,6 +369,7 @@ void ChallengeMirageMgr::RemovePlayer(Player* player)
         return;
 
     uint32 guid = GetPlayerGuidLow(player);
+    std::unique_lock<std::shared_mutex> lock(_stateMutex);
     _playerLevels.erase(guid);
     _playerSpawnTimers.erase(guid);
     _locationTeleportStates.erase(guid);
@@ -376,14 +381,21 @@ void ChallengeMirageMgr::UpdatePlayer(Player* player, uint32 diff)
         return;
 
     uint32 guid = GetPlayerGuidLow(player);
-    uint32& timer = _playerSpawnTimers[guid];
-    timer += diff;
+    bool shouldSpawn = false;
+    {
+        std::unique_lock<std::shared_mutex> lock(_stateMutex);
+        uint32& timer = _playerSpawnTimers[guid];
+        timer += diff;
 
-    if (timer < 3000)
-        return;
+        if (timer < 3000)
+            return;
 
-    timer = 0;
-    SpawnCreaturesForPlayer(player, "UpdatePlayer");
+        timer = 0;
+        shouldSpawn = true;
+    }
+
+    if (shouldSpawn)
+        SpawnCreaturesForPlayer(player, "UpdatePlayer");
 }
 
 uint32 ChallengeMirageMgr::GetPlayerLayer(Player const* player) const
@@ -394,6 +406,7 @@ uint32 ChallengeMirageMgr::GetPlayerLayer(Player const* player) const
 uint32 ChallengeMirageMgr::GetPlayerLevel(Player const* player) const
 {
     uint32 guid = GetPlayerGuidLow(player);
+    std::shared_lock<std::shared_mutex> lock(_stateMutex);
     auto itr = _playerLevels.find(guid);
     return itr != _playerLevels.end() ? itr->second : _defaultLayer;
 }
@@ -410,7 +423,10 @@ bool ChallengeMirageMgr::SetPlayerLevel(Player* player, uint32 level, bool saveN
         player->GetName(), GetPlayerGuidLow(player), oldLevel, level, BoolText(saveNow), player->GetMapId(), player->GetInstanceId(),
         GetMapInstanceId(map), BoolText(map && map->IsDungeon()), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
 
-    _playerLevels[GetPlayerGuidLow(player)] = level;
+    {
+        std::unique_lock<std::shared_mutex> lock(_stateMutex);
+        _playerLevels[GetPlayerGuidLow(player)] = level;
+    }
 
     if (saveNow)
         SavePlayer(player);
@@ -482,7 +498,10 @@ bool ChallengeMirageMgr::EnterFromLocationTeleport(Player* player, uint32 level,
     if (!Enter(player, level, reason))
         return false;
 
-    _locationTeleportStates[GetPlayerGuidLow(player)] = { targetMapId, false };
+    {
+        std::unique_lock<std::shared_mutex> lock(_stateMutex);
+        _locationTeleportStates[GetPlayerGuidLow(player)] = { targetMapId, false };
+    }
     Map* map = player->GetMap();
     LOG_DEBUG("module.challenge_mirage",
         "[ChallengeMirageDebug] LOCATION_TELEPORT_SET player={} guid={} level={} targetMap={} currentMap={} playerInst={} mapInst={} inDungeon={}",
@@ -502,7 +521,10 @@ bool ChallengeMirageMgr::Leave(Player* player)
         player->GetName(), GetPlayerGuidLow(player), GetPlayerLevel(player), player->GetMapId(), player->GetInstanceId(),
         GetMapInstanceId(map), BoolText(map && map->IsDungeon()), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
 
-    _locationTeleportStates.erase(GetPlayerGuidLow(player));
+    {
+        std::unique_lock<std::shared_mutex> lock(_stateMutex);
+        _locationTeleportStates.erase(GetPlayerGuidLow(player));
+    }
     return SetPlayerLevel(player, _defaultLayer, true);
 }
 
@@ -511,6 +533,7 @@ bool ChallengeMirageMgr::IsLocationTeleportActive(Player const* player) const
     if (!player)
         return false;
 
+    std::shared_lock<std::shared_mutex> lock(_stateMutex);
     return _locationTeleportStates.find(GetPlayerGuidLow(player)) != _locationTeleportStates.end();
 }
 
@@ -520,32 +543,39 @@ void ChallengeMirageMgr::UpdateLocationTeleportState(Player* player)
         return;
 
     uint32 guid = GetPlayerGuidLow(player);
-    auto itr = _locationTeleportStates.find(guid);
-    if (itr == _locationTeleportStates.end())
-        return;
+    LocationTeleportState* state = nullptr;
+    {
+        // unordered_map 节点地址稳定；该条目只会被本玩家所在线程读写，
+        // 锁只需保护 find 遍历不与其他玩家条目的结构性修改竞争
+        std::shared_lock<std::shared_mutex> lock(_stateMutex);
+        auto itr = _locationTeleportStates.find(guid);
+        if (itr == _locationTeleportStates.end())
+            return;
+        state = &itr->second;
+    }
 
     Map* map = player->GetMap();
     bool inDungeon = map && map->IsDungeon();
 
-    if (!itr->second.reachedDungeon)
+    if (!state->reachedDungeon)
     {
-        if (inDungeon && player->GetMapId() == itr->second.targetMapId)
+        if (inDungeon && player->GetMapId() == state->targetMapId)
         {
-            itr->second.reachedDungeon = true;
+            state->reachedDungeon = true;
             LOG_DEBUG("module.challenge_mirage",
                 "[ChallengeMirageDebug] LOCATION_REACHED player={} guid={} targetMap={} map={} playerInst={} mapInst={} inDungeon={} pos={:.2f},{:.2f},{:.2f}",
-                player->GetName(), guid, itr->second.targetMapId, player->GetMapId(), player->GetInstanceId(), GetMapInstanceId(map),
+                player->GetName(), guid, state->targetMapId, player->GetMapId(), player->GetInstanceId(), GetMapInstanceId(map),
                 BoolText(inDungeon), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
         }
 
         return;
     }
 
-    if (!inDungeon || player->GetMapId() != itr->second.targetMapId)
+    if (!inDungeon || player->GetMapId() != state->targetMapId)
     {
         LOG_DEBUG("module.challenge_mirage",
             "[ChallengeMirageDebug] LOCATION_LEAVE_TRIGGER player={} guid={} targetMap={} map={} playerInst={} mapInst={} inDungeon={} pos={:.2f},{:.2f},{:.2f}",
-            player->GetName(), guid, itr->second.targetMapId, player->GetMapId(), player->GetInstanceId(), GetMapInstanceId(map),
+            player->GetName(), guid, state->targetMapId, player->GetMapId(), player->GetInstanceId(), GetMapInstanceId(map),
             BoolText(inDungeon), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
         Leave(player);
     }
@@ -556,6 +586,7 @@ void ChallengeMirageMgr::SetCreatureLayer(Creature* creature, uint32 layer)
     if (!creature)
         return;
 
+    std::unique_lock<std::shared_mutex> lock(_stateMutex);
     _creatureLayers[BuildCreatureRuntimeKey(creature)] = layer;
 }
 
@@ -564,9 +595,12 @@ uint32 ChallengeMirageMgr::GetCreatureLayer(Creature const* creature) const
     if (!creature)
         return _defaultLayer;
 
-    auto itr = _creatureLayers.find(BuildCreatureRuntimeKey(creature));
-    if (itr != _creatureLayers.end())
-        return itr->second;
+    {
+        std::shared_lock<std::shared_mutex> lock(_stateMutex);
+        auto itr = _creatureLayers.find(BuildCreatureRuntimeKey(creature));
+        if (itr != _creatureLayers.end())
+            return itr->second;
+    }
 
     if (Player const* linkedPlayer = GetCreatureLinkedPlayer(creature))
         return GetPlayerLayer(linkedPlayer);
@@ -595,6 +629,7 @@ void ChallengeMirageMgr::RemoveCreature(Creature const* creature)
         return;
 
     std::string runtimeKey = BuildCreatureRuntimeKey(creature);
+    std::unique_lock<std::shared_mutex> lock(_stateMutex);
     auto spawnItr = _spawnKeysByCreature.find(runtimeKey);
     bool trackedSpawn = spawnItr != _spawnKeysByCreature.end();
     bool debugEntry = IsChallengeMirageDebugEntry(creature->GetEntry());
@@ -676,7 +711,12 @@ void ChallengeMirageMgr::SpawnCreaturesForPlayer(Player* player, char const* rea
         {
             ++candidateCount;
             std::string spawnKey = BuildCreatureSpawnKey(mapId, instanceId, creatureTemplate.id, i);
-            if (!_activeSpawnKeys.insert(spawnKey).second)
+            bool insertedKey = false;
+            {
+                std::unique_lock<std::shared_mutex> lock(_stateMutex);
+                insertedKey = _activeSpawnKeys.insert(spawnKey).second;
+            }
+            if (!insertedKey)
             {
                 ++skippedExisting;
                 continue;
@@ -703,18 +743,28 @@ void ChallengeMirageMgr::SpawnCreaturesForPlayer(Player* player, char const* rea
 
             if (!creature)
             {
-                _activeSpawnKeys.erase(spawnKey);
+                size_t activeKeys = 0;
+                {
+                    std::unique_lock<std::shared_mutex> lock(_stateMutex);
+                    _activeSpawnKeys.erase(spawnKey);
+                    activeKeys = _activeSpawnKeys.size();
+                }
                 ++summonFailed;
                 LOG_DEBUG("module.challenge_mirage",
                     "[ChallengeMirageDebug] SUMMON_FAIL reason={} player={} guid={} level={} key={} entry={} map={} playerInst={} mapInst={} activeKeys={}",
                     reason ? reason : "unknown", player->GetName(), GetPlayerGuidLow(player), level, spawnKey, creatureTemplate.entry,
-                    mapId, player->GetInstanceId(), instanceId, _activeSpawnKeys.size());
+                    mapId, player->GetInstanceId(), instanceId, activeKeys);
                 continue;
             }
 
             SetCreatureLayer(creature, level);
             std::string runtimeKey = BuildCreatureRuntimeKey(creature);
-            _spawnKeysByCreature[runtimeKey] = spawnKey;
+            size_t activeKeysAfterSummon = 0;
+            {
+                std::unique_lock<std::shared_mutex> lock(_stateMutex);
+                _spawnKeysByCreature[runtimeKey] = spawnKey;
+                activeKeysAfterSummon = _activeSpawnKeys.size();
+            }
             creature->SetHomePosition(creatureTemplate.x, creatureTemplate.y, creatureTemplate.z, creatureTemplate.o);
             creature->UpdateObjectVisibility(true);
             ++summonOk;
@@ -723,14 +773,19 @@ void ChallengeMirageMgr::SpawnCreaturesForPlayer(Player* player, char const* rea
                 reason ? reason : "unknown", player->GetName(), GetPlayerGuidLow(player), level, spawnKey, creature->GetEntry(),
                 creature->GetGUID().GetCounter(), creature->GetGUID().GetRawValue(), runtimeKey, creature->GetMapId(), GetCreatureInstanceId(creature),
                 GetCreatureLayer(creature), BoolText(creature->CanHaveThreatList()), uint32(creature->GetSummonType()),
-                creature->GetSummonerGUID().GetCounter(), creature->GetHealth(), creature->GetMaxHealth(), _activeSpawnKeys.size());
+                creature->GetSummonerGUID().GetCounter(), creature->GetHealth(), creature->GetMaxHealth(), activeKeysAfterSummon);
         }
     }
 
+    size_t activeKeysTotal = 0;
+    {
+        std::shared_lock<std::shared_mutex> lock(_stateMutex);
+        activeKeysTotal = _activeSpawnKeys.size();
+    }
     LOG_DEBUG("module.challenge_mirage",
         "[ChallengeMirageDebug] SPAWN_SUMMARY reason={} player={} guid={} level={} set={} map={} playerInst={} mapInst={} inDungeon={} candidates={} attempts={} ok={} skippedExisting={} failed={} activeKeys={} pos={:.2f},{:.2f},{:.2f}",
         reason ? reason : "unknown", player->GetName(), GetPlayerGuidLow(player), level, creatureSet, mapId, player->GetInstanceId(),
-        instanceId, BoolText(inDungeon), candidateCount, summonAttempts, summonOk, skippedExisting, summonFailed, _activeSpawnKeys.size(),
+        instanceId, BoolText(inDungeon), candidateCount, summonAttempts, summonOk, skippedExisting, summonFailed, activeKeysTotal,
         player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
 }
 

@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <mutex> // 【审计修复】多地图线程并发访问节流/缓存容器所需
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -573,12 +574,17 @@ public:
             return;
 
         uint32 guid = player->GetGUID().GetCounter();
-        uint32& elapsed = _healthSyncElapsed[guid];
-        elapsed += diff;
-        if (elapsed < 250)
-            return;
+        // 【审计修复】OnPlayerUpdate（每 250ms 热路径）在多地图线程并发读写、登出 erase，
+        // 由 _panelStateMutex 保护；临界区只做计时/缓存判断，玩家字段同步与发包在锁外。
+        {
+            std::lock_guard<std::mutex> lock(_panelStateMutex);
+            uint32& elapsed = _healthSyncElapsed[guid];
+            elapsed += diff;
+            if (elapsed < 250)
+                return;
 
-        elapsed = 0;
+            elapsed = 0;
+        }
 
         bool clientResourceSynced = SyncPlayerClientResourceFields(player);
 
@@ -586,13 +592,17 @@ public:
         std::string maxHealth = ToPanelValue(player->GetExtendedMaxHealth256());
         std::string currentMana = ToPanelValue(player->GetPowerForCombat256(POWER_MANA));
         std::string maxMana = ToPanelValue(player->GetExtendedMaxPower256(POWER_MANA));
-        if (!clientResourceSynced && _lastHealth[guid] == currentHealth && _lastMaxHealth[guid] == maxHealth && _lastMana[guid] == currentMana && _lastMaxMana[guid] == maxMana)
-            return;
+        {
+            std::lock_guard<std::mutex> lock(_panelStateMutex);
+            if (!clientResourceSynced && _lastHealth[guid] == currentHealth && _lastMaxHealth[guid] == maxHealth && _lastMana[guid] == currentMana && _lastMaxMana[guid] == maxMana)
+                return;
 
-        _lastHealth[guid] = currentHealth;
-        _lastMaxHealth[guid] = maxHealth;
-        _lastMana[guid] = currentMana;
-        _lastMaxMana[guid] = maxMana;
+            _lastHealth[guid] = currentHealth;
+            _lastMaxHealth[guid] = maxHealth;
+            _lastMana[guid] = currentMana;
+            _lastMaxMana[guid] = maxMana;
+        }
+        // 【审计修复】发包在锁外。
         SendPlayerAttributePanelResourceData(player);
     }
 
@@ -602,6 +612,8 @@ public:
             return;
 
         uint32 guid = player->GetGUID().GetCounter();
+        // 【审计修复】登出 erase 与热路径读写并发，加锁。
+        std::lock_guard<std::mutex> lock(_panelStateMutex);
         _healthSyncElapsed.erase(guid);
         _lastHealth.erase(guid);
         _lastMaxHealth.erase(guid);
@@ -666,6 +678,8 @@ private:
     std::unordered_map<uint32, std::string> _lastMaxHealth;
     std::unordered_map<uint32, std::string> _lastMana;
     std::unordered_map<uint32, std::string> _lastMaxMana;
+    // 【审计修复】保护上述 5 个容器在多地图线程（OnPlayerUpdate/OnPlayerLogout）下的并发读写。
+    std::mutex _panelStateMutex;
 };
 }
 

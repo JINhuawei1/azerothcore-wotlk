@@ -64,7 +64,7 @@ public:
             DoCastSelf(SPELL_DOUBLE_ATTACK);
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (!enraged && me->HealthBelowPctDamaged(10, damage))
             {
@@ -152,7 +152,7 @@ public:
             }
         }
 
-        void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*dmgType*/, SpellSchoolMask /*school*/) override
+        void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*dmgType*/, SpellSchoolMask /*school*/) override
         {
             // Just in case if something will go bad, let players to kill this creature
             if (instance->GetBossState(DATA_GOLEMAGG) == DONE)

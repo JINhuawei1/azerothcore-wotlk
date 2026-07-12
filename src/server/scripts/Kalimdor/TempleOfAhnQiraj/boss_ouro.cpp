@@ -115,7 +115,7 @@ struct boss_ouro : public BossAI
         return me->IsWithinMeleeRange(victim);
     }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType, SpellSchoolMask) override
+    void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType, SpellSchoolMask) override
     {
         if (me->HealthBelowPctDamaged(20, damage) && !_enraged)
         {

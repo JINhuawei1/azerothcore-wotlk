@@ -2058,7 +2058,7 @@ struct npc_chess_move_trigger : public ScriptedAI
         me->SetUnitFlag(UNIT_FLAG_NON_ATTACKABLE);
     }
 
-    void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+    void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
     {
         damage = 0;
     }

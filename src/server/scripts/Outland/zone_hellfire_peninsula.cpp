@@ -474,7 +474,7 @@ struct npc_magister_aledis : public ScriptedAI
         me->SetImmuneToPC(true);
     }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*spellInfo = nullptr*/) override
+    void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*damageType*/, SpellSchoolMask /*spellInfo = nullptr*/) override
     {
         if (damage > me->GetHealth() || me->HealthBelowPctDamaged(20, damage))
         {

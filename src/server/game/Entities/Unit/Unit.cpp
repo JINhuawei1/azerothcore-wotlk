@@ -48,7 +48,6 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "OutdoorPvP.h"
-#include <chrono>
 #include <limits>
 #include <unordered_map>
 #include "PassiveAI.h"
@@ -987,10 +986,8 @@ namespace
         if (!PrepareArtifactProcPanelFeedback(player, victim, spellInfo, damage, critical, displayDamage, displayCritical))
             return;
 
-        uint32 spellId = spellInfo ? spellInfo->Id : 0;
-
         std::string payload = "DMG:" + displayDamage.convert_to<std::string>() + ":" + (displayCritical ? "1" : "0") + ":" +
-            std::to_string(static_cast<uint32>(schoolMask)) + ":" + std::to_string(spellId) + ":" +
+            std::to_string(static_cast<uint32>(schoolMask)) + ":" + std::to_string(spellInfo ? spellInfo->Id : 0) + ":" +
             std::to_string(static_cast<uint32>(damageType));
         std::string fullMessage = std::string(PlayerAttributePanelAddonPrefix) + '\t' + payload;
 
@@ -1059,6 +1056,11 @@ void DamageInfo::ModifyDamage(int64 amount)
 
     uint256 addAmount = static_cast<uint256>(static_cast<uint64>(amount));
     m_damage = AddUInt256Damage(m_damage, addAmount);
+}
+
+void DamageInfo::SetDamage(uint256 const& amount)
+{
+    m_damage = amount;
 }
 
 void DamageInfo::AbsorbDamage(uint256 const& amountIn)
@@ -1187,6 +1189,8 @@ Unit::Unit(bool isWorldObject) : WorldObject(isWorldObject),
         m_auraModifiersGroup[i][BASE_PCT] = 1.0f;
         m_auraModifiersGroup[i][TOTAL_VALUE] = 0.0f;
         m_auraModifiersGroup[i][TOTAL_PCT] = 1.0f;
+        m_flatModExact[i][BASE_VALUE] = 0;
+        m_flatModExact[i][TOTAL_VALUE] = 0;
     }
     // implement 50% base damage from offhand
     m_auraModifiersGroup[UNIT_MOD_DAMAGE_OFFHAND][TOTAL_PCT] = 0.5f;
@@ -1781,20 +1785,15 @@ uint256 Unit::DealDamage(Unit* attacker, Unit* victim, uint256 const& damageIn, 
     uint256 addonDisplayDamage = damage;
     uint256 absorbedDamage = cleanDamage ? cleanDamage->absorbed_damage : uint256(0);
     uint256 rage_damage = AddUInt256Damage(damage, absorbedDamage);
-    uint32 aiDamage = ToUInt32Damage(damage);
-    uint32 originalAiDamage = aiDamage;
 
     //if (attacker)
     {
         if (victim->IsAIEnabled)
-            victim->GetAI()->DamageTaken(attacker, aiDamage, damagetype, damageSchoolMask);
+            victim->GetAI()->DamageTaken(attacker, damage, damagetype, damageSchoolMask);
 
         if (attacker && attacker->IsAIEnabled)
-            attacker->GetAI()->DamageDealt(victim, aiDamage, damagetype, damageSchoolMask);
+            attacker->GetAI()->DamageDealt(victim, damage, damagetype, damageSchoolMask);
     }
-
-    if (aiDamage != originalAiDamage)
-        damage = aiDamage;
 
     {
         // Hook for OnDamage Event
@@ -2331,15 +2330,7 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, uint256 co
         return;
 
     if (victim->GetAI())
-    {
-        int64 aiDamage = damage > static_cast<uint64>(std::numeric_limits<int64>::max())
-            ? std::numeric_limits<int64>::max()
-            : static_cast<int64>(damage);
-        int64 originalAiDamage = aiDamage;
-        victim->GetAI()->OnCalculateSpellDamageReceived(aiDamage, this);
-        if (aiDamage != originalAiDamage)
-            damage = aiDamage > 0 ? static_cast<uint64>(aiDamage) : 0;
-    }
+        victim->GetAI()->OnCalculateSpellDamageReceived(damage, this);
 
     uint256 cleanDamage = 0;
     if (Unit::IsDamageReducedByArmor(damageSchoolMask, spellInfo))
@@ -2509,6 +2500,56 @@ void Unit::DealSpellDamage(SpellNonMeleeDamage* damageInfo, bool durabilityLoss,
     Unit::DealDamage(this, victim, damageInfo->damage, &cleanDamage, SPELL_DIRECT_DAMAGE, SpellSchoolMask(damageInfo->schoolMask), spellProto, durabilityLoss, false, spell);
 }
 
+uint256 Unit::DealTriggeredSpellDamage256(Unit* target, uint32 spellId, uint256 const& rawDamage, AuraEffect const* triggeredByAura, DamageEffectType damageType, uint8 effIndex, bool durabilityLoss)
+{
+    if (!target || !target->IsAlive() || !rawDamage)
+        return 0;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!spellInfo)
+        return 0;
+
+    if (target->IsImmunedToDamageOrSchool(spellInfo))
+    {
+        SendSpellDamageImmune(target, spellId);
+        return 0;
+    }
+
+    SetLastDamagedTargetGuid(target->GetGUID());
+
+    uint256 finalDamage = SpellDamageBonusDone(target, spellInfo, rawDamage, damageType, effIndex);
+    finalDamage = target->SpellDamageBonusTaken(this, spellInfo, finalDamage, damageType);
+
+    SpellNonMeleeDamage damageInfo(this, target, spellInfo, spellInfo->GetSchoolMask());
+    CalculateSpellDamageTaken(&damageInfo, finalDamage, spellInfo);
+    Unit::DealDamageMods(damageInfo.target, damageInfo.damage, &damageInfo.absorb);
+
+    SendSpellNonMeleeDamageLog(&damageInfo);
+    uint256 dealtDamage = damageInfo.damage;
+    DealSpellDamage(&damageInfo, durabilityLoss);
+
+    if (!target->CanProc())
+        return dealtDamage;
+
+    uint32 procAttacker = 0;
+    uint32 procVictim = 0;
+    createProcFlags(spellInfo, BASE_ATTACK, false, procAttacker, procVictim);
+    if (damageInfo.damage)
+        procVictim |= PROC_FLAG_TAKEN_DAMAGE;
+
+    uint32 procEx = createProcExtendMask(&damageInfo, SPELL_MISS_NONE) | PROC_EX_INTERNAL_TRIGGERED;
+
+    if (damageInfo.damage > 0 && spellInfo->DmgClass != SPELL_DAMAGE_CLASS_MELEE && spellInfo->DmgClass != SPELL_DAMAGE_CLASS_RANGED)
+        if (Player* player = GetCharmerOrOwnerPlayerOrPlayerItself())
+            player->CastDamageTriggeredArtifactItemCombatSpell(target, procVictim, procEx, spellInfo);
+
+    DamageInfo dmgInfo(damageInfo, damageType);
+    Unit::ProcDamageAndSpell(this, target, procAttacker, procVictim, procEx, damageInfo.damage, BASE_ATTACK, spellInfo,
+        triggeredByAura ? triggeredByAura->GetSpellInfo() : nullptr, triggeredByAura ? triggeredByAura->GetEffIndex() : -1, nullptr, &dmgInfo);
+
+    return dealtDamage;
+}
+
 // @todo for melee need create structure as in
 void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, WeaponAttackType attackType, const bool sittingVictim)
 {
@@ -2615,12 +2656,7 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
             damage = scriptDamage;
 
         if (victim->GetAI())
-        {
-            uint32 aiDamage = ToUInt32Damage(damage);
-            victim->GetAI()->OnCalculateMeleeDamageReceived(aiDamage, this);
-            if (aiDamage != ToUInt32Damage(damage))
-                damage = aiDamage;
-        }
+            victim->GetAI()->OnCalculateMeleeDamageReceived(damage, this);
 
         // Calculate armor reduction
         if (IsDamageReducedByArmor((SpellSchoolMask)(damageInfo->damages[i].damageSchoolMask)))
@@ -3292,7 +3328,16 @@ void Unit::CalcAbsorbResist(DamageInfo& dmgInfo, bool Splited)
             }
         }
 
-        dmgInfo.ResistDamage(ToUInt64Damage(damageResisted));
+        uint256 resistedDamage = 0;
+        if (std::isfinite(damageResisted))
+            resistedDamage = ToUInt256Damage(damageResisted);
+        else if (damageResisted > 0.0L)
+            resistedDamage = damage;
+
+        if (resistedDamage > damage)
+            resistedDamage = damage;
+
+        dmgInfo.ResistDamage(resistedDamage);
     }
 
     // Ignore Absorption Auras
@@ -6477,13 +6522,6 @@ void Unit::RemoveAreaAurasDueToLeaveWorld()
 void Unit::RemoveAllAuras()
 {
     // 登出路径下这里可能处理上千条 aura，每一条都会触发 effect handler / 脚本回调。
-    // 加计数和分批计时，便于定位慢 aura。
-    Player const* pLog = ToPlayer();
-    using Clk = std::chrono::high_resolution_clock;
-    auto loopStart = Clk::now();
-    uint32 unapplyCount = 0;
-    uint32 ownedRemoveCount = 0;
-
     // this may be a dead loop if some events on aura remove will continiously apply aura on remove
     // we want to have all auras removed, so use your brain when linking events
     while (!m_appliedAuras.empty() || !m_ownedAuras.empty())
@@ -6491,27 +6529,14 @@ void Unit::RemoveAllAuras()
         AuraApplicationMap::iterator aurAppIter;
         for (aurAppIter = m_appliedAuras.begin(); aurAppIter != m_appliedAuras.end();)
         {
-            if (pLog)
-                ++unapplyCount;
             _UnapplyAura(aurAppIter, AURA_REMOVE_BY_DEFAULT);
         }
 
         AuraMap::iterator aurIter;
         for (aurIter = m_ownedAuras.begin(); aurIter != m_ownedAuras.end();)
         {
-            if (pLog)
-                ++ownedRemoveCount;
             RemoveOwnedAura(aurIter);
         }
-    }
-
-    if (pLog)
-    {
-        int64 ms = std::chrono::duration_cast<std::chrono::milliseconds>(Clk::now() - loopStart).count();
-        if (ms >= 30)
-            LOG_WARN("server.loading",
-                "[性能监控-清理Aura] 角色={} applied={} owned={} 耗时={}ms",
-                pLog->GetName(), unapplyCount, ownedRemoveCount, ms);
     }
 }
 
@@ -7617,17 +7642,27 @@ void Unit::SendPeriodicAuraLog(SpellPeriodicAuraLogInfo* pInfo)
                 //IF we are in cheat mode we swap absorb with damage and set damage to 0, this way we can still debug damage but our hp bar will not drop
                 uint32 damage = ToClientDamageForTarget(pInfo->damage, this);
                 uint32 absorb = ToClientDamageForTarget(pInfo->absorb, this);
+                uint32 overDamage = ToClientDamageForTarget(pInfo->overDamage, this);
+                uint32 resist = ToClientDamageForTarget(pInfo->resist, this);
                 if (IsPlayer() && ToPlayer()->GetCommandStatus(CHEAT_GOD))
                 {
                     absorb = damage;
                     damage = 0;
                 }
 
+                if (pInfo->damage > static_cast<uint256>(damage))
+                {
+                    if (Unit* caster = aura->GetCaster())
+                    {
+                        SendPlayerAttributePanelDamagePayload(caster, this, pInfo->damage, pInfo->critical, aura->GetSpellInfo()->GetSchoolMask(), aura->GetSpellInfo(), DOT);
+                    }
+                }
+
                 data << uint32(damage);                         // damage
-                data << uint32(ToClientDamageForTarget(pInfo->overDamage, this)); // overkill?
+                data << uint32(overDamage); // overkill?
                 data << uint32(aura->GetSpellInfo()->GetSchoolMask());
                 data << uint32(absorb);                         // absorb
-                data << uint32(ToClientDamageForTarget(pInfo->resist, this));  // resist
+                data << uint32(resist);  // resist
                 data << uint8(pInfo->critical);                 // new 3.1.2 critical tick
             }
             break;
@@ -12532,6 +12567,42 @@ uint256 Unit::HealBySpell(HealInfo& healInfo, bool critical)
     return gain;
 }
 
+uint256 Unit::DealTriggeredSpellHeal256(Unit* target, uint32 spellId, uint256 const& rawHeal, AuraEffect const* triggeredByAura, DamageEffectType healType, uint8 effIndex, bool critical)
+{
+    if (!target || !target->IsAlive() || !rawHeal)
+        return 0;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!spellInfo)
+        return 0;
+
+    uint256 heal = SpellHealingBonusDone(target, spellInfo, rawHeal, healType, effIndex);
+    heal = target->SpellHealingBonusTaken(this, spellInfo, heal, healType);
+
+    HealInfo healInfo(this, target, heal, spellInfo, spellInfo->GetSchoolMask());
+    uint256 gain = HealBySpell(healInfo, critical);
+    target->getHostileRefMgr().threatAssist(this, Acore::Number::ToFloat(gain) * 0.5f, spellInfo);
+
+    if (!target->CanProc())
+        return gain;
+
+    uint32 procAttacker = 0;
+    uint32 procVictim = 0;
+    createProcFlags(spellInfo, BASE_ATTACK, true, procAttacker, procVictim);
+
+    uint32 procEx = critical ? PROC_EX_CRITICAL_HIT : PROC_EX_NORMAL_HIT;
+    procEx |= PROC_EX_INTERNAL_TRIGGERED;
+    if (healInfo.GetAbsorb())
+        procEx |= PROC_EX_ABSORB;
+    if (gain)
+        procEx |= PROC_EX_NO_OVERHEAL;
+
+    Unit::ProcDamageAndSpell(this, target, procAttacker, procVictim, procEx, heal, BASE_ATTACK, spellInfo,
+        triggeredByAura ? triggeredByAura->GetSpellInfo() : nullptr, triggeredByAura ? triggeredByAura->GetEffIndex() : -1, nullptr, nullptr, &healInfo);
+
+    return gain;
+}
+
 void Unit::SendEnergizeSpellLog(Unit* victim, uint32 spellID, uint256 const& damage, Powers powerType, uint256 const& effectiveGain)
 {
     if (UsesExtendedPowerClientMirror(victim, powerType))
@@ -16736,16 +16807,31 @@ bool Unit::HandleStatModifier(UnitMods unitMod, UnitModifierType modifierType, d
     {
         case BASE_VALUE:
         case TOTAL_VALUE:
-            m_auraModifiersGroup[unitMod][modifierType] += apply ? amount : -amount;
+        {
+            // 【精度修复】平值修正改用 int256 定点(×2^20)精确累加：
+            // double 累加在总量达 1e30 级时，1e7~1e12 级的加/减会被浮点吸收
+            //（10^31 - 10^7 == 10^31），穿/卸顺序不同导致"卸下装备属性残留、
+            // 上线首次属性不对、小退后恢复"。int256 加减精确抵消，double 数组
+            // 仅作为读取镜像，所有读取路径无需改动。
+            double signedAmount = apply ? amount : -amount;
+            m_flatModExact[unitMod][modifierType] += FlatModToExact(signedAmount);
+            m_auraModifiersGroup[unitMod][modifierType] = ExactToFlatMod(m_flatModExact[unitMod][modifierType]);
             break;
+        }
         case BASE_PCT:
         case TOTAL_PCT:
         {
-            // 百分比修正走 float 精度即可(pct 不会出现 1e12 级累加)；
-            // 但底层存储是 double,需要临时拷贝进出。
-            float tmp = float(m_auraModifiersGroup[unitMod][modifierType]);
-            ApplyPercentModFloatVar(tmp, static_cast<float>(amount), apply);
-            m_auraModifiersGroup[unitMod][modifierType] = double(tmp);
+            // 【精度修复】百分比修正改为 double 乘除（原先经 float 中转，
+            // 每次加/减循环残留 ~1e-7 漂移，反复上下线会缓慢累积）。
+            // 语义与 ApplyPercentModFloatVar 一致：加=×(100+X)/100，减=÷(100+X)/100。
+            double pctAmount = amount;
+            if (!apply && pctAmount <= -100.0)
+                pctAmount = -99.99;
+            double factor = (100.0 + pctAmount) / 100.0;
+            if (apply)
+                m_auraModifiersGroup[unitMod][modifierType] *= factor;
+            else if (factor != 0.0)
+                m_auraModifiersGroup[unitMod][modifierType] /= factor;
             break;
         }
         default:
@@ -17511,53 +17597,28 @@ void Unit::CleanupBeforeRemoveFromMap(bool finalCleanup)
     if (IsDuringRemoveFromWorld())
         return;
 
-    // 分段性能采样：定位 CleanupsBeforeDelete 里哪一步拖住主线程。
-    // 只对玩家打日志（NPC 卸载高频，不需要监控）。
-    using Clk = std::chrono::high_resolution_clock;
-    Player const* pLog = ToPlayer();
-    auto t0 = Clk::now();
-    auto step = [&](char const* name)
-    {
-        if (!pLog)
-            return;
-        auto now = Clk::now();
-        int64 ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - t0).count();
-        t0 = now;
-        if (ms >= 30)
-            LOG_WARN("server.loading",
-                "[性能监控-清理] 阶段={} 角色={} 耗时={}ms", name, pLog->GetName(), ms);
-    };
-
     // This needs to be before RemoveFromWorld to make GetCaster() return a valid pointer on aura removal
     InterruptNonMeleeSpells(true);
-    step("InterruptNonMeleeSpells");
 
     if (IsInWorld()) // not in world and not being removed atm
         RemoveFromWorld();
-    step("RemoveFromWorld");
 
     ASSERT(GetGUID());
 
     // A unit may be in removelist and not in world, but it is still in grid
     // and may have some references during delete
     RemoveAllAuras();
-    step("RemoveAllAuras");
     RemoveAllGameObjects();
-    step("RemoveAllGameObjects");
 
     if (finalCleanup)
         m_cleanupDone = true;
 
     CombatStop();
-    step("CombatStop");
     ClearComboPoints();
     ClearComboPointHolders();
-    step("ClearCombo");
     GetThreatMgr().ClearAllThreat();
     getHostileRefMgr().deleteReferences();
-    step("ClearThreatAndHostileRefs");
     GetMotionMaster()->Clear(false);                    // remove different non-standard movement generators.
-    step("MotionMasterClear");
 }
 
 void Unit::CleanupsBeforeDelete(bool finalCleanup)

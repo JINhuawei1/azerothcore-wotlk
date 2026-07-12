@@ -314,7 +314,7 @@ public:
         }
 
         // Summon druid spirits on 75%, 50% and 25% health
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (_stage <= 3 && me->HealthBelowPctDamaged(100 - (25 * _stage), damage))
             {
@@ -419,7 +419,7 @@ public:
             DoCastSelf(SPELL_SHADOW_BOLT_WHIRL, true);
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (_stage <= 3 && me->HealthBelowPctDamaged(100 - (25 * _stage), damage))
             {
@@ -543,7 +543,7 @@ public:
             WorldBossAI::JustEngagedWith(who);
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (_stage <= 3 && me->HealthBelowPctDamaged(100 - (25 * _stage), damage))
             {
@@ -639,7 +639,7 @@ public:
             --_shades;
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             // At 75, 50 or 25 percent health, we need to activate the shades and go "banished"
             // Note: _stage holds the amount of times they have been summoned

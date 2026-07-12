@@ -182,7 +182,7 @@ struct npc_vrykul_skeleton : public ScriptedAI
             events.RescheduleEvent(EVENT_SPELL_BONE_ARMOR, 25s, 120s);
     }
 
-    void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+    void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
     {
         if (damage >= me->GetHealth())
         {

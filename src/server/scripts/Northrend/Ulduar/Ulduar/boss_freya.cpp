@@ -313,7 +313,7 @@ public:
             Talk(SAY_SLAY);
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType, SpellSchoolMask) override
         {
             if (damage >= me->GetHealth())
             {
@@ -723,7 +723,7 @@ public:
                 Talk(SAY_ELDER_AGGRO);
         }
 
-        void DamageTaken(Unit*, uint32& damage, DamageEffectType damageType, SpellSchoolMask damageSchoolMask) override
+        void DamageTaken(Unit*, uint256& damage, DamageEffectType damageType, SpellSchoolMask damageSchoolMask) override
         {
             if ((damageType == DIRECT_DAMAGE || (damageType == SPELL_DIRECT_DAMAGE && damageSchoolMask & SPELL_SCHOOL_MASK_NORMAL)) && _chargesCount)
             {

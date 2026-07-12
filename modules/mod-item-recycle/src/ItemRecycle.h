@@ -52,18 +52,18 @@ struct ItemRecycleInfo
 // 玩家回收设置结构体
 struct PlayerRecycleSettings
 {
-    uint32 playerGuid;                  // 玩家GUID
-    bool autoRecycleEnabled;            // 是否启用自动回收
-    uint32 recycleInterval;             // 自动回收间隔（秒）
-    bool recycleTypes[8];               // 回收类型开关数组
+    uint32 playerGuid = 0;              // 玩家GUID
+    bool autoRecycleEnabled = false;    // 是否启用自动回收
+    uint32 recycleInterval = 0;         // 自动回收间隔（秒）
+    bool recycleTypes[8] = {};          // 回收类型开关数组
                                         // 索引1-6对应具体类型，索引7对应所有类型(-1)
                                         // 新增：支持"所有类型"一键开关
-    uint32 minQuality;                  // 最小品质（0=灰色，1=白色，2=绿色，3=蓝色，4=紫色，5=橙色）
-    uint32 maxQuality;                  // 最大品质
-    uint32 minLevel;                    // 最小物品等级
-    uint32 maxLevel;                    // 最大物品等级
-    bool protectEquipped;               // 是否保护已装备的物品
-    uint32 lastRecycleTime;             // 上次自动回收时间戳
+    uint32 minQuality = 0;              // 最小品质（0=灰色，1=白色，2=绿色，3=蓝色，4=紫色，5=橙色）
+    uint32 maxQuality = 0;              // 最大品质
+    uint32 minLevel = 0;                // 最小物品等级
+    uint32 maxLevel = 0;                // 最大物品等级
+    bool protectEquipped = false;       // 是否保护已装备的物品
+    uint32 lastRecycleTime = 0;         // 上次自动回收时间戳
     std::set<uint32> filteredItems;     // 过滤物品ID集合（不回收的物品）
 
     // 注意：需求模板ID和奖励模板ID在全局配置表（物品_回收）中定义

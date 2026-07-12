@@ -106,7 +106,7 @@ public:
             AttackStart(pAttacker);
         }
 
-        void DamageTaken(Unit*, uint32& uiDamage, DamageEffectType, SpellSchoolMask) override
+        void DamageTaken(Unit*, uint256& uiDamage, DamageEffectType, SpellSchoolMask) override
         {
             if (HealthBelowPct(20))
             {

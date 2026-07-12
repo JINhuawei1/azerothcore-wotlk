@@ -149,7 +149,7 @@ struct boss_nightbane : public BossAI
         BossAI::EnterEvadeMode(why);
     }
 
-    void DamageTaken(Unit* attacker, uint32& damage, DamageEffectType damageEffectType, SpellSchoolMask spellSchoolMask) override
+    void DamageTaken(Unit* attacker, uint256& damage, DamageEffectType damageEffectType, SpellSchoolMask spellSchoolMask) override
     {
         if (_airPhasesCompleted < 3)
         {

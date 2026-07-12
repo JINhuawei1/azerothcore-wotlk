@@ -143,14 +143,18 @@ public:
             EnhancementRecord const* record = sItemEnhancementMgr->GetEnhancementRecord(itemGuid);
             if (record && record->level > 0)
             {
+                // RecordCacheTTL=0 时 record 指向 thread_local 缓存，
+                // ApplyOfficialItemEnhancement 内部会再次查询并使其失效，先拷贝需要的值
+                uint32 recordLevel = record->level;
+
                 // 设置可见槽位
                 if (item->IsEquipped())
                     player->SetVisibleItemSlot(item->GetSlot(), item);
 
-                sItemEnhancementMgr->ApplyOfficialItemEnhancement(player, item, record->level);
+                sItemEnhancementMgr->ApplyOfficialItemEnhancement(player, item, recordLevel);
 
                 LOG_DEBUG("module.itemenhancement", "OnPlayerEquip: Applied enhancement level {} for item {} in slot {} for player {}",
-                    record->level, itemGuid, slot, player->GetGUID().ToString());
+                    recordLevel, itemGuid, slot, player->GetGUID().ToString());
             }
 
             // 【关键优化】登录加载阶段不做全量刷新

@@ -11,6 +11,23 @@
 #include <sstream>
 #include <limits>
 
+namespace
+{
+    // 需求_模板.需要人物等级 来自数据库，可能存在脏数据；stoi 抛出的异常若未捕获会直接终止进程
+    bool TryParseLevelReq(std::string const& value, int& out)
+    {
+        try
+        {
+            out = std::stoi(value);
+            return true;
+        }
+        catch (std::exception const&)
+        {
+            return false;
+        }
+    }
+}
+
 // 提供一个简单的接口函数，用于检查需求模板
 bool CheckRequirementTemplate(Player* player, uint32 templateId, bool showMessages)
 {
@@ -36,11 +53,13 @@ bool CheckRequirementTemplate(Player* player, uint32 templateId, bool showMessag
     // 检查等级要求
     if (!levelReq.empty() && levelReq != "0")
     {
+        int reqLevel = 0;
+        bool parsed = false;
         // 简单处理：只检查大于等于
         if (levelReq[0] == '>')
         {
-            int reqLevel = std::stoi(levelReq.substr(1));
-            if (player->GetLevel() <= reqLevel)
+            parsed = TryParseLevelReq(levelReq.substr(1), reqLevel);
+            if (parsed && player->GetLevel() <= reqLevel)
             {
                 meetsRequirements = false;
                 if (showMessages)
@@ -49,18 +68,8 @@ bool CheckRequirementTemplate(Player* player, uint32 templateId, bool showMessag
         }
         else if (levelReq[0] == '<')
         {
-            int reqLevel = std::stoi(levelReq.substr(1));
-            if (player->GetLevel() >= reqLevel)
-            {
-                meetsRequirements = false;
-                if (showMessages)
-                    handler.PSendSysMessage("您的等级不满足要求: {}", levelReq.c_str());
-            }
-        }
-        else if (levelReq[0] == '=')
-        {
-            int reqLevel = std::stoi(levelReq.substr(1));
-            if (player->GetLevel() != reqLevel)
+            parsed = TryParseLevelReq(levelReq.substr(1), reqLevel);
+            if (parsed && player->GetLevel() >= reqLevel)
             {
                 meetsRequirements = false;
                 if (showMessages)
@@ -69,8 +78,18 @@ bool CheckRequirementTemplate(Player* player, uint32 templateId, bool showMessag
         }
         else if (levelReq.substr(0, 2) == "!=")
         {
-            int reqLevel = std::stoi(levelReq.substr(2));
-            if (player->GetLevel() == reqLevel)
+            parsed = TryParseLevelReq(levelReq.substr(2), reqLevel);
+            if (parsed && player->GetLevel() == reqLevel)
+            {
+                meetsRequirements = false;
+                if (showMessages)
+                    handler.PSendSysMessage("您的等级不满足要求: {}", levelReq.c_str());
+            }
+        }
+        else if (levelReq[0] == '=')
+        {
+            parsed = TryParseLevelReq(levelReq.substr(1), reqLevel);
+            if (parsed && player->GetLevel() != reqLevel)
             {
                 meetsRequirements = false;
                 if (showMessages)
@@ -79,13 +98,21 @@ bool CheckRequirementTemplate(Player* player, uint32 templateId, bool showMessag
         }
         else
         {
-            int reqLevel = std::stoi(levelReq);
-            if (player->GetLevel() < reqLevel)
+            parsed = TryParseLevelReq(levelReq, reqLevel);
+            if (parsed && player->GetLevel() < reqLevel)
             {
                 meetsRequirements = false;
                 if (showMessages)
                     handler.PSendSysMessage("您的等级不满足要求: 需要等级 {}", reqLevel);
             }
+        }
+
+        if (!parsed)
+        {
+            LOG_ERROR("module", "需求_模板 id={} 的 需要人物等级 字段格式非法: '{}'，按不满足条件处理", templateId, levelReq);
+            meetsRequirements = false;
+            if (showMessages)
+                handler.PSendSysMessage("需求模板配置错误，请联系管理员 (模板ID: {})", templateId);
         }
     }
 

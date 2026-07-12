@@ -52,6 +52,7 @@
 #include <limits>
 #include <set>
 #include <sstream>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -85,6 +86,23 @@ std::unordered_map<uint64, uint32> XianmenProcPpmLastEventMs;
 
 std::unordered_map<uint64, uint32> XianmenMagicHitResonanceNextReadyMs;
 
+// 以上全局状态表会在多个地图更新线程的伤害/受击/属性钩子中并发读写，
+// unordered_map 并发结构性修改会导致堆损坏（静默崩溃），访问必须持 XianmenStateMutex；
+// 锁只包住容器操作本身，不得跨越可能重入本模块钩子的核心调用
+std::mutex XianmenStateMutex;
+
+template <typename KeyType>
+bool ShouldLogXianmenDebugSignature(std::unordered_map<KeyType, std::string>& cache, KeyType key, std::string const& signatureText)
+{
+    std::lock_guard<std::mutex> lock(XianmenStateMutex);
+    auto itr = cache.find(key);
+    if (itr != cache.end() && itr->second == signatureText)
+        return false;
+
+    cache[key] = signatureText;
+    return true;
+}
+
 uint64 MakeXianmenPlayerSpellKey(uint32 playerGuid, uint32 spellId)
 {
     return (static_cast<uint64>(playerGuid) << 32) | spellId;
@@ -97,6 +115,7 @@ bool ConsumeXianmenMagicHitResonanceCooldown(Player* player, uint32 sourceSpellI
 
     uint64 const key = MakeXianmenPlayerSpellKey(player->GetGUID().GetCounter(), sourceSpellId);
     uint32 const nowMs = static_cast<uint32>(GameTime::GetGameTimeMS().count());
+    std::lock_guard<std::mutex> lock(XianmenStateMutex);
     auto const readyItr = XianmenMagicHitResonanceNextReadyMs.find(key);
     if (readyItr != XianmenMagicHitResonanceNextReadyMs.end() && nowMs < readyItr->second)
         return false;
@@ -107,6 +126,7 @@ bool ConsumeXianmenMagicHitResonanceCooldown(Player* player, uint32 sourceSpellI
 
 void ClearXianmenMagicHitResonanceState(uint32 playerGuid)
 {
+    std::lock_guard<std::mutex> lock(XianmenStateMutex);
     for (auto itr = XianmenMagicHitResonanceNextReadyMs.begin(); itr != XianmenMagicHitResonanceNextReadyMs.end();)
     {
         if (static_cast<uint32>(itr->first >> 32) == playerGuid)
@@ -735,7 +755,10 @@ public:
                 guid, data.factionId, JoinUIntSet(oldPersonalSkills), personalText, JoinUIntSet(GetActiveSkills(data.factionId)), JoinUIntSet(data.unlockedSkills));
         }
 
-        _playerData[guid] = data;
+        {
+            std::lock_guard<std::mutex> lock(_playerDataMutex);
+            _playerData[guid] = data;
+        }
     }
 
     void RefreshSkillDirectBonuses(Player* player)
@@ -777,13 +800,19 @@ public:
 
     void UnloadPlayerData(uint32 guid)
     {
-        _playerData.erase(guid);
+        {
+            std::lock_guard<std::mutex> lock(_playerDataMutex);
+            _playerData.erase(guid);
+        }
         _appliedSkillSpellPenetration.erase(guid);
     }
 
     void DeletePlayerData(uint32 guid)
     {
-        _playerData.erase(guid);
+        {
+            std::lock_guard<std::mutex> lock(_playerDataMutex);
+            _playerData.erase(guid);
+        }
         _appliedSkillSpellPenetration.erase(guid);
         CharacterDatabase.Execute("DELETE FROM `_仙门_玩家` WHERE `角色GUID` = {}", guid);
         CharacterDatabase.Execute("DELETE FROM `_仙门_玩家日常记录` WHERE `角色GUID` = {}", guid);
@@ -848,6 +877,7 @@ public:
 
     XianmenPlayerData const* GetPlayerData(uint32 guid) const
     {
+        std::lock_guard<std::mutex> lock(_playerDataMutex);
         auto itr = _playerData.find(guid);
         return itr == _playerData.end() ? nullptr : &itr->second;
     }
@@ -1214,7 +1244,6 @@ public:
         LoadPlayerData(player);
         RefreshPassiveAuras(player);
 
-        LOG_INFO("server.loading", "仙门系统: 玩家 {} 加入 {}", player->GetName(), faction->name);
         return true;
     }
 
@@ -1245,7 +1274,10 @@ public:
                 GetNow(), factionId);
         }
 
-        _playerData[guid] = XianmenPlayerData();
+        {
+            std::lock_guard<std::mutex> lock(_playerDataMutex);
+            _playerData[guid] = XianmenPlayerData();
+        }
         RefreshPassiveAuras(player);
         return true;
     }
@@ -1320,10 +1352,6 @@ public:
         uint32 const factionId = data->factionId;
         std::set<uint32> uniqueSkills(skillIds.begin(), skillIds.end());
         std::string const requestedSkills = JoinUIntSet(uniqueSkills);
-        std::string const oldActiveSkills = JoinUIntSet(GetActiveSkills(factionId));
-
-        LOG_INFO("server.loading", "[仙门定位-门主开放] 玩家={} GUID={} 门派={} 请求开放=[{}] 原门主开放=[{}] 最大开放={}",
-            player->GetName(), guid, factionId, requestedSkills, oldActiveSkills, _maxActiveSkills);
 
         if (uniqueSkills.size() > _maxActiveSkills)
         {
@@ -1356,14 +1384,9 @@ public:
             "UPDATE `_仙门_门派状态` SET `激活技能` = '{}', `更新时间` = {} WHERE `门派ID` = {}",
             active, now, factionId);
         _activeSkills[factionId] = uniqueSkills;
-        uint32 const cleanedPersonalCount = PrunePersonalActiveSkillsForFaction(factionId, uniqueSkills, now);
+        PrunePersonalActiveSkillsForFaction(factionId, uniqueSkills, now);
         RefreshFactionPassiveAuras(factionId);
 
-        XianmenFactionConfig const* faction = GetFaction(factionId);
-        LOG_INFO("server.loading", "仙门系统: 门主 {} 设置 {} 门派开放技能数={} 清理个人选择数={}",
-            player->GetName(), faction ? faction->name : "未知门派", static_cast<uint32>(uniqueSkills.size()), cleanedPersonalCount);
-        LOG_INFO("server.loading", "[仙门定位-门主开放成功] 玩家={} GUID={} 门派={} 保存门主开放=[{}] 数量={} 清理个人选择数={}",
-            player->GetName(), guid, factionId, activeText, static_cast<uint32>(uniqueSkills.size()), cleanedPersonalCount);
         return true;
     }
 
@@ -1394,12 +1417,8 @@ public:
         }
 
         std::set<uint32> const& factionActiveSkills = GetActiveSkills(data->factionId);
-        std::string const requestedSkills = JoinUIntSet(uniqueSkills);
         std::string const activeSkillsText = JoinUIntSet(factionActiveSkills);
         std::string const unlockedSkillsText = JoinUIntSet(data->unlockedSkills);
-        std::string const oldPersonalSkills = JoinUIntSet(data->personalActiveSkills);
-        LOG_INFO("server.loading", "[仙门定位-个人生效] 玩家={} GUID={} 门派={} 请求个人生效=[{}] 原个人生效=[{}] 门主开放=[{}] 已解锁=[{}] 最大个人生效={}",
-            player->GetName(), guid, data->factionId, requestedSkills, oldPersonalSkills, activeSkillsText, unlockedSkillsText, _maxPersonalActiveSkills);
 
         for (uint32 skillId : uniqueSkills)
         {
@@ -1439,10 +1458,6 @@ public:
         data->personalActiveSkills = uniqueSkills;
         RefreshPassiveAuras(player);
 
-        LOG_INFO("server.loading", "仙门系统: 玩家 {} 设置个人生效技能数={}",
-            player->GetName(), static_cast<uint32>(uniqueSkills.size()));
-        LOG_INFO("server.loading", "[仙门定位-个人生效成功] 玩家={} GUID={} 门派={} 保存个人生效=[{}] 数量={}",
-            player->GetName(), guid, data->factionId, personalText, static_cast<uint32>(uniqueSkills.size()));
         return true;
     }
 
@@ -1782,8 +1797,6 @@ public:
         _leaders[factionId] = guid;
         _leaderSettleDates[factionId] = today;
 
-        XianmenFactionConfig const* faction = GetFaction(factionId);
-        LOG_INFO("server.loading", "仙门系统: GM 设置 {} 为 {} 门主", player->GetName(), faction ? faction->name : "未知门派");
         return true;
     }
 
@@ -1803,7 +1816,10 @@ public:
         XianmenPlayerData const* data = GetPlayerData(guid);
         if (!data || !data->factionId)
         {
-            XianmenLingdunShieldValues.erase(guid);
+            {
+                std::lock_guard<std::mutex> lock(XianmenStateMutex);
+                XianmenLingdunShieldValues.erase(guid);
+            }
             ClearSkillDirectBonuses(player);
             player->UpdateAllStats();
             NotifyPlayerAttributePanelRefresh(player);
@@ -1841,7 +1857,10 @@ public:
 
         RefreshSkillDirectBonuses(player);
         if (!hasLingdun)
+        {
+            std::lock_guard<std::mutex> lock(XianmenStateMutex);
             XianmenLingdunShieldValues.erase(guid);
+        }
         player->UpdateAllStats();
         NotifyPlayerAttributePanelRefresh(player);
     }
@@ -1951,8 +1970,6 @@ public:
                     playerPair.second.dailyContribution = 0;
             }
 
-            LOG_INFO("server.loading", "仙门系统: {} 每日门主结算完成，门主GUID={}，贡献已清零",
-                pair.second.name, newLeaderGuid);
         }
     }
 
@@ -2064,6 +2081,7 @@ private:
 
     XianmenPlayerData* GetMutablePlayerData(uint32 guid)
     {
+        std::lock_guard<std::mutex> lock(_playerDataMutex);
         auto itr = _playerData.find(guid);
         return itr == _playerData.end() ? nullptr : &itr->second;
     }
@@ -2120,6 +2138,10 @@ private:
     std::unordered_map<uint32, XianmenRewardConfig> _rewardConfigs;
     std::unordered_map<uint32, std::vector<uint32>> _skillsByFaction;
     std::unordered_map<uint32, uint32> _skillsBySpell;
+    // _playerData 会在地图线程（击杀贡献路径 AddContribution→LoadPlayerData 写入）
+    // 与其他地图线程的属性/伤害钩子（GetPlayerData 读取）间并发访问，结构性操作必须持锁；
+    // unordered_map 节点地址稳定，返回的元素指针在持锁查找后使用是安全的
+    mutable std::mutex _playerDataMutex;
     std::unordered_map<uint32, XianmenPlayerData> _playerData;
     std::unordered_map<uint32, int32> _appliedSkillSpellPenetration;
     std::unordered_map<uint32, std::set<uint32>> _activeSkills;
@@ -2617,8 +2639,14 @@ void ApplyXianmenLingdunShield(Player* player, uint256& damage, XianmenSkillConf
         return;
 
     uint32 const guid = player->GetGUID().GetCounter();
-    auto shieldItr = XianmenLingdunShieldValues.find(guid);
-    if (shieldItr == XianmenLingdunShieldValues.end() || shieldItr->second == 0)
+    bool hasShield = false;
+    {
+        std::lock_guard<std::mutex> lock(XianmenStateMutex);
+        auto shieldItr = XianmenLingdunShieldValues.find(guid);
+        hasShield = shieldItr != XianmenLingdunShieldValues.end() && shieldItr->second != 0;
+    }
+
+    if (!hasShield)
     {
         if (!RollXianmenProc(player, skill))
             return;
@@ -2627,29 +2655,48 @@ void ApplyXianmenLingdunShield(Player* player, uint256& damage, XianmenSkillConf
         if (shieldValue == 0)
             return;
 
-        XianmenLingdunShieldValues[guid] = shieldValue;
-        shieldItr = XianmenLingdunShieldValues.find(guid);
+        {
+            std::lock_guard<std::mutex> lock(XianmenStateMutex);
+            XianmenLingdunShieldValues[guid] = shieldValue;
+        }
         ApplyXianmenPowerGain(player, POWER_MANA, ScaleXianmenPercent(player->GetMaxPowerForCombat256(POWER_MANA), value * 0.2f));
         player->SendPlaySpellVisual(XIANMEN_LINGDUN_VISUAL_KIT);
         LOG_DEBUG("server.loading", "[仙门定位-灵盾生成] 玩家={} GUID={} 技能={} 名称={} value={} 护盾值={} 基底=生命+法力+法强+攻强",
             player->GetName(), guid, skill.id, skill.name, value, Acore::Number::ToDecimal65String(shieldValue));
     }
 
-    uint256 const beforeShield = shieldItr->second;
-    uint256 const absorb = std::min<uint256>(damage, shieldItr->second);
-    damage -= absorb;
-    shieldItr->second -= absorb;
+    uint256 beforeShield = 0;
+    uint256 absorb = 0;
+    uint256 remaining = 0;
+    bool shieldBroken = false;
+    {
+        std::lock_guard<std::mutex> lock(XianmenStateMutex);
+        auto shieldItr = XianmenLingdunShieldValues.find(guid);
+        if (shieldItr == XianmenLingdunShieldValues.end() || shieldItr->second == 0)
+            return;
+
+        beforeShield = shieldItr->second;
+        absorb = std::min<uint256>(damage, shieldItr->second);
+        damage -= absorb;
+        shieldItr->second -= absorb;
+        remaining = shieldItr->second;
+
+        if (remaining == 0)
+        {
+            XianmenLingdunShieldValues.erase(shieldItr);
+            shieldBroken = true;
+        }
+    }
 
     LOG_DEBUG("server.loading", "[仙门定位-灵盾吸收] 玩家={} GUID={} 技能={} 名称={} 入伤={} 吸收={} 护盾前={} 护盾余={}",
         player->GetName(), guid, skill.id, skill.name,
         Acore::Number::ToDecimal65String(AddUInt256Damage(damage, absorb)),
         Acore::Number::ToDecimal65String(absorb),
         Acore::Number::ToDecimal65String(beforeShield),
-        Acore::Number::ToDecimal65String(shieldItr->second));
+        Acore::Number::ToDecimal65String(remaining));
 
-    if (shieldItr->second == 0)
+    if (shieldBroken)
     {
-        XianmenLingdunShieldValues.erase(shieldItr);
         LOG_DEBUG("server.loading", "[仙门定位-灵盾破碎] 玩家={} GUID={} 技能={} 名称={}",
             player->GetName(), guid, skill.id, skill.name);
     }
@@ -2701,11 +2748,14 @@ bool TryTriggerXianmenGoldenBody(Player* player, uint256& damage)
 
     uint32 const guid = player->GetGUID().GetCounter();
     uint32 const now = GetNow();
-    auto readyItr = XianmenGoldenBodyReadyTimes.find(guid);
-    if (readyItr != XianmenGoldenBodyReadyTimes.end() && readyItr->second > now)
-        return false;
+    {
+        std::lock_guard<std::mutex> lock(XianmenStateMutex);
+        auto readyItr = XianmenGoldenBodyReadyTimes.find(guid);
+        if (readyItr != XianmenGoldenBodyReadyTimes.end() && readyItr->second > now)
+            return false;
 
-    XianmenGoldenBodyReadyTimes[guid] = now + XIANMEN_GOLDEN_BODY_COOLDOWN_SECONDS;
+        XianmenGoldenBodyReadyTimes[guid] = now + XIANMEN_GOLDEN_BODY_COOLDOWN_SECONDS;
+    }
 
     uint256 const healthFloor = std::max<uint256>(uint256(1), ScaleXianmenPercent(maxHealth, value * 0.4f));
     uint256 const allowedDamage = currentHealth > healthFloor ? currentHealth - healthFloor : uint256(0);
@@ -2744,6 +2794,7 @@ bool RollXianmenProc(Player* player, XianmenSkillConfig const& skill)
                     {
                         uint64 const key = MakeXianmenPlayerSpellKey(player->GetGUID().GetCounter(), skill.id);
                         uint32 const nowMs = static_cast<uint32>(GameTime::GetGameTimeMS().count());
+                        std::lock_guard<std::mutex> lock(XianmenStateMutex);
                         auto const lastItr = XianmenProcPpmLastEventMs.find(key);
                         if (lastItr != XianmenProcPpmLastEventMs.end())
                             elapsedMs = nowMs >= lastItr->second ? nowMs - lastItr->second : 0;
@@ -3250,9 +3301,12 @@ public:
             return;
 
         uint32 const guid = player->GetGUID().GetCounter();
-        _regenTimers.erase(player->GetGUID().GetCounter());
-        XianmenGoldenBodyReadyTimes.erase(guid);
-        XianmenLingdunShieldValues.erase(guid);
+        {
+            std::lock_guard<std::mutex> lock(XianmenStateMutex);
+            _regenTimers.erase(guid);
+            XianmenGoldenBodyReadyTimes.erase(guid);
+            XianmenLingdunShieldValues.erase(guid);
+        }
         ClearXianmenMagicHitResonanceState(guid);
         sXianmenMgr->ClearSkillDirectBonuses(player);
         sXianmenMgr->UnloadPlayerData(guid);
@@ -3260,8 +3314,11 @@ public:
 
     void OnPlayerDelete(ObjectGuid guid, uint32 /*accountId*/) override
     {
-        XianmenGoldenBodyReadyTimes.erase(guid.GetCounter());
-        XianmenLingdunShieldValues.erase(guid.GetCounter());
+        {
+            std::lock_guard<std::mutex> lock(XianmenStateMutex);
+            XianmenGoldenBodyReadyTimes.erase(guid.GetCounter());
+            XianmenLingdunShieldValues.erase(guid.GetCounter());
+        }
         ClearXianmenMagicHitResonanceState(guid.GetCounter());
         sXianmenMgr->DeletePlayerData(guid.GetCounter());
     }
@@ -3474,12 +3531,15 @@ public:
         if (!player->IsInCombat())
             return;
 
-        uint32& timer = _regenTimers[guid];
-        timer += diff;
-        if (timer < 5 * IN_MILLISECONDS)
-            return;
+        {
+            std::lock_guard<std::mutex> lock(XianmenStateMutex);
+            uint32& timer = _regenTimers[guid];
+            timer += diff;
+            if (timer < 5 * IN_MILLISECONDS)
+                return;
 
-        timer = 0;
+            timer = 0;
+        }
 
         uint32 const level = sXianmenMgr->GetPlayerXianmenLevel(player);
         for (XianmenSkillConfig const* skill : sXianmenMgr->GetEffectiveSkills(player))
@@ -3583,10 +3643,8 @@ public:
             uint32 const guid = player->GetGUID().GetCounter();
             uint64 const cacheKey = (static_cast<uint64>(guid) << 32) | 0xFFFFFF01u;
             std::string const signatureText = signature.str();
-            auto cacheItr = XianmenRatingDebugSignatures.find(cacheKey);
-            if (cacheItr == XianmenRatingDebugSignatures.end() || cacheItr->second != signatureText)
+            if (ShouldLogXianmenDebugSignature(XianmenRatingDebugSignatures, cacheKey, signatureText))
             {
-                XianmenRatingDebugSignatures[cacheKey] = signatureText;
                 LOG_DEBUG("server.loading", "[仙门定位-符箓法力计算] 玩家={} GUID={} 修为={} 实际生效=[{}] 法力前={} bonusPct={} 法力后={}",
                     player->GetName(), guid, level, effectiveList, beforeValue, bonusPct, value);
             }
@@ -3706,10 +3764,8 @@ public:
             uint32 const guid = player->GetGUID().GetCounter();
             uint64 const cacheKey = (static_cast<uint64>(guid) << 32) | 0xFFFFFF02u;
             std::string const signatureText = signature.str();
-            auto cacheItr = XianmenRatingDebugSignatures.find(cacheKey);
-            if (cacheItr == XianmenRatingDebugSignatures.end() || cacheItr->second != signatureText)
+            if (ShouldLogXianmenDebugSignature(XianmenRatingDebugSignatures, cacheKey, signatureText))
             {
-                XianmenRatingDebugSignatures[cacheKey] = signatureText;
                 LOG_DEBUG("server.loading", "[仙门定位-符箓法术暴击计算] 玩家={} GUID={} 修为={} 实际生效=[{}] 暴击前={} 加成={} 暴击后={}",
                     player->GetName(), guid, level, effectiveList, beforeValue, bonus, value);
             }
@@ -3747,10 +3803,8 @@ public:
             uint32 const guid = player->GetGUID().GetCounter();
             uint64 const cacheKey = (static_cast<uint64>(guid) << 32) | 0xFFFFFF03u;
             std::string const signatureText = signature.str();
-            auto cacheItr = XianmenRatingDebugSignatures.find(cacheKey);
-            if (cacheItr == XianmenRatingDebugSignatures.end() || cacheItr->second != signatureText)
+            if (ShouldLogXianmenDebugSignature(XianmenRatingDebugSignatures, cacheKey, signatureText))
             {
-                XianmenRatingDebugSignatures[cacheKey] = signatureText;
                 LOG_DEBUG("server.loading", "[仙门定位-符箓法术命中计算] 玩家={} GUID={} 修为={} 实际生效=[{}] 命中前={} 命中后={}",
                     player->GetName(), guid, level, effectiveList, beforeSpellHit, spellHit);
             }
@@ -3808,10 +3862,8 @@ public:
 
             uint32 const guid = player->GetGUID().GetCounter();
             std::string const signatureText = signature.str();
-            auto cacheItr = XianmenSpellPowerDebugSignatures.find(guid);
-            if (cacheItr == XianmenSpellPowerDebugSignatures.end() || cacheItr->second != signatureText)
+            if (ShouldLogXianmenDebugSignature(XianmenSpellPowerDebugSignatures, guid, signatureText))
             {
-                XianmenSpellPowerDebugSignatures[guid] = signatureText;
                 LOG_DEBUG("server.loading", "[仙门定位-法强计算] 玩家={} GUID={} 门派={} 修为={} 实际生效=[{}] damagePct={} healingPct={} 法强前={} 法强后={} 治疗前={} 治疗后={}",
                     player->GetName(), guid, data->factionId, level, effectiveList, damagePct, healingPct,
                     beforeSpellText, afterSpellText, beforeHealingText, afterHealingText);
@@ -3866,10 +3918,8 @@ public:
                 uint32 const guid = player->GetGUID().GetCounter();
                 uint64 const cacheKey = (static_cast<uint64>(guid) << 32) | static_cast<uint32>(cr);
                 std::string const signatureText = signature.str();
-                auto cacheItr = XianmenRatingDebugSignatures.find(cacheKey);
-                if (cacheItr == XianmenRatingDebugSignatures.end() || cacheItr->second != signatureText)
+                if (ShouldLogXianmenDebugSignature(XianmenRatingDebugSignatures, cacheKey, signatureText))
                 {
-                    XianmenRatingDebugSignatures[cacheKey] = signatureText;
                     LOG_DEBUG("server.loading", "[仙门定位-法术急速计算] 玩家={} GUID={} 门派={} 修为={} 实际生效=[{}] 评分前={} 加成={} 评分后={}",
                         player->GetName(), guid, data->factionId, level, effectiveList, beforeText, bonusText, afterText);
                 }

@@ -414,7 +414,7 @@ public:
             summons.Summon(summon);
         }
 
-        void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*dmgType*/, SpellSchoolMask /*school*/) override
+        void DamageTaken(Unit* /*attacker*/, uint256& damage, DamageEffectType /*dmgType*/, SpellSchoolMask /*school*/) override
         {
             // Temporal hack, by some case some melee spells can bypass this aura damage reduction
             if (me->HasAura(SPELL_GIFT_OF_TWILIGHT_FIRE))

@@ -580,6 +580,7 @@ bool AuraEffect::HasCombatAmount() const
         case SPELL_AURA_PERIODIC_LEECH:
         case SPELL_AURA_PERIODIC_HEAL:
         case SPELL_AURA_OBS_MOD_HEALTH:
+        case SPELL_AURA_DUMMY:
             return true;
         default:
             return false;
@@ -6853,11 +6854,7 @@ void AuraEffect::HandlePeriodicDamageAurasTick(Unit* target, Unit* caster) const
 
     if (target->GetAI())
     {
-        uint32 aiDamage = ToUInt32Saturated(damage);
-        uint32 originalAiDamage = aiDamage;
-        target->GetAI()->OnCalculatePeriodicTickReceived(aiDamage, caster);
-        if (aiDamage != originalAiDamage)
-            damage = aiDamage;
+        target->GetAI()->OnCalculatePeriodicTickReceived(damage, caster);
     }
 
     if (GetAuraType() == SPELL_AURA_PERIODIC_DAMAGE)
@@ -6936,7 +6933,7 @@ void AuraEffect::HandlePeriodicDamageAurasTick(Unit* target, Unit* caster) const
         uint256 originalTickDamage = tickDamage;
         tickDamage = AddUInt256Damage(AddUInt256Damage(tickDamage, caster->GetCustomTrueDamageBonus()), caster->GetCustomCuttingDamageBonus());
         if (tickDamage > originalTickDamage)
-            dmgInfo.ModifyDamage(tickDamage - originalTickDamage > static_cast<uint256>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(Acore::Number::ToUInt64Saturated(tickDamage - originalTickDamage)));
+            dmgInfo.SetDamage(tickDamage);
     }
 
     LOG_DEBUG("spells.aura.effect", "PeriodicTick: {} attacked {} for {} dmg inflicted by {} abs is {}",
@@ -6993,13 +6990,7 @@ void AuraEffect::HandlePeriodicHealthLeechAuraTick(Unit* target, Unit* caster) c
         damage = scriptDamage;
 
     if (target->GetAI())
-    {
-        uint32 aiDamage = ToUInt32Saturated(damage);
-        uint32 originalAiDamage = aiDamage;
-        target->GetAI()->OnCalculatePeriodicTickReceived(aiDamage, caster);
-        if (aiDamage != originalAiDamage)
-            damage = aiDamage;
-    }
+        target->GetAI()->OnCalculatePeriodicTickReceived(damage, caster);
 
     if (GetBase()->GetType() == DYNOBJ_AURA_TYPE)
         damage = caster->SpellDamageBonusDone(target, GetSpellInfo(), damage, DOT, GetEffIndex(), 0.0f, GetBase()->GetStackAmount());
@@ -7045,7 +7036,7 @@ void AuraEffect::HandlePeriodicHealthLeechAuraTick(Unit* target, Unit* caster) c
         uint256 originalTickDamage = tickDamage;
         tickDamage = AddUInt256Damage(AddUInt256Damage(tickDamage, caster->GetCustomTrueDamageBonus()), caster->GetCustomCuttingDamageBonus());
         if (tickDamage > originalTickDamage)
-            dmgInfo.ModifyDamage(tickDamage - originalTickDamage > static_cast<uint256>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(Acore::Number::ToUInt64Saturated(tickDamage - originalTickDamage)));
+            dmgInfo.SetDamage(tickDamage);
     }
 
     // Set trigger flag
@@ -7058,20 +7049,21 @@ void AuraEffect::HandlePeriodicHealthLeechAuraTick(Unit* target, Unit* caster) c
     if (dmgInfo.GetDamage())
         procVictim |= PROC_FLAG_TAKEN_DAMAGE;
 
-    uint256 targetHealth = target->GetHealthForCombat256();
-    if (targetHealth < dmgInfo.GetDamage())
-    {
-        uint256 damageDelta = static_cast<uint256>(dmgInfo.GetDamage()) - targetHealth;
-        dmgInfo.ModifyDamage(damageDelta > static_cast<uint256>(std::numeric_limits<int64>::max()) ? std::numeric_limits<int64>::max() : static_cast<int64>(damageDelta));
-    }
-
     tickDamage = dmgInfo.GetDamage();
     TriggerDamageTriggeredArtifactItemProcFromAuraTick(caster, target, tickDamage, procVictim, procEx, GetSpellInfo());
 
     LOG_DEBUG("spells.aura.effect", "PeriodicTick: {} health leech of {} for {} dmg inflicted by {} abs is {}",
                     GetCasterGUID().ToString(), target->GetGUID().ToString(), tickDamage, GetId(), absorb);
     if (caster)
-        caster->SendSpellNonMeleeDamageLog(target, GetSpellInfo(), ToUInt32Damage(tickDamage), GetSpellInfo()->GetSchoolMask(), ToUInt32Damage(absorb), ToUInt32Damage(resist), false, 0, crit);
+    {
+        SpellNonMeleeDamage log(caster, target, GetSpellInfo(), GetSpellInfo()->GetSchoolMask());
+        log.damage = tickDamage;
+        log.absorb = absorb;
+        log.resist = resist;
+        if (crit)
+            log.HitInfo |= SPELL_HIT_TYPE_CRIT;
+        caster->SendSpellNonMeleeDamageLog(&log);
+    }
 
     uint256 new_damage = Unit::DealDamage(caster, target, tickDamage, &cleanDamage, DOT, GetSpellInfo()->GetSchoolMask(), GetSpellInfo(), false);
 
@@ -7231,10 +7223,7 @@ void AuraEffect::HandlePeriodicHealAurasTick(Unit* target, Unit* caster) const
     heal = scriptHeal;
 
     if (target->GetAI())
-    {
-        uint32 aiHeal = ToUInt32Saturated(heal);
-        target->GetAI()->OnCalculatePeriodicTickReceived(aiHeal, caster);
-    }
+        target->GetAI()->OnCalculatePeriodicTickReceived(heal, caster);
 
     HealInfo healInfo(caster, target, heal, GetSpellInfo(), GetSpellInfo()->GetSchoolMask());
     Unit::CalcHealAbsorb(healInfo);
@@ -7640,4 +7629,30 @@ int32 AuraEffect::GetTotalTicks() const
     }
 
     return totalTicks;
+}
+
+uint32 AuraEffect::GetUnhastedTotalTicks(Unit* caster) const
+{
+    int32 amplitude = m_spellInfo->Effects[m_effIndex].Amplitude;
+    if (GetAuraType() == SPELL_AURA_OBS_MOD_POWER && !amplitude)
+        amplitude = IN_MILLISECONDS;
+
+    if (amplitude <= 0)
+        amplitude = IN_MILLISECONDS;
+
+    if (Player* modOwner = caster ? caster->GetSpellModOwner() : nullptr)
+        modOwner->ApplySpellMod(GetId(), SPELLMOD_ACTIVATION_TIME, amplitude);
+
+    if (amplitude <= 0)
+        return 1;
+
+    int32 duration = GetBase() ? GetBase()->CalcMaxDuration(caster) : m_spellInfo->GetMaxDuration();
+    if (duration <= 0)
+        return 1;
+
+    uint32 totalTicks = static_cast<uint32>(duration / amplitude);
+    if (m_spellInfo->HasAttribute(SPELL_ATTR5_EXTRA_INITIAL_PERIOD))
+        ++totalTicks;
+
+    return std::max<uint32>(totalTicks, 1);
 }

@@ -681,7 +681,7 @@ public:
         void EnterEvadeMode(EvadeReason /*why*/) override { } // never stop casting due to evade
         void UpdateAI(uint32 /*diff*/) override { } // never do anything unless told
         void JustEngagedWith(Unit* /*who*/) override { }
-        void DamageTaken(Unit* /*who*/, uint32& damage, DamageEffectType, SpellSchoolMask) override { damage = 0; } // no, you can't kill it
+        void DamageTaken(Unit* /*who*/, uint256& damage, DamageEffectType, SpellSchoolMask) override { damage = 0; } // no, you can't kill it
     };
 };
 
