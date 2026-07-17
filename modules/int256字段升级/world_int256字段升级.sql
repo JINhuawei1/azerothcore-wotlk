@@ -207,3 +207,8 @@ ALTER TABLE `_武魂系统_装备`
 ALTER TABLE `_武魂系统_技能`
   MODIFY `学习消耗` decimal(65,0) unsigned NOT NULL DEFAULT '100',
   MODIFY `升级消耗` decimal(65,0) unsigned NOT NULL DEFAULT '100';
+
+-- 幻境生物属性:装备属性倍率系数宽化 + 装备属性值扩容(配合 C++ equipAttrValue → uint256)
+ALTER TABLE `_幻境生物属性`
+  MODIFY `装备属性倍率` double unsigned NOT NULL DEFAULT 1 COMMENT '装备属性倍率系数(装备属性值=1时,最终倍率=幻境等级*本系数)',
+  MODIFY `装备属性值` decimal(65,0) unsigned NOT NULL DEFAULT 0 COMMENT '装备属性值(0=关闭,1=按幻境等级使用倍率,>1=使用固定值)';
