@@ -2073,6 +2073,7 @@ public:
 
     void LoadSmartAIFromDB();
     void CheckIfSmartAIInDatabaseExists();
+    static bool IsCreatureUsedAsTimedActionListTarget(uint32 creatureEntry, SmartAIEventMap const (&eventMaps)[SMART_SCRIPT_TYPE_MAX]);
 
     SmartAIEventList GetScript(int32 entry, SmartScriptType type)
     {

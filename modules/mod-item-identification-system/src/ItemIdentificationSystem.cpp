@@ -1,4 +1,6 @@
 #include "ItemIdentificationSystem.h"
+#include "IdentificationTemplateGroupResolver.h"
+#include "IdentificationScrollPolicy.h"
 #include "AddonThrottle.h"
 #include "Define.h"
 #include "HermesBridgeAddonApi.h"
@@ -17,6 +19,7 @@
 #include "WorldPacket.h"
 #include "Opcodes.h"
 #include "ScriptedGossip.h"
+#include "Spell.h"
 #include "WorldSessionMgr.h"
 #include <vector>
 #include <map>
@@ -65,6 +68,8 @@
         #define MODULE_RUNE_SYSTEM
     #endif
     #include "RuneManager.h"
+    #include "RuneApplyManager.h"
+    #include "RuneSystem.h"
 #endif
 
 #if __has_include("ItemSkillsManager.h")
@@ -73,6 +78,7 @@
     #endif
     #include "ItemSkillsManager.h"
     #include "ItemSkillsDBHelper.h"
+    #include "ItemSkillsEffects.h"
 #endif
 
 #if __has_include("MagicHitSystem.h")
@@ -125,7 +131,7 @@ namespace
         return 'x';
     }
 
-    bool HasHuanJingEffect(uint32 value, char mode)
+    bool HasHuanJingEffect(uint256 const& value, char mode)
     {
         mode = NormalizeHuanJingMode(mode);
         if (mode == '-')
@@ -310,6 +316,25 @@ namespace
             return;
 
         ObjectGuid playerGuid = player->GetGUID();
+        // 批量鉴定会在同一帧为多件物品排队。旧逻辑全部固定延迟2秒，导致
+        // ALL_MODULE_DATA 瞬间突发，Hermes/客户端消息队列只能收到其中一部分。
+        // 按玩家将同一批次错开350ms发送；超过1秒没有新任务则视为新批次。
+        static std::mutex refreshQueueMutex;
+        static std::unordered_map<uint32, std::pair<std::chrono::steady_clock::time_point, uint32>> refreshQueueState;
+        uint32 staggerIndex = 0;
+        {
+            std::lock_guard<std::mutex> lock(refreshQueueMutex);
+            auto const now = std::chrono::steady_clock::now();
+            auto& state = refreshQueueState[playerGuid.GetCounter()];
+            if (state.first.time_since_epoch().count() == 0 || now - state.first > std::chrono::seconds(1))
+                state.second = 0;
+            else
+                ++state.second;
+            state.first = now;
+            staggerIndex = state.second;
+        }
+        delay += Milliseconds(staggerIndex * 350);
+
         player->m_Events.AddEventAtOffset([playerGuid, itemID, guid]()
         {
             Player* player = ObjectAccessor::FindPlayer(playerGuid);
@@ -365,6 +390,9 @@ void ItemIdentificationSystem::Initialize()
     // 加载鉴定模板（在服务器完全启动后执行）
     LoadIdentificationTemplates();
 
+    // 加载鉴定卷轴配置
+    LoadIdentificationScrollConfigs();
+
     // 显示模块初始化信息
     if (_enabled)
     {
@@ -389,6 +417,7 @@ void ItemIdentificationSystem::LoadConfig(bool reload)
     if (reload)
     {
         LoadIdentificationTemplates();
+        LoadIdentificationScrollConfigs();
 #ifdef MODULE_ITEM_ATTRIBUTES
         sItemAttributesLoaderUnsafe->LoadItemAttributeTemplates();
 #endif
@@ -462,6 +491,12 @@ struct IdentificationTemplate
     std::string itemNameSuffix;
     std::string itemNameColors;
     std::string itemBottomDescription;
+
+    // 公式化扩展字段（数据驱动，不硬编码行数/系数/模式）
+    double baseAttrPerLevelInc = 0.0;        // 基础每级增量：幻境等级每+1，基础属性百分比增加量
+    double additionalAttrPerLevelInc = 0.0;  // 追加每级增量
+    uint8 attrCalcMode = 0;                  // 属性计算模式：0=绝对值，1=官方百分比（取代<=300硬编码判断）
+    uint8 formulaType = 0;                   // 公式类型：0=线性(基础+等级*增量)，1=指数(预留)
 };
 
 static std::string UrlEncodeAddonField(const std::string& value)
@@ -534,7 +569,8 @@ void ItemIdentificationSystem::LoadIdentificationTemplates()
         "`物品技能_模板_组`, `追加技能最小数量`, `追加技能最大数量`, `追加技能允许重复`, "
         "`技能魔次_模板_组`, `技能魔次最小数量`, `技能魔次最大数量`, `技能魔次最小魔次`, `技能魔次最大魔次`, `技能魔次允许重复`, "
         "`需求_模板`, `符文系统_符文`, `符文凹槽最小数量`, `符文凹槽最大数量`, `技能模板_套装_组`, `公告模板`, "
-        "`品质颜色`, `物品名字前缀`, `物品名字后缀`, `物品名字颜色_多个逗号隔开`, `物品底部描述` "
+        "`品质颜色`, `物品名字前缀`, `物品名字后缀`, `物品名字颜色_多个逗号隔开`, `物品底部描述`, "
+        "`基础每级增量`, `追加每级增量`, `属性计算模式`, `公式类型` "
         "FROM `_物品鉴定_模板`");
 
     if (!result)
@@ -634,6 +670,12 @@ void ItemIdentificationSystem::LoadIdentificationTemplates()
         tmpl.itemNameColors = fields[46].Get<std::string>();                   // 物品名字颜色_多个逗号隔开
         tmpl.itemBottomDescription = fields[47].Get<std::string>();            // 物品底部描述
 
+        // 公式化扩展字段(48-51)
+        tmpl.baseAttrPerLevelInc       = fields[48].Get<double>();  // 基础每级增量
+        tmpl.additionalAttrPerLevelInc = fields[49].Get<double>();  // 追加每级增量
+        tmpl.attrCalcMode              = fields[50].Get<uint8>();   // 属性计算模式
+        tmpl.formulaType               = fields[51].Get<uint8>();   // 公式类型
+
         _identificationTemplates[tmpl.id] = tmpl;
         groups.insert(tmpl.group);
         count++;
@@ -645,6 +687,74 @@ void ItemIdentificationSystem::LoadIdentificationTemplates()
         }
 
     } while (result->NextRow());
+}
+
+void ItemIdentificationSystem::LoadIdentificationScrollConfigs()
+{
+    _identificationScrollConfigs.clear();
+
+    QueryResult result = WorldDatabase.Query(
+        "SELECT `卷轴物品ID`, `卷轴类型`, `倍率`, `鉴定组ID` FROM `_物品鉴定_卷轴配置`");
+
+    if (!result)
+    {
+        LOG_INFO("server.loading", "物品鉴定系统: 未加载到鉴定卷轴配置");
+        return;
+    }
+
+    uint32 loadedCount = 0;
+    do
+    {
+        Field* fields = result->Fetch();
+        IdentificationScrollConfig config;
+        config.itemEntry = fields[0].Get<uint32>();
+
+        uint8 scrollType = fields[1].Get<uint8>();
+        if (scrollType != static_cast<uint8>(IdentificationScrollType::Identify) &&
+            scrollType != static_cast<uint8>(IdentificationScrollType::Cleanup))
+        {
+            LOG_WARN("server.loading", "物品鉴定系统: 卷轴物品ID={} 的卷轴类型={}无效，已跳过",
+                config.itemEntry, scrollType);
+            continue;
+        }
+
+        config.type = static_cast<IdentificationScrollType>(scrollType);
+        config.multiplier = fields[2].Get<uint256>();
+        config.identificationGroupId = fields[3].Get<uint32>();
+
+        if (config.type == IdentificationScrollType::Identify &&
+            (config.multiplier <= 1 || config.identificationGroupId == 0))
+        {
+            LOG_WARN("server.loading",
+                "物品鉴定系统: 鉴定卷轴物品ID={} 配置无效（倍率必须大于1且鉴定组ID不能为0），已跳过",
+                config.itemEntry);
+            continue;
+        }
+
+        if (config.type == IdentificationScrollType::Identify)
+        {
+            bool groupExists = std::any_of(
+                _identificationTemplates.begin(),
+                _identificationTemplates.end(),
+                [&config](auto const& entry)
+                {
+                    return entry.second.group == config.identificationGroupId;
+                });
+
+            if (!groupExists)
+            {
+                LOG_WARN("server.loading",
+                    "物品鉴定系统: 鉴定卷轴物品ID={} 绑定的鉴定组ID={}不存在，已跳过",
+                    config.itemEntry, config.identificationGroupId);
+                continue;
+            }
+        }
+
+        _identificationScrollConfigs[config.itemEntry] = std::move(config);
+        ++loadedCount;
+    } while (result->NextRow());
+
+    LOG_INFO("server.loading", "物品鉴定系统: 已加载 {} 条鉴定/清理卷轴配置", loadedCount);
 }
 
 // 检查物品是否可以鉴定
@@ -747,6 +857,10 @@ bool ItemIdentificationSystem::IdentifyItem(Player* player, Item* item, uint32 g
 
         if (applyResult)
         {
+            // 鉴定成功只发送“需要刷新”的轻量通知，数据仍由客户端悬停时按需查询。
+            SendItemIdentificationAddonMessage(player,
+                Acore::StringFormat("IDENTIFY_REFRESH:{}:{}", item->GetEntry(), item->GetGUID().GetCounter()));
+
             // 【修复】应用成功后才扣除金币
             if (costToDeduct > static_cast<uint64>(std::numeric_limits<int64>::max()))
                 player->SetMoney(player->GetMoney() > costToDeduct ? player->GetMoney() - costToDeduct : 0);
@@ -814,10 +928,22 @@ uint32 ItemIdentificationSystem::SelectIdentificationTemplate(uint32 groupId, It
     std::vector<std::pair<uint32, uint32>> templates; // <模板ID, 几率>
     uint32 totalChance = 0;
 
+    std::set<uint32> availableGroups;
+    for (auto const& pair : _identificationTemplates)
+        availableGroups.insert(pair.second.group);
+
+    uint32 const resolvedGroupId = ResolveIdentificationTemplateGroup(groupId, availableGroups);
+    if (resolvedGroupId != groupId)
+    {
+        LOG_INFO("server.loading",
+            "[鉴定模板选择] 请求组ID={} 无精确模板，已回退通用公式组={}；属性将按玩家幻境等级动态计算",
+            groupId, resolvedGroupId);
+    }
+
     for (const auto& pair : _identificationTemplates)
     {
         const IdentificationTemplate& tmpl = pair.second;
-        if (tmpl.group == groupId)
+        if (tmpl.group == resolvedGroupId)
         {
             templates.push_back(std::make_pair(tmpl.id, tmpl.randomChance));
             totalChance += tmpl.randomChance;
@@ -852,13 +978,22 @@ uint32 ItemIdentificationSystem::SelectIdentificationTemplate(uint32 groupId, It
 // 应用鉴定结果到物品（需要指定组ID）
 bool ItemIdentificationSystem::ApplyIdentification(Player* player, Item* item, uint32 groupId)
 {
+    return ApplyIdentificationInternal(player, item, groupId, _cost, GetSuccessRate(player, item));
+}
+
+bool ItemIdentificationSystem::ApplyIdentificationInternal(
+    Player* player,
+    Item* item,
+    uint32 groupId,
+    uint64 recordedCost,
+    uint32 recordedSuccessRate)
+{
     // 获取选择的模板ID
     uint32 templateId = SelectIdentificationTemplate(groupId, item);
     if (!templateId || _identificationTemplates.find(templateId) == _identificationTemplates.end())
         return false;
 
     const IdentificationTemplate& tmpl = _identificationTemplates[templateId];
-
 
     // 0. 检查物品是否已鉴定（防止重复鉴定）
     uint32 itemPropertySeed = item->GetGUID().GetCounter();
@@ -892,8 +1027,8 @@ bool ItemIdentificationSystem::ApplyIdentification(Player* player, Item* item, u
     record.itemGuid = itemGuid;
     record.itemEntry = item->GetEntry();
     record.templateId = templateId;
-    record.costGold = _cost;
-    record.successRate = GetSuccessRate(player, item);
+    record.costGold = recordedCost;
+    record.successRate = recordedSuccessRate;
     
     // 初始化所有标记为false，所有数值字段为0
     record.hasGrowth = false;
@@ -1091,9 +1226,6 @@ bool ItemIdentificationSystem::ApplyIdentification(Player* player, Item* item, u
         _batchQueryCache.erase(cacheKey);
     }
 
-    // 13. 鉴定流程完成后延迟推送一次，等待调用方清理待鉴定标记和子模块数据落库。
-    QueueAllModuleDataAddonRefresh(player, item->GetEntry(), itemGuid, 2000ms);
-
     // 13. 套装刷新已优化：移除鉴定时的刷新调用
     // 原因：物品在背包中时套装效果不需要生效，只有装备时才需要刷新
     // 套装系统会在玩家装备物品时（OnPlayerEquip）自动调用 RefreshPlayerSetEffects
@@ -1226,6 +1358,18 @@ uint256 GetOfficialStatReferenceValue(Item* item, uint32 attributeType)
     return std::max<uint32>(1, itemLevelFallback);
 }
 
+// 按公式算最终百分比：线性 = 基础 + 幻境等级 × 每级增量（纯数据驱动，无魔法数字）
+// formulaType==1 指数为预留，首版回退线性。
+static uint256 ComputeScaledPercent(uint256 const& basePercent, uint256 const& huanJingLevel,
+                                    double perLevelInc, uint8 /*formulaType*/)
+{
+    long double inc = Acore::Number::ToLongDouble(huanJingLevel) * perLevelInc;
+    long double total = Acore::Number::ToLongDouble(basePercent) + inc;
+    if (total < 0.0L)
+        total = 0.0L;
+    return Acore::Number::ToUInt256Saturated(std::round(total));
+}
+
 int256 CalculateOfficialPercentAttributeValue(Item* item, uint32 attributeType, uint256 minPercent, uint256 maxPercent)
 {
     if (minPercent > maxPercent)
@@ -1303,7 +1447,9 @@ uint32 ApplyOfficialPercentAdditionalAttributes(
     Item* item,
     IdentificationTemplate const& tmpl,
     std::vector<uint32> const& attributeGroups,
-    uint32 attrCount)
+    uint32 attrCount,
+    uint256 const& minPercent,
+    uint256 const& maxPercent)
 {
     if (!item || !sItemAttributesLoader || attrCount == 0)
         return 0;
@@ -1332,8 +1478,8 @@ uint32 ApplyOfficialPercentAdditionalAttributes(
             int256 value = CalculateOfficialPercentAttributeValue(
                 item,
                 attributeTemplate->attributeType,
-                tmpl.additionalAttrMinValue,
-                tmpl.additionalAttrMaxValue);
+                minPercent,
+                maxPercent);
 
             ItemAttributeResult result = sItemAttributesLoader->ApplyAttributeToItem(
                 item,
@@ -1360,7 +1506,9 @@ uint32 ApplyOfficialPercentBaseAttributes(
     IdentificationTemplate const& tmpl,
     std::vector<uint32> const& attributeGroups,
     uint32 attrCount,
-    std::string& outAttrDetails)
+    std::string& outAttrDetails,
+    uint256 const& minPercent,
+    uint256 const& maxPercent)
 {
     if (!item || !sItemAttributesLoader || attrCount == 0)
         return 0;
@@ -1391,8 +1539,8 @@ uint32 ApplyOfficialPercentBaseAttributes(
             int256 value = CalculateOfficialPercentAttributeValue(
                 item,
                 attributeTemplate->attributeType,
-                tmpl.baseAttrMinValue,
-                tmpl.baseAttrMaxValue);
+                minPercent,
+                maxPercent);
 
             ItemAttributeResult result = sItemAttributesLoader->ApplyAttributeToItem(
                 item,
@@ -1720,10 +1868,18 @@ void ItemIdentificationSystem::ApplyBaseAttributes(Player* player, Item* item, c
     DebugLog("属性数量: {}", attrCount);
     DebugLog("=================================");
 
-    // 百分比模式：基础属性最小/最大值表示官方属性百分比，和追加属性使用同一套数值口径。
-    if (tmpl.baseAttrMaxValue > 0 && tmpl.baseAttrMaxValue <= 300)
+    // 百分比模式：由 属性计算模式 字段显式决定（attrCalcMode==1），不再用数值大小(<=300)猜。
+    // 最终百分比 = 基础百分比 + 幻境等级 × 每级增量（公式化，可超 300 不退化）。
+    if (tmpl.attrCalcMode == 1)
     {
-        uint32 appliedCount = ApplyOfficialPercentBaseAttributes(item, tmpl, attributeGroups, attrCount, outAttrDetails);
+        uint256 hjLevel = 0;
+#ifdef MODULE_HUANJING_SYSTEM
+        if (sHuanJingSystem)
+            hjLevel = sHuanJingSystem->GetPlayerHuanJingLevel(player);
+#endif
+        uint256 scaledMin = ComputeScaledPercent(tmpl.baseAttrMinValue, hjLevel, tmpl.baseAttrPerLevelInc, tmpl.formulaType);
+        uint256 scaledMax = ComputeScaledPercent(tmpl.baseAttrMaxValue, hjLevel, tmpl.baseAttrPerLevelInc, tmpl.formulaType);
+        uint32 appliedCount = ApplyOfficialPercentBaseAttributes(item, tmpl, attributeGroups, attrCount, outAttrDetails, scaledMin, scaledMax);
         if (appliedCount > 0)
         {
             outAttrCount = appliedCount;
@@ -1853,11 +2009,18 @@ uint32 ItemIdentificationSystem::ApplyAdditionalAttributes(Player* player, Item*
             }
         }
 
-        // 百分比模式：追加属性最小/最大值表示官方属性百分比，而不是固定属性值。
-        // 用于幻境鉴定模板，避免鉴定组随幻境等级平方级膨胀。
-        if (tmpl.additionalAttrMaxValue > 0 && tmpl.additionalAttrMaxValue <= 300)
+        // 百分比模式：由 属性计算模式 字段显式决定（attrCalcMode==1），不再用数值大小(<=300)猜。
+        // 用于幻境鉴定模板，最终百分比 = 基础 + 幻境等级 × 每级增量，避免鉴定组随幻境等级平方级膨胀。
+        if (tmpl.attrCalcMode == 1)
         {
-            appliedCount = ApplyOfficialPercentAdditionalAttributes(item, tmpl, attributeGroups, attrCount);
+            uint256 hjLevel = 0;
+#ifdef MODULE_HUANJING_SYSTEM
+            if (sHuanJingSystem)
+                hjLevel = sHuanJingSystem->GetPlayerHuanJingLevel(player);
+#endif
+            uint256 scaledMin = ComputeScaledPercent(tmpl.additionalAttrMinValue, hjLevel, tmpl.additionalAttrPerLevelInc, tmpl.formulaType);
+            uint256 scaledMax = ComputeScaledPercent(tmpl.additionalAttrMaxValue, hjLevel, tmpl.additionalAttrPerLevelInc, tmpl.formulaType);
+            appliedCount = ApplyOfficialPercentAdditionalAttributes(item, tmpl, attributeGroups, attrCount, scaledMin, scaledMax);
             appliedCount = FilterItemAdditionalAttributesByGroups(item, attributeGroups);
         }
         // 判断是单组还是多组模式
@@ -1928,6 +2091,417 @@ uint32 ItemIdentificationSystem::ApplyAdditionalAttributes(Player* player, Item*
 
 
     return 0;
+}
+
+bool ItemIdentificationSystem::HasAdditionalIdentificationAttributes(Item* item)
+{
+    if (!item)
+        return false;
+
+#ifdef MODULE_ITEM_ATTRIBUTES
+    if (auto data = ItemAttributesDBHelper::LoadItemAttributes(item->GetGUID().GetCounter()))
+        return !data->additionalAttributeIds.empty();
+#endif
+
+    QueryResult result = CharacterDatabase.Query(
+        "SELECT `是否获得追加属性` FROM `物品_鉴定记录` WHERE `物品GUID` = {} LIMIT 1",
+        item->GetGUID().GetCounter());
+    return result && result->Fetch()[0].Get<uint8>() != 0;
+}
+
+bool ItemIdentificationSystem::HasAnyCustomIdentificationData(Item* item)
+{
+    if (!item)
+        return false;
+
+    uint32 itemGuid = item->GetGUID().GetCounter();
+    if (IsItemIdentified(itemGuid))
+        return true;
+
+    QueryResult result = CharacterDatabase.Query(
+        "SELECT 1 FROM ("
+        "SELECT `物品GUID` FROM `物品属性_数据` WHERE `物品GUID` = {} "
+        "UNION ALL SELECT `物品GUID` FROM `物品成长_玩家记录` WHERE `物品GUID` = {} "
+        "UNION ALL SELECT `guid` FROM `物品强化_记录` WHERE `guid` = {} "
+        "UNION ALL SELECT `物品GUID` FROM `_物品技能_数据` WHERE `物品GUID` = {} "
+        "UNION ALL SELECT `物品GUID` FROM `魔次系统_数据` WHERE `物品GUID` = {} "
+        "UNION ALL SELECT `物品GUID` FROM `符文系统_数据` WHERE `物品GUID` = {} "
+        "UNION ALL SELECT `物品GUID` FROM `_物品套装_数据` WHERE `物品GUID` = {} "
+        "UNION ALL SELECT `装备GUID` FROM `玩家装备属性增强` WHERE `装备GUID` = {}"
+        ") custom_data LIMIT 1",
+        itemGuid, itemGuid, itemGuid, itemGuid, itemGuid, itemGuid, itemGuid, itemGuid);
+
+    return static_cast<bool>(result);
+}
+
+bool ItemIdentificationSystem::HasIdentificationMultiplier(Item* item)
+{
+    if (!item)
+        return false;
+
+    QueryResult result = CharacterDatabase.Query(
+        "SELECT `属性倍率`, `属性倍率模式` FROM `玩家装备属性增强` "
+        "WHERE `装备GUID` = {} AND `装备ID` = {} LIMIT 1",
+        item->GetGUID().GetCounter(), item->GetEntry());
+    if (!result)
+        return false;
+
+    Field* fields = result->Fetch();
+    uint256 multiplier = fields[0].Get<uint256>();
+    char multiplierMode = DbValueToHuanJingMode(fields[1].Get<int32>());
+    return HasHuanJingEffect(multiplier, multiplierMode);
+}
+
+bool ItemIdentificationSystem::IdentifyItemFromScroll(Player* player, Item* item, uint32 groupId)
+{
+    if (!player || !item || !_enabled || groupId == 0)
+        return false;
+
+    ItemTemplate const* proto = item->GetTemplate();
+    if (!proto || (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR))
+    {
+        ChatHandler(player->GetSession()).SendNotification("只有武器和护甲可以使用鉴定卷轴");
+        return false;
+    }
+
+    if (IsItemIdentified(item->GetGUID().GetCounter()))
+        return false;
+
+    if (!ApplyIdentificationInternal(player, item, groupId, 0, 100))
+        return false;
+
+    ChatHandler(player->GetSession()).SendNotification("鉴定卷轴已完成装备鉴定");
+    return true;
+}
+
+bool ItemIdentificationSystem::SupplementAdditionalAttributesFromGroup(Player* player, Item* item, uint32 groupId)
+{
+    if (!player || !item || groupId == 0)
+        return false;
+
+    if (HasAdditionalIdentificationAttributes(item))
+        return true;
+
+    uint32 templateId = SelectIdentificationTemplate(groupId, item);
+    auto templateIt = _identificationTemplates.find(templateId);
+    if (!templateId || templateIt == _identificationTemplates.end())
+    {
+        ChatHandler(player->GetSession()).SendNotification("卷轴绑定的鉴定组没有可用模板");
+        return false;
+    }
+
+    IdentificationTemplate const& tmpl = templateIt->second;
+    if (!CheckRequirements(player, item, tmpl))
+        return false;
+
+    if (tmpl.itemAttributesAdditionalGroups.empty() || tmpl.additionalAttrMaxCount == 0)
+    {
+        ChatHandler(player->GetSession()).SendNotification("该鉴定组没有配置追加属性");
+        return false;
+    }
+
+    uint32 appliedCount = ApplyAdditionalAttributes(player, item, tmpl);
+    if (appliedCount == 0)
+    {
+        ChatHandler(player->GetSession()).SendNotification("追加属性生成失败，卷轴未消耗");
+        return false;
+    }
+
+    std::string escapedGroups = tmpl.itemAttributesAdditionalGroups;
+    CharacterDatabase.EscapeString(escapedGroups);
+    CharacterDatabase.DirectExecute(
+        "UPDATE `物品_鉴定记录` SET `是否获得追加属性` = 1, `追加属性数量` = {}, "
+        "`追加属性组ID列表` = '{}' WHERE `物品GUID` = {}",
+        appliedCount, escapedGroups, item->GetGUID().GetCounter());
+
+    item->SetState(ITEM_CHANGED, player);
+    ClearItemCache(item->GetEntry(), item->GetGUID().GetCounter());
+    RefreshItem(player, item);
+    ChatHandler(player->GetSession()).SendNotification("装备原有鉴定结果已保留，并补充了随机追加属性");
+    return true;
+}
+
+bool ItemIdentificationSystem::OverwriteItemMultiplier(
+    Player* player,
+    Item* item,
+    uint256 const& multiplier,
+    uint32 identificationGroupId)
+{
+    if (!player || !item || multiplier <= 1)
+        return false;
+
+#ifdef MODULE_HUANJING_SYSTEM
+    if (!sHuanJingSystem)
+        return false;
+
+    if (item->IsEquipped())
+        sHuanJingSystem->RemoveHuanJingEnhancement(player, item);
+
+    sHuanJingSystem->RemoveItemAttributeMultiplier(item);
+    sHuanJingSystem->ApplyItemAttributeMultiplier(item, multiplier, 'x');
+    sHuanJingSystem->UpdateItemIdentificationGroup(item->GetGUID().GetCounter(), identificationGroupId);
+    CharacterDatabase.DirectExecute(
+        "UPDATE `玩家装备属性增强` SET `鉴定组ID` = {} WHERE `装备GUID` = {}",
+        identificationGroupId, item->GetGUID().GetCounter());
+
+    if (item->IsEquipped())
+        sHuanJingSystem->ApplyHuanJingEnhancement(player, item);
+
+    if (sHuanJingSystem->GetItemAttributeMultiplier(item) != multiplier)
+        return false;
+
+    ClearItemCache(item->GetEntry(), item->GetGUID().GetCounter());
+    QueueAllModuleDataAddonRefresh(player, item->GetEntry(), item->GetGUID().GetCounter(), 100ms);
+    return true;
+#else
+    ChatHandler(player->GetSession()).SendNotification("幻境系统未加载，无法应用倍率卷轴");
+    return false;
+#endif
+}
+
+bool ItemIdentificationSystem::ClearAllIdentificationResults(Player* player, Item* item)
+{
+    if (!player || !item)
+        return false;
+
+    uint32 itemGuid = item->GetGUID().GetCounter();
+    uint32 itemEntry = item->GetEntry();
+    uint32 playerGuid = player->GetGUID().GetCounter();
+    uint32 resetIdentificationGroupId = 1;
+
+    QueryResult previousGroupResult = CharacterDatabase.Query(
+        "SELECT `鉴定组ID` FROM `玩家装备属性增强` WHERE `装备GUID` = {} LIMIT 1",
+        itemGuid);
+    if (previousGroupResult)
+    {
+        uint32 previousGroupId = previousGroupResult->Fetch()[0].Get<uint32>();
+        if (previousGroupId != 0)
+            resetIdentificationGroupId = previousGroupId;
+    }
+
+#ifdef MODULE_HUANJING_SYSTEM
+    if (sHuanJingSystem)
+    {
+        if (item->IsEquipped())
+            sHuanJingSystem->RemoveHuanJingEnhancement(player, item);
+        sHuanJingSystem->RemoveItemAttributeMultiplier(item);
+    }
+#endif
+
+#ifdef MODULE_ITEM_ATTRIBUTES
+    if (item->IsEquipped() && sItemAttributesEffects)
+        sItemAttributesEffects->RemoveItemAttributeEffects(player, item);
+    ItemAttributesDBHelper::ClearItemAttributes(itemGuid);
+#endif
+
+#ifdef MODULE_ITEM_GROWTH
+    if (sItemGrowthMgr)
+    {
+        if (item->IsEquipped())
+            sItemGrowthMgr->RemoveGrowthAura(player, itemGuid);
+        sItemGrowthMgr->GetPlayerItemRecords().erase(itemGuid);
+    }
+#endif
+
+#ifdef MODULE_ITEM_ENHANCEMENT
+    if (sItemEnhancementMgr)
+    {
+        if (item->IsEquipped())
+            sItemEnhancementMgr->RemoveOfficialItemEnhancement(player, item);
+        sItemEnhancementMgr->DeleteEnhancementRecord(itemGuid);
+    }
+#endif
+
+#ifdef MODULE_ITEM_SKILLS
+    if (item->IsEquipped() && sItemSkillsEffects)
+        sItemSkillsEffects->RemoveItemSkillEffects(player, item);
+    if (sItemSkillsDBHelper)
+        sItemSkillsDBHelper->ClearItemSkills(item);
+#endif
+
+#ifdef MODULE_MAGIC_HIT_SYSTEM
+    if (sMagicHitSystem)
+        sMagicHitSystem->RemoveMagicHitFromItem(itemGuid);
+#endif
+
+#ifdef MODULE_RUNE_SYSTEM
+    if (item->IsEquipped())
+        RuneApplyManager::RemoveItemRunes(player, itemGuid);
+#endif
+
+#ifdef MODULE_ITEM_SETS
+    if (sItemSetsManager)
+        sItemSetsManager->ClearAllSetEffects(player, true);
+#endif
+
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    trans->Append(Acore::StringFormat(
+        "DELETE FROM `待鉴定物品标记` WHERE `物品GUID` = {}", itemGuid).c_str());
+    trans->Append(Acore::StringFormat(
+        "DELETE FROM `物品_鉴定记录` WHERE `物品GUID` = {}", itemGuid).c_str());
+    trans->Append(Acore::StringFormat(
+        "DELETE FROM `物品属性_数据` WHERE `物品GUID` = {}", itemGuid).c_str());
+    trans->Append(Acore::StringFormat(
+        "DELETE FROM `物品成长_玩家记录` WHERE `物品GUID` = {}", itemGuid).c_str());
+    trans->Append(Acore::StringFormat(
+        "DELETE FROM `物品强化_记录` WHERE `guid` = {}", itemGuid).c_str());
+    trans->Append(Acore::StringFormat(
+        "DELETE FROM `_物品技能_数据` WHERE `物品GUID` = {}", itemGuid).c_str());
+    trans->Append(Acore::StringFormat(
+        "DELETE FROM `魔次系统_数据` WHERE `物品GUID` = {}", itemGuid).c_str());
+    trans->Append(Acore::StringFormat(
+        "DELETE FROM `符文系统_数据` WHERE `物品GUID` = {}", itemGuid).c_str());
+    trans->Append(Acore::StringFormat(
+        "DELETE FROM `_物品套装_数据` WHERE `物品GUID` = {}", itemGuid).c_str());
+    trans->Append(Acore::StringFormat(
+        "DELETE FROM `玩家装备属性增强` WHERE `装备GUID` = {}", itemGuid).c_str());
+    trans->Append(Acore::StringFormat(
+        "REPLACE INTO `待鉴定物品标记` "
+        "(`物品GUID`, `物品ID`, `玩家GUID`, `幻境倍率`, `幻境倍率模式`, `鉴定组ID`) "
+        "VALUES ({}, {}, {}, 1, 0, {})",
+        itemGuid, itemEntry, playerGuid, resetIdentificationGroupId).c_str());
+    CharacterDatabase.DirectCommitTransaction(trans);
+
+#ifdef MODULE_RUNE_SYSTEM
+    if (sRuneSystem)
+        sRuneSystem->LoadItemRuneStorageFromDB(itemGuid);
+#endif
+
+#ifdef MODULE_ITEM_SKILLS
+    if (sItemSkillsDBHelper)
+        sItemSkillsDBHelper->ClearCache(itemGuid);
+    if (sItemSkillsManager)
+        sItemSkillsManager->RefreshItemSkillsInMemory(playerGuid, item);
+    if (sItemSkillsEffects)
+        sItemSkillsEffects->UpdatePlayerHitSkillsCache(player);
+#endif
+
+#ifdef MODULE_ITEM_SETS
+    if (sItemSetsManager)
+    {
+        sItemSetsManager->LoadPlayerSetStatus(player);
+        sItemSetsManager->RefreshPlayerSetEffects(player);
+    }
+#endif
+
+    ClearIdentifiedCache(itemGuid);
+    ClearItemCache(itemEntry, itemGuid);
+
+    int32 randomPropertyId = item->GetInt32Value(ITEM_FIELD_RANDOM_PROPERTIES_ID);
+    if (randomPropertyId == -1 ||
+        (randomPropertyId > 0 && static_cast<uint32>(randomPropertyId) == itemGuid))
+    {
+        item->SetInt32Value(ITEM_FIELD_RANDOM_PROPERTIES_ID, 0);
+    }
+
+    QueryResult pendingResult = CharacterDatabase.Query(
+        "SELECT 1 FROM `待鉴定物品标记` "
+        "WHERE `物品GUID` = {} AND `物品ID` = {} AND `玩家GUID` = {} LIMIT 1",
+        itemGuid, itemEntry, playerGuid);
+    if (!pendingResult || HasAnyCustomIdentificationData(item))
+    {
+        LOG_INFO("server.loading",
+            "[鉴定清理卷轴] 清理后校验失败: 玩家GUID={}, 物品GUID={}, 物品ID={}",
+            playerGuid, itemGuid, itemEntry);
+        ChatHandler(player->GetSession()).SendNotification("清理鉴定数据失败，卷轴未消耗");
+        return false;
+    }
+
+    item->SetState(ITEM_CHANGED, player);
+    RefreshItem(player, item);
+    item->SendUpdateToPlayer(player);
+
+    player->UpdateAllStats();
+    player->UpdateAttackPowerAndDamage();
+    player->UpdateAttackPowerAndDamage(true);
+    player->UpdateMaxHealth();
+    player->UpdateMaxPower(POWER_MANA);
+
+    SendItemIdentificationAddonMessage(player,
+        BuildIdentificationCleanupRefreshPayload(itemEntry, itemGuid));
+    QueueAllModuleDataAddonRefresh(player, itemEntry, itemGuid, 100ms);
+    return true;
+}
+
+bool ItemIdentificationSystem::HandleIdentificationScrollUse(Player* player, Item* scroll, Item* target)
+{
+    if (!player || !scroll || !target || scroll == target)
+        return false;
+
+    auto configIt = _identificationScrollConfigs.find(scroll->GetEntry());
+    if (configIt == _identificationScrollConfigs.end())
+    {
+        ChatHandler(player->GetSession()).SendNotification("此物品没有配置鉴定卷轴数据");
+        return false;
+    }
+
+    if (target->GetOwner() != player)
+    {
+        ChatHandler(player->GetSession()).SendNotification("卷轴只能用于自己的装备");
+        return false;
+    }
+
+    ItemTemplate const* targetTemplate = target->GetTemplate();
+    if (!targetTemplate ||
+        (targetTemplate->Class != ITEM_CLASS_WEAPON && targetTemplate->Class != ITEM_CLASS_ARMOR))
+    {
+        ChatHandler(player->GetSession()).SendNotification("卷轴只能用于武器或护甲");
+        return false;
+    }
+
+    IdentificationScrollConfig const& config = configIt->second;
+    IdentificationScrollTargetState targetState;
+    targetState.isIdentified = IsItemIdentified(target->GetGUID().GetCounter());
+    targetState.hasAdditionalAttributes = HasAdditionalIdentificationAttributes(target);
+    targetState.hasMultiplier = HasIdentificationMultiplier(target);
+
+    IdentificationScrollAction action = ResolveIdentificationScrollAction(config.type, targetState);
+    bool success = false;
+
+    switch (action)
+    {
+        case IdentificationScrollAction::RunFullIdentificationAndOverwriteMultiplier:
+            success = IdentifyItemFromScroll(player, target, config.identificationGroupId) &&
+                      OverwriteItemMultiplier(player, target, config.multiplier, config.identificationGroupId);
+            break;
+        case IdentificationScrollAction::SupplementAdditionalAndOverwriteMultiplier:
+            success = SupplementAdditionalAttributesFromGroup(player, target, config.identificationGroupId) &&
+                      OverwriteItemMultiplier(player, target, config.multiplier, config.identificationGroupId);
+            break;
+        case IdentificationScrollAction::PreserveIdentificationAndOverwriteMultiplier:
+            success = OverwriteItemMultiplier(player, target, config.multiplier, config.identificationGroupId);
+            break;
+        case IdentificationScrollAction::ClearAllCustomIdentificationData:
+            success = ClearAllIdentificationResults(player, target);
+            break;
+        case IdentificationScrollAction::RejectNotEligible:
+            ChatHandler(player->GetSession()).SendNotification("只有已鉴定且存在追加属性或有效倍率的装备才能使用清理卷轴");
+            return false;
+    }
+
+    if (!success)
+        return false;
+
+    if (config.type != IdentificationScrollType::Cleanup)
+    {
+        SendItemIdentificationAddonMessage(player,
+            BuildIdentificationRefreshPayload(target->GetEntry(), target->GetGUID().GetCounter()));
+    }
+
+    uint32 consumeCount = 1;
+    player->DestroyItemCount(scroll, consumeCount, true);
+
+    if (config.type == IdentificationScrollType::Cleanup)
+        ChatHandler(player->GetSession()).SendNotification("装备的全部自定义鉴定结果已清空");
+    else
+        ChatHandler(player->GetSession()).SendNotification("装备倍率已覆盖为 {} 倍", config.multiplier.str());
+
+    return true;
+}
+
+bool ItemIdentificationSystem::IsIdentificationScrollConfigured(uint32 itemEntry) const
+{
+    return _identificationScrollConfigs.find(itemEntry) != _identificationScrollConfigs.end();
 }
 
 // 应用追加技能
@@ -3933,7 +4507,7 @@ private:
 
         Field* fields = result->Fetch();
         uint32 itemId = fields[0].Get<uint32>();
-        uint32 huanJingMultiplier = fields[1].Get<uint32>();
+        uint256 huanJingMultiplier = fields[1].Get<uint256>();
         char huanJingMode = DbValueToHuanJingMode(fields[2].Get<int32>());
         uint32 identificationGroupId = fields[3].Get<uint32>();
 
@@ -3961,7 +4535,7 @@ private:
         {
             if (sHuanJingSystem)
             {
-                sHuanJingSystem->ApplyItemAttributeMultiplier(item, static_cast<float>(huanJingMultiplier), huanJingMode);
+                sHuanJingSystem->ApplyItemAttributeMultiplier(item, huanJingMultiplier, huanJingMode);
             }
         }
 #endif
@@ -4004,7 +4578,7 @@ private:
             uint8 clientSlot = location.valid ? location.slot : static_cast<uint8>(item->GetSlot() + 1);
 
             std::ostringstream response;
-            response << "IDENTIFY_RESULT:SUCCESS:" << clientBag << ":" << clientSlot << ":" << itemId << ":" << huanJingMultiplier;
+            response << "IDENTIFY_RESULT:SUCCESS:" << clientBag << ":" << clientSlot << ":" << itemId << ":" << huanJingMultiplier.str();
             SendAddonResponse(player, response.str());
         }
         else
@@ -4047,7 +4621,7 @@ private:
             Field* fields = result->Fetch();
             uint32 itemGuid = fields[0].Get<uint32>();
             uint32 itemId = fields[1].Get<uint32>();
-            uint32 huanJingMultiplier = fields[2].Get<uint32>();
+            uint256 huanJingMultiplier = fields[2].Get<uint256>();
             char huanJingMode = DbValueToHuanJingMode(fields[3].Get<int32>());
             uint32 identificationGroupId = fields[4].Get<uint32>();
 
@@ -4073,7 +4647,7 @@ private:
             {
                 if (sHuanJingSystem)
                 {
-                    sHuanJingSystem->ApplyItemAttributeMultiplier(item, static_cast<float>(huanJingMultiplier), huanJingMode);
+                    sHuanJingSystem->ApplyItemAttributeMultiplier(item, huanJingMultiplier, huanJingMode);
                 }
             }
 #endif
@@ -4164,7 +4738,7 @@ private:
             Field* fields = result->Fetch();
             uint32 guid = fields[0].Get<uint32>();
             uint32 itemId = fields[1].Get<uint32>();
-            uint32 multiplier = fields[2].Get<uint32>();
+            uint256 multiplier = fields[2].Get<uint256>();
             char multiplierMode = DbValueToHuanJingMode(fields[3].Get<int32>());
             uint32 groupId = fields[4].Get<uint32>();
             dbCount++;
@@ -4488,6 +5062,33 @@ private:
     }
 };
 
+class IdentificationScrollItemScript : public AllItemScript
+{
+public:
+    IdentificationScrollItemScript() : AllItemScript("IdentificationScrollItemScript") { }
+
+    bool CanItemUse(Player* player, Item* scroll, SpellCastTargets const& targets) override
+    {
+        if (!player || !scroll)
+            return false;
+
+        if (!sItemIdentificationSystem->IsIdentificationScrollConfigured(scroll->GetEntry()))
+            return false;
+
+        Item* target = targets.GetItemTarget();
+        if (!target)
+        {
+            ChatHandler(player->GetSession()).SendNotification("请将卷轴使用在一件武器或护甲上");
+            player->SendEquipError(EQUIP_ERR_NONE, scroll, nullptr);
+            return true;
+        }
+
+        player->SendEquipError(EQUIP_ERR_NONE, scroll, target);
+        sItemIdentificationSystem->HandleIdentificationScrollUse(player, scroll, target);
+        return true;
+    }
+};
+
 // 添加脚本
 void AddItemIdentificationSystemScripts()
 {
@@ -4508,6 +5109,9 @@ void AddItemIdentificationSystemScripts()
 
     // 添加物品数据清理脚本
     new ItemIdentificationCleanupScript();
+
+    // 添加鉴定/清理卷轴脚本
+    new IdentificationScrollItemScript();
 }
 
 // ============================================================================
@@ -4600,7 +5204,7 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
         if (pendingIdentifyResult)
         {
             Field* fields = pendingIdentifyResult->Fetch();
-            uint32 multiplier = fields[0].Get<uint32>();
+            uint256 multiplier = fields[0].Get<uint256>();
             char multiplierMode = DbValueToHuanJingMode(fields[1].Get<int32>());
             uint32 groupId = fields[2].Get<uint32>();
 
@@ -5089,7 +5693,7 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
     // 如果没有找到，回退查询 待鉴定物品标记 表（未鉴定物品）
     {
         bool foundHuanjingData = false;
-        int multiplier = 0;
+        uint256 multiplier = 0;
         char multiplierMode = 'x';
         std::string enhancedAttrs;
 
@@ -5101,14 +5705,14 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
         if (huanjingResult)
         {
             Field* fields = huanjingResult->Fetch();
-            multiplier = fields[0].Get<int>();
+            multiplier = fields[0].Get<uint256>();
             multiplierMode = DbValueToHuanJingMode(fields[1].Get<int32>());
             enhancedAttrs = fields[2].Get<std::string>();
 
             if (HasHuanJingEffect(multiplier, multiplierMode))
             {
                 foundHuanjingData = true;
-                DebugLog("[批量查询-优化-幻境] 从玩家装备属性增强表找到: multiplier={}, enhancedAttrs=[{}]", multiplier, enhancedAttrs);
+                DebugLog("[批量查询-优化-幻境] 从玩家装备属性增强表找到: multiplier={}, enhancedAttrs=[{}]", multiplier.str(), enhancedAttrs);
             }
         }
 
@@ -5122,7 +5726,7 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
             if (pendingResult)
             {
                 Field* fields = pendingResult->Fetch();
-                multiplier = fields[0].Get<int>();
+                multiplier = fields[0].Get<uint256>();
                 multiplierMode = DbValueToHuanJingMode(fields[1].Get<int32>());
 
                 if (HasHuanJingEffect(multiplier, multiplierMode))
@@ -5130,7 +5734,7 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
                     foundHuanjingData = true;
                     // 待鉴定物品没有增强属性数据，只有倍率
                     enhancedAttrs = "";
-                    DebugLog("[批量查询-优化-幻境] 从待鉴定物品标记表找到: multiplier={} (待鉴定)", multiplier);
+                    DebugLog("[批量查询-优化-幻境] 从待鉴定物品标记表找到: multiplier={} (待鉴定)", multiplier.str());
                 }
             }
         }
@@ -5139,7 +5743,7 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
         if (foundHuanjingData && HasHuanJingEffect(multiplier, multiplierMode))
         {
             std::ostringstream huanjingStream;
-            huanjingStream << multiplierMode << "," << multiplier;
+            huanjingStream << multiplierMode << "," << multiplier.str();
 
             // 如果有增强属性数据，添加到结果中
             if (!enhancedAttrs.empty())
@@ -5719,7 +6323,7 @@ static bool DoIdentifyItem(Player* player, Item* item, ChatHandler* handler = nu
 
     Field* fields = result->Fetch();
     uint32 itemId = fields[0].Get<uint32>();
-    uint32 huanJingMultiplier = fields[1].Get<uint32>();
+    uint256 huanJingMultiplier = fields[1].Get<uint256>();
     char huanJingMode = DbValueToHuanJingMode(fields[2].Get<int32>());
     uint32 identificationGroupId = fields[3].Get<uint32>();
 
@@ -5740,7 +6344,7 @@ static bool DoIdentifyItem(Player* player, Item* item, ChatHandler* handler = nu
     {
         handler->PSendSysMessage("|cff00ff00开始鉴定物品: |r|cffffffff{}|r", itemName);
         handler->PSendSysMessage("|cff00ff00幻境模式: |r|cffff8000{}{}|r",
-            huanJingMode == '+' ? "+" : (huanJingMode == '-' ? "关闭" : "x"), huanJingMultiplier);
+            huanJingMode == '+' ? "+" : (huanJingMode == '-' ? "关闭" : "x"), huanJingMultiplier.str());
     }
 
     // 应用幻境倍率属性（如果有幻境系统）
@@ -5749,7 +6353,7 @@ static bool DoIdentifyItem(Player* player, Item* item, ChatHandler* handler = nu
     {
         if (sHuanJingSystem)
         {
-            sHuanJingSystem->ApplyItemAttributeMultiplier(item, static_cast<float>(huanJingMultiplier), huanJingMode);
+            sHuanJingSystem->ApplyItemAttributeMultiplier(item, huanJingMultiplier, huanJingMode);
             if (handler)
                 handler->PSendSysMessage("|cff00ff00已应用幻境倍率属性|r");
         }
@@ -5899,7 +6503,7 @@ bool ItemIdentificationCommandScript::HandleListPendingCommand(ChatHandler* hand
         Field* fields = result->Fetch();
         uint32 guid = fields[0].Get<uint32>();
         uint32 itemId = fields[1].Get<uint32>();
-        uint32 multiplier = fields[2].Get<uint32>();
+        uint256 multiplier = fields[2].Get<uint256>();
         char multiplierMode = DbValueToHuanJingMode(fields[3].Get<int32>());
 
         ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
@@ -5943,7 +6547,7 @@ bool ItemIdentificationCommandScript::HandleListPendingCommand(ChatHandler* hand
         if (found)
         {
             handler->PSendSysMessage("|cffffffff[{}]|r |cffff8000{}{}|r |cff00ff00背包{} 槽位{}|r",
-                itemName, multiplierMode == '+' ? "+" : (multiplierMode == '-' ? "关闭" : "x"), multiplier, foundBag, foundSlot);
+                itemName, multiplierMode == '+' ? "+" : (multiplierMode == '-' ? "关闭" : "x"), multiplier.str(), foundBag, foundSlot);
             validCount++;
         }
         else
@@ -6008,7 +6612,7 @@ bool ItemIdentificationCommandScript::HandleBatchIdentifyCommand(ChatHandler* ha
         Field* fields = result->Fetch();
         uint32 itemGuid = fields[0].Get<uint32>();
         uint32 itemId = fields[1].Get<uint32>();
-        uint32 huanJingMultiplier = fields[2].Get<uint32>();
+        uint256 huanJingMultiplier = fields[2].Get<uint256>();
         char huanJingMode = DbValueToHuanJingMode(fields[3].Get<int32>());
         uint32 identificationGroupId = fields[4].Get<uint32>();
 
@@ -6042,7 +6646,7 @@ bool ItemIdentificationCommandScript::HandleBatchIdentifyCommand(ChatHandler* ha
         {
             if (sHuanJingSystem)
             {
-                sHuanJingSystem->ApplyItemAttributeMultiplier(item, static_cast<float>(huanJingMultiplier), huanJingMode);
+                sHuanJingSystem->ApplyItemAttributeMultiplier(item, huanJingMultiplier, huanJingMode);
             }
         }
 #endif

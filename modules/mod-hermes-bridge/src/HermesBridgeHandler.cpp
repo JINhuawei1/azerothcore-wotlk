@@ -3008,7 +3008,7 @@ namespace
             Field* fields = result->Fetch();
             uint32 guid = fields[0].Get<uint32>();
             uint32 itemId = fields[1].Get<uint32>();
-            uint32 multiplier = fields[2].Get<uint32>();
+            uint256 multiplier = fields[2].Get<uint256>();
             char multiplierMode = HermesTooltipDbValueToHuanJingMode(fields[3].Get<int32>());
             uint32 groupId = fields[4].Get<uint32>();
 

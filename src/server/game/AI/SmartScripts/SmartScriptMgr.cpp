@@ -332,7 +332,7 @@ void SmartAIMgr::CheckIfSmartAIInDatabaseExists()
             }
         }
 
-        if (!found)
+        if (!found && !IsCreatureUsedAsTimedActionListTarget(creatureTemplate.Entry, mEventMap))
             LOG_ERROR("sql.sql", "Creature entry ({}) has SmartAI enabled but no SmartAI entries in the database.", creatureTemplate.Entry);
     }
 
@@ -378,6 +378,46 @@ void SmartAIMgr::CheckIfSmartAIInDatabaseExists()
         if (mEventMap[uint32(SmartScriptType::SMART_SCRIPT_TYPE_AREATRIGGER)].find(pair.first) == mEventMap[uint32(SmartScriptType::SMART_SCRIPT_TYPE_AREATRIGGER)].end())
             LOG_ERROR("sql.sql", "AreaTrigger entry ({}) has SmartTrigger enabled but no SmartAI entries in the database.", pair.first);
     }
+}
+
+bool SmartAIMgr::IsCreatureUsedAsTimedActionListTarget(uint32 creatureEntry, SmartAIEventMap const (&eventMaps)[SMART_SCRIPT_TYPE_MAX])
+{
+    for (uint8 sourceType = 0; sourceType < SMART_SCRIPT_TYPE_MAX; ++sourceType)
+    {
+        for (auto const& [entryOrGuid, events] : eventMaps[sourceType])
+        {
+            for (SmartScriptHolder const& event : events)
+            {
+                if (event.action.type != SMART_ACTION_CALL_TIMED_ACTIONLIST)
+                    continue;
+
+                if (eventMaps[SMART_SCRIPT_TYPE_TIMED_ACTIONLIST].find(event.action.timedActionList.id) == eventMaps[SMART_SCRIPT_TYPE_TIMED_ACTIONLIST].end())
+                    continue;
+
+                uint32 targetEntry = 0;
+                switch (event.target.type)
+                {
+                    case SMART_TARGET_CREATURE_RANGE:
+                        targetEntry = event.target.unitRange.creature;
+                        break;
+                    case SMART_TARGET_CREATURE_GUID:
+                        targetEntry = event.target.unitGUID.entry;
+                        break;
+                    case SMART_TARGET_CREATURE_DISTANCE:
+                    case SMART_TARGET_CLOSEST_CREATURE:
+                        targetEntry = event.target.unitDistance.creature;
+                        break;
+                    default:
+                        break;
+                }
+
+                if (targetEntry == creatureEntry)
+                    return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 /*static*/ bool SmartAIMgr::EventHasInvoker(SMART_EVENT event)

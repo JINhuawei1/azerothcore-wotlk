@@ -13,6 +13,7 @@
 #include "TradeData.h"
 #include "ModuleManager.h"
 #include "AnnouncementInterface.h"
+#include "IdentificationScrollPolicy.h"
 #include <vector>
 #include <map>
 #include <set>
@@ -57,6 +58,14 @@ struct ItemIdentificationRecord
     uint32 successRate;
 };
 
+struct IdentificationScrollConfig
+{
+    uint32 itemEntry = 0;
+    IdentificationScrollType type = IdentificationScrollType::Identify;
+    uint256 multiplier = 0;
+    uint32 identificationGroupId = 0;
+};
+
 // 物品鉴定系统类
 class ItemIdentificationSystem
 {
@@ -71,6 +80,10 @@ public:
 
     // 鉴定物品（需要指定组ID）
     bool IdentifyItem(Player* player, Item* item, uint32 groupId);
+
+    // 使用数据库配置的鉴定/清理卷轴处理目标装备
+    bool HandleIdentificationScrollUse(Player* player, Item* scroll, Item* target);
+    bool IsIdentificationScrollConfigured(uint32 itemEntry) const;
 
     // 检查物品是否可以鉴定
     bool CanIdentify(Player* player, Item* item, bool sendError = true);
@@ -302,6 +315,18 @@ private:
     // 从数据库加载鉴定模板
     void LoadIdentificationTemplates();
 
+    // 从数据库加载鉴定卷轴配置
+    void LoadIdentificationScrollConfigs();
+
+    bool ApplyIdentificationInternal(Player* player, Item* item, uint32 groupId, uint64 recordedCost, uint32 recordedSuccessRate);
+    bool IdentifyItemFromScroll(Player* player, Item* item, uint32 groupId);
+    bool SupplementAdditionalAttributesFromGroup(Player* player, Item* item, uint32 groupId);
+    bool ClearAllIdentificationResults(Player* player, Item* item);
+    bool HasAdditionalIdentificationAttributes(Item* item);
+    bool HasAnyCustomIdentificationData(Item* item);
+    bool HasIdentificationMultiplier(Item* item);
+    bool OverwriteItemMultiplier(Player* player, Item* item, uint256 const& multiplier, uint32 identificationGroupId);
+
     // 根据组ID和物品ID随机选择一个鉴定模板（根据几率加权）
     uint32 SelectIdentificationTemplate(uint32 groupId, Item* item);
 
@@ -338,6 +363,8 @@ private:
 
     // 物品刷新
     void RefreshItem(Player* player, Item* item);
+
+    std::unordered_map<uint32, IdentificationScrollConfig> _identificationScrollConfigs;
 
     // 调试日志
     template<typename... Args>

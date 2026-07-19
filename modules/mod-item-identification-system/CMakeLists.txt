@@ -54,6 +54,7 @@ endif()
 # 添加源文件
 AC_ADD_SCRIPT("${CMAKE_CURRENT_SOURCE_DIR}/src/ItemIdentificationSystem.cpp")
 AC_ADD_SCRIPT("${CMAKE_CURRENT_SOURCE_DIR}/src/ItemIdentificationSystem.h")
+AC_ADD_SCRIPT("${CMAKE_CURRENT_SOURCE_DIR}/src/IdentificationScrollPolicy.h")
 AC_ADD_SCRIPT_LOADER("ItemIdentificationSystem" "${CMAKE_CURRENT_SOURCE_DIR}/src/ItemIdentificationSystem_loader.cpp")
 
 # 添加配置文件
