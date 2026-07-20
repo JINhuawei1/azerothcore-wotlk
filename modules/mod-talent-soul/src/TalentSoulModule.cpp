@@ -16,6 +16,7 @@
  */
 
 #include "TalentSoul.h"
+#include "TalentSoulGcd.h"
 #include "ScriptMgr.h"
 #include "Configuration/Config.h"
 #include "Log.h"
@@ -267,17 +268,11 @@ public:
             if (originalGCD <= 0)
                 originalGCD = 1500;
 
-            int32 reducedAmount = static_cast<int32>(originalGCD * gcdReductionPercent / 100.0f);
-            int32 newGCD = originalGCD - reducedAmount;
-            if (newGCD < 0)
-                newGCD = 0;
+            TalentSoulGcdAdjustment const adjustment = CalculateTalentSoulGcdAdjustment(originalGCD, gcdReductionPercent);
 
             // 如果GCD减少到很低，发送清除包清除客户端GCD动画
-            if (newGCD < 500)
+            if (adjustment.clearClientCooldown)
             {
-                // 取消服务端的GCD记录
-                player->GetGlobalCooldownMgr().CancelGlobalCooldown(spellInfo);
-
                 // 发送SMSG_CLEAR_COOLDOWN清除客户端GCD动画
                 WorldPacket clearData(SMSG_CLEAR_COOLDOWN, 4 + 8);
                 clearData << uint32(spellId);
@@ -285,7 +280,7 @@ public:
                 player->SendDirectMessage(&clearData);
 
                 LOG_DEBUG("module", "[天赋之魂-GCD] 玩家 {} 技能 {} GCD {}ms -> {}ms, 已清除客户端GCD",
-                    player->GetName(), spellId, originalGCD, newGCD);
+                    player->GetName(), spellId, originalGCD, adjustment.serverDurationMs);
             }
         }
 
@@ -328,11 +323,7 @@ public:
         if (reductionPercent > 0)
         {
             int32 originalGCD = gcd;
-            int32 reducedAmount = static_cast<int32>(gcd * reductionPercent / 100.0f);
-            gcd -= reducedAmount;
-
-            if (gcd < 0)
-                gcd = 0;
+            gcd = CalculateTalentSoulGcdAdjustment(gcd, reductionPercent).serverDurationMs;
 
             LOG_DEBUG("module", "[天赋之魂-GCD(服务端)] 玩家 {} 技能 {} GCD {} -> {} (-{:.1f}%)",
                 player->GetName(), spellId, originalGCD, gcd, reductionPercent);

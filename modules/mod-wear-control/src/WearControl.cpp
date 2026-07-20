@@ -3,6 +3,7 @@
  */
 
 #include "WearControl.h"
+#include "WearPermissionPolicy.h"
 
 #include "Chat.h"
 #include "DatabaseEnv.h"
@@ -23,12 +24,13 @@ namespace
 using WearRuleList = std::vector<WearControl::WearRule>;
 
 std::unordered_map<uint32, WearRuleList> g_wearRules;
-std::unordered_map<uint32, uint32> g_playerWearLevels;
+std::unordered_map<uint32, WearControl::PermissionLevels> g_playerWearLevels;
 std::mutex g_playerWearLevelsMutex;
 int8 g_wearLevelTableState = -1;
+int8 g_wearLevelSlotColumnsState = -1;
 
 constexpr uint32 WEAR_CONTROL_LOAD_DELAY_MS = 3000;
-constexpr uint32 DEFAULT_PLAYER_WEAR_LEVEL = 1;
+constexpr uint32 DEFAULT_SLOT_WEAR_LEVEL = 1;
 
 RequirementInterface* GetRequirementModule()
 {
@@ -81,18 +83,56 @@ bool WearLevelPermissionTableExists()
     return exists;
 }
 
-uint32 LoadPlayerWearLevelFromDatabase(uint32 playerGuid)
+bool WearLevelPermissionColumnExists(char const* columnName)
 {
-    if (!WearLevelPermissionTableExists())
-        return DEFAULT_PLAYER_WEAR_LEVEL;
+    QueryResult result = CharacterDatabase.Query(
+        "SELECT COUNT(*) FROM `information_schema`.`COLUMNS` "
+        "WHERE `TABLE_SCHEMA` = DATABASE() AND `TABLE_NAME` = '_穿戴等级权限' AND `COLUMN_NAME` = '{}'",
+        columnName);
+
+    return result && result->Fetch()[0].Get<uint64>() > 0;
+}
+
+bool WearLevelPermissionSupportsSlots()
+{
+    if (g_wearLevelSlotColumnsState >= 0)
+        return g_wearLevelSlotColumnsState == 1;
+
+    bool const supported = WearLevelPermissionTableExists()
+        && WearLevelPermissionColumnExists("限制类型")
+        && WearLevelPermissionColumnExists("槽位位置");
+    g_wearLevelSlotColumnsState = supported ? 1 : 0;
+
+    if (!supported)
+        LOG_INFO("server.loading", "穿戴控制: `_穿戴等级权限` 尚未升级为按槽位存储，所有槽位默认按 1 级处理；请重新导入该表 SQL 后重启");
+
+    return supported;
+}
+
+WearControl::PermissionLevels LoadPlayerWearLevelsFromDatabase(uint32 playerGuid)
+{
+    WearControl::PermissionLevels levels;
+    if (!WearLevelPermissionSupportsSlots())
+        return levels;
 
     QueryResult result = CharacterDatabase.Query(
-        "SELECT `穿戴等级` FROM `_穿戴等级权限` WHERE `玩家GUID` = {}", playerGuid);
+        "SELECT `限制类型`, `槽位位置`, `穿戴等级` FROM `_穿戴等级权限` WHERE `玩家GUID` = {}",
+        playerGuid);
 
     if (!result)
-        return DEFAULT_PLAYER_WEAR_LEVEL;
+        return levels;
 
-    return result->Fetch()[0].Get<uint32>();
+    do
+    {
+        Field* fields = result->Fetch();
+        uint8 const limitType = fields[0].Get<uint8>();
+        uint8 const slotPosition = fields[1].Get<uint8>();
+        uint32 const wearLevel = fields[2].Get<uint32>();
+        if (limitType != WEAR_LIMIT_NONE && slotPosition != 0)
+            levels[WearControl::MakePermissionKey(limitType, slotPosition)] = wearLevel;
+    } while (result->NextRow());
+
+    return levels;
 }
 
 void EraseCachedPlayerWearLevel(uint32 playerGuid)
@@ -172,7 +212,7 @@ public:
 
     void OnPlayerLogin(Player* player) override
     {
-        WearControl::GetPlayerWearLevel(player);
+        WearControl::GetPlayerWearLevel(player, WEAR_LIMIT_XIANQI, 1);
     }
 
     void OnPlayerLogout(Player* player) override
@@ -284,7 +324,23 @@ bool IsLimitedTo(uint32 itemId, uint8 limitType)
     return GetExclusiveLimit(itemId) == limitType;
 }
 
-uint32 GetPlayerWearLevel(Player* player)
+std::vector<uint8> GetItemWearSlots(uint32 itemId, uint8 limitType)
+{
+    std::vector<uint8> slots;
+    auto itr = g_wearRules.find(itemId);
+    if (itr == g_wearRules.end())
+        return slots;
+
+    for (WearRule const& rule : itr->second)
+        if (rule.limitType == limitType && rule.slotPosition != 0)
+            slots.push_back(rule.slotPosition);
+
+    std::sort(slots.begin(), slots.end());
+    slots.erase(std::unique(slots.begin(), slots.end()), slots.end());
+    return slots;
+}
+
+uint32 GetPlayerWearLevel(Player* player, uint8 limitType, uint8 slotPosition)
 {
     if (!player)
         return 0;
@@ -295,46 +351,53 @@ uint32 GetPlayerWearLevel(Player* player)
         std::lock_guard<std::mutex> guard(g_playerWearLevelsMutex);
         auto itr = g_playerWearLevels.find(playerGuid);
         if (itr != g_playerWearLevels.end())
-            return itr->second;
+            return ResolvePermissionLevel(itr->second, limitType, slotPosition, DEFAULT_SLOT_WEAR_LEVEL);
     }
 
-    uint32 const wearLevel = LoadPlayerWearLevelFromDatabase(playerGuid);
+    PermissionLevels levels = LoadPlayerWearLevelsFromDatabase(playerGuid);
     {
         std::lock_guard<std::mutex> guard(g_playerWearLevelsMutex);
-        g_playerWearLevels[playerGuid] = wearLevel;
+        auto itr = g_playerWearLevels.emplace(playerGuid, std::move(levels)).first;
+        return ResolvePermissionLevel(itr->second, limitType, slotPosition, DEFAULT_SLOT_WEAR_LEVEL);
     }
-
-    return wearLevel;
 }
 
-bool UnlockPlayerWearLevel(Player* player, uint32 wearLevel, bool notify)
+bool UnlockPlayerWearLevel(Player* player, uint8 limitType, uint8 slotPosition, uint32 wearLevel, bool notify)
 {
     if (wearLevel == 0)
         return true;
 
-    if (!player)
+    if (!player || limitType == WEAR_LIMIT_NONE || slotPosition == 0)
         return false;
 
-    uint32 const currentLevel = GetPlayerWearLevel(player);
+    uint32 const currentLevel = GetPlayerWearLevel(player, limitType, slotPosition);
     if (currentLevel >= wearLevel)
         return true;
 
-    if (!WearLevelPermissionTableExists())
+    if (!WearLevelPermissionSupportsSlots())
+    {
+        LOG_INFO("server.loading", "[穿戴权限-写入失败] 玩家={} 类型={} 槽位={} 原因=权限表缺少按槽位字段",
+            player->GetName(), uint32(limitType), uint32(slotPosition));
         return false;
+    }
 
     uint32 const playerGuid = player->GetGUID().GetCounter();
     CharacterDatabase.Execute(
-        "INSERT INTO `_穿戴等级权限` (`玩家GUID`, `穿戴等级`) VALUES ({}, {}) "
+        "INSERT INTO `_穿戴等级权限` (`玩家GUID`, `限制类型`, `槽位位置`, `穿戴等级`) VALUES ({}, {}, {}, {}) "
         "ON DUPLICATE KEY UPDATE `穿戴等级` = GREATEST(`穿戴等级`, VALUES(`穿戴等级`))",
-        playerGuid, wearLevel);
+        playerGuid, limitType, slotPosition, wearLevel);
 
     {
         std::lock_guard<std::mutex> guard(g_playerWearLevelsMutex);
-        g_playerWearLevels[playerGuid] = std::max(currentLevel, wearLevel);
+        g_playerWearLevels[playerGuid][MakePermissionKey(limitType, slotPosition)] = std::max(currentLevel, wearLevel);
     }
 
+    LOG_INFO("server.loading", "[穿戴权限-写入完成] 玩家={} GUID={} 类型={} 槽位={} 新等级={}",
+        player->GetName(), playerGuid, uint32(limitType), uint32(slotPosition), wearLevel);
+
     if (notify && player->GetSession())
-        ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff00[穿戴控制]|r 已解锁穿戴等级 {}。", wearLevel);
+        ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff00[穿戴控制]|r 已解锁{}槽位 {} 的 {} 级穿戴权限。",
+            GetLimitName(limitType), slotPosition, wearLevel);
 
     return true;
 }
@@ -368,9 +431,12 @@ bool CanEquipItem(Player* player, uint32 itemId, uint8 limitType, uint8 slotPosi
 
     if (rule->wearLevel > 0)
     {
-        uint32 const playerWearLevel = GetPlayerWearLevel(player);
+        uint32 const playerWearLevel = GetPlayerWearLevel(player, limitType, slotPosition);
         if (playerWearLevel < rule->wearLevel)
         {
+            LOG_INFO("server.loading", "[穿戴权限-校验拒绝] 玩家={} GUID={} 物品={} 类型={} 槽位={} 当前等级={} 需要等级={}",
+                player ? player->GetName() : "<null>", player ? player->GetGUID().GetCounter() : 0, itemId,
+                uint32(limitType), uint32(slotPosition), playerWearLevel, rule->wearLevel);
             if (error)
                 *error = Acore::StringFormat("穿戴等级不足，需要 {} 级，当前 {} 级。", rule->wearLevel, playerWearLevel);
             return false;

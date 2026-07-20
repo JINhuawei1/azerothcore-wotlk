@@ -28,6 +28,7 @@
 #include "SpellMgr.h"
 #include "Totem.h"
 #include "TotemPackets.h"
+#include "Timer.h"
 #include "Vehicle.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
@@ -375,6 +376,16 @@ void WorldSession::HandleGameobjectReportUse(WorldPacket& recvPacket)
 
 void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
 {
+    HandleCastSpellOpcodeInternal(recvPacket, PlayerCastRequestSource::ClientPacket);
+}
+
+void WorldSession::HandleQueuedCastSpellOpcode(WorldPacket& recvPacket)
+{
+    HandleCastSpellOpcodeInternal(recvPacket, PlayerCastRequestSource::QueuedReplay);
+}
+
+void WorldSession::HandleCastSpellOpcodeInternal(WorldPacket& recvPacket, PlayerCastRequestSource source)
+{
     uint32 spellId;
     uint8  castCount, castFlags;
 
@@ -385,6 +396,21 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
     TriggerCastFlags triggerFlag = TRIGGERED_NONE;
 
     uint32 oldSpellId = spellId;
+
+    uint64 const nowMs = GetTimeMS().count();
+    if (!_playerCastRateLimiter.TryConsume(nowMs, source))
+    {
+        _playerCastRateLimitLog.Record(_player->GetName(), _player->GetGUID().GetCounter(), spellId);
+        if (!_hasCastRateLimitLog || nowMs - _lastCastRateLimitLogMs >= 2000)
+        {
+            FlushPlayerCastRateLimitLog();
+            _lastCastRateLimitLogMs = nowMs;
+            _hasCastRateLimitLog = true;
+        }
+
+        recvPacket.rfinish();
+        return;
+    }
 
     LOG_DEBUG("network", "WORLD: got cast spell packet, castCount: {}, spellId: {}, castFlags: {}, data length = {}", castCount, spellId, castFlags, (uint32)recvPacket.size());
 

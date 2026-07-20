@@ -2525,7 +2525,7 @@ void Player::ExecuteOrCancelSpellCastRequest(PendingSpellCastRequest* request, b
         if (request->isItem)
             session->HandleUseItemOpcode(request->requestPacket);
         else
-            session->HandleCastSpellOpcode(request->requestPacket);
+            session->HandleQueuedCastSpellOpcode(request->requestPacket);
     }
 }
 

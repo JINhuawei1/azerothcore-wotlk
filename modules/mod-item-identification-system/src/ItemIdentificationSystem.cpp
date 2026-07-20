@@ -104,7 +104,9 @@ namespace
         if (!player)
             return;
 
-        if (HermesBridge_SendAddonMessage(player, ITEM_IDENTIFICATION_ADDON_PREFIX, payload))
+        bool const sentViaHermes = HermesBridge_SendAddonMessage(player, ITEM_IDENTIFICATION_ADDON_PREFIX, payload);
+
+        if (sentViaHermes)
             return;
 
         std::string fullMessage = std::string(ITEM_IDENTIFICATION_ADDON_PREFIX) + "\t" + payload;
@@ -2238,7 +2240,7 @@ bool ItemIdentificationSystem::OverwriteItemMultiplier(
         sHuanJingSystem->RemoveHuanJingEnhancement(player, item);
 
     sHuanJingSystem->RemoveItemAttributeMultiplier(item);
-    sHuanJingSystem->ApplyItemAttributeMultiplier(item, multiplier, 'x');
+    sHuanJingSystem->ApplyItemAttributeMultiplier(item, multiplier, 'x', identificationGroupId);
     sHuanJingSystem->UpdateItemIdentificationGroup(item->GetGUID().GetCounter(), identificationGroupId);
     CharacterDatabase.DirectExecute(
         "UPDATE `玩家装备属性增强` SET `鉴定组ID` = {} WHERE `装备GUID` = {}",
@@ -4535,7 +4537,7 @@ private:
         {
             if (sHuanJingSystem)
             {
-                sHuanJingSystem->ApplyItemAttributeMultiplier(item, huanJingMultiplier, huanJingMode);
+                sHuanJingSystem->ApplyItemAttributeMultiplier(item, huanJingMultiplier, huanJingMode, identificationGroupId);
             }
         }
 #endif
@@ -4647,7 +4649,7 @@ private:
             {
                 if (sHuanJingSystem)
                 {
-                    sHuanJingSystem->ApplyItemAttributeMultiplier(item, huanJingMultiplier, huanJingMode);
+                    sHuanJingSystem->ApplyItemAttributeMultiplier(item, huanJingMultiplier, huanJingMode, identificationGroupId);
                 }
             }
 #endif
@@ -5699,7 +5701,7 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
 
         // 第一步：查询已鉴定物品的增强数据
         QueryResult huanjingResult = CharacterDatabase.Query(
-            "SELECT `属性倍率`, `属性倍率模式`, `增强属性数据` FROM `玩家装备属性增强` WHERE `装备GUID` = {} AND `装备ID` = {}",
+            "SELECT `属性倍率`, `属性倍率模式`, `增强属性数据`, `鉴定组ID` FROM `玩家装备属性增强` WHERE `装备GUID` = {} AND `装备ID` = {}",
             guid, itemID);
 
         if (huanjingResult)
@@ -5708,6 +5710,11 @@ ItemIdentificationSystem::AllModuleData ItemIdentificationSystem::QueryAllModule
             multiplier = fields[0].Get<uint256>();
             multiplierMode = DbValueToHuanJingMode(fields[1].Get<int32>());
             enhancedAttrs = fields[2].Get<std::string>();
+            uint32 identificationGroupId = fields[3].Get<uint32>();
+
+            // 鉴定装备的倍率只作用于鉴定基础/追加属性，不向客户端发送官方属性增强数据。
+            if (identificationGroupId > 0)
+                enhancedAttrs.clear();
 
             if (HasHuanJingEffect(multiplier, multiplierMode))
             {
@@ -6353,7 +6360,7 @@ static bool DoIdentifyItem(Player* player, Item* item, ChatHandler* handler = nu
     {
         if (sHuanJingSystem)
         {
-            sHuanJingSystem->ApplyItemAttributeMultiplier(item, huanJingMultiplier, huanJingMode);
+            sHuanJingSystem->ApplyItemAttributeMultiplier(item, huanJingMultiplier, huanJingMode, identificationGroupId);
             if (handler)
                 handler->PSendSysMessage("|cff00ff00已应用幻境倍率属性|r");
         }
@@ -6646,7 +6653,7 @@ bool ItemIdentificationCommandScript::HandleBatchIdentifyCommand(ChatHandler* ha
         {
             if (sHuanJingSystem)
             {
-                sHuanJingSystem->ApplyItemAttributeMultiplier(item, huanJingMultiplier, huanJingMode);
+                sHuanJingSystem->ApplyItemAttributeMultiplier(item, huanJingMultiplier, huanJingMode, identificationGroupId);
             }
         }
 #endif

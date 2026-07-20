@@ -30,6 +30,7 @@
 #include "DatabaseEnv.h"
 #include "GossipDef.h"
 #include "Packet.h"
+#include "PlayerCastRateLimiter.h"
 #include "SharedDefines.h"
 #include "World.h"
 #include <map>
@@ -824,6 +825,8 @@ public:                                                 // opcodes handlers
     void HandleUseItemOpcode(WorldPacket& recvPacket);
     void HandleOpenItemOpcode(WorldPacket& recvPacket);
     void HandleCastSpellOpcode(WorldPacket& recvPacket);
+    void HandleQueuedCastSpellOpcode(WorldPacket& recvPacket);
+    void HandleCastSpellOpcodeInternal(WorldPacket& recvPacket, PlayerCastRequestSource source);
     void HandleCancelCastOpcode(WorldPacket& recvPacket);
     void HandleCancelAuraOpcode(WorldPacket& recvPacket);
     void HandleCancelGrowthAuraOpcode(WorldPacket& recvPacket);
@@ -1142,6 +1145,8 @@ private:
     // logging helper
     void LogUnexpectedOpcode(WorldPacket* packet, char const* status, const char* reason);
     void LogUnprocessedTail(WorldPacket* packet);
+    void FlushPlayerCastRateLimitLog();
+    void ResetPlayerCastRateLimitState();
 
     // EnumData helpers
     bool IsLegitCharacterForAccount(ObjectGuid guid)
@@ -1191,6 +1196,10 @@ private:
     uint32 _offlineTime;
     bool _kicked;
     bool _hasLargeDamageTextAddon = false;
+    PlayerCastRateLimiter _playerCastRateLimiter;
+    PlayerCastRateLimitLogAccumulator _playerCastRateLimitLog;
+    uint64 _lastCastRateLimitLogMs = 0;
+    bool _hasCastRateLimitLog = false;
     // Packets cooldown
     time_t _calendarEventCreationCooldown;
 

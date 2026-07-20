@@ -8,6 +8,7 @@ include_directories(
 
 AC_ADD_SCRIPT("${CMAKE_CURRENT_SOURCE_DIR}/src/WearControl.cpp")
 AC_ADD_SCRIPT("${CMAKE_CURRENT_SOURCE_DIR}/src/WearControl.h")
+AC_ADD_SCRIPT("${CMAKE_CURRENT_SOURCE_DIR}/src/WearPermissionPolicy.h")
 AC_ADD_SCRIPT_LOADER("WearControl" "${CMAKE_CURRENT_SOURCE_DIR}/src/loader.h")
 
 message("-- 穿戴控制模块已加载")

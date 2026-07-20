@@ -6,6 +6,10 @@ include_directories(
   ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
+if(EXISTS "${CMAKE_SOURCE_DIR}/modules/mod-huanjinxitong/src/HuanJingSystem.h")
+  include_directories(${CMAKE_SOURCE_DIR}/modules/mod-huanjinxitong/src)
+endif()
+
 if(EXISTS "${CMAKE_SOURCE_DIR}/modules/mod-magic-hit-system/src/MagicHitSystem.h")
   include_directories(${CMAKE_SOURCE_DIR}/modules/mod-magic-hit-system/src)
 endif()

@@ -2,7 +2,7 @@
  * Xianqi feature spell runtime.
  *
  * The DBC records only provide passive/equip auras. This script turns the
- * set spells and artifact spells (385001-385050)
+ * set spells and twenty tiers of artifact spells
  * into combat effects while keeping all damage based on "main combat power".
  */
 
@@ -49,12 +49,19 @@ namespace
 constexpr uint32 XIANQI_SET_SPELL_FIRST = 384001;
 constexpr uint32 XIANQI_SET_SPELL_LAST = 384016;
 constexpr uint32 XIANQI_SET_SPELLS_PER_TIER = 16;
-constexpr std::array<uint32, 17> XIANQI_SET_SPELL_TIER_STARTS = {
+constexpr std::array<uint32, 20> XIANQI_SET_SPELL_TIER_STARTS = {
     384001, 384101, 384201, 384301, 384401, 384501, 384601, 384701, 384801,
-    384901, 386001, 386101, 386201, 386301, 386401, 386501, 386601
+    384901, 386001, 386101, 386201, 386301, 386401, 386501, 386601,
+    386701, 386801, 386901
 };
 constexpr uint32 XIANQI_ARTIFACT_SPELL_FIRST = 385001;
 constexpr uint32 XIANQI_ARTIFACT_SPELL_LAST = 385050;
+constexpr uint32 XIANQI_ARTIFACT_SPELLS_PER_TIER = 50;
+constexpr std::array<uint32, 20> XIANQI_ARTIFACT_SPELL_TIER_STARTS = {
+    385001, 389001, 389051, 389101, 389151, 389201, 389251, 389301, 389351,
+    389401, 389451, 389501, 389551, 389601, 389651, 389701, 389751,
+    389801, 389851, 389901
+};
 
 constexpr uint32 CULTIVATION_SPELL_WANJIAN = 371007;
 constexpr uint32 CULTIVATION_SPELL_JIUTIAN = 371009;
@@ -314,7 +321,14 @@ bool IsSetSpell(uint32 spellId)
 
 bool IsArtifactSpell(uint32 spellId)
 {
-    return spellId >= XIANQI_ARTIFACT_SPELL_FIRST && spellId <= XIANQI_ARTIFACT_SPELL_LAST;
+    for (uint32 first : XIANQI_ARTIFACT_SPELL_TIER_STARTS)
+    {
+        uint32 const last = first + XIANQI_ARTIFACT_SPELLS_PER_TIER - 1;
+        if (spellId >= first && spellId <= last)
+            return true;
+    }
+
+    return false;
 }
 
 uint32 GetSetSpellOffset(uint32 spellId)
@@ -344,6 +358,48 @@ uint32 NormalizeSetSpellId(uint32 spellId)
         return spellId;
 
     return XIANQI_SET_SPELL_FIRST + offset;
+}
+
+uint32 GetArtifactSpellOffset(uint32 spellId)
+{
+    for (uint32 first : XIANQI_ARTIFACT_SPELL_TIER_STARTS)
+    {
+        uint32 const last = first + XIANQI_ARTIFACT_SPELLS_PER_TIER - 1;
+        if (spellId >= first && spellId <= last)
+            return spellId - first;
+    }
+
+    return XIANQI_ARTIFACT_SPELLS_PER_TIER;
+}
+
+uint32 MakeArtifactSpellId(uint32 baseSpellId, uint32 tier)
+{
+    if (baseSpellId < XIANQI_ARTIFACT_SPELL_FIRST || baseSpellId > XIANQI_ARTIFACT_SPELL_LAST ||
+        tier >= XIANQI_ARTIFACT_SPELL_TIER_STARTS.size())
+        return 0;
+
+    return XIANQI_ARTIFACT_SPELL_TIER_STARTS[tier] + (baseSpellId - XIANQI_ARTIFACT_SPELL_FIRST);
+}
+
+uint32 NormalizeArtifactSpellId(uint32 spellId)
+{
+    uint32 const offset = GetArtifactSpellOffset(spellId);
+    if (offset >= XIANQI_ARTIFACT_SPELLS_PER_TIER)
+        return spellId;
+
+    return XIANQI_ARTIFACT_SPELL_FIRST + offset;
+}
+
+uint32 ResolveArtifactFeatureSpell(Player* player, uint32 baseSpellId);
+
+uint32 ResolveRuntimeFeatureSpellId(Player* player, uint32 spellId)
+{
+    uint32 const baseSpellId = NormalizeArtifactSpellId(spellId);
+    if (baseSpellId < XIANQI_ARTIFACT_SPELL_FIRST || baseSpellId > XIANQI_ARTIFACT_SPELL_LAST)
+        return spellId;
+
+    uint32 const activeSpellId = ResolveArtifactFeatureSpell(player, baseSpellId);
+    return activeSpellId ? activeSpellId : spellId;
 }
 
 SpellSchoolMask MakeSchoolMask(uint32 mask)
@@ -512,6 +568,21 @@ bool HasFeatureAura(Player* player, uint32 spellId)
 bool HasAnyFeatureAura(Player* player);
 bool IsValidFeatureTarget(Player* player, Unit* target);
 
+uint32 ResolveArtifactFeatureSpell(Player* player, uint32 baseSpellId)
+{
+    if (!player || baseSpellId < XIANQI_ARTIFACT_SPELL_FIRST || baseSpellId > XIANQI_ARTIFACT_SPELL_LAST)
+        return 0;
+
+    for (int32 tier = static_cast<int32>(XIANQI_ARTIFACT_SPELL_TIER_STARTS.size()) - 1; tier >= 0; --tier)
+    {
+        uint32 const spellId = MakeArtifactSpellId(baseSpellId, static_cast<uint32>(tier));
+        if (spellId && HasFeatureAura(player, spellId))
+            return spellId;
+    }
+
+    return 0;
+}
+
 uint32 ResolveSetFeatureSpell(Player* player, uint32 baseSpellId)
 {
     if (!player || baseSpellId < XIANQI_SET_SPELL_FIRST || baseSpellId > XIANQI_SET_SPELL_LAST)
@@ -553,19 +624,19 @@ bool HasAnyFeatureAura(Player* player)
                 return true;
     }
 
-    for (uint32 spellId = XIANQI_ARTIFACT_SPELL_FIRST; spellId <= XIANQI_ARTIFACT_SPELL_LAST; ++spellId)
-        if (HasFeatureAura(player, spellId))
-            return true;
+    for (uint32 first : XIANQI_ARTIFACT_SPELL_TIER_STARTS)
+    {
+        for (uint32 offset = 0; offset < XIANQI_ARTIFACT_SPELLS_PER_TIER; ++offset)
+            if (HasFeatureAura(player, first + offset))
+                return true;
+    }
 
     return false;
 }
 
 bool CanUseArtifactSkill(Player* player, uint32 spellId)
 {
-    if (!HasFeatureAura(player, spellId))
-        return false;
-
-    return true;
+    return ResolveArtifactFeatureSpell(player, NormalizeArtifactSpellId(spellId)) != 0;
 }
 
 bool IsAscended(Player* player, PlayerFeatureState const& state)
@@ -737,15 +808,17 @@ void ApplyTimedControl(Player* player, Unit* target, FeatureControl control, uin
 
 bool CooldownReady(PlayerFeatureState const& state, uint32 spellId)
 {
-    auto itr = state.cooldowns.find(spellId);
+    uint32 const cooldownKey = NormalizeArtifactSpellId(spellId);
+    auto itr = state.cooldowns.find(cooldownKey);
     return itr == state.cooldowns.end() || itr->second == 0;
 }
 
 void StartCooldown(PlayerFeatureState& state, uint32 spellId, uint32 cooldownMs)
 {
     cooldownMs = GetFeatureCooldown(spellId, cooldownMs);
+    uint32 const cooldownKey = NormalizeArtifactSpellId(spellId);
     if (cooldownMs)
-        state.cooldowns[spellId] = cooldownMs;
+        state.cooldowns[cooldownKey] = cooldownMs;
 }
 
 bool TryUseCooldown(PlayerFeatureState& state, uint32 spellId, uint32 cooldownMs)
@@ -802,6 +875,7 @@ SpellVisualEntry const* GetFeatureVisualEntry(uint32 spellId)
 
 void PlayFeatureCasterVisual(Player* player, PlayerFeatureState& state, uint32 spellId)
 {
+    spellId = ResolveRuntimeFeatureSpellId(player, spellId);
     if (!player || !TryUseVisualCooldown(state, spellId, 0, XIANQI_VISUAL_CASTER_THROTTLE_MS))
         return;
 
@@ -816,6 +890,7 @@ void PlayFeatureCasterVisual(Player* player, PlayerFeatureState& state, uint32 s
 
 void PlayFeatureTargetVisual(Player* player, Unit* target, PlayerFeatureState& state, uint32 spellId)
 {
+    spellId = ResolveRuntimeFeatureSpellId(player, spellId);
     if (!player || !target || !player->IsInMap(target) ||
         !TryUseVisualCooldown(state, spellId, 1, XIANQI_VISUAL_TARGET_THROTTLE_MS))
         return;
@@ -831,6 +906,7 @@ void PlayFeatureTargetVisual(Player* player, Unit* target, PlayerFeatureState& s
 
 void PlayFeatureAreaVisual(Player* player, Unit* center, PlayerFeatureState& state, uint32 spellId)
 {
+    spellId = ResolveRuntimeFeatureSpellId(player, spellId);
     if (!player || !center || !player->IsInMap(center) ||
         !TryUseVisualCooldown(state, spellId, 2, XIANQI_VISUAL_AREA_THROTTLE_MS))
         return;
@@ -961,9 +1037,25 @@ uint256 DealRawFeatureDamage(Player* player, Unit* victim, PlayerFeatureState& s
     if (!IsValidFeatureTarget(player, victim))
         return 0;
 
+    spellId = ResolveRuntimeFeatureSpellId(player, spellId);
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
     if (!spellInfo)
         return 0;
+
+    uint256 configuredDamage = damage;
+    uint32 const baseArtifactSpellId = NormalizeArtifactSpellId(spellId);
+    if (fromArtifact && baseArtifactSpellId != spellId)
+    {
+        SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(baseArtifactSpellId);
+        int32 const baseCoefficient = baseSpellInfo ? baseSpellInfo->Effects[EFFECT_0].BasePoints : 0;
+        int32 const activeCoefficient = spellInfo->Effects[EFFECT_0].BasePoints;
+        if (baseCoefficient > 0 && activeCoefficient > 0)
+        {
+            long double const scaled = Acore::Number::ToLongDouble(damage) *
+                static_cast<long double>(activeCoefficient) / static_cast<long double>(baseCoefficient);
+            configuredDamage = Acore::Number::ToUInt256Saturated(scaled);
+        }
+    }
 
     if (victim->IsImmunedToDamageOrSchool(spellInfo))
     {
@@ -989,7 +1081,7 @@ uint256 DealRawFeatureDamage(Player* player, Unit* victim, PlayerFeatureState& s
 
         SpellNonMeleeDamage damageInfo(player, victim, spellInfo, school);
         player->SetLastDamagedTargetGuid(victim->GetGUID());
-        player->CalculateSpellDamageTaken(&damageInfo, damage, spellInfo);
+        player->CalculateSpellDamageTaken(&damageInfo, configuredDamage, spellInfo);
         Unit::DealDamageMods(damageInfo.target, damageInfo.damage, &damageInfo.absorb);
         afterModsDamage = damageInfo.damage;
 
@@ -1030,7 +1122,8 @@ uint256 DealRawFeatureDamage(Player* player, Unit* victim, PlayerFeatureState& s
         if (!ultimate)
             state.lastNonUltimateDamage = actualDamage;
 
-        if (spellId == 385021 || spellId == 385022 || spellId == 385024 || spellId == 385025)
+        if (baseArtifactSpellId == 385021 || baseArtifactSpellId == 385022 ||
+            baseArtifactSpellId == 385024 || baseArtifactSpellId == 385025)
         {
             state.lastElementDamage = actualDamage;
             state.lastElementSchool = school;

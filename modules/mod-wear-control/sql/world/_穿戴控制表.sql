@@ -121,7 +121,7 @@ SELECT
   x.`仙器槽位ID`,
   0,
   CASE
-    WHEN x.`物品ID` BETWEEN 95100 AND 98499 THEN FLOOR((x.`物品ID` - 95100) / 200) + 1
+    WHEN x.`物品ID` BETWEEN 95100 AND 99099 THEN FLOOR((x.`物品ID` - 95100) / 200) + 1
     ELSE 0
   END,
   2,
@@ -166,7 +166,7 @@ SELECT
   2,
   CONCAT('仙器系统扩展专属：', it.`name`)
 FROM `item_template` it
-WHERE it.`entry` BETWEEN 95100 AND 98499
+WHERE it.`entry` BETWEEN 95100 AND 99099
   AND NOT EXISTS (SELECT 1 FROM `_仙门_仙器物品` x WHERE x.`物品ID` = it.`entry`)
   AND it.`InventoryType` IN (1, 2, 3, 4, 5, 20, 6, 7, 8, 9, 10, 16, 15, 25, 26, 28, 19)
 ON DUPLICATE KEY UPDATE
@@ -183,7 +183,7 @@ JOIN (
   SELECT 21 AS `slot_id`
   UNION ALL SELECT 22
 ) slots
-WHERE it.`entry` BETWEEN 95100 AND 98499
+WHERE it.`entry` BETWEEN 95100 AND 99099
   AND NOT EXISTS (SELECT 1 FROM `_仙门_仙器物品` x WHERE x.`物品ID` = it.`entry`)
   AND it.`InventoryType` = 11
 ON DUPLICATE KEY UPDATE
@@ -200,7 +200,7 @@ JOIN (
   SELECT 23 AS `slot_id`
   UNION ALL SELECT 24
 ) slots
-WHERE it.`entry` BETWEEN 95100 AND 98499
+WHERE it.`entry` BETWEEN 95100 AND 99099
   AND NOT EXISTS (SELECT 1 FROM `_仙门_仙器物品` x WHERE x.`物品ID` = it.`entry`)
   AND it.`InventoryType` = 12
 ON DUPLICATE KEY UPDATE
@@ -217,7 +217,7 @@ JOIN (
   SELECT 26 AS `slot_id`
   UNION ALL SELECT 27
 ) slots
-WHERE it.`entry` BETWEEN 95100 AND 98499
+WHERE it.`entry` BETWEEN 95100 AND 99099
   AND NOT EXISTS (SELECT 1 FROM `_仙门_仙器物品` x WHERE x.`物品ID` = it.`entry`)
   AND it.`InventoryType` IN (13, 14, 17, 21, 22, 23)
 ON DUPLICATE KEY UPDATE

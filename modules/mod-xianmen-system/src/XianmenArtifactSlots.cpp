@@ -34,6 +34,12 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "Util.h"
+#if __has_include("HuanJingSystem.h")
+    #ifndef MODULE_HUANJING_SYSTEM
+        #define MODULE_HUANJING_SYSTEM
+    #endif
+    #include "HuanJingSystem.h"
+#endif
 #if __has_include("WearControl.h")
     #ifndef MODULE_WEAR_CONTROL
         #define MODULE_WEAR_CONTROL
@@ -275,7 +281,8 @@ bool IsXianqiDamageTriggeredCombatSpellId(uint32 spellId)
 
 bool IsXianqiFeatureSpellId(uint32 spellId)
 {
-    return spellId >= 385001 && spellId <= 385050;
+    return (spellId >= 385001 && spellId <= 385050)
+        || (spellId >= 389001 && spellId <= 389950);
 }
 
 bool HasXianqiFeatureSpell(ItemTemplate const* proto)
@@ -346,7 +353,7 @@ bool CanXianqiItemProcForAttack(XianqiSlotConfig const* config, ItemTemplate con
     if (!config || !proto)
         return false;
 
-    // 385001-385050 是仙器特色技能配置，由 XianqiFeatureSpells 统一按玩家伤害事件结算。
+    // 分档仙器特色技能由 XianqiFeatureSpells 统一按玩家伤害事件结算。
     // 如果也走普通物品 CastItemCombatSpell，会只播放 DBC dummy 法术视觉，不会产生特色伤害和仇恨。
     if (HasXianqiFeatureSpell(proto))
         return false;
@@ -1506,6 +1513,14 @@ public:
                 RemoveStatEffect(player, effect.statType, effect.statValue);
         status->slotStats.clear();
 
+#ifdef MODULE_HUANJING_SYSTEM
+        for (auto const& slotPair : status->slots)
+        {
+            if (slotPair.second.itemPtr && sHuanJingSystem)
+                sHuanJingSystem->RemoveHuanJingEnhancement(player, slotPair.second.itemPtr);
+        }
+#endif
+
         UpdatePlayerStats(player);
     }
 
@@ -1681,6 +1696,16 @@ public:
                 ApplySlotSpell(player, status, slot, spellId, apply);
         }
 
+#ifdef MODULE_HUANJING_SYSTEM
+        if (item && sHuanJingSystem)
+        {
+            if (apply)
+                sHuanJingSystem->ApplyHuanJingEnhancement(player, item, updateStats);
+            else
+                sHuanJingSystem->RemoveHuanJingEnhancement(player, item);
+        }
+#endif
+
         if (updateStats)
             UpdatePlayerStats(player);
     }
@@ -1784,6 +1809,11 @@ private:
                 RemoveXianqiEquipSpell(player, item, spellId);
             status->slotSpells.erase(spellItr);
         }
+
+#ifdef MODULE_HUANJING_SYSTEM
+        if (item && sHuanJingSystem)
+            sHuanJingSystem->RemoveHuanJingEnhancement(player, item);
+#endif
 
         auto itemSetItr = status->slotItemSets.find(slot);
         if (itemSetItr != status->slotItemSets.end())

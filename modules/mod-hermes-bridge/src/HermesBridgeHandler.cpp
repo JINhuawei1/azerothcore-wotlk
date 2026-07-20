@@ -24,6 +24,7 @@
 #include "../../mod-mall-system/src/MallSystem.h"
 #include "../../mod-requirement-template/src/RequirementSystem.h"
 #include "../../mod-reward-template/src/RewardTemplate.h"
+#include "../../mod-wear-control/src/WearControl.h"
 
 #include <json/json.h>
 
@@ -975,6 +976,7 @@ namespace
         uint32 BoosterItemId = 0;
         float BoosterChance = 0.0f;
         bool DestroyOnFail = false;
+        uint32 UnlockWearLevel = 0;
     };
 
     std::string TrimHermesSynthesisText(std::string value)
@@ -1194,7 +1196,7 @@ namespace
         std::vector<HermesSynthesisEntry> entries;
         QueryResult result = WorldDatabase.Query(
             "SELECT `物品id`, `升级等级`, `职业类型`, `需求id`, `升级成功奖励id`, `成功几率`, "
-            "`合成几率物品id`, `合成几率提升`, `失败是否摧毁` "
+            "`合成几率物品id`, `合成几率提升`, `失败是否摧毁`, `解锁穿戴等级` "
             "FROM `_物品合成` ORDER BY `物品id`, `升级等级`");
 
         if (!result)
@@ -1213,6 +1215,7 @@ namespace
             entry.BoosterItemId = fields[6].Get<uint32>();
             entry.BoosterChance = std::clamp(fields[7].Get<float>(), 0.0f, 100.0f);
             entry.DestroyOnFail = fields[8].Get<uint8>() != 0;
+            entry.UnlockWearLevel = fields[9].Get<uint32>();
 
             if (!sObjectMgr->GetItemTemplate(entry.ItemId))
                 continue;
@@ -1279,8 +1282,39 @@ namespace
                << LimitHermesSynthesisText(requirementSummary, 80) << '^'
                << LimitHermesSynthesisText(rewardText, 70) << '^'
                << static_cast<uint32>(entry.ClassType) << '^'
-               << requirementItems;
+               << requirementItems << '^'
+               << entry.UnlockWearLevel;
         return record.str();
+    }
+
+    bool UnlockHermesSynthesisWearSlots(Player& player, HermesSynthesisEntry const& entry, std::string& message)
+    {
+        std::string rewardItems = GetHermesSynthesisRewardItemList(entry.RewardId);
+        uint32 const unlockItemId = ParseHermesSynthesisFirstRewardItem(rewardItems).first;
+        uint8 const limitType = WearControl::GetExclusiveLimit(unlockItemId);
+        std::vector<uint8> const slots = WearControl::GetItemWearSlots(unlockItemId, limitType);
+
+        if (entry.UnlockWearLevel == 0)
+            return true;
+
+        if (limitType == WEAR_LIMIT_NONE || slots.empty())
+        {
+            message = "合成成功，但产物没有配置可解锁的专属槽位";
+            return false;
+        }
+
+        for (uint8 slotPosition : slots)
+        {
+            bool const unlocked = WearControl::UnlockPlayerWearLevel(&player, limitType, slotPosition, entry.UnlockWearLevel, false);
+            if (!unlocked)
+            {
+                message = "合成成功，但相关槽位穿戴权限解锁失败，请检查 `_穿戴等级权限` 表结构";
+                return false;
+            }
+        }
+
+        message = "合成成功，已解锁仙器穿戴权限";
+        return true;
     }
 
     std::string BuildHermesSynthesisListPayload(Player& player, uint32 offset, uint32 limit, uint32 classType)
@@ -1387,7 +1421,12 @@ namespace
         {
             bool rewarded = sRewardTemplate->GiveReward(&player, entry.RewardId, false, true);
             if (rewarded)
-                return BuildHermesSynthesisResultPayload(true, entry.ItemId, entry.UpgradeLevel, "合成成功");
+            {
+                std::string resultMessage = "合成成功";
+                if (entry.UnlockWearLevel > 0)
+                    UnlockHermesSynthesisWearSlots(player, entry, resultMessage);
+                return BuildHermesSynthesisResultPayload(true, entry.ItemId, entry.UpgradeLevel, resultMessage);
+            }
 
             return BuildHermesSynthesisResultPayload(false, entry.ItemId, entry.UpgradeLevel, "合成成功但发放奖励失败，请检查奖励模板或背包空间");
         }

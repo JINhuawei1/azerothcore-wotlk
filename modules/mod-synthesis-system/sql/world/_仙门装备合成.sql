@@ -2,10 +2,10 @@
 
 -- 仙门装备合成数据
 -- 规则：当前阶同部位装备 x3 + 灵气石(62001) x10000 + 突破石(62002) x5000，合成下一阶同部位装备。
--- 覆盖范围：17 阶；生成 16 段升级链，每段 96 件，共 1536 条合成配置。
+-- 覆盖范围：20 阶；生成 19 段升级链，每段 96 件，共 1824 条合成配置。
 -- 每段包含：10 件仙器、10 职业 × 8 件仙装、5 件仙饰、1 件披风。
 -- 已排除：武器、衬衫、战袍、旧通用 8 件套。
--- ID 号段：_模板_需求 / _模板_奖励 使用 951000-952535。
+-- ID 号段：_模板_需求 / _模板_奖励 使用 951000-952823。
 
 SET @xianmen_has_synthesis_class_type := (
   SELECT COUNT(*)
@@ -39,9 +39,9 @@ PREPARE xianmen_add_synthesis_unlock_wear_level_stmt FROM @xianmen_add_synthesis
 EXECUTE xianmen_add_synthesis_unlock_wear_level_stmt;
 DEALLOCATE PREPARE xianmen_add_synthesis_unlock_wear_level_stmt;
 
-DELETE FROM `_物品合成` WHERE `物品id` BETWEEN 95100 AND 98499;
-DELETE FROM `_模板_需求` WHERE `id` BETWEEN 951000 AND 952535;
-DELETE FROM `_模板_奖励` WHERE `id` BETWEEN 951000 AND 952535;
+DELETE FROM `_物品合成` WHERE `物品id` BETWEEN 95100 AND 99099;
+DELETE FROM `_模板_需求` WHERE `id` BETWEEN 951000 AND 952823;
+DELETE FROM `_模板_奖励` WHERE `id` BETWEEN 951000 AND 952823;
 
 -- 合成列表的 tooltip 依赖 item_template；单独导入本文件时同步修正职业仙装限制。
 UPDATE `item_template`
@@ -58,7 +58,7 @@ SET `AllowableClass` = CASE
     WHEN MOD(`entry` - 95200, 200) BETWEEN 92 AND 99 THEN 2
     ELSE `AllowableClass`
 END
-WHERE `entry` BETWEEN 95220 AND 98499
+WHERE `entry` BETWEEN 95220 AND 99099
   AND MOD(`entry` - 95200, 200) BETWEEN 20 AND 99;
 
 DROP TEMPORARY TABLE IF EXISTS `_xianmen_synthesis_stage`;
@@ -89,7 +89,10 @@ INSERT INTO `_xianmen_synthesis_stage`
 (12, 13, 97500, 97600, 97700, 97800),
 (13, 14, 97700, 97800, 97900, 98000),
 (14, 15, 97900, 98000, 98100, 98200),
-(15, 16, 98100, 98200, 98300, 98400);
+(15, 16, 98100, 98200, 98300, 98400),
+(16, 17, 98300, 98400, 98500, 98600),
+(17, 18, 98500, 98600, 98700, 98800),
+(18, 19, 98700, 98800, 98900, 99000);
 
 DROP TEMPORARY TABLE IF EXISTS `_xianmen_synthesis_slot`;
 CREATE TEMPORARY TABLE `_xianmen_synthesis_slot` (

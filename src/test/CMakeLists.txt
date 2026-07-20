@@ -18,6 +18,11 @@ include_directories(
         "mocks"
 )
 
+include_directories(
+        ${CMAKE_SOURCE_DIR}/modules/mod-magic-hit-system/src
+        ${CMAKE_SOURCE_DIR}/modules/mod-talent-soul/src
+)
+
 add_executable(
         unit_tests
         ${PRIVATE_SOURCES}
@@ -36,4 +41,28 @@ add_test(
         unit
         COMMAND
         ${CMAKE_BINARY_DIR}/src/test/unit_tests
+)
+
+set(LOAD_PROTECTION_TEST_SOURCES
+        server/game/Server/PlayerCastRateLimiterTest.cpp
+        server/game/Spells/MagicHitBatchTest.cpp
+        server/game/Spells/TalentSoulGcdTest.cpp
+)
+
+add_executable(
+        load_protection_tests
+        ${LOAD_PROTECTION_TEST_SOURCES}
+)
+
+target_link_libraries(
+        load_protection_tests
+        gtest_main
+        game-interface
+)
+
+add_test(
+        NAME
+        load_protection
+        COMMAND
+        $<TARGET_FILE:load_protection_tests>
 )

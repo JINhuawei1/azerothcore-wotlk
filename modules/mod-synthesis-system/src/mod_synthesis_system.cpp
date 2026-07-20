@@ -46,6 +46,7 @@ struct SynthesisEntry
     float boosterChance = 0.0f;
     bool destroyOnFail = false;
     uint32 unlockWearLevel = 0;
+    uint32 unlockItemId = 0;
 };
 
 std::string TrimAddonText(std::string value)
@@ -329,22 +330,39 @@ bool SynthesisColumnExists(char const* columnName)
     return result->Fetch()[0].Get<uint64>() > 0;
 }
 
-bool UnlockWearLevelFromSynthesis(Player* player, uint32 wearLevel, std::string& message)
+bool UnlockWearLevelFromSynthesis(Player* player, uint32 unlockItemId, uint32 wearLevel, std::string& message)
 {
+    LOG_INFO("server.loading", "[穿戴权限-合成解锁入口] 玩家={} GUID={} 产物={} 请求等级={}",
+        player ? player->GetName() : "<null>", player ? player->GetGUID().GetCounter() : 0, unlockItemId, wearLevel);
+
     if (wearLevel == 0)
         return true;
 
 #if SYNTHESIS_HAS_WEAR_CONTROL
-    if (WearControl::UnlockPlayerWearLevel(player, wearLevel, true))
+    uint8 const limitType = WearControl::GetExclusiveLimit(unlockItemId);
+    std::vector<uint8> const slots = WearControl::GetItemWearSlots(unlockItemId, limitType);
+    LOG_INFO("server.loading", "[穿戴权限-槽位解析] 产物={} 限制类型={} 槽位数量={}",
+        unlockItemId, uint32(limitType), uint32(slots.size()));
+    if (limitType == WEAR_LIMIT_NONE || slots.empty())
     {
-        std::ostringstream ss;
-        ss << "合成成功，已解锁穿戴等级 " << wearLevel;
-        message = ss.str();
-        return true;
+        message = "合成成功，但产物没有配置可解锁的专属槽位";
+        return false;
     }
 
-    message = "合成成功，但穿戴等级解锁失败，请检查 `_穿戴等级权限` 表";
-    return false;
+    for (uint8 slotPosition : slots)
+    {
+        bool const unlocked = WearControl::UnlockPlayerWearLevel(player, limitType, slotPosition, wearLevel, false);
+        LOG_INFO("server.loading", "[穿戴权限-槽位解锁结果] 玩家={} 产物={} 类型={} 槽位={} 请求等级={} 结果={}",
+            player ? player->GetName() : "<null>", unlockItemId, uint32(limitType), uint32(slotPosition), wearLevel, unlocked);
+        if (!unlocked)
+        {
+            message = "合成成功，但相关槽位穿戴权限解锁失败，请检查 `_穿戴等级权限` 表结构";
+            return false;
+        }
+    }
+
+    message = "合成成功，已解锁仙器穿戴权限";
+    return true;
 #else
     message = "合成成功，但当前未编译穿戴控制模块，无法解锁穿戴等级";
     return false;
@@ -375,6 +393,7 @@ public:
         _entries.clear();
 
         bool const hasUnlockWearLevelColumn = SynthesisColumnExists("解锁穿戴等级");
+        LOG_INFO("server.loading", "[穿戴权限-配方字段检测] `_物品合成`.`解锁穿戴等级` 存在={}", hasUnlockWearLevelColumn);
         if (!hasUnlockWearLevelColumn)
             LOG_INFO("server.loading", "合成系统: `_物品合成`.`解锁穿戴等级` 字段不存在，合成成功不授予穿戴等级");
 
@@ -392,6 +411,7 @@ public:
             return 0;
 
         uint32 count = 0;
+        uint32 unlockCount = 0;
         do
         {
             Field* fields = result->Fetch();
@@ -407,6 +427,15 @@ public:
             entry.boosterChance = std::clamp(fields[7].Get<float>(), 0.0f, 100.0f);
             entry.destroyOnFail = fields[8].Get<uint8>() != 0;
             entry.unlockWearLevel = fields[9].Get<uint32>();
+            entry.unlockItemId = ParseFirstRewardItem(GetRewardItemList(entry.rewardId)).first;
+
+            if (entry.unlockWearLevel > 0)
+                ++unlockCount;
+            if (entry.itemId == 95276 || entry.itemId == 95476)
+            {
+                LOG_INFO("server.loading", "[穿戴权限-配方样本] 原料={} 升级等级={} 奖励模板={} 产物={} 解锁等级={}",
+                    entry.itemId, entry.upgradeLevel, entry.rewardId, entry.unlockItemId, entry.unlockWearLevel);
+            }
 
             if (!sObjectMgr->GetItemTemplate(entry.itemId))
             {
@@ -425,6 +454,7 @@ public:
             ++count;
         } while (result->NextRow());
 
+        LOG_INFO("server.loading", "[穿戴权限-配方加载完成] 总数={} 含解锁配置={}", count, unlockCount);
         return count;
     }
 
@@ -587,8 +617,11 @@ public:
             if (rewarded)
             {
                 std::string resultMessage = "合成成功";
+                LOG_INFO("server.loading", "[穿戴权限-奖励成功] 玩家={} GUID={} 原料={} 升级等级={} 产物={} 解锁等级={}",
+                    player->GetName(), player->GetGUID().GetCounter(), entry.itemId, entry.upgradeLevel,
+                    entry.unlockItemId, entry.unlockWearLevel);
                 if (entry.unlockWearLevel > 0)
-                    UnlockWearLevelFromSynthesis(player, entry.unlockWearLevel, resultMessage);
+                    UnlockWearLevelFromSynthesis(player, entry.unlockItemId, entry.unlockWearLevel, resultMessage);
                 SendResult(player, true, entry.itemId, entry.upgradeLevel, resultMessage);
             }
             else

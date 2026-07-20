@@ -29,6 +29,11 @@ void ScriptMgr::OnDamage(Unit* attacker, Unit* victim, uint256& damage)
     CALL_ENABLED_HOOKS(UnitScript, UNITHOOK_ON_DAMAGE, script->OnDamage(attacker, victim, damage));
 }
 
+void ScriptMgr::OnDamageWithContext(Unit* attacker, Unit* victim, uint256& damage, DamageEffectType damageType, SpellInfo const* spellInfo)
+{
+    CALL_ENABLED_HOOKS(UnitScript, UNITHOOK_ON_DAMAGE_WITH_CONTEXT, script->OnDamageWithContext(attacker, victim, damage, damageType, spellInfo));
+}
+
 void ScriptMgr::ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint256& damage, SpellInfo const* spellInfo)
 {
     CALL_ENABLED_HOOKS(UnitScript, UNITHOOK_MODIFY_PERIODIC_DAMAGE_AURAS_TICK, script->ModifyPeriodicDamageAurasTick(target, attacker, damage, spellInfo));
