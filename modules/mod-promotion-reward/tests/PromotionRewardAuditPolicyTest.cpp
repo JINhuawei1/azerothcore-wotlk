@@ -29,5 +29,15 @@ int main()
     assert(!ShouldBanAfterReject(2, 3));
     assert(!ShouldBanAfterReject(3, 0));
 
+    assert(BuildClaimMarker("abc123") == "CLAIM:abc123");
+    assert(OwnsGrantClaim("CLAIM:abc123", "abc123"));
+    assert(!OwnsGrantClaim("CLAIM:other", "abc123"));
+    assert(!OwnsGrantClaim("", "abc123"));
+
+    assert(ProcessingRecoveryFor(GrantMode::Cdk, false) == ProcessingRecoveryAction::RetryPending);
+    assert(ProcessingRecoveryFor(GrantMode::Cdk, true) == ProcessingRecoveryAction::RetryPending);
+    assert(ProcessingRecoveryFor(GrantMode::Item, true) == ProcessingRecoveryAction::FinalizeIssued);
+    assert(ProcessingRecoveryFor(GrantMode::Item, false) == ProcessingRecoveryAction::RecoveryDebt);
+
     return 0;
 }

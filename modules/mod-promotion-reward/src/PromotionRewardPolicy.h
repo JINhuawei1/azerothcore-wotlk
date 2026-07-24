@@ -3,6 +3,8 @@
 
 #include <cstdint>
 #include <limits>
+#include <string>
+#include <string_view>
 
 namespace PromotionRewardPolicy
 {
@@ -45,6 +47,13 @@ enum class RollbackStatus : std::uint8_t
     Failed
 };
 
+enum class ProcessingRecoveryAction : std::uint8_t
+{
+    RetryPending,
+    FinalizeIssued,
+    RecoveryDebt
+};
+
 constexpr ReviewStatus NextReviewStatus(ReviewStatus current, ReviewDecision decision)
 {
     if (current != ReviewStatus::Pending)
@@ -70,6 +79,26 @@ constexpr std::uint32_t NextInvalidStreak(
 constexpr bool ShouldBanAfterReject(std::uint32_t invalidStreak, std::uint32_t banThreshold)
 {
     return banThreshold > 0 && invalidStreak >= banThreshold;
+}
+
+inline std::string BuildClaimMarker(std::string_view claimToken)
+{
+    return std::string("CLAIM:") + std::string(claimToken);
+}
+
+inline bool OwnsGrantClaim(std::string_view storedMarker, std::string_view claimToken)
+{
+    return storedMarker == BuildClaimMarker(claimToken);
+}
+
+constexpr ProcessingRecoveryAction ProcessingRecoveryFor(GrantMode mode, bool hasReliableReceipt)
+{
+    if (mode == GrantMode::Cdk)
+        return ProcessingRecoveryAction::RetryPending;
+
+    return hasReliableReceipt
+        ? ProcessingRecoveryAction::FinalizeIssued
+        : ProcessingRecoveryAction::RecoveryDebt;
 }
 }
 
