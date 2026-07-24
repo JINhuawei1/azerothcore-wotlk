@@ -68,6 +68,8 @@ public:
     bool GiveRewardWithReceipt(Player* player, uint32 rewardId, RewardGrantReceipt& receipt,
         bool checkChance = true, bool showNotification = true) override;
     bool GiveRewardWithoutItems(Player* player, uint32 rewardId, bool checkChance = true, bool showNotification = true);
+    bool GiveRewardWithoutItemsWithReceipt(Player* player, uint32 rewardId, RewardGrantReceipt& receipt,
+        bool checkChance = true, bool showNotification = true);
     bool GiveRandomReward(Player* player, const std::vector<uint32>& rewardIds) override;
     std::vector<std::string> GetRewardDescription(Player* player, uint32 rewardId) override;
 

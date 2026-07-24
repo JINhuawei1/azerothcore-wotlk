@@ -1,6 +1,7 @@
 #include "PromotionRewardAudit.h"
 
 #include "PromotionRewardModule.h"
+#include "Bag.h"
 #include "DatabaseEnv.h"
 #include "Item.h"
 #include "Log.h"
@@ -96,6 +97,107 @@ std::string JoinGuids(std::vector<uint32> const& itemGuids)
     }
     stream << ']';
     return stream.str();
+}
+
+void AppendUniqueGuid(std::vector<uint32>& itemGuids, uint32 itemGuid)
+{
+    if (itemGuid != 0 && std::find(itemGuids.begin(), itemGuids.end(), itemGuid) == itemGuids.end())
+        itemGuids.push_back(itemGuid);
+}
+
+std::vector<uint32> CollectPromotionItemGuids(Player* player)
+{
+    std::vector<uint32> itemGuids;
+    if (!player)
+        return itemGuids;
+
+    auto collect = [&itemGuids](Item* item)
+    {
+        if (item && sPromotionRewardMgr->IsPromotionWeaponEntry(item->GetEntry()))
+            AppendUniqueGuid(itemGuids, item->GetGUID().GetCounter());
+    };
+
+    for (uint16 slot = PLAYER_SLOT_START; slot < PLAYER_SLOT_END; ++slot)
+        collect(player->GetItemByPos(INVENTORY_SLOT_BAG_0, static_cast<uint8>(slot)));
+
+    auto collectBag = [&collect, player](uint8 bagSlot)
+    {
+        if (Bag* bag = player->GetBagByPos(bagSlot))
+            for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
+                collect(bag->GetItemByPos(static_cast<uint8>(slot)));
+    };
+
+    for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+        collectBag(bagSlot);
+    for (uint8 bagSlot = BANK_SLOT_BAG_START; bagSlot < BANK_SLOT_BAG_END; ++bagSlot)
+        collectBag(bagSlot);
+
+    std::sort(itemGuids.begin(), itemGuids.end());
+    return itemGuids;
+}
+
+std::string EscapeJsonString(std::string const& value)
+{
+    std::ostringstream stream;
+    for (char character : value)
+    {
+        switch (character)
+        {
+            case '\\': stream << "\\\\"; break;
+            case '"': stream << "\\\""; break;
+            case '\n': stream << "\\n"; break;
+            case '\r': stream << "\\r"; break;
+            case '\t': stream << "\\t"; break;
+            default: stream << character; break;
+        }
+    }
+    return stream.str();
+}
+
+std::string BuildRedeemResourceSnapshot(
+    uint32 rewardId,
+    uint32 beforeDays,
+    uint32 afterDays,
+    std::vector<uint32> const& oldPromotionGuids,
+    std::vector<uint32> const& newItemGuids,
+    RewardGrantReceipt const& receipt,
+    bool receiptComplete,
+    std::string const& receiptError)
+{
+    std::ostringstream stream;
+    stream << "{\"rewardId\":" << rewardId
+           << ",\"beforeDays\":" << beforeDays
+           << ",\"afterDays\":" << afterDays
+           << ",\"moneyDelta\":" << receipt.moneyDelta
+           << ",\"complete\":" << (receiptComplete ? "true" : "false")
+           << ",\"error\":\"" << EscapeJsonString(receiptError) << '"'
+           << ",\"oldPromotionGuids\":" << JoinGuids(oldPromotionGuids)
+           << ",\"newItemGuids\":" << JoinGuids(newItemGuids)
+           << ",\"resources\":{";
+
+    bool first = true;
+    for (auto const& [name, delta] : receipt.resourceDeltas)
+    {
+        if (!first)
+            stream << ',';
+        first = false;
+        stream << '"' << EscapeJsonString(name) << "\":" << delta;
+    }
+    stream << "}}";
+    return stream.str();
+}
+
+uint32 FindPromotionItemGuid(Player* player, std::vector<uint32> const& itemGuids)
+{
+    if (!player)
+        return 0;
+
+    for (uint32 itemGuid : itemGuids)
+        if (Item* item = player->GetItemByGuid(ObjectGuid::Create<HighGuid::Item>(itemGuid)))
+            if (sPromotionRewardMgr->IsPromotionWeaponEntry(item->GetEntry()))
+                return itemGuid;
+
+    return 0;
 }
 
 std::string BuildItemSnapshot(Player* player, ItemPosCountVec const& destinations)
@@ -213,6 +315,55 @@ void MarkClaimedItemRecoveryDebt(
         grantId, safeRequestId, safeClaimMarker);
 }
 
+uint32 RecoverTimedOutRedeemClaims(uint32 limit)
+{
+    if (limit == 0)
+        return 0;
+
+    QueryResult result = CharacterDatabase.Query(
+        "SELECT `流水ID`,`处理令牌` FROM `_宣传奖励流水` "
+        "WHERE `处理令牌` LIKE 'REDEEM:%' AND `更新时间` < DATE_SUB(NOW(), INTERVAL 5 MINUTE) "
+        "ORDER BY `更新时间`,`流水ID` LIMIT {}",
+        limit);
+    if (!result)
+        return 0;
+
+    uint32 recovered = 0;
+    do
+    {
+        Field* fields = result->Fetch();
+        uint64 grantId = fields[0].Get<uint64>();
+        std::string redeemMarker = fields[1].Get<std::string>();
+        std::string safeRedeemMarker = EscapeCharacterString(redeemMarker);
+
+        QueryResult receipt = CharacterDatabase.Query(
+            "SELECT 1 FROM `_宣传兑换流水` WHERE `奖励流水ID`={} LIMIT 1",
+            grantId);
+        if (receipt)
+        {
+            CharacterDatabase.DirectExecute(
+                "UPDATE `_宣传奖励流水` SET `处理令牌`='',"
+                "`回滚错误`=IF(`回滚状态`='PENDING','',`回滚错误`) "
+                "WHERE `流水ID`={} AND `处理令牌`='{}' "
+                "AND `更新时间` < DATE_SUB(NOW(), INTERVAL 5 MINUTE)",
+                grantId, safeRedeemMarker);
+        }
+        else
+        {
+            CharacterDatabase.DirectExecute(
+                "UPDATE `_宣传奖励流水` SET `处理令牌`='',`回滚状态`='DEBT',`回滚时间`=NOW(),"
+                "`回滚错误`='CDK兑换过程超时且无兑换回执，奖励是否已发放未知，禁止重复兑换' "
+                "WHERE `流水ID`={} AND `处理令牌`='{}' "
+                "AND `更新时间` < DATE_SUB(NOW(), INTERVAL 5 MINUTE)",
+                grantId, safeRedeemMarker);
+        }
+
+        ++recovered;
+    } while (recovered < limit && result->NextRow());
+
+    return recovered;
+}
+
 uint32 RecoverTimedOutProcessingGrants(uint32 limit)
 {
     if (limit == 0)
@@ -307,7 +458,9 @@ bool PromotionRewardAuditMgr::ConsumeGrantQueue(std::uint32_t limit)
     if (limit == 0)
         return false;
 
-    uint32 consumedCount = RecoverTimedOutProcessingGrants(limit);
+    uint32 consumedCount = RecoverTimedOutRedeemClaims(limit);
+    if (consumedCount < limit)
+        consumedCount += RecoverTimedOutProcessingGrants(limit - consumedCount);
     if (consumedCount >= limit)
         return true;
 
@@ -647,8 +800,8 @@ bool PromotionRewardAuditMgr::BeginCodeRedeem(
 
     std::string safeCode = EscapeCharacterString(code);
     QueryResult result = CharacterDatabase.Query(
-        "SELECT `流水ID`,`提交ID` FROM `_宣传奖励流水` "
-        "WHERE `CDK`='{}' AND `发放状态` IN ('ISSUED','FINAL') AND `回滚状态`<>'SUCCESS' LIMIT 1",
+        "SELECT `流水ID`,`提交ID`,`任务ID`,`request_id`,`发放状态`,`回滚状态` "
+        "FROM `_宣传奖励流水` WHERE `CDK`='{}' LIMIT 1",
         safeCode);
     if (!result)
         return false;
@@ -656,29 +809,172 @@ bool PromotionRewardAuditMgr::BeginCodeRedeem(
     Field* fields = result->Fetch();
     snapshot.grantId = fields[0].Get<uint64>();
     snapshot.submissionId = fields[1].Get<uint64>();
+    snapshot.taskId = fields[2].Get<uint32>();
+    snapshot.requestId = fields[3].Get<std::string>();
+    std::string grantStatus = fields[4].Get<std::string>();
+    std::string rollbackStatus = fields[5].Get<std::string>();
     snapshot.code = code;
+
+    if ((grantStatus != "ISSUED" && grantStatus != "FINAL") || rollbackStatus != "NONE")
+        return false;
+
+    snapshot.redeemToken = GenerateClaimToken(snapshot.grantId);
     snapshot.accountId = player->GetSession()->GetAccountId();
     snapshot.characterGuid = player->GetGUID().GetCounter();
     if (PromotionPlayerData* data = sPromotionRewardMgr->GetPlayerData(snapshot.characterGuid))
         snapshot.beforeDays = data->days;
+    snapshot.oldItemGuids = CollectPromotionItemGuids(player);
 
-    return sPromotionRewardMgr->BeginItemCapture(player, snapshot.grantId);
+    std::string redeemMarker = "REDEEM:" + snapshot.redeemToken;
+    std::string safeRedeemMarker = EscapeCharacterString(redeemMarker);
+    CharacterDatabase.DirectExecute(
+        "UPDATE `_宣传奖励流水` SET `处理令牌`='{}' "
+        "WHERE `流水ID`={} AND `CDK`='{}' AND `发放状态` IN ('ISSUED','FINAL') "
+        "AND `回滚状态`='NONE' AND `处理令牌`='' "
+        "AND NOT EXISTS (SELECT 1 FROM `_宣传兑换流水` r WHERE r.`奖励流水ID`={})",
+        safeRedeemMarker, snapshot.grantId, safeCode, snapshot.grantId);
+
+    QueryResult claimed = CharacterDatabase.Query(
+        "SELECT `处理令牌` FROM `_宣传奖励流水` WHERE `流水ID`={}", snapshot.grantId);
+    if (!claimed || claimed->Fetch()[0].Get<std::string>() != redeemMarker)
+        return false;
+
+    if (!sPromotionRewardMgr->BeginItemCapture(player, snapshot.grantId))
+    {
+        CharacterDatabase.DirectExecute(
+            "UPDATE `_宣传奖励流水` SET `处理令牌`='' "
+            "WHERE `流水ID`={} AND `处理令牌`='{}'",
+            snapshot.grantId, safeRedeemMarker);
+        return false;
+    }
+
+    return true;
 }
 
 void PromotionRewardAuditMgr::CompleteCodeRedeem(
     Player* player,
-    std::string const& /*code*/,
-    std::uint32_t /*rewardId*/,
+    std::string const& code,
+    std::uint32_t rewardId,
     PromotionRedeemSnapshot const& snapshot,
     bool success)
 {
     if (!player || snapshot.grantId == 0)
         return;
 
-    if (success)
-        (void)sPromotionRewardMgr->EndItemCapture(player, snapshot.grantId);
-    else
+    std::string redeemMarker = "REDEEM:" + snapshot.redeemToken;
+    std::string safeRedeemMarker = EscapeCharacterString(redeemMarker);
+
+    if (!player->GetSession())
+    {
         sPromotionRewardMgr->CancelItemCapture(player, snapshot.grantId);
+        if (success)
+        {
+            CharacterDatabase.DirectExecute(
+                "UPDATE `_宣传奖励流水` SET `回滚状态`='DEBT',`回滚时间`=NOW(),"
+                "`回滚错误`='CDK奖励已发放，但玩家会话中断导致兑换回执缺失' "
+                "WHERE `流水ID`={} AND `回滚状态`='NONE' AND `处理令牌`='{}'",
+                snapshot.grantId, safeRedeemMarker);
+        }
+        else
+        {
+            CharacterDatabase.DirectExecute(
+                "UPDATE `_宣传奖励流水` SET `处理令牌`='' "
+                "WHERE `流水ID`={} AND `处理令牌`='{}'",
+                snapshot.grantId, safeRedeemMarker);
+        }
+        return;
+    }
+
+    if (!success)
+    {
+        sPromotionRewardMgr->CancelItemCapture(player, snapshot.grantId);
+        CharacterDatabase.DirectExecute(
+            "UPDATE `_宣传奖励流水` SET `处理令牌`='' "
+            "WHERE `流水ID`={} AND `处理令牌`='{}'",
+            snapshot.grantId, safeRedeemMarker);
+        return;
+    }
+
+    std::vector<uint32> newItemGuids = sPromotionRewardMgr->EndItemCapture(player, snapshot.grantId);
+    for (uint32 itemGuid : snapshot.rewardReceipt.itemGuids)
+        AppendUniqueGuid(newItemGuids, itemGuid);
+    std::sort(newItemGuids.begin(), newItemGuids.end());
+
+    uint32 afterDays = snapshot.beforeDays;
+    if (PromotionPlayerData* data = sPromotionRewardMgr->GetPlayerData(player->GetGUID().GetCounter()))
+        afterDays = data->days;
+
+    uint32 oldPromotionGuid = snapshot.oldItemGuids.empty() ? 0 : snapshot.oldItemGuids.front();
+    uint32 newPromotionGuid = FindPromotionItemGuid(player, newItemGuids);
+    std::string guidList = JoinGuids(newItemGuids);
+    std::string resourceSnapshot = BuildRedeemResourceSnapshot(
+        rewardId, snapshot.beforeDays, afterDays, snapshot.oldItemGuids, newItemGuids,
+        snapshot.rewardReceipt, snapshot.receiptComplete, snapshot.receiptError);
+
+    uint32 actualAccountId = player->GetSession()->GetAccountId();
+    uint32 actualCharacterGuid = player->GetGUID().GetCounter();
+    std::string accountName;
+    if (QueryResult account = LoginDatabase.Query("SELECT `username` FROM `account` WHERE `id`={}", actualAccountId))
+        accountName = account->Fetch()[0].Get<std::string>();
+
+    std::string actualCode = code.empty() ? snapshot.code : code;
+    std::string safeRequestId = EscapeCharacterString(snapshot.requestId);
+    std::string safeCode = EscapeCharacterString(actualCode);
+    std::string safeCharacterName = EscapeCharacterString(player->GetName());
+    std::string safeAccountName = EscapeCharacterString(accountName);
+    std::string safeIp = EscapeCharacterString(player->GetSession()->GetRemoteAddress());
+    std::string safeGuidList = EscapeCharacterString(guidList);
+    std::string safeResourceSnapshot = EscapeCharacterString(resourceSnapshot);
+    std::string exchangeRollbackStatus = snapshot.receiptComplete ? "NONE" : "DEBT";
+    std::string safeReceiptError = EscapeCharacterString(snapshot.receiptError);
+
+    CharacterDatabase.DirectExecute(
+        "INSERT INTO `_宣传兑换流水` "
+        "(`奖励流水ID`,`提交ID`,`任务ID`,`账号ID`,`request_id`,`CDK`,`兑换角色GUID`,`兑换角色名`,"
+        "`兑换账号名`,`兑换IP`,`兑换时间`,`兑换前宣传天数`,`兑换后宣传天数`,`旧宣传物品GUID`,"
+        "`新宣传物品GUID`,`新增奖励GUID`,`资源快照`,`回滚状态`,`回滚错误`) VALUES "
+        "({},{},{},{},'{}','{}',{},'{}','{}','{}',NOW(),{},{},{},{},'{}','{}','{}','{}') "
+        "ON DUPLICATE KEY UPDATE `奖励流水ID`=VALUES(`奖励流水ID`)",
+        snapshot.grantId, snapshot.submissionId, snapshot.taskId, actualAccountId,
+        safeRequestId, safeCode, actualCharacterGuid, safeCharacterName, safeAccountName, safeIp,
+        snapshot.beforeDays, afterDays, oldPromotionGuid, newPromotionGuid, safeGuidList, safeResourceSnapshot,
+        exchangeRollbackStatus, safeReceiptError);
+
+    QueryResult recorded = CharacterDatabase.Query(
+        "SELECT `兑换角色GUID`,`账号ID`,`CDK` FROM `_宣传兑换流水` WHERE `奖励流水ID`={}",
+        snapshot.grantId);
+    bool receiptRecorded = false;
+    if (recorded)
+    {
+        Field* recordedFields = recorded->Fetch();
+        receiptRecorded = recordedFields[0].Get<uint64>() == actualCharacterGuid &&
+            recordedFields[1].Get<uint32>() == actualAccountId &&
+            recordedFields[2].Get<std::string>() == actualCode;
+    }
+
+    if (!receiptRecorded)
+    {
+        CharacterDatabase.DirectExecute(
+            "UPDATE `_宣传奖励流水` SET `回滚状态`='DEBT',`回滚时间`=NOW(),"
+            "`回滚错误`='CDK奖励已发放，但实际兑换回执写入失败' "
+            "WHERE `流水ID`={} AND `回滚状态`='NONE' AND `处理令牌`='{}'",
+            snapshot.grantId, safeRedeemMarker);
+        return;
+    }
+
+    if (!snapshot.receiptComplete)
+    {
+        CharacterDatabase.DirectExecute(
+            "UPDATE `_宣传奖励流水` SET `处理令牌`='',`回滚状态`='DEBT',`回滚时间`=NOW(),"
+            "`回滚错误`='{}' WHERE `流水ID`={} AND `处理令牌`='{}'",
+            safeReceiptError, snapshot.grantId, safeRedeemMarker);
+        return;
+    }
+
+    CharacterDatabase.DirectExecute(
+        "UPDATE `_宣传奖励流水` SET `处理令牌`='',`回滚错误`='' "
+        "WHERE `流水ID`={} AND `处理令牌`='{}'",
+        snapshot.grantId, safeRedeemMarker);
 }
 
 bool PromotionRewardAuditMgr::RequestRollback(std::uint64_t submissionId, std::string const& reason)
@@ -705,7 +1001,7 @@ bool PromotionRewardAuditMgr::RequestRollback(std::uint64_t submissionId, std::s
 bool PromotionRewardAuditMgr::RollbackGrant(std::uint64_t grantId)
 {
     QueryResult result = CharacterDatabase.Query(
-        "SELECT `发放模式`,`CDK`,`发放状态`,`回滚状态` "
+        "SELECT `发放模式`,`CDK`,`发放状态`,`回滚状态`,`处理令牌` "
         "FROM `_宣传奖励流水` WHERE `流水ID`={}", grantId);
     if (!result)
         return false;
@@ -715,9 +1011,19 @@ bool PromotionRewardAuditMgr::RollbackGrant(std::uint64_t grantId)
     std::string code = fields[1].Get<std::string>();
     std::string grantStatus = fields[2].Get<std::string>();
     std::string rollbackStatus = fields[3].Get<std::string>();
+    std::string processingToken = fields[4].Get<std::string>();
 
     if (rollbackStatus == "SUCCESS")
         return true;
+
+    if (processingToken.rfind("REDEEM:", 0) == 0)
+    {
+        CharacterDatabase.DirectExecute(
+            "UPDATE `_宣传奖励流水` SET `回滚错误`='CDK正在兑换，等待兑换回执完成后追回' "
+            "WHERE `流水ID`={} AND `处理令牌`='{}' AND `回滚状态`='PENDING'",
+            grantId, EscapeCharacterString(processingToken));
+        return false;
+    }
 
     if (grantStatus == "PROCESSING")
     {

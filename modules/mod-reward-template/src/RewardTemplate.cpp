@@ -201,6 +201,17 @@ bool RewardTemplate::GiveRewardWithoutItems(Player* player, uint32 rewardId, boo
     return GiveRewardInternal(player, rewardId, checkChance, showNotification, false, nullptr);
 }
 
+bool RewardTemplate::GiveRewardWithoutItemsWithReceipt(Player* player, uint32 rewardId,
+    RewardGrantReceipt& receipt, bool checkChance, bool showNotification)
+{
+    receipt = {};
+    bool success = GiveRewardInternal(player, rewardId, checkChance, showNotification, false, &receipt);
+    if (!success)
+        receipt = {};
+
+    return success;
+}
+
 bool RewardTemplate::GiveRewardInternal(Player* player, uint32 rewardId, bool checkChance, bool showNotification,
     bool processItems, RewardGrantReceipt* receipt)
 {

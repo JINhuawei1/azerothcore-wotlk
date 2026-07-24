@@ -14,13 +14,18 @@ struct PromotionRedeemSnapshot
 {
     std::uint64_t submissionId = 0;
     std::uint64_t grantId = 0;
+    std::uint32_t taskId = 0;
+    std::string requestId;
     std::string code;
+    std::string redeemToken;
     std::uint32_t accountId = 0;
     std::uint32_t characterGuid = 0;
     std::uint32_t beforeDays = 0;
     std::vector<std::uint32_t> oldItemGuids;
     std::vector<std::uint32_t> newItemGuids;
     RewardGrantReceipt rewardReceipt;
+    bool receiptComplete = true;
+    std::string receiptError;
 };
 
 class PromotionRewardAuditMgr
