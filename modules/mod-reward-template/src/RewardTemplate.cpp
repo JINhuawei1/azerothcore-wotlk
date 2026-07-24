@@ -20,6 +20,7 @@
 #include <random>
 #include <limits>
 #include <array>
+#include <unordered_set>
 
 namespace
 {
@@ -188,7 +189,11 @@ bool RewardTemplate::GiveRewardWithReceipt(Player* player, uint32 rewardId, Rewa
     bool checkChance, bool showNotification)
 {
     receipt = {};
-    return GiveRewardInternal(player, rewardId, checkChance, showNotification, true, &receipt);
+    bool success = GiveRewardInternal(player, rewardId, checkChance, showNotification, true, &receipt);
+    if (!success)
+        receipt = {};
+
+    return success;
 }
 
 bool RewardTemplate::GiveRewardWithoutItems(Player* player, uint32 rewardId, bool checkChance, bool showNotification)
@@ -540,12 +545,47 @@ bool RewardTemplate::ProcessRewardItem(Player* player, const RewardItemEntry& it
     if (msg != EQUIP_ERR_OK)
         return false;
 
+    // StoreNewItem 返回跨槽发放时的最后一个对象；先记录每个目标位置已有的 GUID，
+    // 再从发放后的所有目标位置收集真正新建的对象，避免漏记或把已有堆叠误当成新增物品。
+    std::unordered_set<uint32> existingGuids;
+    if (receipt)
+    {
+        for (ItemPosCount const& destination : dest)
+        {
+            if (Item* existingItem = player->GetItemByPos(destination.pos))
+                existingGuids.insert(existingItem->GetGUID().GetCounter());
+        }
+    }
+
     Item* newItem = player->StoreNewItem(dest, item.ItemId, true, Item::GenerateItemRandomPropertyId(item.ItemId));
     if (!newItem)
         return false;
 
     if (receipt)
-        receipt->itemGuids.push_back(newItem->GetGUID().GetCounter());
+    {
+        std::unordered_set<uint32> capturedGuids;
+        for (ItemPosCount const& destination : dest)
+        {
+            Item* storedItem = player->GetItemByPos(destination.pos);
+            if (!storedItem)
+                continue;
+
+            uint32 guid = storedItem->GetGUID().GetCounter();
+            if (existingGuids.find(guid) != existingGuids.end() || !capturedGuids.insert(guid).second)
+                continue;
+
+            receipt->itemGuids.push_back(guid);
+        }
+
+        // 保留对非标准存储实现的兼容：若目标位置无法回读，使用 StoreNewItem
+        // 返回对象作为兜底，但仍排除已有堆叠 GUID。
+        if (capturedGuids.empty())
+        {
+            uint32 guid = newItem->GetGUID().GetCounter();
+            if (existingGuids.find(guid) == existingGuids.end())
+                receipt->itemGuids.push_back(guid);
+        }
+    }
 
     player->SendNewItem(newItem, item.Count, true, false);
     return true;

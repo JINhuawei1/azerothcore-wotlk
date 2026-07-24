@@ -14,6 +14,14 @@ bool ConsumeReceiptOnce(std::map<std::uint64_t, bool>& consumed, std::uint64_t g
 
     return consumed.emplace(grantId, true).second;
 }
+
+bool CompleteReceiptGrant(bool success, RewardGrantReceipt& receipt)
+{
+    if (!success)
+        receipt = {};
+
+    return success;
+}
 }
 
 int main()
@@ -22,7 +30,7 @@ int main()
     failed.itemGuids = { 101 };
     failed.moneyDelta = 25;
     failed.resourceDeltas["泡点"] = 3;
-    failed = {};
+    assert(!CompleteReceiptGrant(false, failed));
 
     assert(failed.itemGuids.empty());
     assert(failed.moneyDelta == 0);
