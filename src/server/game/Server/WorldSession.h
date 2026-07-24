@@ -1145,7 +1145,6 @@ private:
     // logging helper
     void LogUnexpectedOpcode(WorldPacket* packet, char const* status, const char* reason);
     void LogUnprocessedTail(WorldPacket* packet);
-    void FlushPlayerCastRateLimitLog();
     void ResetPlayerCastRateLimitState();
 
     // EnumData helpers
@@ -1197,9 +1196,6 @@ private:
     bool _kicked;
     bool _hasLargeDamageTextAddon = false;
     PlayerCastRateLimiter _playerCastRateLimiter;
-    PlayerCastRateLimitLogAccumulator _playerCastRateLimitLog;
-    uint64 _lastCastRateLimitLogMs = 0;
-    bool _hasCastRateLimitLog = false;
     // Packets cooldown
     time_t _calendarEventCreationCooldown;
 

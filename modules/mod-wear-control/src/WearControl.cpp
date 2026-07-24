@@ -362,6 +362,29 @@ uint32 GetPlayerWearLevel(Player* player, uint8 limitType, uint8 slotPosition)
     }
 }
 
+bool CanUnlockPlayerWearLevel(Player* player, uint8 limitType, uint8 slotPosition, uint32 wearLevel, std::string* error)
+{
+    if (wearLevel == 0)
+        return true;
+
+    if (!player || limitType == WEAR_LIMIT_NONE || slotPosition == 0)
+    {
+        if (error)
+            *error = "穿戴权限参数无效";
+        return false;
+    }
+
+    uint32 const currentLevel = GetPlayerWearLevel(player, limitType, slotPosition);
+    if (CanAdvancePermissionLevel(currentLevel, wearLevel))
+        return true;
+
+    if (error)
+        *error = Acore::StringFormat("穿戴权限必须逐级解锁：{}槽位 {} 当前 {} 级，请先解锁 {} 级。",
+            GetLimitName(limitType), slotPosition, currentLevel, wearLevel - 1);
+
+    return false;
+}
+
 bool UnlockPlayerWearLevel(Player* player, uint8 limitType, uint8 slotPosition, uint32 wearLevel, bool notify)
 {
     if (wearLevel == 0)
@@ -373,6 +396,13 @@ bool UnlockPlayerWearLevel(Player* player, uint8 limitType, uint8 slotPosition, 
     uint32 const currentLevel = GetPlayerWearLevel(player, limitType, slotPosition);
     if (currentLevel >= wearLevel)
         return true;
+
+    if (!CanAdvancePermissionLevel(currentLevel, wearLevel))
+    {
+        LOG_INFO("server.loading", "[穿戴权限-越级写入拒绝] 玩家={} GUID={} 类型={} 槽位={} 当前等级={} 请求等级={}",
+            player->GetName(), player->GetGUID().GetCounter(), uint32(limitType), uint32(slotPosition), currentLevel, wearLevel);
+        return false;
+    }
 
     if (!WearLevelPermissionSupportsSlots())
     {
@@ -391,9 +421,6 @@ bool UnlockPlayerWearLevel(Player* player, uint8 limitType, uint8 slotPosition, 
         std::lock_guard<std::mutex> guard(g_playerWearLevelsMutex);
         g_playerWearLevels[playerGuid][MakePermissionKey(limitType, slotPosition)] = std::max(currentLevel, wearLevel);
     }
-
-    LOG_INFO("server.loading", "[穿戴权限-写入完成] 玩家={} GUID={} 类型={} 槽位={} 新等级={}",
-        player->GetName(), playerGuid, uint32(limitType), uint32(slotPosition), wearLevel);
 
     if (notify && player->GetSession())
         ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff00[穿戴控制]|r 已解锁{}槽位 {} 的 {} 级穿戴权限。",

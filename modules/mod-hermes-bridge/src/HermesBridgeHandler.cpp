@@ -17,6 +17,7 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include "WorldSessionMgr.h"
+#include "../../mod-twelve-zodiac/src/TwelveZodiacHermesApi.h"
 #include "../../mod-boundary/src/BoundaryMgr.h"
 #include "../../mod-breakthrough/src/BreakthroughSystem.h"
 #include "../../mod-breakthrough/src/BreakthroughSkillSystem.h"
@@ -137,7 +138,11 @@ namespace
         HERMES_METHOD_TOOLTIP_LIST_PENDING = 503,
         HERMES_METHOD_MALL_GET_CATEGORIES = 520,
         HERMES_METHOD_MALL_GET_ITEMS = 521,
-        HERMES_METHOD_MALL_PURCHASE = 522
+        HERMES_METHOD_MALL_PURCHASE = 522,
+        HERMES_METHOD_ZODIAC_GET_STATE = 540,
+        HERMES_METHOD_ZODIAC_GET_DETAIL = 541,
+        HERMES_METHOD_ZODIAC_EQUIP = 542,
+        HERMES_METHOD_ZODIAC_UNEQUIP = 543
     };
 
     enum HermesSchemaId : uint16
@@ -234,6 +239,10 @@ namespace
     JsonRpcDispatchResult HandleMallGetCategories(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method);
     JsonRpcDispatchResult HandleMallGetItems(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method);
     JsonRpcDispatchResult HandleMallPurchase(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method);
+    JsonRpcDispatchResult HandleZodiacGetState(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method);
+    JsonRpcDispatchResult HandleZodiacGetDetail(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method);
+    JsonRpcDispatchResult HandleZodiacEquip(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method);
+    JsonRpcDispatchResult HandleZodiacUnequip(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method);
 
     struct HermesMethodDescriptor
     {
@@ -298,7 +307,11 @@ namespace
         { "tooltip.listPending", HERMES_METHOD_TOOLTIP_LIST_PENDING, HERMES_LANE_RPC, HERMES_CODEC_JSON, "active", SEC_PLAYER, 16, HandleTooltipListPending },
         { "mall.getCategories", HERMES_METHOD_MALL_GET_CATEGORIES, HERMES_LANE_RPC, HERMES_CODEC_JSON, "active", SEC_PLAYER, 16, HandleMallGetCategories },
         { "mall.getItems", HERMES_METHOD_MALL_GET_ITEMS, HERMES_LANE_RPC, HERMES_CODEC_JSON, "active", SEC_PLAYER, 32, HandleMallGetItems },
-        { "mall.purchase", HERMES_METHOD_MALL_PURCHASE, HERMES_LANE_RPC, HERMES_CODEC_JSON, "active", SEC_PLAYER, 8, HandleMallPurchase }
+        { "mall.purchase", HERMES_METHOD_MALL_PURCHASE, HERMES_LANE_RPC, HERMES_CODEC_JSON, "active", SEC_PLAYER, 8, HandleMallPurchase },
+        { "zodiac.getState", HERMES_METHOD_ZODIAC_GET_STATE, HERMES_LANE_RPC, HERMES_CODEC_JSON, "active", SEC_PLAYER, 16, HandleZodiacGetState },
+        { "zodiac.getDetail", HERMES_METHOD_ZODIAC_GET_DETAIL, HERMES_LANE_RPC, HERMES_CODEC_JSON, "active", SEC_PLAYER, 32, HandleZodiacGetDetail },
+        { "zodiac.equip", HERMES_METHOD_ZODIAC_EQUIP, HERMES_LANE_RPC, HERMES_CODEC_JSON, "active", SEC_PLAYER, 8, HandleZodiacEquip },
+        { "zodiac.unequip", HERMES_METHOD_ZODIAC_UNEQUIP, HERMES_LANE_RPC, HERMES_CODEC_JSON, "active", SEC_PLAYER, 8, HandleZodiacUnequip }
     };
 
     struct HermesRateLimitBucket
@@ -1317,6 +1330,28 @@ namespace
         return true;
     }
 
+    bool CanUnlockHermesSynthesisWearSlots(Player& player, HermesSynthesisEntry const& entry, std::string& message)
+    {
+        if (entry.UnlockWearLevel == 0)
+            return true;
+
+        std::string rewardItems = GetHermesSynthesisRewardItemList(entry.RewardId);
+        uint32 const unlockItemId = ParseHermesSynthesisFirstRewardItem(rewardItems).first;
+        uint8 const limitType = WearControl::GetExclusiveLimit(unlockItemId);
+        std::vector<uint8> const slots = WearControl::GetItemWearSlots(unlockItemId, limitType);
+        if (limitType == WEAR_LIMIT_NONE || slots.empty())
+        {
+            message = "产物没有配置可解锁的专属槽位";
+            return false;
+        }
+
+        for (uint8 slotPosition : slots)
+            if (!WearControl::CanUnlockPlayerWearLevel(&player, limitType, slotPosition, entry.UnlockWearLevel, &message))
+                return false;
+
+        return true;
+    }
+
     std::string BuildHermesSynthesisListPayload(Player& player, uint32 offset, uint32 limit, uint32 classType)
     {
         std::vector<HermesSynthesisEntry> entries = LoadHermesSynthesisEntries();
@@ -1387,6 +1422,13 @@ namespace
 
         if (entry.RewardId == 0 || !sRewardTemplate->IsEnabled() || !sRewardTemplate->GetRewardTemplate(entry.RewardId))
             return BuildHermesSynthesisResultPayload(false, entry.ItemId, entry.UpgradeLevel, "合成奖励模板不存在或奖励系统未启用");
+
+        if (entry.UnlockWearLevel > 0)
+        {
+            std::string prerequisiteError;
+            if (!CanUnlockHermesSynthesisWearSlots(player, entry, prerequisiteError))
+                return BuildHermesSynthesisResultPayload(false, entry.ItemId, entry.UpgradeLevel, prerequisiteError);
+        }
 
         if (entry.RequirementId != 0)
         {
@@ -3245,6 +3287,8 @@ namespace
             "ZDYUI_CH",
             "ZDYUI_TJ",
             "MAGICHIT",
+            "ZODIACOPEN",
+            "ZODIACDMG",
             "TALENTSOUL",
             "POPUPTPL",
             "DarkHardcore",
@@ -5254,6 +5298,44 @@ namespace
         MallSystem::PurchaseResult purchase = sMallSystem->PurchaseItem(player, itemId);
         bool const success = purchase.status == MallSystem::PurchaseStatus::SUCCESS;
         return HermesPayloadResult(idText, "mall.purchase.v1", BuildHermesMallStatusPayload(success, purchase.message));
+    }
+
+    JsonRpcDispatchResult HandleZodiacGetState(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method)
+    {
+        (void)frame;
+        (void)request;
+        (void)method;
+
+        return HermesPayloadResult(idText, "zodiac.state.v1", TwelveZodiacHermesGetState(session.GetPlayer()));
+    }
+
+    JsonRpcDispatchResult HandleZodiacGetDetail(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method)
+    {
+        (void)frame;
+        (void)method;
+
+        uint32 const zodiacId = ParseHermesUInt(ExtractPayloadParam(request), 0);
+        return HermesPayloadResult(idText, "zodiac.detail.v1", TwelveZodiacHermesGetDetail(session.GetPlayer(), zodiacId));
+    }
+
+    JsonRpcDispatchResult HandleZodiacEquip(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method)
+    {
+        (void)frame;
+        (void)method;
+
+        std::vector<std::string> const fields = SplitHermesPayloadFields(ExtractPayloadParam(request), '|');
+        uint32 const zodiacId = fields.size() > 0 ? ParseHermesUInt(fields[0], 0) : 0;
+        uint32 const slot = fields.size() > 1 ? ParseHermesUInt(fields[1], std::numeric_limits<uint32>::max()) : std::numeric_limits<uint32>::max();
+        return HermesPayloadResult(idText, "zodiac.equip.v1", TwelveZodiacHermesEquip(session.GetPlayer(), zodiacId, slot));
+    }
+
+    JsonRpcDispatchResult HandleZodiacUnequip(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method)
+    {
+        (void)frame;
+        (void)method;
+
+        uint32 const slot = ParseHermesUInt(ExtractPayloadParam(request), std::numeric_limits<uint32>::max());
+        return HermesPayloadResult(idText, "zodiac.unequip.v1", TwelveZodiacHermesUnequip(session.GetPlayer(), slot));
     }
 
     JsonRpcDispatchResult HandleTooltipQuery(WorldSession& session, HermesFrameV2& frame, Json::Value const& request, std::string const& idText, std::string const& method)

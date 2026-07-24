@@ -278,8 +278,8 @@ JOIN `item_template` target_item ON target_item.`entry` = source_item.`entry` + 
 
 INSERT INTO `_模板_需求` (`注释`, `id`, `需要人物等级`, `是否消耗物品`, `消耗物品`, `客户端显示`)
 SELECT CONCAT('仙门装备合成需求：', source_item.`name`, ' → ', target_item.`name`), recipe.`template_id`, '1', 0,
-       CONCAT(recipe.`source_entry`, ' 3,62001 10000,62002 5000'),
-       CONCAT('消耗 ', source_item.`name`, ' x3、灵气石 x10000、突破石 x5000')
+       CONCAT(recipe.`source_entry`, ' 2,62001 500,62002 100'),
+       CONCAT('消耗 ', source_item.`name`, ' x2、灵气石 x500、突破石 x100')
 FROM `_xianqi_new_recipes` recipe
 JOIN `item_template` source_item ON source_item.`entry` = recipe.`source_entry`
 JOIN `item_template` target_item ON target_item.`entry` = recipe.`target_entry`

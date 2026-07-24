@@ -8,7 +8,7 @@
 #include "hermes_bridge_recv_queue_policy.h"
 #include "hermes_bridge_send_queue_policy.h"
 
-#define HERMES_BRIDGE_VERSION "0.7.84-recvpump-watchdog"
+#define HERMES_BRIDGE_VERSION "0.7.85-zodiac-rpc"
 #define HERMES_STRINGIFY_VALUE(x) #x
 #define HERMES_STRINGIFY(x) HERMES_STRINGIFY_VALUE(x)
 #define HERMES_FRAME_SCRIPT_EXECUTE_RVA 0x00419210
@@ -92,6 +92,10 @@
 #define HERMES_METHOD_MALL_GET_CATEGORIES 520
 #define HERMES_METHOD_MALL_GET_ITEMS 521
 #define HERMES_METHOD_MALL_PURCHASE 522
+#define HERMES_METHOD_ZODIAC_GET_STATE 540
+#define HERMES_METHOD_ZODIAC_GET_DETAIL 541
+#define HERMES_METHOD_ZODIAC_EQUIP 542
+#define HERMES_METHOD_ZODIAC_UNEQUIP 543
 #define HERMES_SEND_QUEUE_CAPACITY 256
 #define HERMES_SEND_QUEUE_PAYLOAD_SIZE 512
 #define HERMES_SEND_QUEUE_DIAGNOSTIC_RESERVE 64
@@ -1115,6 +1119,18 @@ static WORD ResolveHermesMethodId(const char* method)
 
     if (lstrcmpiA(method, "mall.purchase") == 0)
         return HERMES_METHOD_MALL_PURCHASE;
+
+    if (lstrcmpiA(method, "zodiac.getState") == 0)
+        return HERMES_METHOD_ZODIAC_GET_STATE;
+
+    if (lstrcmpiA(method, "zodiac.getDetail") == 0)
+        return HERMES_METHOD_ZODIAC_GET_DETAIL;
+
+    if (lstrcmpiA(method, "zodiac.equip") == 0)
+        return HERMES_METHOD_ZODIAC_EQUIP;
+
+    if (lstrcmpiA(method, "zodiac.unequip") == 0)
+        return HERMES_METHOD_ZODIAC_UNEQUIP;
 
     return 0;
 }
@@ -2162,7 +2178,11 @@ static BOOL ShouldTraceClientFrame(WORD methodId)
         methodId == HERMES_METHOD_MALL_GET_ITEMS ||
         methodId == HERMES_METHOD_SYNTHESIS_LIST ||
         methodId == HERMES_METHOD_SYNTHESIS_DO ||
-        methodId == HERMES_METHOD_MALL_PURCHASE;
+        methodId == HERMES_METHOD_MALL_PURCHASE ||
+        methodId == HERMES_METHOD_ZODIAC_GET_STATE ||
+        methodId == HERMES_METHOD_ZODIAC_GET_DETAIL ||
+        methodId == HERMES_METHOD_ZODIAC_EQUIP ||
+        methodId == HERMES_METHOD_ZODIAC_UNEQUIP;
 }
 
 static BOOL BuildAddonMessageCoalesceKey(const char* payload, DWORD payloadSize, char* output, DWORD outputSize)

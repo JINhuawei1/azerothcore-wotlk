@@ -1,5 +1,6 @@
 #include "ScriptMgr.h"
 #include "AddonThrottle.h"
+#include "AnticheatMgr.h"
 
 #include "Cell.h"
 #include "CellImpl.h"
@@ -7710,9 +7711,16 @@ public:
             return false;
         }
 
+        auto authorizedTeleport = [player](uint32 mapId, float x, float y, float z, float orientation)
+        {
+            // 插件进入深渊地图属于服务端授权传送，跳过落地瞬间产生的移动包检测。
+            sAnticheatMgr->SkipMovementChecksForTeleport(player->GetGUID());
+            return player->TeleportTo(mapId, x, y, z, orientation);
+        };
+
         if (AreaTriggerTeleport const* trigger = sObjectMgr->GetMapEntranceTrigger(chapter.mapId))
         {
-            if (player->TeleportTo(trigger->target_mapId, trigger->target_X, trigger->target_Y, trigger->target_Z, trigger->target_Orientation))
+            if (authorizedTeleport(trigger->target_mapId, trigger->target_X, trigger->target_Y, trigger->target_Z, trigger->target_Orientation))
                 return true;
         }
 
@@ -7723,7 +7731,7 @@ public:
         {
             if (mapEntry->GetEntrancePos(entranceMapId, entranceX, entranceY) && entranceMapId >= 0)
             {
-                if (player->TeleportTo(static_cast<uint32>(entranceMapId), entranceX, entranceY, player->GetPositionZ(), player->GetOrientation()))
+                if (authorizedTeleport(static_cast<uint32>(entranceMapId), entranceX, entranceY, player->GetPositionZ(), player->GetOrientation()))
                     return true;
             }
         }
@@ -7731,7 +7739,7 @@ public:
         if (chapter.abyssSummonMapId != 0 &&
             (chapter.abyssSummonX != 0.0f || chapter.abyssSummonY != 0.0f || chapter.abyssSummonZ != 0.0f))
         {
-            if (player->TeleportTo(chapter.abyssSummonMapId, chapter.abyssSummonX, chapter.abyssSummonY, chapter.abyssSummonZ, chapter.abyssSummonO))
+            if (authorizedTeleport(chapter.abyssSummonMapId, chapter.abyssSummonX, chapter.abyssSummonY, chapter.abyssSummonZ, chapter.abyssSummonO))
                 return true;
         }
 

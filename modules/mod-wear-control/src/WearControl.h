@@ -38,6 +38,7 @@ bool IsLimitedTo(uint32 itemId, uint8 limitType);
 uint8 GetExclusiveLimit(uint32 itemId);
 std::vector<uint8> GetItemWearSlots(uint32 itemId, uint8 limitType);
 uint32 GetPlayerWearLevel(Player* player, uint8 limitType, uint8 slotPosition);
+bool CanUnlockPlayerWearLevel(Player* player, uint8 limitType, uint8 slotPosition, uint32 wearLevel, std::string* error = nullptr);
 bool UnlockPlayerWearLevel(Player* player, uint8 limitType, uint8 slotPosition, uint32 wearLevel, bool notify = true);
 bool CanEquipItem(Player* player, uint32 itemId, uint8 limitType, uint8 slotPosition, std::string* error = nullptr, bool showRequirementMessages = true);
 char const* GetLimitName(uint8 limitType);

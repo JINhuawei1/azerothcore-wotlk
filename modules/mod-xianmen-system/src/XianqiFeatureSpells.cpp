@@ -27,6 +27,7 @@
 #include "UnitScript.h"
 #include "Util.h"
 #include "XianmenArtifactSlots.h"
+#include "XianqiSoulDebtTimers.h"
 
 #include <algorithm>
 #include <array>
@@ -2045,20 +2046,12 @@ void ProcessScheduledEffects(Player* player, PlayerFeatureState& state, uint32 d
 
 void ProcessSoulDebts(Player* player, PlayerFeatureState& state, uint32 diff)
 {
-    for (auto itr = state.soulDebtMs.begin(); itr != state.soulDebtMs.end();)
+    std::vector<ObjectGuid> const expired = Xianqi::ExtractExpiredSoulDebts(state.soulDebtMs, diff);
+    for (ObjectGuid const& targetGuid : expired)
     {
-        if (itr->second > diff)
-        {
-            itr->second -= diff;
-            ++itr;
-            continue;
-        }
-
-        Unit* target = ObjectAccessor::GetUnit(*player, itr->first);
+        Unit* target = ObjectAccessor::GetUnit(*player, targetGuid);
         if (target && IsValidFeatureTarget(player, target))
             DealAreaScaled(player, target, state, 385041, GetFeatureCoeff(385041, 420), SPELL_SCHOOL_MASK_SHADOW, 8.0f, 6, false, true);
-
-        itr = state.soulDebtMs.erase(itr);
     }
 }
 

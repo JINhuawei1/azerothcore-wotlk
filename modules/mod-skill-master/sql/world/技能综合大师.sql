@@ -11,13 +11,14 @@
 --
 -- =====================================================
 
--- 删除已存在的NPC (默认示例NPC)
-DELETE FROM `creature_template` WHERE `entry` = 60002;
-
--- 创建技能综合大师NPC (示例)
--- 你可以复制此模板创建不同外观的技能大师NPC
+-- 创建技能综合大师NPC；已存在时只绑定功能字段，保留原模型和缩放配置
 INSERT INTO `creature_template` (`entry`, `difficulty_entry_1`, `difficulty_entry_2`, `difficulty_entry_3`, `KillCredit1`, `KillCredit2`, `name`, `subname`, `IconName`, `gossip_menu_id`, `minlevel`, `maxlevel`, `exp`, `faction`, `npcflag`, `speed_walk`, `speed_run`, `speed_swim`, `speed_flight`, `detection_range`, `scale`, `rank`, `dmgschool`, `DamageModifier`, `BaseAttackTime`, `RangeAttackTime`, `BaseVariance`, `RangeVariance`, `unit_class`, `unit_flags`, `unit_flags2`, `dynamicflags`, `family`, `trainer_type`, `trainer_spell`, `trainer_class`, `trainer_race`, `type`, `type_flags`, `lootid`, `pickpocketloot`, `skinloot`, `PetSpellDataId`, `VehicleId`, `mingold`, `maxgold`, `AIName`, `MovementType`, `HoverHeight`, `HealthModifier`, `ManaModifier`, `ArmorModifier`, `ExperienceModifier`, `RacialLeader`, `movementId`, `RegenHealth`, `mechanic_immune_mask`, `spell_school_immune_mask`, `flags_extra`, `ScriptName`, `VerifiedBuild`) VALUES
-(60002, 0, 0, 0, 0, 0, '技能综合大师', '职业技能|武器技能|骑术', 'Train', 0, 80, 80, 2, 35, 17, 1, 1.14286, 1, 1, 20, 1.5, 0, 0, 1, 2000, 2000, 1, 1, 1, 2, 2048, 0, 0, 2, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, '', 0, 1, 10, 1, 1, 1, 0, 0, 1, 0, 0, 2, 'npc_skill_master', NULL);
+(60002, 0, 0, 0, 0, 0, '技能综合大师', '职业技能|专业技能|武器技能|骑术', '', 0, 80, 80, 2, 35, 17, 1, 1.14286, 1, 1, 20, 1, 0, 0, 1, 2000, 2000, 1, 1, 1, 2, 2048, 0, 0, 2, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, '', 0, 1, 10, 1, 1, 1, 0, 0, 1, 0, 0, 2, 'npc_skill_master', NULL)
+ON DUPLICATE KEY UPDATE
+`npcflag` = `npcflag` | 17,
+`trainer_type` = 2,
+`IconName` = '',
+`ScriptName` = 'npc_skill_master';
 
 -- =====================================================
 -- 关键字段说明：
@@ -30,12 +31,9 @@ INSERT INTO `creature_template` (`entry`, `difficulty_entry_1`, `difficulty_entr
 -- trainer_type = 2 - 避免核心按职业训练师 trainer_class 校验拦截购买请求
 -- =====================================================
 
--- 删除已存在的模型数据
-DELETE FROM `creature_template_model` WHERE `CreatureID` = 60002;
-
--- 添加NPC模型 (可自定义外观)
-INSERT INTO `creature_template_model` (`CreatureID`, `Idx`, `CreatureDisplayID`, `DisplayScale`, `Probability`, `VerifiedBuild`) VALUES
-(60002, 0, 3343, 1, 1, NULL);
+-- 仅在模型不存在时添加默认值，绝不覆盖已有模型和缩放配置
+INSERT IGNORE INTO `creature_template_model` (`CreatureID`, `Idx`, `CreatureDisplayID`, `DisplayScale`, `Probability`, `VerifiedBuild`) VALUES
+(60002, 0, 30721, 1.3, 1.3, 12340);
 
 -- 删除已存在的附加数据
 DELETE FROM `creature_template_addon` WHERE `entry` = 60002;
@@ -59,7 +57,7 @@ INSERT INTO `creature_template_addon` (`entry`, `path_id`, `mount`, `bytes1`, `b
 
 -- =====================================================
 -- 训练师技能数据（购买流程由核心默认处理器完成）
--- 通过引用行(-ID)聚合所有职业/武器/骑术训练师列表。
+-- 通过引用行(-ID)聚合所有职业/专业/武器/骑术训练师列表。
 -- 跨职业技能由核心 GetTrainerSpellState 自动判红，无法购买。
 -- =====================================================
 DELETE FROM `npc_trainer` WHERE `ID` = 60002;
@@ -84,6 +82,59 @@ INSERT INTO `npc_trainer` (`ID`, `SpellID`, `MoneyCost`, `ReqSkillLine`, `ReqSki
 (60002, -200017, 0, 0, 0, 0, 0),
 (60002, -200018, 0, 0, 0, 0, 0),
 (60002, -200019, 0, 0, 0, 0, 0),
+-- 主专业模板（炼金/锻造/附魔/工程/草药/铭文/珠宝/制皮/采矿/剥皮/裁缝）
+(60002, -201001, 0, 0, 0, 0, 0),
+(60002, -201002, 0, 0, 0, 0, 0),
+(60002, -201003, 0, 0, 0, 0, 0),
+(60002, -201004, 0, 0, 0, 0, 0),
+(60002, -201005, 0, 0, 0, 0, 0),
+(60002, -201006, 0, 0, 0, 0, 0),
+(60002, -201007, 0, 0, 0, 0, 0),
+(60002, -201008, 0, 0, 0, 0, 0),
+(60002, -201009, 0, 0, 0, 0, 0),
+(60002, -201010, 0, 0, 0, 0, 0),
+(60002, -201011, 0, 0, 0, 0, 0),
+(60002, -201012, 0, 0, 0, 0, 0),
+(60002, -201013, 0, 0, 0, 0, 0),
+(60002, -201014, 0, 0, 0, 0, 0),
+(60002, -201015, 0, 0, 0, 0, 0),
+(60002, -201016, 0, 0, 0, 0, 0),
+(60002, -201017, 0, 0, 0, 0, 0),
+(60002, -201018, 0, 0, 0, 0, 0),
+(60002, -201019, 0, 0, 0, 0, 0),
+(60002, -201020, 0, 0, 0, 0, 0),
+(60002, -201021, 0, 0, 0, 0, 0),
+(60002, -201022, 0, 0, 0, 0, 0),
+(60002, -201023, 0, 0, 0, 0, 0),
+(60002, -201024, 0, 0, 0, 0, 0),
+(60002, -201025, 0, 0, 0, 0, 0),
+(60002, -201026, 0, 0, 0, 0, 0),
+(60002, -201027, 0, 0, 0, 0, 0),
+(60002, -201028, 0, 0, 0, 0, 0),
+(60002, -201029, 0, 0, 0, 0, 0),
+(60002, -201030, 0, 0, 0, 0, 0),
+(60002, -201031, 0, 0, 0, 0, 0),
+(60002, -201032, 0, 0, 0, 0, 0),
+(60002, -201033, 0, 0, 0, 0, 0),
+(60002, -201034, 0, 0, 0, 0, 0),
+(60002, -201035, 0, 0, 0, 0, 0),
+(60002, -201036, 0, 0, 0, 0, 0),
+(60002, -201037, 0, 0, 0, 0, 0),
+(60002, -201038, 0, 0, 0, 0, 0),
+(60002, -201039, 0, 0, 0, 0, 0),
+(60002, -201040, 0, 0, 0, 0, 0),
+(60002, -201041, 0, 0, 0, 0, 0),
+(60002, -201042, 0, 0, 0, 0, 0),
+-- 次要专业模板（钓鱼/烹饪/急救）
+(60002, -202001, 0, 0, 0, 0, 0),
+(60002, -202002, 0, 0, 0, 0, 0),
+(60002, -202003, 0, 0, 0, 0, 0),
+(60002, -202004, 0, 0, 0, 0, 0),
+(60002, -202005, 0, 0, 0, 0, 0),
+(60002, -202006, 0, 0, 0, 0, 0),
+(60002, -202007, 0, 0, 0, 0, 0),
+(60002, -202008, 0, 0, 0, 0, 0),
+(60002, -202009, 0, 0, 0, 0, 0),
 -- 武器大师列表
 (60002, -11865, 0, 0, 0, 0, 0),
 (60002, -11866, 0, 0, 0, 0, 0),

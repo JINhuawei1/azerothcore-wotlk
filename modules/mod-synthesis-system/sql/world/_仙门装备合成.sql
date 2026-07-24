@@ -1,7 +1,7 @@
 ﻿SET NAMES utf8mb4;
 
 -- 仙门装备合成数据
--- 规则：当前阶同部位装备 x3 + 灵气石(62001) x10000 + 突破石(62002) x5000，合成下一阶同部位装备。
+-- 规则：当前阶同部位装备 x2 + 灵气石(62001) x500 + 突破石(62002) x100，合成下一阶同部位装备。
 -- 覆盖范围：20 阶；生成 19 段升级链，每段 96 件，共 1824 条合成配置。
 -- 每段包含：10 件仙器、10 职业 × 8 件仙装、5 件仙饰、1 件披风。
 -- 已排除：武器、衬衫、战袍、旧通用 8 件套。
@@ -236,8 +236,8 @@ SELECT
   recipe.`template_id` AS `id`,
   '1' AS `需要人物等级`,
   0 AS `是否消耗物品`,
-  CONCAT(recipe.`source_entry`, ' 3,62001 10000,62002 5000') AS `消耗物品`,
-  CONCAT('消耗 ', source_item.`name`, ' x3、灵气石 x10000、突破石 x5000') AS `客户端显示`
+  CONCAT(recipe.`source_entry`, ' 2,62001 500,62002 100') AS `消耗物品`,
+  CONCAT('消耗 ', source_item.`name`, ' x2、灵气石 x500、突破石 x100') AS `客户端显示`
 FROM `_xianmen_synthesis_recipe` recipe
 JOIN `item_template` source_item ON source_item.`entry` = recipe.`source_entry`
 JOIN `item_template` target_item ON target_item.`entry` = recipe.`target_entry`

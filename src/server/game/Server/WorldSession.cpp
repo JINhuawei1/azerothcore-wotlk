@@ -395,8 +395,6 @@ WorldSession::WorldSession(uint32 id, std::string&& name, std::shared_ptr<WorldS
 /// WorldSession destructor
 WorldSession::~WorldSession()
 {
-    FlushPlayerCastRateLimitLog();
-
     LoginDatabase.Execute("UPDATE account SET totaltime = {} WHERE id = {}", GetTotalTime(), GetAccountId());
 
     ///- unload player if not unloaded
@@ -734,13 +732,6 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
 
     if (!updater.ProcessUnsafe()) // <=> updater is of type MapSessionFilter
     {
-        uint64 const nowMs = GetTimeMS().count();
-        if (_hasCastRateLimitLog && nowMs - _lastCastRateLimitLogMs >= 2000)
-        {
-            FlushPlayerCastRateLimitLog();
-            _lastCastRateLimitLogMs = nowMs;
-        }
-
         // Send time sync packet every 10s.
         if (_timeSyncTimer > 0)
         {
@@ -1569,7 +1560,6 @@ void WorldSession::SetPlayer(Player* player)
 {
     if (_player != player)
     {
-        FlushPlayerCastRateLimitLog();
         ResetPlayerCastRateLimitState();
     }
 
@@ -1580,22 +1570,9 @@ void WorldSession::SetPlayer(Player* player)
         m_GUIDLow = _player->GetGUID().GetCounter();
 }
 
-void WorldSession::FlushPlayerCastRateLimitLog()
-{
-    std::optional<PlayerCastRateLimitLogSnapshot> snapshot = _playerCastRateLimitLog.Take();
-    if (!snapshot)
-        return;
-
-    LOG_INFO("server.loading", "[施法入口限流] 玩家={} GUID={} 技能={} 限制=20次/秒 突发=4 本窗口丢弃={}",
-        snapshot->playerName, snapshot->playerGuid, snapshot->spellId, snapshot->dropped);
-}
-
 void WorldSession::ResetPlayerCastRateLimitState()
 {
     _playerCastRateLimiter.Reset();
-    _playerCastRateLimitLog.Reset();
-    _lastCastRateLimitLogMs = 0;
-    _hasCastRateLimitLog = false;
 }
 
 void WorldSession::ProcessQueryCallbacks()

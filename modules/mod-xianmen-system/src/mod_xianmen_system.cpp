@@ -46,6 +46,7 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <list>
@@ -2464,26 +2465,33 @@ uint64 GetXianmenTrialKillContribution(Creature* creature)
     if (!creature)
         return 0;
 
-    switch (creature->GetEntry())
+    static constexpr std::array<uint64, 5> bossContributions = { 10, 20, 40, 80, 160 };
+    static constexpr std::array<uint64, 5> minionContributions = { 5, 10, 20, 40, 80 };
+
+    auto GetXianmenTrialTierIndex = [](uint32 entry) -> uint8
     {
-        case 800001:
-        case 800002:
-        case 800003:
-        case 800004:
-        case 800005:
-            return 10;
-        case 800011:
-        case 800012:
-        case 800013:
-        case 800014:
-        case 800015:
-        case 800016:
-        case 800017:
-        case 800018:
-            return 5;
-        default:
-            return 0;
-    }
+        if (entry <= 800000)
+            return std::numeric_limits<uint8>::max();
+
+        uint32 const relativeEntry = entry - 800000;
+        uint32 const tierIndex = relativeEntry / 100;
+        uint32 const creatureOffset = relativeEntry % 100;
+        if (tierIndex >= bossContributions.size()
+            || !((creatureOffset >= 1 && creatureOffset <= 5) || (creatureOffset >= 11 && creatureOffset <= 18)))
+            return std::numeric_limits<uint8>::max();
+
+        return uint8(tierIndex);
+    };
+
+    uint32 const relativeEntry = creature->GetEntry() - 800000;
+    uint32 const creatureOffset = relativeEntry % 100;
+    uint8 const tierIndex = GetXianmenTrialTierIndex(creature->GetEntry());
+    if (tierIndex == std::numeric_limits<uint8>::max())
+        return 0;
+
+    if (creatureOffset >= 1 && creatureOffset <= 5)
+        return bossContributions[tierIndex];
+    return minionContributions[tierIndex];
 }
 
 uint256 ScaleXianmenPercent(uint256 const& value, float percent)

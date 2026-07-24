@@ -37,6 +37,48 @@ enum CustomEntries : uint32
     NPC_RHINO = 800018
 };
 
+constexpr uint32 GUNDRAK_ENTRY_BASE = 800000;
+constexpr uint32 GUNDRAK_TIER_STRIDE = 100;
+constexpr uint32 GUNDRAK_TIER_COUNT = 5;
+
+bool IsGundrakCreatureOffset(uint32 offset)
+{
+    return (offset >= 1 && offset <= 5) || (offset >= 11 && offset <= 18);
+}
+
+uint32 GetGundrakTierIndex(uint32 entry)
+{
+    if (entry <= GUNDRAK_ENTRY_BASE)
+        return 0;
+
+    uint32 const relativeEntry = entry - GUNDRAK_ENTRY_BASE;
+    uint32 const tierIndex = relativeEntry / GUNDRAK_TIER_STRIDE;
+    uint32 const creatureOffset = relativeEntry % GUNDRAK_TIER_STRIDE;
+    if (tierIndex >= GUNDRAK_TIER_COUNT || !IsGundrakCreatureOffset(creatureOffset))
+        return 0;
+
+    return tierIndex;
+}
+
+uint32 GetGundrakBaseEntry(uint32 entry)
+{
+    if (entry <= GUNDRAK_ENTRY_BASE)
+        return entry;
+
+    uint32 const relativeEntry = entry - GUNDRAK_ENTRY_BASE;
+    uint32 const tierIndex = relativeEntry / GUNDRAK_TIER_STRIDE;
+    uint32 const creatureOffset = relativeEntry % GUNDRAK_TIER_STRIDE;
+    if (tierIndex >= GUNDRAK_TIER_COUNT || !IsGundrakCreatureOffset(creatureOffset))
+        return entry;
+
+    return GUNDRAK_ENTRY_BASE + creatureOffset;
+}
+
+uint32 GetGundrakTierEntry(uint32 ownerEntry, uint32 baseEntry)
+{
+    return baseEntry + GetGundrakTierIndex(ownerEntry) * GUNDRAK_TIER_STRIDE;
+}
+
 enum GundrakSpells : uint32
 {
     SPELL_POISON_NOVA = 55081,
@@ -1064,7 +1106,7 @@ public:
             if (_summons.size() >= MAX_ACTIVE_SUMMONS)
                 return;
 
-            SummonMirageAdd(me, entry, _summonIndex++);
+            SummonMirageAdd(me, GetGundrakTierEntry(me->GetEntry(), entry), _summonIndex++);
         }
 
         EventMap _events;
@@ -1153,7 +1195,7 @@ public:
     private:
         void CastEntrySpell()
         {
-            switch (me->GetEntry())
+            switch (GetGundrakBaseEntry(me->GetEntry()))
             {
                 case NPC_SERPENT:
                     CastIfKnown(me, GetRandomTarget(this), SPELL_VENOM_BOLT);

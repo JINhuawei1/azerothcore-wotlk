@@ -25,10 +25,13 @@
 // 菜单选项
 enum SkillMasterMenu
 {
-    SKILL_MASTER_MENU_MAIN          = 0,
-    SKILL_MASTER_MENU_CLASS_SKILLS  = 1,
-    SKILL_MASTER_MENU_WEAPON_SKILLS = 2,
-    SKILL_MASTER_MENU_RIDING        = 3,
+    SKILL_MASTER_MENU_MAIN            = 0,
+    SKILL_MASTER_MENU_CLASS_SKILLS    = 1,
+    SKILL_MASTER_MENU_WEAPON_SKILLS   = 2,
+    SKILL_MASTER_MENU_RIDING          = 3,
+    SKILL_MASTER_MENU_PROFESSIONS     = 4,
+    SKILL_MASTER_MENU_PROFESSION_BASE = 1000,
+    SKILL_MASTER_MENU_BACK            = 1100,
 };
 
 // 全局配置
@@ -49,6 +52,8 @@ public:
 
 private:
     void ShowMainMenu(Player* player, Creature* creature);
+    void ShowProfessionMenu(Player* player, Creature* creature);
+    void RefreshPrimaryProfessionPoints(Player* player);
     void SendTrainerListForType(Player* player, Creature* creature, uint32 skillType);
     const char* GetClassName(uint8 classId);
     const char* GetClassIcon(uint8 classId);

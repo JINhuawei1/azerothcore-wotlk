@@ -21,6 +21,7 @@ include_directories(
 include_directories(
         ${CMAKE_SOURCE_DIR}/modules/mod-magic-hit-system/src
         ${CMAKE_SOURCE_DIR}/modules/mod-talent-soul/src
+        ${CMAKE_SOURCE_DIR}/modules/mod-xianmen-system/src
 )
 
 add_executable(
@@ -47,6 +48,7 @@ set(LOAD_PROTECTION_TEST_SOURCES
         server/game/Server/PlayerCastRateLimiterTest.cpp
         server/game/Spells/MagicHitBatchTest.cpp
         server/game/Spells/TalentSoulGcdTest.cpp
+        server/game/Spells/XianqiSoulDebtTimersTest.cpp
 )
 
 add_executable(

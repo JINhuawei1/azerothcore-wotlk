@@ -51,6 +51,7 @@ namespace
     constexpr size_t MAX_ADDON_PAYLOAD = 200;
     constexpr uint8 TUJIAN_ATTR_MODE_FIXED = 0;
     constexpr uint8 TUJIAN_ATTR_MODE_EQUIP = 1;
+    constexpr uint8 TUJIAN_ATTR_MODE_PERCENT = 2;
 
     int32 ToInt32ForLegacyStatPath(int64 value)
     {
@@ -117,6 +118,7 @@ namespace
         std::string activationCommand;
         uint8 attributeEffectMode = TUJIAN_ATTR_MODE_EQUIP;
         int256 fixedAllStatsValue = 0;
+        int256 allStatsPercent = 0;
     };
 
     struct TuJianSetEntry
@@ -221,6 +223,7 @@ namespace
     std::unordered_map<uint32, std::vector<AggregatedItemSetContribution>> playerItemSetContributions;
     std::unordered_map<uint32, PlayerWeaponDamageBonusCache> playerWeaponDamageBonuses;
     std::unordered_map<uint32, int256> playerFixedAllStatsBonus;
+    std::unordered_map<uint32, int256> playerAllStatsPercentBonus;
     std::unordered_set<uint32> blockedVirtualEquipSpellItemGuids;
 
     uint8 GetAttackSlotForVirtualItem(ItemTemplate const* proto);
@@ -308,7 +311,7 @@ namespace
 
     uint32 GetTuJianApplyCount(TuJianEntry const& entry, uint32 currentLevel)
     {
-        if (entry.attributeEffectMode == TUJIAN_ATTR_MODE_FIXED)
+        if (entry.attributeEffectMode != TUJIAN_ATTR_MODE_EQUIP)
             return 0;
 
         uint32 applyCount = std::max<uint32>(1, currentLevel);
@@ -329,6 +332,16 @@ namespace
             player->HandleStatModifier(UnitMods(UNIT_MOD_STAT_START + stat), BASE_VALUE, legacyAmount, apply);
             player->ApplyStatBuffMod(Stats(stat), legacyAmount, apply);
         }
+    }
+
+    void ApplyAllStatsPercentBonus(Player* player, int256 const& percent, bool apply)
+    {
+        if (!player || percent == 0)
+            return;
+
+        float legacyPercent = Acore::Number::ToFloat(percent);
+        for (uint8 stat = STAT_STRENGTH; stat < MAX_STATS; ++stat)
+            player->HandleStatModifier(UnitMods(UNIT_MOD_STAT_START + stat), TOTAL_PCT, legacyPercent, apply);
     }
 
     void ApplyAggregatedItemStat(Player* player, uint32 statType, int256 const& value, bool apply)
@@ -1420,6 +1433,8 @@ namespace
             "SHOW COLUMNS FROM `_图鉴系统` LIKE '属性生效模式'") != nullptr;
         bool hasFixedAllStatsValueColumn = WorldDatabase.Query(
             "SHOW COLUMNS FROM `_图鉴系统` LIKE '固定全属性值'") != nullptr;
+        bool hasAllStatsPercentColumn = WorldDatabase.Query(
+            "SHOW COLUMNS FROM `_图鉴系统` LIKE '全属性百分比'") != nullptr;
 
         std::string query =
             "SELECT tj.`注释`, COALESCE(it.`name`, ''), tj.`id`, tj.`一级菜单名称`, tj.`一级菜单图标`, tj.`二级菜单名称1`, tj.`二级菜单名称2`, tj.`二级菜单图标`, "
@@ -1428,6 +1443,8 @@ namespace
             query += ", tj.`属性生效模式`";
         if (hasFixedAllStatsValueColumn)
             query += ", tj.`固定全属性值`";
+        if (hasAllStatsPercentColumn)
+            query += ", tj.`全属性百分比`";
         query += " FROM `_图鉴系统` tj LEFT JOIN `item_template` it ON it.`entry` = tj.`物品entry`";
 
         QueryResult result = WorldDatabase.Query(query);
@@ -1462,11 +1479,16 @@ namespace
             uint8 nextFieldIndex = 15;
             entry.attributeEffectMode = hasAttributeEffectModeColumn ? fields[nextFieldIndex++].Get<uint8>() : TUJIAN_ATTR_MODE_EQUIP;
             entry.fixedAllStatsValue = hasFixedAllStatsValueColumn ? fields[nextFieldIndex++].Get<int256>() : 0;
+            entry.allStatsPercent = hasAllStatsPercentColumn ? fields[nextFieldIndex++].Get<int256>() : 0;
 
-            if (entry.attributeEffectMode != TUJIAN_ATTR_MODE_FIXED)
+            if (entry.attributeEffectMode != TUJIAN_ATTR_MODE_FIXED &&
+                entry.attributeEffectMode != TUJIAN_ATTR_MODE_EQUIP &&
+                entry.attributeEffectMode != TUJIAN_ATTR_MODE_PERCENT)
                 entry.attributeEffectMode = TUJIAN_ATTR_MODE_EQUIP;
             if (entry.fixedAllStatsValue < 0)
                 entry.fixedAllStatsValue = 0;
+            if (entry.allStatsPercent < 0)
+                entry.allStatsPercent = 0;
 
             tuJianEntries[entry.itemEntry] = entry;
             ++count;
@@ -1525,6 +1547,7 @@ namespace
         playerItemSetContributions.erase(playerGuid);
         playerWeaponDamageBonuses.erase(playerGuid);
         playerFixedAllStatsBonus.erase(playerGuid);
+        playerAllStatsPercentBonus.erase(playerGuid);
     }
 
     void RemovePlayerVirtualItems(Player* player, bool refreshStats)
@@ -1617,6 +1640,13 @@ namespace
             playerFixedAllStatsBonus.erase(fixedBonusItr);
         }
 
+        auto percentBonusItr = playerAllStatsPercentBonus.find(playerGuid);
+        if (percentBonusItr != playerAllStatsPercentBonus.end())
+        {
+            ApplyAllStatsPercentBonus(player, percentBonusItr->second, false);
+            playerAllStatsPercentBonus.erase(percentBonusItr);
+        }
+
 #ifdef MODULE_ITEM_SKILLS
         sItemSkillsEffects->UpdatePlayerHitSkillsCache(player);
 #endif
@@ -1670,7 +1700,8 @@ namespace
             playerAggregatedItemBonuses.find(playerGuid) != playerAggregatedItemBonuses.end() ||
             playerItemSetContributions.find(playerGuid) != playerItemSetContributions.end() ||
             playerWeaponDamageBonuses.find(playerGuid) != playerWeaponDamageBonuses.end() ||
-            playerFixedAllStatsBonus.find(playerGuid) != playerFixedAllStatsBonus.end();
+            playerFixedAllStatsBonus.find(playerGuid) != playerFixedAllStatsBonus.end() ||
+            playerAllStatsPercentBonus.find(playerGuid) != playerAllStatsPercentBonus.end();
 
         RemovePlayerVirtualItems(player, false);
 
@@ -1701,6 +1732,7 @@ namespace
         aggregatedItemSetCounts.reserve(activationRecordCount);
         PlayerWeaponDamageBonusCache weaponDamageBonuses;
         int256 totalFixedAllStatsBonus = 0;
+        int256 totalAllStatsPercentBonus = 0;
 
 #ifdef MODULE_ITEM_SKILLS
         std::unordered_map<uint32, std::unordered_set<uint32>> activatedTuJianIdsByGroup;
@@ -1735,6 +1767,11 @@ namespace
             if (tuJian.attributeEffectMode == TUJIAN_ATTR_MODE_FIXED)
             {
                 totalFixedAllStatsBonus = AddInt256Saturated(totalFixedAllStatsBonus, tuJian.fixedAllStatsValue);
+                continue;
+            }
+            if (tuJian.attributeEffectMode == TUJIAN_ATTR_MODE_PERCENT)
+            {
+                totalAllStatsPercentBonus = AddInt256Saturated(totalAllStatsPercentBonus, tuJian.allStatsPercent);
                 continue;
             }
 
@@ -1815,6 +1852,12 @@ namespace
         {
             ApplyFixedAllStatsBonus(player, totalFixedAllStatsBonus, true);
             playerFixedAllStatsBonus[playerGuid] = totalFixedAllStatsBonus;
+        }
+
+        if (totalAllStatsPercentBonus > 0)
+        {
+            ApplyAllStatsPercentBonus(player, totalAllStatsPercentBonus, true);
+            playerAllStatsPercentBonus[playerGuid] = totalAllStatsPercentBonus;
         }
 
         if (!aggregatedItemSetCounts.empty())
@@ -1934,6 +1977,7 @@ namespace
             hasAggregatedBonuses ||
             itemSetContributionCount > 0 ||
             totalFixedAllStatsBonus > 0 ||
+            totalAllStatsPercentBonus > 0 ||
             externalSkillCarrierCount > 0;
 
         if (needRefreshStats)
@@ -2337,6 +2381,7 @@ public:
         playerFallbackAppliedItems.erase(playerGuid);
         playerWeaponDamageBonuses.erase(playerGuid);
         playerFixedAllStatsBonus.erase(playerGuid);
+        playerAllStatsPercentBonus.erase(playerGuid);
         step("FastCleanupVirtualItems");
 
         ClearPlayerCache(playerGuid);
@@ -2357,6 +2402,7 @@ public:
         playerItemSetContributions.erase(guid);
         playerWeaponDamageBonuses.erase(guid);
         playerFixedAllStatsBonus.erase(guid);
+        playerAllStatsPercentBonus.erase(guid);
     }
 
     void OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg, Player* /*receiver*/) override

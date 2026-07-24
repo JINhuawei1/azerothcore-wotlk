@@ -20,5 +20,11 @@ int main()
     assert(WearControl::ResolvePermissionLevel(levels, LIMIT_XIANQI, 11, 1) == 3);
     assert(WearControl::ResolvePermissionLevel(levels, LIMIT_XIANQI, 15, 1) == 1);
 
+    assert(WearControl::CanAdvancePermissionLevel(1, 2));
+    assert(!WearControl::CanAdvancePermissionLevel(1, 5));
+    assert(WearControl::CanAdvancePermissionLevel(4, 5));
+    assert(WearControl::CanAdvancePermissionLevel(5, 5));
+    assert(WearControl::CanAdvancePermissionLevel(5, 3));
+
     return 0;
 }

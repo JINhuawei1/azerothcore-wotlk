@@ -24,6 +24,11 @@ void ScriptMgr::OnHeal(Unit* healer, Unit* reciever, uint256& gain)
     CALL_ENABLED_HOOKS(UnitScript, UNITHOOK_ON_HEAL, script->OnHeal(healer, reciever, gain));
 }
 
+void ScriptMgr::OnBeforeDamageWithContext(Unit* attacker, Unit* victim, uint256& damage, DamageEffectType damageType, SpellInfo const* spellInfo)
+{
+    CALL_ENABLED_HOOKS(UnitScript, UNITHOOK_ON_BEFORE_DAMAGE_WITH_CONTEXT, script->OnBeforeDamageWithContext(attacker, victim, damage, damageType, spellInfo));
+}
+
 void ScriptMgr::OnDamage(Unit* attacker, Unit* victim, uint256& damage)
 {
     CALL_ENABLED_HOOKS(UnitScript, UNITHOOK_ON_DAMAGE, script->OnDamage(attacker, victim, damage));

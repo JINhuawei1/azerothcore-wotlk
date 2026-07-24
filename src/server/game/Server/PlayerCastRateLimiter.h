@@ -11,53 +11,12 @@
 #define ACORE_PLAYER_CAST_RATE_LIMITER_H
 
 #include "Define.h"
-#include <algorithm>
 #include <limits>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <utility>
 
 enum class PlayerCastRequestSource
 {
     ClientPacket,
     QueuedReplay
-};
-
-struct PlayerCastRateLimitLogSnapshot
-{
-    std::string playerName;
-    uint32 playerGuid = 0;
-    uint32 spellId = 0;
-    uint32 dropped = 0;
-};
-
-class PlayerCastRateLimitLogAccumulator
-{
-public:
-    void Record(std::string_view playerName, uint32 playerGuid, uint32 spellId)
-    {
-        _snapshot.playerName = playerName;
-        _snapshot.playerGuid = playerGuid;
-        _snapshot.spellId = spellId;
-        if (_snapshot.dropped < std::numeric_limits<uint32>::max())
-            ++_snapshot.dropped;
-    }
-
-    std::optional<PlayerCastRateLimitLogSnapshot> Take()
-    {
-        if (_snapshot.dropped == 0)
-            return std::nullopt;
-
-        PlayerCastRateLimitLogSnapshot snapshot = std::move(_snapshot);
-        _snapshot = {};
-        return snapshot;
-    }
-
-    void Reset() { _snapshot = {}; }
-
-private:
-    PlayerCastRateLimitLogSnapshot _snapshot;
 };
 
 class PlayerCastRateLimiter

@@ -1798,6 +1798,7 @@ uint256 Unit::DealDamage(Unit* attacker, Unit* victim, uint256 const& damageIn, 
     {
         // Hook for OnDamage Event
         uint256 scriptDamage = damage;
+        sScriptMgr->OnBeforeDamageWithContext(attacker, victim, scriptDamage, damagetype, spellProto);
         sScriptMgr->OnDamage(attacker, victim, scriptDamage);
         sScriptMgr->OnDamageWithContext(attacker, victim, scriptDamage, damagetype, spellProto);
         if (scriptDamage != damage)

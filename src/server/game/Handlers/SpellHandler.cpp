@@ -400,14 +400,6 @@ void WorldSession::HandleCastSpellOpcodeInternal(WorldPacket& recvPacket, Player
     uint64 const nowMs = GetTimeMS().count();
     if (!_playerCastRateLimiter.TryConsume(nowMs, source))
     {
-        _playerCastRateLimitLog.Record(_player->GetName(), _player->GetGUID().GetCounter(), spellId);
-        if (!_hasCastRateLimitLog || nowMs - _lastCastRateLimitLogMs >= 2000)
-        {
-            FlushPlayerCastRateLimitLog();
-            _lastCastRateLimitLogMs = nowMs;
-            _hasCastRateLimitLog = true;
-        }
-
         recvPacket.rfinish();
         return;
     }

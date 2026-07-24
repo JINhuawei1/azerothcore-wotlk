@@ -548,6 +548,7 @@ public: /* Scheduled scripts */
 
 public: /* UnitScript */
     void OnHeal(Unit* healer, Unit* reciever, uint256& gain);
+    void OnBeforeDamageWithContext(Unit* attacker, Unit* victim, uint256& damage, DamageEffectType damageType, SpellInfo const* spellInfo);
     void OnDamage(Unit* attacker, Unit* victim, uint256& damage);
     void OnDamageWithContext(Unit* attacker, Unit* victim, uint256& damage, DamageEffectType damageType, SpellInfo const* spellInfo);
     void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint256& damage, SpellInfo const* spellInfo);

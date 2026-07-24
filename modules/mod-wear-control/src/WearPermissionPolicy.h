@@ -20,6 +20,11 @@ inline std::uint32_t ResolvePermissionLevel(PermissionLevels const& levels, std:
     auto itr = levels.find(MakePermissionKey(limitType, slotPosition));
     return itr == levels.end() ? defaultLevel : itr->second;
 }
+
+constexpr bool CanAdvancePermissionLevel(std::uint32_t currentLevel, std::uint32_t requestedLevel)
+{
+    return requestedLevel <= currentLevel || requestedLevel - currentLevel == 1;
+}
 }
 
 #endif // WEAR_PERMISSION_POLICY_H

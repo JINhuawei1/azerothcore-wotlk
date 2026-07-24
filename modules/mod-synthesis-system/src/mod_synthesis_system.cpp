@@ -330,6 +330,31 @@ bool SynthesisColumnExists(char const* columnName)
     return result->Fetch()[0].Get<uint64>() > 0;
 }
 
+bool CanUnlockWearLevelFromSynthesis(Player* player, uint32 unlockItemId, uint32 wearLevel, std::string& message)
+{
+    if (wearLevel == 0)
+        return true;
+
+#if SYNTHESIS_HAS_WEAR_CONTROL
+    uint8 const limitType = WearControl::GetExclusiveLimit(unlockItemId);
+    std::vector<uint8> const slots = WearControl::GetItemWearSlots(unlockItemId, limitType);
+    if (limitType == WEAR_LIMIT_NONE || slots.empty())
+    {
+        message = "产物没有配置可解锁的专属槽位";
+        return false;
+    }
+
+    for (uint8 slotPosition : slots)
+        if (!WearControl::CanUnlockPlayerWearLevel(player, limitType, slotPosition, wearLevel, &message))
+            return false;
+
+    return true;
+#else
+    message = "当前未编译穿戴控制模块，无法校验穿戴等级";
+    return false;
+#endif
+}
+
 bool UnlockWearLevelFromSynthesis(Player* player, uint32 unlockItemId, uint32 wearLevel, std::string& message)
 {
     LOG_INFO("server.loading", "[穿戴权限-合成解锁入口] 玩家={} GUID={} 产物={} 请求等级={}",
@@ -565,6 +590,16 @@ public:
         {
             SendResult(player, false, entry.itemId, entry.upgradeLevel, "合成奖励模板不存在或奖励系统未启用");
             return;
+        }
+
+        if (entry.unlockWearLevel > 0)
+        {
+            std::string prerequisiteError;
+            if (!CanUnlockWearLevelFromSynthesis(player, entry.unlockItemId, entry.unlockWearLevel, prerequisiteError))
+            {
+                SendResult(player, false, entry.itemId, entry.upgradeLevel, prerequisiteError);
+                return;
+            }
         }
 
         if (entry.requirementId != 0)

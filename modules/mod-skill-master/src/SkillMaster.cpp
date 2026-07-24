@@ -7,6 +7,7 @@
 #include "SpellInfo.h"
 #include "Opcodes.h"
 #include "WorldPacket.h"
+#include <array>
 #include <cmath>
 
 // 全局变量
@@ -34,6 +35,50 @@ std::vector<uint32> weaponTrainerIds = {11865, 11866, 11867, 11868, 11869, 11870
 // 31238 引用了 -202010(初级/中级), -202011(专家/大师), -202012(寒冷天气飞行)
 uint32 ridingTrainerId = 31238;
 
+namespace
+{
+constexpr uint16 SKILL_MASTER_PRIMARY_PROFESSION_LIMIT = 11;
+
+struct ProfessionTrainerDefinition
+{
+    uint16 skillId;
+    char const* name;
+    char const* icon;
+    std::vector<uint32> trainerIds;
+};
+
+std::array<ProfessionTrainerDefinition, 14> const professionTrainerDefinitions = {{
+    ProfessionTrainerDefinition{ SKILL_MINING,         "采矿", "Trade_Mining",                    { 1681, 18747, 26912 } },
+    ProfessionTrainerDefinition{ SKILL_ENCHANTING,     "附魔", "Trade_Engraving",                 { 1317, 18753, 26906 } },
+    ProfessionTrainerDefinition{ SKILL_ALCHEMY,        "炼金", "Trade_Alchemy",                   { 1215, 16588, 26903 } },
+    ProfessionTrainerDefinition{ SKILL_JEWELCRAFTING,  "珠宝", "INV_Misc_Gem_01",                { 15501, 18751, 26915 } },
+    ProfessionTrainerDefinition{ SKILL_BLACKSMITHING,  "锻造", "Trade_BlackSmithing",             { 514, 16583, 26564, 5164, 7231 } },
+    ProfessionTrainerDefinition{ SKILL_ENGINEERING,    "工程", "Trade_Engineering",               { 1676, 17634, 25277, 8126, 7406, 24868 } },
+    ProfessionTrainerDefinition{ SKILL_TAILORING,      "裁缝", "Trade_Tailoring",                 { 1103, 18749, 26914, 4578 } },
+    ProfessionTrainerDefinition{ SKILL_FIRST_AID,      "急救", "INV_Misc_Bandage_15",             { 2326, 18990, 23734 } },
+    ProfessionTrainerDefinition{ SKILL_COOKING,        "烹饪", "INV_Misc_Food_15",                { 1355, 18987, 26905 } },
+    ProfessionTrainerDefinition{ SKILL_HERBALISM,      "草药", "Trade_Herbalism",                 { 812, 18748, 26910 } },
+    ProfessionTrainerDefinition{ SKILL_LEATHERWORKING, "制皮", "Trade_LeatherWorking",            { 1385, 18754, 26911, 7870, 7866, 7868 } },
+    ProfessionTrainerDefinition{ SKILL_SKINNING,       "剥皮", "INV_Misc_Pelt_Wolf_01",           { 1292, 18755, 26913 } },
+    ProfessionTrainerDefinition{ SKILL_FISHING,        "钓鱼", "Trade_Fishing",                   { 1651, 18911, 26909 } },
+    ProfessionTrainerDefinition{ SKILL_INSCRIPTION,    "铭文", "INV_Inscription_Tradeskill01",    { 26916 } },
+}};
+
+std::array<uint16, SKILL_MASTER_PRIMARY_PROFESSION_LIMIT> const primaryProfessionSkillIds = {{
+    SKILL_ALCHEMY,
+    SKILL_BLACKSMITHING,
+    SKILL_ENCHANTING,
+    SKILL_ENGINEERING,
+    SKILL_HERBALISM,
+    SKILL_INSCRIPTION,
+    SKILL_JEWELCRAFTING,
+    SKILL_LEATHERWORKING,
+    SKILL_MINING,
+    SKILL_SKINNING,
+    SKILL_TAILORING,
+}};
+}
+
 // SkillMasterCreatureScript 实现
 SkillMasterCreatureScript::SkillMasterCreatureScript() : CreatureScript("npc_skill_master") {}
 
@@ -53,6 +98,13 @@ bool SkillMasterCreatureScript::OnGossipSelect(Player* player, Creature* creatur
 
     player->PlayerTalkClass->ClearMenus();
 
+    if (action >= SKILL_MASTER_MENU_PROFESSION_BASE &&
+        action < SKILL_MASTER_MENU_PROFESSION_BASE + professionTrainerDefinitions.size())
+    {
+        SendTrainerListForType(player, creature, action);
+        return true;
+    }
+
     switch (action)
     {
         case SKILL_MASTER_MENU_CLASS_SKILLS:
@@ -63,6 +115,12 @@ bool SkillMasterCreatureScript::OnGossipSelect(Player* player, Creature* creatur
             break;
         case SKILL_MASTER_MENU_RIDING:
             SendTrainerListForType(player, creature, SKILL_TYPE_RIDING);
+            break;
+        case SKILL_MASTER_MENU_PROFESSIONS:
+            ShowProfessionMenu(player, creature);
+            break;
+        case SKILL_MASTER_MENU_BACK:
+            ShowMainMenu(player, creature);
             break;
         default:
             ShowMainMenu(player, creature);
@@ -85,6 +143,10 @@ void SkillMasterCreatureScript::ShowMainMenu(Player* player, Creature* creature)
         GOSSIP_SENDER_MAIN, SKILL_MASTER_MENU_CLASS_SKILLS);
 
     AddGossipItemFor(player, GOSSIP_ICON_TRAINER,
+        "|TInterface\\Icons\\INV_Inscription_Tradeskill01:30:30|t 专业技能",
+        GOSSIP_SENDER_MAIN, SKILL_MASTER_MENU_PROFESSIONS);
+
+    AddGossipItemFor(player, GOSSIP_ICON_TRAINER,
         "|TInterface\\Icons\\INV_Sword_27:30:30|t 学习武器技能",
         GOSSIP_SENDER_MAIN, SKILL_MASTER_MENU_WEAPON_SKILLS);
 
@@ -93,6 +155,38 @@ void SkillMasterCreatureScript::ShowMainMenu(Player* player, Creature* creature)
         GOSSIP_SENDER_MAIN, SKILL_MASTER_MENU_RIDING);
 
     SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, creature->GetGUID());
+}
+
+void SkillMasterCreatureScript::ShowProfessionMenu(Player* player, Creature* creature)
+{
+    player->PlayerTalkClass->ClearMenus();
+
+    for (uint32 index = 0; index < professionTrainerDefinitions.size(); ++index)
+    {
+        ProfessionTrainerDefinition const& profession = professionTrainerDefinitions[index];
+        AddGossipItemFor(player, GOSSIP_ICON_TRAINER,
+            Acore::StringFormat("|TInterface\\Icons\\{}:30:30|t {}", profession.icon, profession.name),
+            GOSSIP_SENDER_MAIN, SKILL_MASTER_MENU_PROFESSION_BASE + index);
+    }
+
+    AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+        "|TInterface\\Icons\\Spell_ChargeNegative:24:24|t 返回主菜单",
+        GOSSIP_SENDER_MAIN, SKILL_MASTER_MENU_BACK);
+
+    SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, creature->GetGUID());
+}
+
+void SkillMasterCreatureScript::RefreshPrimaryProfessionPoints(Player* player)
+{
+    uint16 learnedPrimaryProfessions = 0;
+    for (uint16 skillId : primaryProfessionSkillIds)
+        if (player->HasSkill(skillId))
+            ++learnedPrimaryProfessions;
+
+    uint16 const freePoints = learnedPrimaryProfessions < SKILL_MASTER_PRIMARY_PROFESSION_LIMIT
+        ? SKILL_MASTER_PRIMARY_PROFESSION_LIMIT - learnedPrimaryProfessions
+        : 0;
+    player->SetFreePrimaryProfessions(freePoints);
 }
 
 void SkillMasterCreatureScript::SendTrainerListForType(Player* player, Creature* creature, uint32 skillType)
@@ -107,10 +201,58 @@ void SkillMasterCreatureScript::SendTrainerListForType(Player* player, Creature*
     std::vector<TrainerSpell const*> validSpells;
     std::set<uint32> addedSpells; // 用于去重
     float fDiscountMod = player->GetReputationPriceDiscount(creature);
-    bool canLearnPrimaryProf = player->GetFreePrimaryProfessionPoints() > 0;
 
+    // 专业技能 - 合并该专业从经典旧世到诺森德以及专精训练师的数据
+    if (skillType >= SKILL_MASTER_MENU_PROFESSION_BASE &&
+        skillType < SKILL_MASTER_MENU_PROFESSION_BASE + professionTrainerDefinitions.size())
+    {
+        uint32 const professionIndex = skillType - SKILL_MASTER_MENU_PROFESSION_BASE;
+        ProfessionTrainerDefinition const& profession = professionTrainerDefinitions[professionIndex];
+        trainerName = profession.name;
+        trainerType = 2;
+
+        RefreshPrimaryProfessionPoints(player);
+
+        for (uint32 trainerId : profession.trainerIds)
+        {
+            TrainerSpellData const* trainerSpells = sObjectMgr->GetNpcTrainerSpells(trainerId);
+            if (!trainerSpells)
+            {
+                LOG_ERROR("module", "[技能大师] 专业 {} 的训练师 {} 没有技能数据", profession.name, trainerId);
+                continue;
+            }
+
+            for (TrainerSpellMap::const_iterator itr = trainerSpells->spellList.begin();
+                 itr != trainerSpells->spellList.end(); ++itr)
+            {
+                TrainerSpell const* tSpell = &itr->second;
+                if (addedSpells.find(tSpell->spell) != addedSpells.end())
+                    continue;
+
+                bool valid = true;
+                for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
+                {
+                    if (!tSpell->learnedSpell[i])
+                        continue;
+                    if (!player->IsSpellFitByClassAndRace(tSpell->learnedSpell[i]))
+                    {
+                        valid = false;
+                        break;
+                    }
+                }
+
+                if (!valid)
+                    continue;
+                if (tSpell->reqSpell && !player->HasSpell(tSpell->reqSpell))
+                    continue;
+
+                addedSpells.insert(tSpell->spell);
+                validSpells.push_back(tSpell);
+            }
+        }
+    }
     // 武器技能 - 合并所有武器训练师的数据
-    if (skillType == SKILL_TYPE_WEAPON)
+    else if (skillType == SKILL_TYPE_WEAPON)
     {
         trainerName = "武器大师";
         trainerType = 0; // 通用训练师
@@ -233,6 +375,8 @@ void SkillMasterCreatureScript::SendTrainerListForType(Player* player, Creature*
             validSpells.push_back(tSpell);
         }
     }
+
+    bool const canLearnPrimaryProf = player->GetFreePrimaryProfessionPoints() > 0;
 
     // 使用我们自定义的标题
     std::string strTitle = Acore::StringFormat("技能综合大师 - {}", trainerName);

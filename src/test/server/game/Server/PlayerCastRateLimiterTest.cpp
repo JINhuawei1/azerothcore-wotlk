@@ -71,22 +71,3 @@ TEST(PlayerCastRateLimiterTest, ResetRestoresBurstForTheNextPlayer)
         EXPECT_TRUE(limiter.TryConsume(0));
     EXPECT_FALSE(limiter.TryConsume(0));
 }
-
-TEST(PlayerCastRateLimitLogTest, FlushUsesCachedIdentityAfterPlayerLifetimeEnds)
-{
-    PlayerCastRateLimitLogAccumulator accumulator;
-    {
-        std::string playerName = "Guid30";
-        accumulator.Record(playerName, 30, 42833);
-        accumulator.Record(playerName, 30, 42833);
-    }
-
-    std::optional<PlayerCastRateLimitLogSnapshot> snapshot = accumulator.Take();
-
-    ASSERT_TRUE(snapshot.has_value());
-    EXPECT_EQ("Guid30", snapshot->playerName);
-    EXPECT_EQ(30, snapshot->playerGuid);
-    EXPECT_EQ(42833, snapshot->spellId);
-    EXPECT_EQ(2, snapshot->dropped);
-    EXPECT_FALSE(accumulator.Take().has_value());
-}
