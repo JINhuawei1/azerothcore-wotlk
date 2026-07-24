@@ -362,6 +362,8 @@ bool RewardTemplate::GiveRewardInternal(Player* player, uint32 rewardId, bool ch
 
     if (receipt && !success)
     {
+        // 奖励处理器沿用现有非事务语义，失败时可能已经产生部分玩家状态变化；
+        // 清空回执可阻止审计层把不完整快照当作可逆奖励继续追回。
         *receipt = {};
         return false;
     }

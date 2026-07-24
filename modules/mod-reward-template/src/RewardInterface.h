@@ -34,6 +34,7 @@ public:
     virtual bool GiveRewardWithReceipt(Player* player, uint32 rewardId, RewardGrantReceipt& receipt,
         bool checkChance = true, bool showNotification = true)
     {
+        receipt = {};
         return GiveReward(player, rewardId, checkChance, showNotification);
     }
 
