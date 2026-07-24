@@ -34,10 +34,25 @@ int main()
     assert(!OwnsGrantClaim("CLAIM:other", "abc123"));
     assert(!OwnsGrantClaim("", "abc123"));
 
-    assert(ProcessingRecoveryFor(GrantMode::Cdk, false) == ProcessingRecoveryAction::RetryPending);
-    assert(ProcessingRecoveryFor(GrantMode::Cdk, true) == ProcessingRecoveryAction::RetryPending);
-    assert(ProcessingRecoveryFor(GrantMode::Item, true) == ProcessingRecoveryAction::FinalizeIssued);
-    assert(ProcessingRecoveryFor(GrantMode::Item, false) == ProcessingRecoveryAction::RecoveryDebt);
+    assert(ProcessingRecoveryFor(GrantMode::Cdk, false, false, false) == ProcessingRecoveryAction::RetryPending);
+    assert(ProcessingRecoveryFor(GrantMode::Cdk, true, false, true) == ProcessingRecoveryAction::RetryPending);
+    assert(ProcessingRecoveryFor(GrantMode::Item, true, false, false) == ProcessingRecoveryAction::FinalizeIssued);
+    assert(ProcessingRecoveryFor(GrantMode::Item, false, false, false) == ProcessingRecoveryAction::RecoveryDebt);
+
+    assert(ProcessingRecoveryFor(GrantMode::Cdk, false, true, false) ==
+        ProcessingRecoveryAction::RevokeWithoutIssue);
+    assert(ProcessingRecoveryFor(GrantMode::Cdk, false, true, true) ==
+        ProcessingRecoveryAction::FinalizeIssued);
+    assert(ProcessingRecoveryFor(GrantMode::Item, true, true, false) ==
+        ProcessingRecoveryAction::FinalizeIssued);
+    assert(ProcessingRecoveryFor(GrantMode::Item, false, true, false) ==
+        ProcessingRecoveryAction::RecoveryDebt);
+
+    assert(HasReliableItemReceipt(true, false, true));
+    assert(HasReliableItemReceipt(false, true, true));
+    assert(!HasReliableItemReceipt(true, false, false));
+    assert(!HasReliableItemReceipt(false, true, false));
+    assert(!HasReliableItemReceipt(false, false, true));
 
     return 0;
 }

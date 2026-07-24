@@ -4,6 +4,7 @@ from pathlib import Path
 MODULE_ROOT = Path(__file__).resolve().parents[1]
 WORLD_SQL = MODULE_ROOT / "sql" / "world" / "20260724_宣传审核配置.sql"
 CHARACTERS_SQL = MODULE_ROOT / "sql" / "characters" / "20260724_宣传审核流水.sql"
+AUDIT_CPP = MODULE_ROOT / "src" / "PromotionRewardAudit.cpp"
 
 WORLD_TABLE = "_宣传审核任务"
 CHARACTERS_TABLES = (
@@ -103,6 +104,7 @@ def test_characters_tables_have_their_required_audit_fields():
             "发放状态",
             "回滚状态",
             "回滚错误",
+            "处理令牌",
         ),
         "_宣传兑换流水": (
             "奖励流水ID",
@@ -187,3 +189,40 @@ def test_account_and_ip_statistics_are_global_per_day():
     assert "PRIMARY KEY (`IP地址`, `统计日期`)" in ip
     assert "`任务ID`" not in ip
     assert "KEY `idx_宣传IP统计_IP日期` (`IP地址`, `统计日期`)" in ip
+
+
+def test_grant_claim_uses_a_dedicated_field_and_processing_rollback_is_deferred():
+    source = AUDIT_CPP.read_text(encoding="utf-8")
+
+    claim_start = source.index("bool ClaimPendingGrant")
+    claim_end = source.index("void RestorePendingGrant", claim_start)
+    claim = source[claim_start:claim_end]
+    assert "`处理令牌`" in claim
+    assert "`回滚错误`" not in claim
+
+    rollback_start = source.index("bool PromotionRewardAuditMgr::RollbackGrant")
+    rollback_end = source.index("void PromotionRewardAuditMgr::ApplyReviewDecision", rollback_start)
+    rollback = source[rollback_start:rollback_end]
+    assert 'grantStatus == "PROCESSING"' in rollback
+    assert rollback.index('grantStatus == "PROCESSING"') < rollback.index('grantStatus == "PENDING"')
+
+
+def test_item_processing_recovery_requires_guid_and_resource_snapshot():
+    source = AUDIT_CPP.read_text(encoding="utf-8")
+    start = source.index("uint32 RecoverTimedOutProcessingGrants")
+    end = source.index("PromotionRewardAuditMgr* PromotionRewardAuditMgr::instance", start)
+    recovery = source[start:end]
+
+    assert "`资源快照`" in recovery
+    assert "HasReliableItemReceipt" in recovery
+    assert "`回滚状态`" in recovery
+    assert "RevokeWithoutIssue" in recovery
+
+
+def test_pending_rollbacks_are_retried_by_the_review_worker():
+    source = AUDIT_CPP.read_text(encoding="utf-8")
+    start = source.index("bool PromotionRewardAuditMgr::ConsumeReviewQueue")
+    end = source.index("bool PromotionRewardAuditMgr::BeginCodeRedeem", start)
+    review = source[start:end]
+
+    assert "g.`回滚状态` IN ('NONE','PENDING')" in review

@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS `_宣传奖励流水` (
   `回滚状态`           VARCHAR(16) NOT NULL DEFAULT 'NONE' COMMENT 'NONE/PENDING/SUCCESS/FAILED/DEBT',
   `回滚时间`           DATETIME NULL,
   `回滚错误`           VARCHAR(2048) NOT NULL DEFAULT '' COMMENT '追回失败或欠账原因',
+  `处理令牌`           VARCHAR(160) NOT NULL DEFAULT '' COMMENT '发奖PROCESSING阶段的独占claim token',
   `创建时间`           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `更新时间`           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`流水ID`),
@@ -71,6 +72,22 @@ COLLATE = utf8mb4_unicode_ci
 ENGINE = InnoDB
 ROW_FORMAT = DEFAULT
 ;
+
+SET @promotion_claim_column_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = '_宣传奖励流水'
+    AND COLUMN_NAME = '处理令牌'
+);
+SET @promotion_claim_column_sql := IF(
+  @promotion_claim_column_exists = 0,
+  'ALTER TABLE `_宣传奖励流水` ADD COLUMN `处理令牌` VARCHAR(160) NOT NULL DEFAULT '''' COMMENT ''发奖PROCESSING阶段的独占claim token'' AFTER `回滚错误`',
+  'SELECT 1'
+);
+PREPARE promotion_claim_column_stmt FROM @promotion_claim_column_sql;
+EXECUTE promotion_claim_column_stmt;
+DEALLOCATE PREPARE promotion_claim_column_stmt;
 
 CREATE TABLE IF NOT EXISTS `_宣传兑换流水` (
   `兑换流水ID`         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '实际兑换流水唯一ID',

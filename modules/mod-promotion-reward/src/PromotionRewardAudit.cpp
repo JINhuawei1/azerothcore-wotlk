@@ -139,12 +139,12 @@ bool ClaimPendingGrant(uint64 grantId, std::string const& requestId, std::string
     std::string safeRequestId = EscapeCharacterString(requestId);
     std::string safeClaimMarker = EscapeCharacterString(claimMarker);
     CharacterDatabase.DirectExecute(
-        "UPDATE `_宣传奖励流水` SET `发放状态`='PROCESSING',`回滚错误`='{}' "
+        "UPDATE `_宣传奖励流水` SET `发放状态`='PROCESSING',`处理令牌`='{}' "
         "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PENDING'",
         safeClaimMarker, grantId, safeRequestId);
 
     QueryResult result = CharacterDatabase.Query(
-        "SELECT `发放状态`,`回滚错误` FROM `_宣传奖励流水` "
+        "SELECT `发放状态`,`处理令牌` FROM `_宣传奖励流水` "
         "WHERE `流水ID`={} AND `request_id`='{}'",
         grantId, safeRequestId);
     if (!result)
@@ -160,8 +160,8 @@ void RestorePendingGrant(uint64 grantId, std::string const& requestId, std::stri
     std::string safeRequestId = EscapeCharacterString(requestId);
     std::string safeClaimMarker = EscapeCharacterString(PromotionRewardPolicy::BuildClaimMarker(claimToken));
     CharacterDatabase.DirectExecute(
-        "UPDATE `_宣传奖励流水` SET `发放状态`='PENDING',`回滚错误`='' "
-        "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PROCESSING' AND `回滚错误`='{}'",
+        "UPDATE `_宣传奖励流水` SET `发放状态`='PENDING',`处理令牌`='' "
+        "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PROCESSING' AND `处理令牌`='{}'",
         grantId, safeRequestId, safeClaimMarker);
 }
 
@@ -194,8 +194,8 @@ void MarkClaimedGrantFailed(
     std::string safeClaimMarker = EscapeCharacterString(PromotionRewardPolicy::BuildClaimMarker(claimToken));
     std::string safeError = EscapeCharacterString(error);
     CharacterDatabase.DirectExecute(
-        "UPDATE `_宣传奖励流水` SET `发放状态`='FAILED',`回滚错误`='{}' "
-        "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PROCESSING' AND `回滚错误`='{}'",
+        "UPDATE `_宣传奖励流水` SET `发放状态`='FAILED',`回滚错误`='{}',`处理令牌`='' "
+        "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PROCESSING' AND `处理令牌`='{}'",
         safeError, grantId, safeRequestId, safeClaimMarker);
 }
 
@@ -208,8 +208,8 @@ void MarkClaimedItemRecoveryDebt(
     std::string safeClaimMarker = EscapeCharacterString(PromotionRewardPolicy::BuildClaimMarker(claimToken));
     CharacterDatabase.DirectExecute(
         "UPDATE `_宣传奖励流水` SET `发放状态`='FAILED',`回滚状态`='DEBT',`回滚时间`=NOW(),"
-        "`回滚错误`='可能已发物品，需人工核查' "
-        "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PROCESSING' AND `回滚错误`='{}'",
+        "`回滚错误`='可能已发物品，需人工核查',`处理令牌`='' "
+        "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PROCESSING' AND `处理令牌`='{}'",
         grantId, safeRequestId, safeClaimMarker);
 }
 
@@ -219,7 +219,8 @@ uint32 RecoverTimedOutProcessingGrants(uint32 limit)
         return 0;
 
     QueryResult result = CharacterDatabase.Query(
-        "SELECT `流水ID`,`request_id`,`发放模式`,`物品GUID`,`新增奖励GUID`,`回滚错误` "
+        "SELECT `流水ID`,`request_id`,`发放模式`,`CDK`,`物品GUID`,`新增奖励GUID`,`资源快照`,"
+        "`回滚状态`,`处理令牌` "
         "FROM `_宣传奖励流水` WHERE `发放状态`='PROCESSING' "
         "AND `更新时间` < DATE_SUB(NOW(), INTERVAL 5 MINUTE) "
         "ORDER BY `更新时间`,`流水ID` LIMIT {}", limit);
@@ -233,41 +234,57 @@ uint32 RecoverTimedOutProcessingGrants(uint32 limit)
         uint64 grantId = fields[0].Get<uint64>();
         std::string requestId = fields[1].Get<std::string>();
         std::string modeText = fields[2].Get<std::string>();
-        uint64 itemGuid = fields[3].Get<uint64>();
-        std::string newItemGuids = fields[4].Get<std::string>();
-        std::string storedMarker = fields[5].Get<std::string>();
+        std::string code = fields[3].Get<std::string>();
+        uint64 itemGuid = fields[4].Get<uint64>();
+        std::string newItemGuids = fields[5].Get<std::string>();
+        std::string resourceSnapshot = fields[6].Get<std::string>();
+        bool rollbackPending = fields[7].Get<std::string>() == "PENDING";
+        std::string storedMarker = fields[8].Get<std::string>();
 
         GrantMode mode = modeText == "CDK" ? GrantMode::Cdk : GrantMode::Item;
-        bool hasReliableReceipt = itemGuid != 0 || (!newItemGuids.empty() && newItemGuids != "[]");
+        bool hasReliableReceipt = PromotionRewardPolicy::HasReliableItemReceipt(
+            itemGuid != 0,
+            !newItemGuids.empty() && newItemGuids != "[]",
+            !resourceSnapshot.empty());
         PromotionRewardPolicy::ProcessingRecoveryAction action =
-            PromotionRewardPolicy::ProcessingRecoveryFor(mode, hasReliableReceipt);
+            PromotionRewardPolicy::ProcessingRecoveryFor(mode, hasReliableReceipt, rollbackPending, !code.empty());
 
         std::string safeRequestId = EscapeCharacterString(requestId);
         std::string safeStoredMarker = EscapeCharacterString(storedMarker);
         if (action == PromotionRewardPolicy::ProcessingRecoveryAction::RetryPending)
         {
             CharacterDatabase.DirectExecute(
-                "UPDATE `_宣传奖励流水` SET `发放状态`='PENDING',`回滚错误`='' "
+                "UPDATE `_宣传奖励流水` SET `发放状态`='PENDING',`回滚错误`='',`处理令牌`='' "
                 "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PROCESSING' "
-                "AND `回滚错误`='{}' AND `更新时间` < DATE_SUB(NOW(), INTERVAL 5 MINUTE)",
+                "AND `处理令牌`='{}' AND `更新时间` < DATE_SUB(NOW(), INTERVAL 5 MINUTE)",
                 grantId, safeRequestId, safeStoredMarker);
         }
         else if (action == PromotionRewardPolicy::ProcessingRecoveryAction::FinalizeIssued)
         {
             CharacterDatabase.DirectExecute(
                 "UPDATE `_宣传奖励流水` SET `发放状态`='ISSUED',"
-                "`发放时间`=COALESCE(`发放时间`,NOW()),`回滚错误`='' "
+                "`发放时间`=COALESCE(`发放时间`,NOW()),`回滚错误`='',`处理令牌`='' "
                 "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PROCESSING' "
-                "AND `回滚错误`='{}' AND `更新时间` < DATE_SUB(NOW(), INTERVAL 5 MINUTE)",
+                "AND `处理令牌`='{}' AND `更新时间` < DATE_SUB(NOW(), INTERVAL 5 MINUTE)",
+                grantId, safeRequestId, safeStoredMarker);
+        }
+        else if (action == PromotionRewardPolicy::ProcessingRecoveryAction::RevokeWithoutIssue)
+        {
+            CharacterDatabase.DirectExecute(
+                "UPDATE `_宣传奖励流水` SET `发放状态`='REVOKED',`回滚状态`='SUCCESS',"
+                "`回滚时间`=NOW(),`回滚错误`='',`处理令牌`='' "
+                "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PROCESSING' "
+                "AND `回滚状态`='PENDING' AND `处理令牌`='{}' "
+                "AND `更新时间` < DATE_SUB(NOW(), INTERVAL 5 MINUTE)",
                 grantId, safeRequestId, safeStoredMarker);
         }
         else
         {
             CharacterDatabase.DirectExecute(
                 "UPDATE `_宣传奖励流水` SET `发放状态`='FAILED',`回滚状态`='DEBT',"
-                "`回滚时间`=NOW(),`回滚错误`='可能已发物品，需人工核查' "
+                "`回滚时间`=NOW(),`回滚错误`='可能已发物品，需人工核查',`处理令牌`='' "
                 "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PROCESSING' "
-                "AND `回滚错误`='{}' AND `更新时间` < DATE_SUB(NOW(), INTERVAL 5 MINUTE)",
+                "AND `处理令牌`='{}' AND `更新时间` < DATE_SUB(NOW(), INTERVAL 5 MINUTE)",
                 grantId, safeRequestId, safeStoredMarker);
         }
 
@@ -355,7 +372,7 @@ bool PromotionRewardAuditMgr::IssueCdkGrant(
     std::string safeClaimMarker = EscapeCharacterString(claimMarker);
     CharacterDatabase.DirectExecute(
         "UPDATE `_宣传奖励流水` SET `发放模式`='CDK',`奖励ID`={},`物品entry`=0,`物品数量`=0 "
-        "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PROCESSING' AND `回滚错误`='{}'",
+        "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PROCESSING' AND `处理令牌`='{}'",
         config.rewardId, grantId, safeRequestId, safeClaimMarker);
 
     std::string remark = "宣传审核-提交ID:" + std::to_string(submissionId) +
@@ -392,7 +409,7 @@ bool PromotionRewardAuditMgr::IssueCdkGrant(
         CharacterDatabase.DirectExecute(
             "UPDATE `_宣传奖励流水` SET `CDK`='{}' "
             "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PROCESSING' "
-            "AND `回滚错误`='{}' AND `CDK`=''",
+            "AND `处理令牌`='{}' AND `CDK`=''",
             safeCode, grantId, safeRequestId, safeClaimMarker);
     }
 
@@ -430,8 +447,8 @@ bool PromotionRewardAuditMgr::IssueCdkGrant(
     std::string safeCharacterCode = EscapeCharacterString(code);
     CharacterDatabase.DirectExecute(
         "UPDATE `_宣传奖励流水` SET `发放模式`='CDK',`CDK`='{}',`奖励ID`={},"
-        "`物品entry`=0,`物品数量`=0,`发放状态`='ISSUED',`发放时间`=NOW(),`回滚错误`='' "
-        "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PROCESSING' AND `回滚错误`='{}'",
+        "`物品entry`=0,`物品数量`=0,`发放状态`='ISSUED',`发放时间`=NOW(),`回滚错误`='',`处理令牌`='' "
+        "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PROCESSING' AND `处理令牌`='{}'",
         safeCharacterCode, config.rewardId, grantId, safeRequestId, safeClaimMarker);
     return true;
 }
@@ -498,7 +515,7 @@ bool PromotionRewardAuditMgr::IssueItemGrant(
     std::string safeClaimMarker = EscapeCharacterString(PromotionRewardPolicy::BuildClaimMarker(claimToken));
     CharacterDatabase.DirectExecute(
         "UPDATE `_宣传奖励流水` SET `发放模式`='ITEM',`奖励ID`=0,`物品entry`={},`物品数量`={} "
-        "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PROCESSING' AND `回滚错误`='{}'",
+        "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PROCESSING' AND `处理令牌`='{}'",
         config.itemEntry, config.itemCount, grantId, safeRequestId, safeClaimMarker);
 
     if (!sPromotionRewardMgr->BeginItemCapture(player, grantId))
@@ -540,12 +557,12 @@ bool PromotionRewardAuditMgr::IssueItemGrant(
     CharacterDatabase.DirectExecute(
         "UPDATE `_宣传奖励流水` SET `发放模式`='ITEM',`CDK`='',`奖励ID`=0,"
         "`物品entry`={},`物品数量`={},`物品GUID`={},`新增奖励GUID`='{}',`资源快照`='{}' "
-        "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PROCESSING' AND `回滚错误`='{}'",
+        "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PROCESSING' AND `处理令牌`='{}'",
         config.itemEntry, config.itemCount, itemGuids.front(), guidList, safeSnapshot,
         grantId, safeRequestId, safeClaimMarker);
 
     QueryResult persisted = CharacterDatabase.Query(
-        "SELECT `发放状态`,`回滚错误`,`物品GUID`,`新增奖励GUID` FROM `_宣传奖励流水` "
+        "SELECT `发放状态`,`处理令牌`,`物品GUID`,`新增奖励GUID`,`资源快照` FROM `_宣传奖励流水` "
         "WHERE `流水ID`={} AND `request_id`='{}'",
         grantId, safeRequestId);
     bool reliableReceipt = false;
@@ -554,7 +571,10 @@ bool PromotionRewardAuditMgr::IssueItemGrant(
         Field* persistedFields = persisted->Fetch();
         reliableReceipt = persistedFields[0].Get<std::string>() == "PROCESSING" &&
             PromotionRewardPolicy::OwnsGrantClaim(persistedFields[1].Get<std::string>(), claimToken) &&
-            (persistedFields[2].Get<uint64>() != 0 || !persistedFields[3].Get<std::string>().empty());
+            PromotionRewardPolicy::HasReliableItemReceipt(
+                persistedFields[2].Get<uint64>() != 0,
+                !persistedFields[3].Get<std::string>().empty() && persistedFields[3].Get<std::string>() != "[]",
+                !persistedFields[4].Get<std::string>().empty());
     }
 
     if (!reliableReceipt)
@@ -564,8 +584,8 @@ bool PromotionRewardAuditMgr::IssueItemGrant(
     }
 
     CharacterDatabase.DirectExecute(
-        "UPDATE `_宣传奖励流水` SET `发放状态`='ISSUED',`发放时间`=NOW(),`回滚错误`='' "
-        "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PROCESSING' AND `回滚错误`='{}'",
+        "UPDATE `_宣传奖励流水` SET `发放状态`='ISSUED',`发放时间`=NOW(),`回滚错误`='',`处理令牌`='' "
+        "WHERE `流水ID`={} AND `request_id`='{}' AND `发放状态`='PROCESSING' AND `处理令牌`='{}'",
         grantId, safeRequestId, safeClaimMarker);
 
     player->SendNewItem(firstItem, config.itemCount, true, false);
@@ -583,7 +603,7 @@ bool PromotionRewardAuditMgr::ConsumeReviewQueue(std::uint32_t limit)
         "FROM `_宣传提交记录` s "
         "INNER JOIN `_宣传奖励流水` g ON g.`提交ID`=s.`提交ID` "
         "WHERE (s.`审核状态`='APPROVED' AND g.`发放状态` IN ('ISSUED','REDEEMED')) "
-        "OR (s.`审核状态`='REJECTED' AND g.`回滚状态`='NONE') "
+        "OR (s.`审核状态`='REJECTED' AND g.`回滚状态` IN ('NONE','PENDING')) "
         "ORDER BY s.`提交ID` LIMIT {}", limit);
     if (!result)
         return false;
@@ -698,12 +718,30 @@ bool PromotionRewardAuditMgr::RollbackGrant(std::uint64_t grantId)
     if (rollbackStatus == "SUCCESS")
         return true;
 
+    if (grantStatus == "PROCESSING")
+    {
+        CharacterDatabase.DirectExecute(
+            "UPDATE `_宣传奖励流水` SET `回滚错误`='奖励正在发放，等待发放完成后追回' "
+            "WHERE `流水ID`={} AND `发放状态`='PROCESSING' AND `回滚状态`='PENDING'",
+            grantId);
+        return false;
+    }
+
     if (grantStatus == "PENDING" || grantStatus == "FAILED")
     {
         CharacterDatabase.DirectExecute(
             "UPDATE `_宣传奖励流水` SET `发放状态`='REVOKED',`回滚状态`='SUCCESS',"
-            "`回滚时间`=NOW(),`回滚错误`='' WHERE `流水ID`={}", grantId);
-        return true;
+            "`回滚时间`=NOW(),`回滚错误`='',`处理令牌`='' "
+            "WHERE `流水ID`={} AND `发放状态` IN ('PENDING','FAILED')",
+            grantId);
+        QueryResult revoked = CharacterDatabase.Query(
+            "SELECT `发放状态`,`回滚状态` FROM `_宣传奖励流水` WHERE `流水ID`={}", grantId);
+        if (!revoked)
+            return false;
+
+        Field* revokedFields = revoked->Fetch();
+        return revokedFields[0].Get<std::string>() == "REVOKED" &&
+            revokedFields[1].Get<std::string>() == "SUCCESS";
     }
 
     if (grantMode == "CDK" && IsSafeCode(code))

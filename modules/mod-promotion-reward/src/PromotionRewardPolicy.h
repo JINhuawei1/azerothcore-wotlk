@@ -51,6 +51,7 @@ enum class ProcessingRecoveryAction : std::uint8_t
 {
     RetryPending,
     FinalizeIssued,
+    RevokeWithoutIssue,
     RecoveryDebt
 };
 
@@ -91,14 +92,30 @@ inline bool OwnsGrantClaim(std::string_view storedMarker, std::string_view claim
     return storedMarker == BuildClaimMarker(claimToken);
 }
 
-constexpr ProcessingRecoveryAction ProcessingRecoveryFor(GrantMode mode, bool hasReliableReceipt)
+constexpr ProcessingRecoveryAction ProcessingRecoveryFor(
+    GrantMode mode,
+    bool hasReliableReceipt,
+    bool rollbackPending,
+    bool hasCdk)
 {
     if (mode == GrantMode::Cdk)
+    {
+        if (rollbackPending)
+            return hasCdk
+                ? ProcessingRecoveryAction::FinalizeIssued
+                : ProcessingRecoveryAction::RevokeWithoutIssue;
+
         return ProcessingRecoveryAction::RetryPending;
+    }
 
     return hasReliableReceipt
         ? ProcessingRecoveryAction::FinalizeIssued
         : ProcessingRecoveryAction::RecoveryDebt;
+}
+
+constexpr bool HasReliableItemReceipt(bool hasPrimaryGuid, bool hasGuidList, bool hasResourceSnapshot)
+{
+    return (hasPrimaryGuid || hasGuidList) && hasResourceSnapshot;
 }
 }
 
