@@ -225,4 +225,5 @@ def test_pending_rollbacks_are_retried_by_the_review_worker():
     end = source.index("bool PromotionRewardAuditMgr::BeginCodeRedeem", start)
     review = source[start:end]
 
-    assert "g.`回滚状态` IN ('NONE','PENDING')" in review
+    assert "g.`回滚状态`='NONE'" in review
+    assert "g.`回滚状态`='PENDING' AND g.`发放状态`<>'PROCESSING' AND g.`回滚错误`=''" in review

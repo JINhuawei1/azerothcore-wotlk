@@ -603,7 +603,8 @@ bool PromotionRewardAuditMgr::ConsumeReviewQueue(std::uint32_t limit)
         "FROM `_宣传提交记录` s "
         "INNER JOIN `_宣传奖励流水` g ON g.`提交ID`=s.`提交ID` "
         "WHERE (s.`审核状态`='APPROVED' AND g.`发放状态` IN ('ISSUED','REDEEMED')) "
-        "OR (s.`审核状态`='REJECTED' AND g.`回滚状态` IN ('NONE','PENDING')) "
+        "OR (s.`审核状态`='REJECTED' AND (g.`回滚状态`='NONE' "
+        "OR (g.`回滚状态`='PENDING' AND g.`发放状态`<>'PROCESSING' AND g.`回滚错误`=''))) "
         "ORDER BY s.`提交ID` LIMIT {}", limit);
     if (!result)
         return false;
