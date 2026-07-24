@@ -3,6 +3,7 @@
  */
 
 #include "PromotionRewardModule.h"
+#include "PromotionRewardAudit.h"
 #include "AddonThrottle.h"
 #include "loader.h"
 #include "Config.h"
@@ -20,8 +21,10 @@
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSessionMgr.h"
+#include <algorithm>
 #include <random>
 #include <sstream>
+#include <utility>
 
 extern void AddSC_PromotionReward_CommandScript();
 
@@ -112,6 +115,73 @@ void PromotionRewardMgr::SavePlayerData(uint32 guid)
         "VALUES ({},{}) "
         "ON DUPLICATE KEY UPDATE `宣传天数`=VALUES(`宣传天数`)",
         guid, it->second.days);
+}
+
+bool PromotionRewardMgr::BeginItemCapture(Player* player, uint64 operationId)
+{
+    if (!player || operationId == 0)
+        return false;
+
+    uint32 guid = player->GetGUID().GetCounter();
+    if (_itemCaptures.find(guid) != _itemCaptures.end())
+        return false;
+
+    PromotionItemCaptureContext context;
+    context.operationId = operationId;
+    _itemCaptures.emplace(guid, std::move(context));
+    return true;
+}
+
+std::vector<uint32> PromotionRewardMgr::EndItemCapture(Player* player, uint64 operationId)
+{
+    if (!player || operationId == 0)
+        return {};
+
+    uint32 guid = player->GetGUID().GetCounter();
+    auto it = _itemCaptures.find(guid);
+    if (it == _itemCaptures.end() || it->second.operationId != operationId)
+        return {};
+
+    std::vector<uint32> itemGuids = std::move(it->second.itemGuids);
+    _itemCaptures.erase(it);
+    return itemGuids;
+}
+
+void PromotionRewardMgr::CancelItemCapture(Player* player, uint64 operationId)
+{
+    if (!player)
+        return;
+
+    uint32 guid = player->GetGUID().GetCounter();
+    auto it = _itemCaptures.find(guid);
+    if (it == _itemCaptures.end())
+        return;
+
+    if (operationId == 0 || it->second.operationId == operationId)
+        _itemCaptures.erase(it);
+}
+
+void PromotionRewardMgr::RecordCapturedItem(Player* player, Item* item)
+{
+    if (!player || !item)
+        return;
+
+    auto it = _itemCaptures.find(player->GetGUID().GetCounter());
+    if (it == _itemCaptures.end())
+        return;
+
+    uint32 itemGuid = item->GetGUID().GetCounter();
+    if (itemGuid == 0)
+        return;
+
+    std::vector<uint32>& itemGuids = it->second.itemGuids;
+    if (std::find(itemGuids.begin(), itemGuids.end(), itemGuid) == itemGuids.end())
+        itemGuids.push_back(itemGuid);
+}
+
+void PromotionRewardMgr::ClearAllItemCaptures()
+{
+    _itemCaptures.clear();
 }
 
 std::string PromotionRewardMgr::GenerateUniqueCode()
@@ -394,9 +464,32 @@ void PromotionReward_WorldScript::OnAfterConfigLoad(bool /*reload*/)
 
 void PromotionReward_WorldScript::OnStartup()
 {
+    _auditTimerMs = 0;
+    sPromotionRewardMgr->ClearAllItemCaptures();
     sPromotionRewardMgr->LoadConfig();
     sPromotionRewardMgr->LoadAllPlayers();
     LOG_INFO("server.loading", "→宣传奖励系统√");
+}
+
+void PromotionReward_WorldScript::OnUpdate(uint32 diff)
+{
+    if (!sPromotionRewardMgr->IsEnabled())
+        return;
+
+    _auditTimerMs += diff;
+    if (_auditTimerMs < 1000)
+        return;
+
+    _auditTimerMs = 0;
+
+    // 每次轮询最多消费 5 条发奖和 5 条审核，合计不超过 10 条。
+    sPromotionRewardAuditMgr->ConsumeGrantQueue(5);
+    sPromotionRewardAuditMgr->ConsumeReviewQueue(5);
+}
+
+void PromotionReward_WorldScript::OnShutdown()
+{
+    sPromotionRewardMgr->ClearAllItemCaptures();
 }
 
 // ============================================================
@@ -415,11 +508,13 @@ void PromotionReward_PlayerScript::OnPlayerLogin(Player* player)
 
 void PromotionReward_PlayerScript::OnPlayerLogout(Player* player)
 {
-    (void)player;
+    sPromotionRewardMgr->CancelItemCapture(player);
 }
 
 void PromotionReward_PlayerScript::OnPlayerStoreNewItem(Player* player, Item* item, uint32 /*count*/)
 {
+    sPromotionRewardMgr->RecordCapturedItem(player, item);
+
     if (!sPromotionRewardMgr->IsEnabled() || !player || !item)
         return;
     if (!sPromotionRewardMgr->IsPromotionWeaponEntry(item->GetEntry()))

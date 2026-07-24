@@ -55,6 +55,12 @@ struct PromotionPlayerData
     uint32 days = 0;
 };
 
+struct PromotionItemCaptureContext
+{
+    uint64 operationId = 0;
+    std::vector<uint32> itemGuids;
+};
+
 class PromotionRewardMgr
 {
 public:
@@ -100,6 +106,13 @@ public:
     // 给客户端 UI 用的兑换接口(直接走流程,不依赖 mod-redemption-code 命令)
     bool ClientRedeem(Player* player, std::string const& code, std::string& errMsg);
 
+    // 审计发奖/兑换期间捕获 OnPlayerStoreNewItem 产生的物品 GUID。
+    bool BeginItemCapture(Player* player, uint64 operationId);
+    std::vector<uint32> EndItemCapture(Player* player, uint64 operationId);
+    void CancelItemCapture(Player* player, uint64 operationId = 0);
+    void RecordCapturedItem(Player* player, Item* item);
+    void ClearAllItemCaptures();
+
 private:
     PromotionRewardMgr() = default;
     ~PromotionRewardMgr() = default;
@@ -108,6 +121,7 @@ private:
 
     PromotionConfig                                  _cfg;
     std::unordered_map<uint32, PromotionPlayerData>  _players;
+    std::unordered_map<uint32, PromotionItemCaptureContext> _itemCaptures;
 };
 
 #define sPromotionRewardMgr PromotionRewardMgr::instance()
@@ -118,6 +132,11 @@ public:
     PromotionReward_WorldScript();
     void OnAfterConfigLoad(bool reload) override;
     void OnStartup() override;
+    void OnUpdate(uint32 diff) override;
+    void OnShutdown() override;
+
+private:
+    uint32 _auditTimerMs = 0;
 };
 
 class PromotionReward_PlayerScript : public PlayerScript
