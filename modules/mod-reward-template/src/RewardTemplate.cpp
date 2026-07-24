@@ -204,14 +204,48 @@ bool RewardTemplate::GiveRewardWithoutItems(Player* player, uint32 rewardId, boo
 bool RewardTemplate::GiveRewardInternal(Player* player, uint32 rewardId, bool checkChance, bool showNotification,
     bool processItems, RewardGrantReceipt* receipt)
 {
-    if (!player || !_enabled)
+    auto failGrant = [&receipt]()
+    {
+        if (receipt)
+            *receipt = {};
         return false;
+    };
+
+    if (!player || !_enabled)
+        return failGrant();
 
     RewardTemplateEntry const* reward = GetRewardTemplate(rewardId);
     if (!reward)
     {
         LOG_ERROR("module", "奖励模板ID {} 不存在", rewardId);
-        return false;
+        return failGrant();
+    }
+
+    // 带回执的发放在开始修改玩家状态前拒绝可确定失败的配置，避免留下明显的部分奖励。
+    bool hasCurrencyReward = reward->PaoDian != 0 || reward->JiFen != 0 || reward->YaoBi != 0 ||
+        reward->MoBi != 0 || reward->XianBi != 0 || reward->ShenBi != 0;
+    if (receipt && hasCurrencyReward && !sCurrencySystem->IsEnabled())
+    {
+        LOG_WARN("module", "奖励模板 {} 配置了货币奖励，但货币系统模块未启用", reward->Id);
+        return failGrant();
+    }
+
+    if (receipt && reward->TitleId > 0 && !sCharTitlesStore.LookupEntry(reward->TitleId))
+    {
+        LOG_ERROR("module", "头衔ID {} 不存在", reward->TitleId);
+        return failGrant();
+    }
+
+    if (receipt && processItems)
+    {
+        for (RewardItemEntry const& item : reward->RewardItems)
+        {
+            if (!sObjectMgr->GetItemTemplate(item.ItemId))
+            {
+                LOG_ERROR("module", "物品ID {} 不存在", item.ItemId);
+                return failGrant();
+            }
+        }
     }
 
     // 是否显示提示：showNotification参数优先级最高，其次是模板配置
@@ -230,7 +264,7 @@ bool RewardTemplate::GiveRewardInternal(Player* player, uint32 rewardId, bool ch
         {
             if (canNotify)
                 ChatHandler(player->GetSession()).PSendSysMessage("未能获得奖励，运气不佳！");
-            return false;
+            return failGrant();
         }
     }
 
@@ -242,6 +276,8 @@ bool RewardTemplate::GiveRewardInternal(Player* player, uint32 rewardId, bool ch
         for (std::size_t i = 0; i < currencyNames.size(); ++i)
             currenciesBefore[i] = sCurrencySystem->GetCurrency(player, currencyNames[i]);
     }
+
+    bool success = true;
 
     // 处理金币奖励
     if (reward->Money != 0)
@@ -259,7 +295,7 @@ bool RewardTemplate::GiveRewardInternal(Player* player, uint32 rewardId, bool ch
             {
                 if (canNotify)
                     ChatHandler(player->GetSession()).PSendSysMessage("金币不足，无法扣除 {} 铜币", moneyCost);
-                return false;
+                return failGrant();
             }
             player->ModifyMoney(reward->Money);
             if (canNotify)
@@ -288,7 +324,10 @@ bool RewardTemplate::GiveRewardInternal(Player* player, uint32 rewardId, bool ch
         // 处理物品奖励
         for (const auto& item : reward->RewardItems)
         {
-            if (!ProcessRewardItem(player, item, receipt))
+            bool itemSuccess = ProcessRewardItem(player, item, receipt);
+            if (receipt)
+                success = itemSuccess && success;
+            if (!itemSuccess)
             {
                 if (canNotify)
                     ChatHandler(player->GetSession()).PSendSysMessage("无法添加物品 {}，背包可能已满", item.ItemId);
@@ -297,20 +336,34 @@ bool RewardTemplate::GiveRewardInternal(Player* player, uint32 rewardId, bool ch
     }
 
     // 处理货币奖励
-    ProcessCurrencyReward(player, *reward, canNotify);
+    bool currencySuccess = ProcessCurrencyReward(player, *reward, canNotify);
+    if (receipt)
+        success = currencySuccess && success;
 
     // 处理境界经验/点数奖励
     // 【半截实现补齐】这两个函数此前从未被调用——8 个经验/点数字段配置后完全不发放
-    ProcessExperienceReward(player, *reward);
-    ProcessPointsReward(player, *reward);
+    bool experienceSuccess = ProcessExperienceReward(player, *reward);
+    if (receipt)
+        success = experienceSuccess && success;
+    bool pointsSuccess = ProcessPointsReward(player, *reward);
+    if (receipt)
+        success = pointsSuccess && success;
 
     // 处理特殊奖励
-    ProcessSpecialReward(player, *reward, canNotify);
+    bool specialSuccess = ProcessSpecialReward(player, *reward, canNotify);
+    if (receipt)
+        success = specialSuccess && success;
 
     // 显示客户端提示
     if (!reward->ClientDisplay.empty() && canNotify)
     {
         ChatHandler(player->GetSession()).PSendSysMessage("{}", reward->ClientDisplay);
+    }
+
+    if (receipt && !success)
+    {
+        *receipt = {};
+        return false;
     }
 
     if (receipt)

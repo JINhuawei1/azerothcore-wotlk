@@ -36,6 +36,12 @@ int main()
     assert(failed.moneyDelta == 0);
     assert(failed.resourceDeltas.empty());
 
+    RewardGrantReceipt successful = { { 777 }, 88, { { "积分", 2 } } };
+    assert(CompleteReceiptGrant(true, successful));
+    assert(successful.itemGuids.size() == 1);
+    assert(successful.moneyDelta == 88);
+    assert(successful.resourceDeltas.at("积分") == 2);
+
     RewardGrantReceipt issued;
     issued.itemGuids = { 9001, 9002 };
     issued.moneyDelta = 1234;
