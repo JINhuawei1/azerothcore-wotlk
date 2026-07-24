@@ -21,12 +21,16 @@ CREATE TABLE IF NOT EXISTS `_宣传提交记录` (
   `审核人账号ID`       INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '管理员账号ID，自动预检为0',
   `审核人名称`         VARCHAR(64) NOT NULL DEFAULT '' COMMENT '管理员账号或显示名',
   `审核理由`           VARCHAR(1024) NOT NULL DEFAULT '' COMMENT '审核通过或驳回理由',
+  `审核处理状态`       VARCHAR(16) NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING/PROCESSING/APPLIED',
+  `审核处理令牌`       VARCHAR(160) NOT NULL DEFAULT '' COMMENT 'worldserver审核副作用独占claim token',
+  `审核处理时间`       DATETIME NULL,
   `提交时间`           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `更新时间`           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`提交ID`),
   KEY `idx_宣传提交记录_任务账号时间` (`任务ID`, `账号ID`, `提交时间`),
   KEY `idx_宣传提交记录_IP时间` (`来源IP`, `提交时间`),
   KEY `idx_宣传提交记录_状态` (`审核状态`, `预检状态`),
+  KEY `idx_宣传提交记录_处理状态` (`审核处理状态`, `更新时间`),
   KEY `idx_宣传提交记录_内容哈希` (`任务ID`, `账号ID`, `内容哈希`)
 )
 COMMENT = '自动宣传审核提交记录'
@@ -35,6 +39,45 @@ COLLATE = utf8mb4_unicode_ci
 ENGINE = InnoDB
 ROW_FORMAT = DEFAULT
 ;
+
+SET @promotion_review_state_column_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '_宣传提交记录' AND COLUMN_NAME = '审核处理状态'
+);
+SET @promotion_review_state_column_sql := IF(
+  @promotion_review_state_column_exists = 0,
+  'ALTER TABLE `_宣传提交记录` ADD COLUMN `审核处理状态` VARCHAR(16) NOT NULL DEFAULT ''PENDING'' COMMENT ''PENDING/PROCESSING/APPLIED'' AFTER `审核理由`',
+  'SELECT 1'
+);
+PREPARE promotion_review_state_column_stmt FROM @promotion_review_state_column_sql;
+EXECUTE promotion_review_state_column_stmt;
+DEALLOCATE PREPARE promotion_review_state_column_stmt;
+
+SET @promotion_review_token_column_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '_宣传提交记录' AND COLUMN_NAME = '审核处理令牌'
+);
+SET @promotion_review_token_column_sql := IF(
+  @promotion_review_token_column_exists = 0,
+  'ALTER TABLE `_宣传提交记录` ADD COLUMN `审核处理令牌` VARCHAR(160) NOT NULL DEFAULT '''' COMMENT ''worldserver审核副作用独占claim token'' AFTER `审核处理状态`',
+  'SELECT 1'
+);
+PREPARE promotion_review_token_column_stmt FROM @promotion_review_token_column_sql;
+EXECUTE promotion_review_token_column_stmt;
+DEALLOCATE PREPARE promotion_review_token_column_stmt;
+
+SET @promotion_review_time_column_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '_宣传提交记录' AND COLUMN_NAME = '审核处理时间'
+);
+SET @promotion_review_time_column_sql := IF(
+  @promotion_review_time_column_exists = 0,
+  'ALTER TABLE `_宣传提交记录` ADD COLUMN `审核处理时间` DATETIME NULL AFTER `审核处理令牌`',
+  'SELECT 1'
+);
+PREPARE promotion_review_time_column_stmt FROM @promotion_review_time_column_sql;
+EXECUTE promotion_review_time_column_stmt;
+DEALLOCATE PREPARE promotion_review_time_column_stmt;
 
 CREATE TABLE IF NOT EXISTS `_宣传奖励流水` (
   `流水ID`             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '奖励流水唯一ID',
@@ -135,7 +178,7 @@ CREATE TABLE IF NOT EXISTS `_宣传账号统计` (
   `今日发放次数`       INT UNSIGNED NOT NULL DEFAULT 0,
   `今日无效次数`       INT UNSIGNED NOT NULL DEFAULT 0,
   `连续无效次数`       INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '审核通过后清零',
-  `封禁状态`           TINYINT NOT NULL DEFAULT 0 COMMENT '0=未封禁，1=已封禁',
+  `封禁状态`           TINYINT NOT NULL DEFAULT 0 COMMENT '0=未封禁，1=已封禁，2=等待封禁',
   `封禁时间`           DATETIME NULL,
   `封禁原因`           VARCHAR(1024) NOT NULL DEFAULT '',
   `最后审核时间`       DATETIME NULL,

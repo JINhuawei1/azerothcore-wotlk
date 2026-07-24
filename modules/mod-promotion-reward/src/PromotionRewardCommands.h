@@ -31,6 +31,11 @@ public:
     static bool HandleQueryCommand  (ChatHandler* handler, Optional<std::string> targetName);
     static bool HandleReloadCommand (ChatHandler* handler, char const* args);
     static bool HandleOpenUICommand (ChatHandler* handler, char const* args);
+    static bool HandleApproveSubmissionCommand(ChatHandler* handler, uint64 submissionId);
+    static bool HandleRejectSubmissionCommand(ChatHandler* handler, uint64 submissionId, Tail reason);
+    static bool HandleRetryRollbackCommand(ChatHandler* handler, uint64 submissionId);
+    static bool HandleQueryRollbackCommand(ChatHandler* handler, uint64 submissionId);
+    static bool HandleClearRecoveryDebtCommand(ChatHandler* handler, uint64 submissionId, Tail reason);
 };
 
 #endif // PROMOTION_REWARD_COMMANDS_H

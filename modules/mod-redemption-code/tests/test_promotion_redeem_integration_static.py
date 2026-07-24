@@ -55,7 +55,7 @@ def test_tracked_code_uses_an_exclusive_redeem_claim() -> None:
     assert "`处理令牌`=''" in complete
 
     rollback_start = audit.index("bool PromotionRewardAuditMgr::RollbackGrant")
-    rollback_end = audit.index("void PromotionRewardAuditMgr::ApplyReviewDecision", rollback_start)
+    rollback_end = audit.index("bool PromotionRewardAuditMgr::RetryRollback", rollback_start)
     rollback = audit[rollback_start:rollback_end]
     assert "`处理令牌`" in rollback
     assert "REDEEM:" in rollback
@@ -100,6 +100,8 @@ def test_audit_completion_persists_actual_redeemer_and_receipt() -> None:
     begin_start = audit.index("bool PromotionRewardAuditMgr::BeginCodeRedeem")
     complete_start = audit.index("void PromotionRewardAuditMgr::CompleteCodeRedeem", begin_start)
     begin = audit[begin_start:complete_start]
+    complete_end = audit.index("bool PromotionRewardAuditMgr::RequestRollback", complete_start)
+    complete = audit[complete_start:complete_end]
 
     assert "`回滚状态`='NONE'" in begin
     assert "`发放状态`,`回滚状态`" in begin
@@ -107,7 +109,8 @@ def test_audit_completion_persists_actual_redeemer_and_receipt() -> None:
     assert 'rollbackStatus != "NONE"' in begin
     assert "CollectPromotionItemGuids" in audit
     assert "snapshot.oldItemGuids" in audit
-    assert "EndItemCapture(player, snapshot.grantId)" in audit
+    assert "EndItemCapture(" in complete
+    assert "snapshot.grantId, &captureExact, &captureError" in complete
     assert "INSERT INTO `_宣传兑换流水`" in audit
     assert "player->GetSession()->GetAccountId()" in audit
     assert "player->GetGUID().GetCounter()" in audit
@@ -116,6 +119,8 @@ def test_audit_completion_persists_actual_redeemer_and_receipt() -> None:
     assert "snapshot.receiptComplete" in audit
     assert "`回滚状态`,`回滚错误`" in audit
     assert "SELECT `兑换角色GUID`,`账号ID`,`CDK` FROM `_宣传兑换流水`" in audit
+    assert "player->SaveInventoryAndGoldToDB" in complete
+    assert "CharacterDatabase.DirectCommitTransaction" in complete
 
 
 def test_stale_redeem_claims_are_recovered_without_duplicate_rewards() -> None:

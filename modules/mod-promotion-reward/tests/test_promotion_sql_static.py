@@ -201,10 +201,10 @@ def test_grant_claim_uses_a_dedicated_field_and_processing_rollback_is_deferred(
     assert "`回滚错误`" not in claim
 
     rollback_start = source.index("bool PromotionRewardAuditMgr::RollbackGrant")
-    rollback_end = source.index("void PromotionRewardAuditMgr::ApplyReviewDecision", rollback_start)
+    rollback_end = source.index("bool PromotionRewardAuditMgr::RetryRollback", rollback_start)
     rollback = source[rollback_start:rollback_end]
     assert 'grantStatus == "PROCESSING"' in rollback
-    assert rollback.index('grantStatus == "PROCESSING"') < rollback.index('grantStatus == "PENDING"')
+    assert rollback.index('grantStatus == "PROCESSING"') < rollback.index('grantStatus != "PENDING"')
 
 
 def test_item_processing_recovery_requires_guid_and_resource_snapshot():
@@ -219,11 +219,15 @@ def test_item_processing_recovery_requires_guid_and_resource_snapshot():
     assert "RevokeWithoutIssue" in recovery
 
 
-def test_pending_rollbacks_are_retried_by_the_review_worker():
+def test_pending_rollbacks_are_retried_by_the_independent_rollback_worker():
     source = AUDIT_CPP.read_text(encoding="utf-8")
-    start = source.index("bool PromotionRewardAuditMgr::ConsumeReviewQueue")
-    end = source.index("bool PromotionRewardAuditMgr::BeginCodeRedeem", start)
-    review = source[start:end]
+    review_start = source.index("bool PromotionRewardAuditMgr::ConsumeReviewQueue")
+    review_end = source.index("bool PromotionRewardAuditMgr::BeginCodeRedeem", review_start)
+    review = source[review_start:review_end]
+    rollback_start = source.index("bool PromotionRewardAuditMgr::ConsumeRollbackQueue")
+    rollback_end = source.index("bool PromotionRewardAuditMgr::ConsumeBanQueue", rollback_start)
+    rollback = source[rollback_start:rollback_end]
 
-    assert "g.`回滚状态`='NONE'" in review
-    assert "g.`回滚状态`='PENDING' AND g.`发放状态`<>'PROCESSING' AND g.`回滚错误`=''" in review
+    assert "RollbackGrant(" not in review
+    assert "`回滚状态`='PENDING'" in rollback
+    assert "RollbackGrant(grantId)" in rollback

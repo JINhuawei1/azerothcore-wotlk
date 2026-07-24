@@ -54,5 +54,24 @@ int main()
     assert(!HasReliableItemReceipt(false, true, false));
     assert(!HasReliableItemReceipt(false, false, true));
 
+    assert(DetermineRollbackAction(GrantMode::Cdk, false, false, false) ==
+        RollbackAction::CompleteWithoutIssue);
+    assert(DetermineRollbackAction(GrantMode::Cdk, true, false, false) ==
+        RollbackAction::RevokeUnusedCdk);
+    assert(DetermineRollbackAction(GrantMode::Cdk, true, true, false) ==
+        RollbackAction::RollbackRedeemedCdk);
+    assert(DetermineRollbackAction(GrantMode::Item, true, false, true) ==
+        RollbackAction::RollbackDirectItem);
+    assert(DetermineRollbackAction(GrantMode::Item, true, false, false) ==
+        RollbackAction::RecoveryDebt);
+    assert(DetermineRollbackAction(GrantMode::Item, true, false, true, true) ==
+        RollbackAction::Defer);
+
+    assert(CanReverseResourceDelta(100, 60));
+    assert(CanReverseResourceDelta(60, 60));
+    assert(!CanReverseResourceDelta(59, 60));
+    assert(CanReverseResourceDelta(0, 0));
+    assert(CanReverseResourceDelta(0, -60));
+
     return 0;
 }

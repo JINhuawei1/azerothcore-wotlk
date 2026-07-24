@@ -3,6 +3,7 @@
  */
 
 #include "PromotionRewardCommands.h"
+#include "PromotionRewardAudit.h"
 #include "PromotionRewardModule.h"
 #include "Chat.h"
 #include "CharacterCache.h"
@@ -33,6 +34,11 @@ ChatCommandTable PromotionReward_CommandScript::GetCommands() const
         { "帮助", HandleHelpCommand,    SEC_PLAYER,         Console::No  },
         { "发放", HandleIssueCommand,   SEC_ADMINISTRATOR,  Console::Yes },
         { "查询", HandleQueryCommand,   SEC_GAMEMASTER,     Console::Yes },
+        { "审核通过", HandleApproveSubmissionCommand, SEC_ADMINISTRATOR, Console::Yes },
+        { "审核无效", HandleRejectSubmissionCommand, SEC_ADMINISTRATOR, Console::Yes },
+        { "回收重试", HandleRetryRollbackCommand, SEC_GAMEMASTER, Console::Yes },
+        { "回收查询", HandleQueryRollbackCommand, SEC_GAMEMASTER, Console::Yes },
+        { "欠账清除", HandleClearRecoveryDebtCommand, SEC_ADMINISTRATOR, Console::Yes },
         { "重载", HandleReloadCommand,  SEC_ADMINISTRATOR,  Console::Yes },
         { "界面", HandleOpenUICommand,  SEC_PLAYER,         Console::No  },
         { "ui",   HandleOpenUICommand,  SEC_PLAYER,         Console::No  },
@@ -59,6 +65,8 @@ bool PromotionReward_CommandScript::HandleHelpCommand(ChatHandler* handler, char
     handler->PSendSysMessage("GM 命令:");
     handler->PSendSysMessage("  .宣传奖励 查询 [玩家名]");
     handler->PSendSysMessage("    无参=查自己。显示累计宣传天数与当前武器属性");
+    handler->PSendSysMessage("  .宣传奖励 回收查询 <提交ID>");
+    handler->PSendSysMessage("  .宣传奖励 回收重试 <提交ID>");
     handler->PSendSysMessage("");
     handler->PSendSysMessage("管理员命令:");
     handler->PSendSysMessage("  .宣传奖励 发放 [玩家名] [数量=1]");
@@ -66,6 +74,9 @@ bool PromotionReward_CommandScript::HandleHelpCommand(ChatHandler* handler, char
     handler->PSendSysMessage("    第1次兑换给宣传神器1,第2次回收旧武器并给宣传神器2");
     handler->PSendSysMessage("  .宣传奖励 重载");
     handler->PSendSysMessage("    重新加载 world.`_宣传奖励系统` 配置");
+    handler->PSendSysMessage("  .宣传奖励 审核通过 <提交ID>");
+    handler->PSendSysMessage("  .宣传奖励 审核无效 <提交ID> <理由>");
+    handler->PSendSysMessage("  .宣传奖励 欠账清除 <提交ID> <线下处理说明>");
     handler->PSendSysMessage("========================================");
     handler->PSendSysMessage("注意:宣传CDK是通用码,不绑定固定武器等级");
     handler->PSendSysMessage("武器只要在玩家身上(背包或装备槽)就生效");
@@ -217,6 +228,103 @@ bool PromotionReward_CommandScript::HandleOpenUICommand(ChatHandler* handler, ch
 
     sPromotionRewardMgr->SendInfoToClient(player);
     sPromotionRewardMgr->SendOpenUIToClient(player);
+    return true;
+}
+
+bool PromotionReward_CommandScript::HandleApproveSubmissionCommand(ChatHandler* handler, uint64 submissionId)
+{
+    uint32 reviewerAccountId = handler->GetSession() ? handler->GetSession()->GetAccountId() : 0;
+    if (!sPromotionRewardAuditMgr->ApplyReviewDecision(
+        submissionId, true, reviewerAccountId, "GM命令审核通过"))
+    {
+        handler->PSendSysMessage("提交 {} 不存在、已审核或状态冲突", submissionId);
+        handler->SetSentErrorMessage(true);
+        return false;
+    }
+
+    sPromotionRewardAuditMgr->ConsumeReviewQueue(1);
+    handler->PSendSysMessage("提交 {} 已登记为审核通过", submissionId);
+    return true;
+}
+
+bool PromotionReward_CommandScript::HandleRejectSubmissionCommand(
+    ChatHandler* handler,
+    uint64 submissionId,
+    Tail reason)
+{
+    if (reason.empty())
+    {
+        handler->PSendSysMessage("用法: .宣传奖励 审核无效 <提交ID> <理由>");
+        handler->SetSentErrorMessage(true);
+        return false;
+    }
+
+    uint32 reviewerAccountId = handler->GetSession() ? handler->GetSession()->GetAccountId() : 0;
+    if (!sPromotionRewardAuditMgr->ApplyReviewDecision(
+        submissionId, false, reviewerAccountId, std::string(reason)))
+    {
+        handler->PSendSysMessage("提交 {} 不存在、已审核或状态冲突", submissionId);
+        handler->SetSentErrorMessage(true);
+        return false;
+    }
+
+    sPromotionRewardAuditMgr->ConsumeReviewQueue(1);
+    handler->PSendSysMessage("提交 {} 已登记为审核无效，奖励进入独立回收队列", submissionId);
+    return true;
+}
+
+bool PromotionReward_CommandScript::HandleRetryRollbackCommand(ChatHandler* handler, uint64 submissionId)
+{
+    if (!sPromotionRewardAuditMgr->RetryRollback(submissionId))
+    {
+        handler->PSendSysMessage("提交 {} 不存在或当前状态不能重试", submissionId);
+        handler->SetSentErrorMessage(true);
+        return false;
+    }
+
+    sPromotionRewardAuditMgr->ConsumeRollbackQueue(1);
+    std::string summary;
+    if (sPromotionRewardAuditMgr->GetRollbackSummary(submissionId, summary))
+        handler->PSendSysMessage("{}", summary);
+    return true;
+}
+
+bool PromotionReward_CommandScript::HandleQueryRollbackCommand(ChatHandler* handler, uint64 submissionId)
+{
+    std::string summary;
+    if (!sPromotionRewardAuditMgr->GetRollbackSummary(submissionId, summary))
+    {
+        handler->PSendSysMessage("找不到提交 {} 的奖励流水", submissionId);
+        handler->SetSentErrorMessage(true);
+        return false;
+    }
+
+    handler->PSendSysMessage("{}", summary);
+    return true;
+}
+
+bool PromotionReward_CommandScript::HandleClearRecoveryDebtCommand(
+    ChatHandler* handler,
+    uint64 submissionId,
+    Tail reason)
+{
+    if (reason.empty())
+    {
+        handler->PSendSysMessage("用法: .宣传奖励 欠账清除 <提交ID> <线下处理说明>");
+        handler->SetSentErrorMessage(true);
+        return false;
+    }
+
+    uint32 operatorAccountId = handler->GetSession() ? handler->GetSession()->GetAccountId() : 0;
+    if (!sPromotionRewardAuditMgr->ClearRecoveryDebt(
+        submissionId, operatorAccountId, std::string(reason)))
+    {
+        handler->PSendSysMessage("提交 {} 不存在或当前不是追回欠账状态", submissionId);
+        handler->SetSentErrorMessage(true);
+        return false;
+    }
+
+    handler->PSendSysMessage("提交 {} 的追回欠账已按管理员说明关闭", submissionId);
     return true;
 }
 

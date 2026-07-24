@@ -5,6 +5,7 @@
 #include "PromotionRewardModule.h"
 #include "PromotionRewardAudit.h"
 #include "AddonThrottle.h"
+#include "Bag.h"
 #include "loader.h"
 #include "Config.h"
 #include "Chat.h"
@@ -33,6 +34,37 @@ constexpr uint32 PROMO_WEAPON_ENTRY_BASE = 997000;
 constexpr uint32 PROMO_WEAPON_MIN_ENTRY  = 997001;
 constexpr uint32 PROMO_WEAPON_MAX_ENTRY  = 998000;
 constexpr uint32 PROMO_WEAPON_MAX_LEVEL  = 1000;
+
+namespace
+{
+void SnapshotItemCounts(Player* player, std::unordered_map<uint32, uint32>& counts)
+{
+    counts.clear();
+    if (!player)
+        return;
+
+    auto collect = [&counts](Item* item)
+    {
+        if (item)
+            counts[item->GetGUID().GetCounter()] = item->GetCount();
+    };
+
+    for (uint16 slot = PLAYER_SLOT_START; slot < PLAYER_SLOT_END; ++slot)
+        collect(player->GetItemByPos(INVENTORY_SLOT_BAG_0, static_cast<uint8>(slot)));
+
+    auto collectBag = [&collect, player](uint8 bagSlot)
+    {
+        if (Bag* bag = player->GetBagByPos(bagSlot))
+            for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
+                collect(bag->GetItemByPos(static_cast<uint8>(slot)));
+    };
+
+    for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+        collectBag(bagSlot);
+    for (uint8 bagSlot = BANK_SLOT_BAG_START; bagSlot < BANK_SLOT_BAG_END; ++bagSlot)
+        collectBag(bagSlot);
+}
+}
 
 PromotionRewardMgr* PromotionRewardMgr::instance()
 {
@@ -128,11 +160,16 @@ bool PromotionRewardMgr::BeginItemCapture(Player* player, uint64 operationId)
 
     PromotionItemCaptureContext context;
     context.operationId = operationId;
+    SnapshotItemCounts(player, context.initialItemCounts);
     _itemCaptures.emplace(guid, std::move(context));
     return true;
 }
 
-std::vector<uint32> PromotionRewardMgr::EndItemCapture(Player* player, uint64 operationId)
+std::vector<uint32> PromotionRewardMgr::EndItemCapture(
+    Player* player,
+    uint64 operationId,
+    bool* receiptExact,
+    std::string* receiptError)
 {
     if (!player || operationId == 0)
         return {};
@@ -141,6 +178,11 @@ std::vector<uint32> PromotionRewardMgr::EndItemCapture(Player* player, uint64 op
     auto it = _itemCaptures.find(guid);
     if (it == _itemCaptures.end() || it->second.operationId != operationId)
         return {};
+
+    if (receiptExact)
+        *receiptExact = it->second.receiptExact;
+    if (receiptError)
+        *receiptError = it->second.receiptError;
 
     std::vector<uint32> itemGuids = std::move(it->second.itemGuids);
     _itemCaptures.erase(it);
@@ -173,6 +215,17 @@ void PromotionRewardMgr::RecordCapturedItem(Player* player, Item* item)
     uint32 itemGuid = item->GetGUID().GetCounter();
     if (itemGuid == 0)
         return;
+
+    auto initial = it->second.initialItemCounts.find(itemGuid);
+    if (initial != it->second.initialItemCounts.end())
+    {
+        if (item->GetCount() > initial->second)
+        {
+            it->second.receiptExact = false;
+            it->second.receiptError = "奖励物品合并到玩家原有堆叠，无法按新增GUID精确追回";
+        }
+        return;
+    }
 
     std::vector<uint32>& itemGuids = it->second.itemGuids;
     if (std::find(itemGuids.begin(), itemGuids.end(), itemGuid) == itemGuids.end())
@@ -482,9 +535,11 @@ void PromotionReward_WorldScript::OnUpdate(uint32 diff)
 
     _auditTimerMs = 0;
 
-    // 每次轮询最多消费 5 条发奖和 5 条审核，合计不超过 10 条。
+    // 发奖、审核副作用、精确回收和封禁各有独立有界队列，避免长期回收欠账挤占审核窗口。
     sPromotionRewardAuditMgr->ConsumeGrantQueue(5);
     sPromotionRewardAuditMgr->ConsumeReviewQueue(5);
+    sPromotionRewardAuditMgr->ConsumeRollbackQueue(5);
+    sPromotionRewardAuditMgr->ConsumeBanQueue(5);
 }
 
 void PromotionReward_WorldScript::OnShutdown()

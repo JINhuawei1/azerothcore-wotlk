@@ -59,6 +59,9 @@ struct PromotionItemCaptureContext
 {
     uint64 operationId = 0;
     std::vector<uint32> itemGuids;
+    std::unordered_map<uint32, uint32> initialItemCounts;
+    bool receiptExact = true;
+    std::string receiptError;
 };
 
 class PromotionRewardMgr
@@ -108,7 +111,8 @@ public:
 
     // 审计发奖/兑换期间捕获 OnPlayerStoreNewItem 产生的物品 GUID。
     bool BeginItemCapture(Player* player, uint64 operationId);
-    std::vector<uint32> EndItemCapture(Player* player, uint64 operationId);
+    std::vector<uint32> EndItemCapture(Player* player, uint64 operationId,
+        bool* receiptExact = nullptr, std::string* receiptError = nullptr);
     void CancelItemCapture(Player* player, uint64 operationId = 0);
     void RecordCapturedItem(Player* player, Item* item);
     void ClearAllItemCaptures();

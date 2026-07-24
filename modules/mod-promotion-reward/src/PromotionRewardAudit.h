@@ -35,6 +35,8 @@ public:
 
     bool ConsumeGrantQueue(std::uint32_t limit = 10);
     bool ConsumeReviewQueue(std::uint32_t limit = 10);
+    bool ConsumeRollbackQueue(std::uint32_t limit = 10);
+    bool ConsumeBanQueue(std::uint32_t limit = 10);
 
     bool BeginCodeRedeem(Player* player, std::string const& code, PromotionRedeemSnapshot& snapshot);
     void CompleteCodeRedeem(Player* player, std::string const& code, std::uint32_t rewardId,
@@ -42,7 +44,11 @@ public:
 
     bool RequestRollback(std::uint64_t submissionId, std::string const& reason);
     bool RollbackGrant(std::uint64_t grantId);
-    void ApplyReviewDecision(std::uint64_t submissionId, bool approved, std::uint32_t reviewerAccountId,
+    bool RetryRollback(std::uint64_t submissionId);
+    bool ClearRecoveryDebt(std::uint64_t submissionId, std::uint32_t operatorAccountId,
+        std::string const& reason);
+    bool GetRollbackSummary(std::uint64_t submissionId, std::string& summary) const;
+    bool ApplyReviewDecision(std::uint64_t submissionId, bool approved, std::uint32_t reviewerAccountId,
         std::string const& reason);
 
 private:

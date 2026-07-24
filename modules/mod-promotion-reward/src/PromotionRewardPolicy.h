@@ -55,6 +55,16 @@ enum class ProcessingRecoveryAction : std::uint8_t
     RecoveryDebt
 };
 
+enum class RollbackAction : std::uint8_t
+{
+    Defer,
+    CompleteWithoutIssue,
+    RevokeUnusedCdk,
+    RollbackRedeemedCdk,
+    RollbackDirectItem,
+    RecoveryDebt
+};
+
 constexpr ReviewStatus NextReviewStatus(ReviewStatus current, ReviewDecision decision)
 {
     if (current != ReviewStatus::Pending)
@@ -116,6 +126,33 @@ constexpr ProcessingRecoveryAction ProcessingRecoveryFor(
 constexpr bool HasReliableItemReceipt(bool hasPrimaryGuid, bool hasGuidList, bool hasResourceSnapshot)
 {
     return (hasPrimaryGuid || hasGuidList) && hasResourceSnapshot;
+}
+
+constexpr RollbackAction DetermineRollbackAction(
+    GrantMode mode,
+    bool issued,
+    bool redeemed,
+    bool hasExactItemReceipt,
+    bool processing = false)
+{
+    if (processing)
+        return RollbackAction::Defer;
+
+    if (!issued)
+        return RollbackAction::CompleteWithoutIssue;
+
+    if (mode == GrantMode::Cdk)
+        return redeemed ? RollbackAction::RollbackRedeemedCdk : RollbackAction::RevokeUnusedCdk;
+
+    return hasExactItemReceipt ? RollbackAction::RollbackDirectItem : RollbackAction::RecoveryDebt;
+}
+
+constexpr bool CanReverseResourceDelta(std::uint64_t currentValue, std::int64_t grantedDelta)
+{
+    if (grantedDelta <= 0)
+        return true;
+
+    return currentValue >= static_cast<std::uint64_t>(grantedDelta);
 }
 }
 
