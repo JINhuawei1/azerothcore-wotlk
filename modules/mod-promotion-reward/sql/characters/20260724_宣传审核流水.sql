@@ -111,7 +111,6 @@ ROW_FORMAT = DEFAULT
 ;
 
 CREATE TABLE IF NOT EXISTS `_宣传账号统计` (
-  `任务ID`             INT UNSIGNED NOT NULL,
   `账号ID`             INT UNSIGNED NOT NULL,
   `统计日期`           DATE NOT NULL COMMENT '按服务器日期统计',
   `账号名`             VARCHAR(64) NOT NULL DEFAULT '',
@@ -125,7 +124,7 @@ CREATE TABLE IF NOT EXISTS `_宣传账号统计` (
   `最后审核时间`       DATETIME NULL,
   `最后IP`             VARCHAR(45) NOT NULL DEFAULT '',
   `更新时间`           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`任务ID`, `账号ID`, `统计日期`),
+  PRIMARY KEY (`账号ID`, `统计日期`),
   KEY `idx_宣传账号统计_账号日期` (`账号ID`, `统计日期`),
   KEY `idx_宣传账号统计_状态` (`封禁状态`, `连续无效次数`)
 )
@@ -137,7 +136,6 @@ ROW_FORMAT = DEFAULT
 ;
 
 CREATE TABLE IF NOT EXISTS `_宣传IP统计` (
-  `任务ID`             INT UNSIGNED NOT NULL,
   `IP地址`             VARCHAR(45) NOT NULL,
   `统计日期`           DATE NOT NULL COMMENT '按服务器日期统计',
   `今日提交次数`       INT UNSIGNED NOT NULL DEFAULT 0,
@@ -145,9 +143,9 @@ CREATE TABLE IF NOT EXISTS `_宣传IP统计` (
   `今日无效次数`       INT UNSIGNED NOT NULL DEFAULT 0,
   `最后账号ID`         INT UNSIGNED NOT NULL DEFAULT 0,
   `更新时间`           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`任务ID`, `IP地址`, `统计日期`),
+  PRIMARY KEY (`IP地址`, `统计日期`),
   KEY `idx_宣传IP统计_IP日期` (`IP地址`, `统计日期`),
-  KEY `idx_宣传IP统计_任务日期` (`任务ID`, `统计日期`)
+  KEY `idx_宣传IP统计_日期` (`统计日期`)
 )
 COMMENT = '自动宣传IP每日次数统计'
 CHARACTER SET = utf8mb4
