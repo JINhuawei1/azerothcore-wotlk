@@ -210,14 +210,14 @@ bool RedemptionCodeMgr::UseCodeWithRewardId(Player* player, std::string const& c
         return false;
 
     PromotionRedeemSnapshot snapshot;
-    bool trackedPromotionCode = sPromotionRewardAuditMgr->BeginCodeRedeem(player, code, snapshot);
+    bool trackedPromotionCode = sPromotionRewardAuditMgr->BeginCodeRedeem(player, code, groupId, snapshot);
     if (snapshot.grantId != 0 && !trackedPromotionCode)
         return false;
 
     if (sPromotionRewardMgr->IsPromotionCodeGroup(groupId))
     {
         uint32 promoRewardId = rewardId;
-        if (!sPromotionRewardMgr->RedeemPromotionCode(player, promoRewardId))
+        if (!sPromotionRewardMgr->RedeemPromotionCode(player, groupId, promoRewardId))
         {
             if (trackedPromotionCode)
                 sPromotionRewardAuditMgr->CompleteCodeRedeem(player, code, promoRewardId, snapshot, false);

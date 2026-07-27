@@ -15,6 +15,7 @@ struct PromotionRedeemSnapshot
     std::uint64_t submissionId = 0;
     std::uint64_t grantId = 0;
     std::uint32_t taskId = 0;
+    std::uint32_t groupId = 0;
     std::string requestId;
     std::string code;
     std::string redeemToken;
@@ -38,7 +39,8 @@ public:
     bool ConsumeRollbackQueue(std::uint32_t limit = 10);
     bool ConsumeBanQueue(std::uint32_t limit = 10);
 
-    bool BeginCodeRedeem(Player* player, std::string const& code, PromotionRedeemSnapshot& snapshot);
+    bool BeginCodeRedeem(Player* player, std::string const& code, std::uint32_t groupId,
+        PromotionRedeemSnapshot& snapshot);
     void CompleteCodeRedeem(Player* player, std::string const& code, std::uint32_t rewardId,
         PromotionRedeemSnapshot const& snapshot, bool success);
 

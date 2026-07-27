@@ -71,7 +71,7 @@ bool PromotionReward_CommandScript::HandleHelpCommand(ChatHandler* handler, char
     handler->PSendSysMessage("管理员命令:");
     handler->PSendSysMessage("  .宣传奖励 发放 [玩家名] [数量=1]");
     handler->PSendSysMessage("    生成N张通用宣传CDK。玩家兑换成功时才宣传天数+1并升级武器");
-    handler->PSendSysMessage("    第1次兑换给宣传神器1,第2次回收旧武器并给宣传神器2");
+    handler->PSendSysMessage("    第1次兑换给默认宣传武器1,后续自动回收并升级下一等级");
     handler->PSendSysMessage("  .宣传奖励 重载");
     handler->PSendSysMessage("    重新加载 world.`_宣传奖励系统` 配置");
     handler->PSendSysMessage("  .宣传奖励 审核通过 <提交ID>");
@@ -80,7 +80,7 @@ bool PromotionReward_CommandScript::HandleHelpCommand(ChatHandler* handler, char
     handler->PSendSysMessage("========================================");
     handler->PSendSysMessage("注意:宣传CDK是通用码,不绑定固定武器等级");
     handler->PSendSysMessage("武器只要在玩家身上(背包或装备槽)就生效");
-    handler->PSendSysMessage("属性 = 初始值 + (宣传天数-1) * 每日增量");
+    handler->PSendSysMessage("属性优先读取每个等级物品模板；模板缺失时才使用线性回退配置");
     return true;
 }
 
@@ -122,8 +122,9 @@ bool PromotionReward_CommandScript::HandleIssueCommand(ChatHandler* handler, Opt
     }
 
     handler->PSendSysMessage("========================================");
+    PromotionConfig const& config = sPromotionRewardMgr->GetConfig();
     handler->PSendSysMessage("已为 {} 生成 {} 张通用宣传CDK", *targetName, codes.size());
-    handler->PSendSysMessage("玩家每兑换1张,宣传天数+1,自动回收旧宣传神器并发放下一等级:");
+    handler->PSendSysMessage("奖励组 {},玩家每兑换1张自动升级 {}:", config.groupId, config.weaponName);
     for (auto const& c : codes)
         handler->PSendSysMessage("  {}", c);
     handler->PSendSysMessage("玩家请用: .兑换码 兑换 [CDK]");
@@ -132,7 +133,8 @@ bool PromotionReward_CommandScript::HandleIssueCommand(ChatHandler* handler, Opt
     if (Player* target = ObjectAccessor::FindPlayerByName(*targetName, false))
     {
         ChatHandler th(target->GetSession());
-        th.PSendSysMessage("|cff00ff00[宣传奖励]|r 您获得 {} 张通用宣传CDK,使用 .兑换码 兑换 [CDK] 升级宣传神器:", codes.size());
+        th.PSendSysMessage("|cff00ff00[宣传奖励]|r 您获得 {} 张通用宣传CDK,使用 .兑换码 兑换 [CDK] 升级{}:",
+            codes.size(), config.weaponName);
         for (auto const& c : codes)
             th.PSendSysMessage("  |cffffff00{}|r", c);
     }
@@ -182,11 +184,13 @@ bool PromotionReward_CommandScript::HandleQueryCommand(ChatHandler* handler, Opt
 
     int256 attr = sPromotionRewardMgr->CalcTotalAttr(d->days);
     bool held = online ? sPromotionRewardMgr->IsWeaponHeld(online) : false;
+    PromotionConfig const& config = sPromotionRewardMgr->GetConfig();
 
     handler->PSendSysMessage("========================================");
     handler->PSendSysMessage("玩家: {}", name);
-    handler->PSendSysMessage("  累计宣传天数: {}", d->days);
-    handler->PSendSysMessage("  持有宣传武器: {}", online ? (held ? "是" : "否") : "(离线无法判定)");
+    handler->PSendSysMessage("  默认奖励组: {}", config.groupId);
+    handler->PSendSysMessage("  累计宣传次数: {} / {}", d->days, config.maxLevel);
+    handler->PSendSysMessage("  持有{}: {}", config.weaponName, online ? (held ? "是" : "否") : "(离线无法判定)");
     handler->PSendSysMessage("  全属性加成: +{} {}", Acore::ToString(attr), held ? "(已生效)" : "(未生效,需持有武器)");
     handler->PSendSysMessage("========================================");
     return true;
@@ -198,11 +202,15 @@ bool PromotionReward_CommandScript::HandleReloadCommand(ChatHandler* handler, ch
     sPromotionRewardMgr->LoadAllPlayers();
 
     PromotionConfig const& c = sPromotionRewardMgr->GetConfig();
+    uint32 maxEntry = c.maxLevel == 0 ? 0 : c.weaponEntry + c.maxLevel - 1;
     handler->PSendSysMessage("========================================");
     handler->PSendSysMessage("宣传奖励系统已重新加载");
     handler->PSendSysMessage("  启用: {}", c.enabled ? "是" : "否");
-    handler->PSendSysMessage("  武器entry: {}", c.weaponEntry);
-    handler->PSendSysMessage("  初始全属性: {} / 每日增量: {}", Acore::ToString(c.baseAttrValue), Acore::ToString(c.perDayAttrValue));
+    handler->PSendSysMessage("  默认活动ID: {} / 奖励组: {}", c.id, c.groupId);
+    handler->PSendSysMessage("  武器: {} / entry: {}-{} / 最大等级: {}",
+        c.weaponName, c.weaponEntry, maxEntry, c.maxLevel);
+    handler->PSendSysMessage("  首级全属性: {} / 成长方式: {}", Acore::ToString(c.baseAttrValue),
+        c.levelAttrValues.empty() ? "线性回退" : "逐级物品属性曲线");
     handler->PSendSysMessage("  对接 _奖励_兑换码 [组={}, 需求={}, 奖励={}]",
         c.groupId, c.requireId, c.rewardId);
     handler->PSendSysMessage("========================================");

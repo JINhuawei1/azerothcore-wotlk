@@ -3,9 +3,32 @@
 -- 幂等迁移：只创建新表，不删除或改写现有宣传奖励数据。
 -- ============================================================
 
+CREATE TABLE IF NOT EXISTS `_宣传全局状态` (
+  `状态ID`             TINYINT UNSIGNED NOT NULL COMMENT '固定为1的全局状态行',
+  `当前限额周期`       BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '每次全服重置后递增',
+  `限额重置时间`       DATETIME NULL,
+  `最后操作人账号ID`   INT UNSIGNED NOT NULL DEFAULT 0,
+  `最后操作人名称`     VARCHAR(64) NOT NULL DEFAULT '',
+  `最后操作理由`       VARCHAR(1024) NOT NULL DEFAULT '',
+  `最后操作IP`         VARCHAR(45) NOT NULL DEFAULT '',
+  `更新时间`           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`状态ID`)
+)
+COMMENT = '自动宣传全服限额周期状态'
+CHARACTER SET = utf8mb4
+COLLATE = utf8mb4_unicode_ci
+ENGINE = InnoDB
+ROW_FORMAT = DEFAULT
+;
+
+INSERT INTO `_宣传全局状态` (`状态ID`, `当前限额周期`)
+VALUES (1, 1)
+ON DUPLICATE KEY UPDATE `状态ID`=VALUES(`状态ID`);
+
 CREATE TABLE IF NOT EXISTS `_宣传提交记录` (
   `提交ID`             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '宣传提交唯一ID',
   `任务ID`             INT UNSIGNED NOT NULL COMMENT '对应 world._宣传审核任务.任务ID',
+  `限额周期`           BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '提交时的全服限额周期',
   `账号ID`             INT UNSIGNED NOT NULL COMMENT 'auth.account.id',
   `账号名`             VARCHAR(64) NOT NULL DEFAULT '' COMMENT '提交时的游戏账号名',
   `角色GUID`           BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '提交时使用的角色GUID，网页提交可为0',
@@ -28,6 +51,7 @@ CREATE TABLE IF NOT EXISTS `_宣传提交记录` (
   `更新时间`           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`提交ID`),
   KEY `idx_宣传提交记录_任务账号时间` (`任务ID`, `账号ID`, `提交时间`),
+  KEY `idx_宣传提交记录_任务周期` (`任务ID`, `限额周期`),
   KEY `idx_宣传提交记录_IP时间` (`来源IP`, `提交时间`),
   KEY `idx_宣传提交记录_状态` (`审核状态`, `预检状态`),
   KEY `idx_宣传提交记录_处理状态` (`审核处理状态`, `更新时间`),
@@ -78,6 +102,54 @@ SET @promotion_review_time_column_sql := IF(
 PREPARE promotion_review_time_column_stmt FROM @promotion_review_time_column_sql;
 EXECUTE promotion_review_time_column_stmt;
 DEALLOCATE PREPARE promotion_review_time_column_stmt;
+
+SET @promotion_limit_cycle_column_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '_宣传提交记录' AND COLUMN_NAME = '限额周期'
+);
+SET @promotion_limit_cycle_column_sql := IF(
+  @promotion_limit_cycle_column_exists = 0,
+  'ALTER TABLE `_宣传提交记录` ADD COLUMN `限额周期` BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT ''提交时的全服限额周期'' AFTER `任务ID`',
+  'SELECT 1'
+);
+PREPARE promotion_limit_cycle_column_stmt FROM @promotion_limit_cycle_column_sql;
+EXECUTE promotion_limit_cycle_column_stmt;
+DEALLOCATE PREPARE promotion_limit_cycle_column_stmt;
+
+SET @promotion_limit_cycle_index_exists := (
+  SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '_宣传提交记录' AND INDEX_NAME = 'idx_宣传提交记录_任务周期'
+);
+SET @promotion_limit_cycle_index_sql := IF(
+  @promotion_limit_cycle_index_exists = 0,
+  'ALTER TABLE `_宣传提交记录` ADD KEY `idx_宣传提交记录_任务周期` (`任务ID`, `限额周期`)',
+  'SELECT 1'
+);
+PREPARE promotion_limit_cycle_index_stmt FROM @promotion_limit_cycle_index_sql;
+EXECUTE promotion_limit_cycle_index_stmt;
+DEALLOCATE PREPARE promotion_limit_cycle_index_stmt;
+
+CREATE TABLE IF NOT EXISTS `_宣传提交素材` (
+  `素材ID`             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '宣传素材唯一ID',
+  `提交ID`             BIGINT UNSIGNED NOT NULL COMMENT '所属宣传提交ID',
+  `素材类型`           VARCHAR(16) NOT NULL COMMENT 'IMAGE=群聊截图，URL=论坛链接',
+  `素材序号`           INT UNSIGNED NOT NULL COMMENT '同一提交内从1开始的展示顺序',
+  `素材引用`           VARCHAR(2048) NOT NULL DEFAULT '' COMMENT '图片存储引用或规范化公开URL',
+  `内容哈希`           CHAR(64) NOT NULL DEFAULT '' COMMENT '单个素材SHA-256',
+  `预检状态`           VARCHAR(16) NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING/PASS/FAIL',
+  `预检结果`           VARCHAR(2048) NOT NULL DEFAULT '' COMMENT '单个素材检查结果',
+  `创建时间`           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`素材ID`),
+  UNIQUE KEY `uk_宣传提交素材_提交序号` (`提交ID`, `素材序号`),
+  KEY `idx_宣传提交素材_提交类型` (`提交ID`, `素材类型`),
+  KEY `idx_宣传提交素材_内容哈希` (`内容哈希`)
+)
+COMMENT = '自动宣传审核提交素材明细'
+CHARACTER SET = utf8mb4
+COLLATE = utf8mb4_unicode_ci
+ENGINE = InnoDB
+ROW_FORMAT = DEFAULT
+;
 
 CREATE TABLE IF NOT EXISTS `_宣传奖励流水` (
   `流水ID`             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '奖励流水唯一ID',
@@ -234,6 +306,31 @@ CREATE TABLE IF NOT EXISTS `_宣传审核日志` (
   KEY `idx_宣传审核日志_状态` (`原状态`, `新状态`)
 )
 COMMENT = '自动宣传审核操作审计日志'
+CHARACTER SET = utf8mb4
+COLLATE = utf8mb4_unicode_ci
+ENGINE = InnoDB
+ROW_FORMAT = DEFAULT
+;
+
+CREATE TABLE IF NOT EXISTS `_宣传管理日志` (
+  `日志ID`             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `关联提交ID`         BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '账号操作来源提交，全服操作为0',
+  `目标账号ID`         INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '全服操作为0',
+  `操作类型`           VARCHAR(32) NOT NULL COMMENT 'RESET_ALL_COUNTS/CANCEL_PENDING_BAN/UNBAN_ACCOUNT',
+  `操作前状态`         LONGTEXT NOT NULL,
+  `操作后状态`         LONGTEXT NOT NULL,
+  `审核人账号ID`       INT UNSIGNED NOT NULL DEFAULT 0,
+  `审核人名称`         VARCHAR(64) NOT NULL DEFAULT '',
+  `操作理由`           VARCHAR(1024) NOT NULL DEFAULT '',
+  `操作IP`             VARCHAR(45) NOT NULL DEFAULT '',
+  `操作结果`           VARCHAR(32) NOT NULL DEFAULT 'SUCCESS',
+  `操作时间`           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`日志ID`),
+  KEY `idx_宣传管理日志_账号时间` (`目标账号ID`, `操作时间`),
+  KEY `idx_宣传管理日志_审核人时间` (`审核人账号ID`, `操作时间`),
+  KEY `idx_宣传管理日志_操作时间` (`操作类型`, `操作时间`)
+)
+COMMENT = '自动宣传后台全服与账号管理审计日志'
 CHARACTER SET = utf8mb4
 COLLATE = utf8mb4_unicode_ci
 ENGINE = InnoDB

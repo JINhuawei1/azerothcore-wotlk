@@ -95,6 +95,21 @@ bool IsSafeCode(std::string const& code)
     });
 }
 
+uint32 LoadPromotionGroupForCode(std::string const& code)
+{
+    if (!IsSafeCode(code))
+        return 0;
+
+    if (QueryResult result = WorldDatabase.Query(
+        "SELECT `组` FROM `_奖励_兑换码` WHERE `兑换码`='{}' LIMIT 1", EscapeWorldString(code)))
+    {
+        uint32 groupId = result->Fetch()[0].Get<uint32>();
+        if (sPromotionRewardMgr->IsPromotionCodeGroup(groupId))
+            return groupId;
+    }
+    return 0;
+}
+
 std::string JoinGuids(std::vector<uint32> const& itemGuids)
 {
     std::ostringstream stream;
@@ -115,15 +130,15 @@ void AppendUniqueGuid(std::vector<uint32>& itemGuids, uint32 itemGuid)
         itemGuids.push_back(itemGuid);
 }
 
-std::vector<uint32> CollectPromotionItemGuids(Player* player)
+std::vector<uint32> CollectPromotionItemGuids(Player* player, uint32 groupId)
 {
     std::vector<uint32> itemGuids;
     if (!player)
         return itemGuids;
 
-    auto collect = [&itemGuids](Item* item)
+    auto collect = [&itemGuids, groupId](Item* item)
     {
-        if (item && sPromotionRewardMgr->IsPromotionWeaponEntry(item->GetEntry()))
+        if (item && sPromotionRewardMgr->IsPromotionWeaponEntry(item->GetEntry(), groupId))
             AppendUniqueGuid(itemGuids, item->GetGUID().GetCounter());
     };
 
@@ -166,6 +181,7 @@ std::string EscapeJsonString(std::string const& value)
 
 std::string BuildRedeemResourceSnapshot(
     uint32 rewardId,
+    uint32 groupId,
     uint32 beforeDays,
     uint32 afterDays,
     std::vector<uint32> const& oldPromotionGuids,
@@ -177,6 +193,7 @@ std::string BuildRedeemResourceSnapshot(
 {
     std::ostringstream stream;
     stream << "{\"rewardId\":" << rewardId
+           << ",\"groupId\":" << groupId
            << ",\"beforeDays\":" << beforeDays
            << ",\"afterDays\":" << afterDays
            << ",\"moneyDelta\":" << receipt.moneyDelta
@@ -209,14 +226,14 @@ std::string BuildRedeemResourceSnapshot(
     return stream.str();
 }
 
-uint32 FindPromotionItemGuid(Player* player, std::vector<uint32> const& itemGuids)
+uint32 FindPromotionItemGuid(Player* player, std::vector<uint32> const& itemGuids, uint32 groupId)
 {
     if (!player)
         return 0;
 
     for (uint32 itemGuid : itemGuids)
         if (Item* item = player->GetItemByGuid(ObjectGuid::Create<HighGuid::Item>(itemGuid)))
-            if (sPromotionRewardMgr->IsPromotionWeaponEntry(item->GetEntry()))
+            if (sPromotionRewardMgr->IsPromotionWeaponEntry(item->GetEntry(), groupId))
                 return itemGuid;
 
     return 0;
@@ -1238,6 +1255,7 @@ bool PromotionRewardAuditMgr::ConsumeReviewQueue(std::uint32_t limit)
 bool PromotionRewardAuditMgr::BeginCodeRedeem(
     Player* player,
     std::string const& code,
+    std::uint32_t groupId,
     PromotionRedeemSnapshot& snapshot)
 {
     snapshot = {};
@@ -1256,10 +1274,14 @@ bool PromotionRewardAuditMgr::BeginCodeRedeem(
     snapshot.grantId = fields[0].Get<uint64>();
     snapshot.submissionId = fields[1].Get<uint64>();
     snapshot.taskId = fields[2].Get<uint32>();
+    snapshot.groupId = groupId;
     snapshot.requestId = fields[3].Get<std::string>();
     std::string grantStatus = fields[4].Get<std::string>();
     std::string rollbackStatus = fields[5].Get<std::string>();
     snapshot.code = code;
+
+    if (!sPromotionRewardMgr->IsPromotionCodeGroup(groupId))
+        return false;
 
     if ((grantStatus != "ISSUED" && grantStatus != "FINAL") || rollbackStatus != "NONE")
         return false;
@@ -1267,9 +1289,9 @@ bool PromotionRewardAuditMgr::BeginCodeRedeem(
     snapshot.redeemToken = GenerateClaimToken(snapshot.grantId);
     snapshot.accountId = player->GetSession()->GetAccountId();
     snapshot.characterGuid = player->GetGUID().GetCounter();
-    if (PromotionPlayerData* data = sPromotionRewardMgr->GetPlayerData(snapshot.characterGuid))
+    if (PromotionPlayerData* data = sPromotionRewardMgr->GetPlayerDataForGroup(snapshot.characterGuid, groupId))
         snapshot.beforeDays = data->days;
-    snapshot.oldItemGuids = CollectPromotionItemGuids(player);
+    snapshot.oldItemGuids = CollectPromotionItemGuids(player, groupId);
 
     std::string redeemMarker = "REDEEM:" + snapshot.redeemToken;
     std::string safeRedeemMarker = EscapeCharacterString(redeemMarker);
@@ -1374,14 +1396,15 @@ void PromotionRewardAuditMgr::CompleteCodeRedeem(
     }
 
     uint32 afterDays = snapshot.beforeDays;
-    if (PromotionPlayerData* data = sPromotionRewardMgr->GetPlayerData(player->GetGUID().GetCounter()))
+    if (PromotionPlayerData* data = sPromotionRewardMgr->GetPlayerDataForGroup(
+        player->GetGUID().GetCounter(), snapshot.groupId))
         afterDays = data->days;
 
     uint32 oldPromotionGuid = snapshot.oldItemGuids.empty() ? 0 : snapshot.oldItemGuids.front();
-    uint32 newPromotionGuid = FindPromotionItemGuid(player, newItemGuids);
+    uint32 newPromotionGuid = FindPromotionItemGuid(player, newItemGuids, snapshot.groupId);
     std::string guidList = JoinGuids(newItemGuids);
     std::string resourceSnapshot = BuildRedeemResourceSnapshot(
-        rewardId, snapshot.beforeDays, afterDays, snapshot.oldItemGuids, newItemGuids,
+        rewardId, snapshot.groupId, snapshot.beforeDays, afterDays, snapshot.oldItemGuids, newItemGuids,
         itemCounts, snapshot.rewardReceipt, receiptComplete, receiptError);
 
     uint32 actualAccountId = player->GetSession()->GetAccountId();
@@ -1769,6 +1792,13 @@ bool PromotionRewardAuditMgr::RollbackGrant(std::uint64_t grantId)
         return false;
     }
 
+    uint32 promotionGroupId = LoadPromotionGroupForCode(code);
+    if (promotionGroupId == 0)
+    {
+        MarkRollbackDebt(grantId, rollbackMarker, "无法确定CDK所属宣传奖励组");
+        return false;
+    }
+
     if (redeemCharacterGuid == 0 && IsSafeCode(code))
     {
         if (QueryResult fallback = WorldDatabase.Query(
@@ -1880,7 +1910,8 @@ bool PromotionRewardAuditMgr::RollbackGrant(std::uint64_t grantId)
         }
     }
 
-    uint32 restoreEntry = beforeDays == 0 ? 0 : sPromotionRewardMgr->GetWeaponEntryForLevel(beforeDays);
+    uint32 restoreEntry = beforeDays == 0 ? 0 :
+        sPromotionRewardMgr->GetWeaponEntryForLevel(beforeDays, promotionGroupId);
     if (restoreEntry != 0 && !sObjectMgr->GetItemTemplate(restoreEntry))
     {
         MarkRollbackDebt(grantId, rollbackMarker, "旧宣传神器模板不存在");
@@ -1933,7 +1964,13 @@ bool PromotionRewardAuditMgr::RollbackGrant(std::uint64_t grantId)
     }
 
     player->SetMoney(reversedMoney);
-    PromotionPlayerData* promotionData = sPromotionRewardMgr->GetPlayerData(redeemCharacterGuid, true);
+    PromotionPlayerData* promotionData = sPromotionRewardMgr->GetPlayerDataForGroup(
+        redeemCharacterGuid, promotionGroupId, true);
+    if (!promotionData)
+    {
+        MarkRollbackDebt(grantId, rollbackMarker, "宣传奖励组玩家数据配置缺失");
+        return false;
+    }
     promotionData->days = beforeDays;
 
     static constexpr std::array<char const*, 6> currencyNames =
@@ -1953,9 +1990,9 @@ bool PromotionRewardAuditMgr::RollbackGrant(std::uint64_t grantId)
             reversedResources[currencyNames[4]], reversedResources[currencyNames[5]]);
     }
     trans->Append(
-        "INSERT INTO `_宣传奖励系统玩家` (`玩家GUID`,`宣传天数`) VALUES ({},{}) "
+        "INSERT INTO `_宣传奖励系统玩家` (`奖励组`,`玩家GUID`,`宣传天数`) VALUES ({},{},{}) "
         "ON DUPLICATE KEY UPDATE `宣传天数`=VALUES(`宣传天数`)",
-        redeemCharacterGuid, beforeDays);
+        promotionGroupId, redeemCharacterGuid, beforeDays);
     trans->Append(
         "UPDATE `_宣传兑换流水` SET `回滚状态`='SUCCESS',`回滚时间`=NOW(),`回滚错误`='' "
         "WHERE `兑换流水ID`={} AND `回滚状态` IN ('NONE','PENDING','FAILED')",

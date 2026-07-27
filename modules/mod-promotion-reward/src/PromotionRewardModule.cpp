@@ -23,6 +23,7 @@
 #include "WorldPacket.h"
 #include "WorldSessionMgr.h"
 #include <algorithm>
+#include <limits>
 #include <random>
 #include <sstream>
 #include <utility>
@@ -30,10 +31,6 @@
 extern void AddSC_PromotionReward_CommandScript();
 
 constexpr char const* PROMO_ADDON_PREFIX = "PROMOREWARD";
-constexpr uint32 PROMO_WEAPON_ENTRY_BASE = 997000;
-constexpr uint32 PROMO_WEAPON_MIN_ENTRY  = 997001;
-constexpr uint32 PROMO_WEAPON_MAX_ENTRY  = 998000;
-constexpr uint32 PROMO_WEAPON_MAX_LEVEL  = 1000;
 
 namespace
 {
@@ -72,40 +69,151 @@ PromotionRewardMgr* PromotionRewardMgr::instance()
     return &s;
 }
 
+uint64 PromotionRewardMgr::BuildPlayerKey(uint32 guid, uint32 groupId)
+{
+    return (static_cast<uint64>(groupId) << 32) | static_cast<uint64>(guid);
+}
+
+PromotionConfig const& PromotionRewardMgr::GetConfig() const
+{
+    if (PromotionConfig const* config = GetConfigForGroup(_defaultGroupId))
+        return *config;
+    return _disabledConfig;
+}
+
+PromotionConfig const* PromotionRewardMgr::GetConfigForGroup(uint32 groupId) const
+{
+    auto it = _configs.find(groupId);
+    return it == _configs.end() ? nullptr : &it->second;
+}
+
 void PromotionRewardMgr::LoadConfig()
 {
-    _cfg.debugLog = sConfigMgr->GetOption<bool>("PromotionReward.DebugLog", false);
+    _enabled = false;
+    _debugLog = sConfigMgr->GetOption<bool>("PromotionReward.DebugLog", false);
+    _defaultGroupId = 0;
+    _configs.clear();
+    _disabledConfig = {};
+    _disabledConfig.enabled = false;
+    _disabledConfig.debugLog = _debugLog;
 
     if (!sConfigMgr->GetOption<bool>("PromotionReward.Enable", true))
     {
-        _cfg.enabled = false;
         LOG_INFO("server.loading", "宣传奖励系统已在配置文件中禁用");
         return;
     }
 
     QueryResult r = WorldDatabase.Query(
-        "SELECT `武器entry`,`初始全属性值`,`每日增量`,"
-        "`对接奖励组`,`对接需求ID`,`对接奖励ID`,`领取公告` "
-        "FROM `_宣传奖励系统` WHERE `id`=1");
+        "SELECT `id`,`启用`,`默认活动`,`武器名称`,`武器entry`,`最大等级`,"
+        "`初始全属性值`,`每日增量`,`对接奖励组`,`对接需求ID`,`对接奖励ID`,`领取公告` "
+        "FROM `_宣传奖励系统` ORDER BY `默认活动` DESC,`id`");
 
     if (!r)
     {
-        _cfg.enabled = false;
         LOG_WARN("server.loading",
-            "[宣传奖励] world.`_宣传奖励系统` 表中没有 id=1 的配置行,模块禁用。请导入 SQL 或插入一行配置以启用");
+            "[宣传奖励] world.`_宣传奖励系统` 没有可用活动配置,模块禁用。请导入最新 SQL");
         return;
     }
 
-    Field* f = r->Fetch();
-    _cfg.weaponEntry     = f[0].Get<uint32>();
-    _cfg.baseAttrValue   = f[1].Get<int256>();
-    _cfg.perDayAttrValue = f[2].Get<int256>();
-    _cfg.groupId         = f[3].Get<uint32>();
-    _cfg.requireId       = f[4].Get<uint32>();
-    _cfg.rewardId        = f[5].Get<uint32>();
-    _cfg.announceType    = f[6].Get<uint32>();
+    bool defaultSelected = false;
+    do
+    {
+        Field* f = r->Fetch();
+        PromotionConfig config;
+        config.id              = f[0].Get<uint32>();
+        config.enabled         = f[1].Get<bool>();
+        config.isDefault       = f[2].Get<bool>();
+        config.weaponName      = f[3].Get<std::string>();
+        config.weaponEntry     = f[4].Get<uint32>();
+        config.maxLevel        = f[5].Get<uint32>();
+        config.baseAttrValue   = f[6].Get<int256>();
+        config.perDayAttrValue = f[7].Get<int256>();
+        config.groupId         = f[8].Get<uint32>();
+        config.requireId       = f[9].Get<uint32>();
+        config.rewardId        = f[10].Get<uint32>();
+        config.announceType    = f[11].Get<uint32>();
+        config.debugLog        = _debugLog;
 
-    _cfg.enabled = true;
+        uint64 maxEntry = config.maxLevel == 0 ? 0 :
+            static_cast<uint64>(config.weaponEntry) + static_cast<uint64>(config.maxLevel) - 1;
+        uint64 maxRewardId = config.maxLevel == 0 ? 0 :
+            static_cast<uint64>(config.rewardId) + static_cast<uint64>(config.maxLevel) - 1;
+        if (!config.enabled)
+            continue;
+        if (config.groupId == 0 || config.weaponEntry == 0 || config.maxLevel == 0 || config.rewardId == 0 ||
+            maxEntry > std::numeric_limits<uint32>::max() || maxRewardId > std::numeric_limits<uint32>::max())
+        {
+            LOG_WARN("server.loading", "[宣传奖励] 活动ID={} 配置无效,已跳过", config.id);
+            continue;
+        }
+        if (_configs.find(config.groupId) != _configs.end())
+        {
+            LOG_WARN("server.loading", "[宣传奖励] 奖励组={} 重复配置,活动ID={} 已跳过", config.groupId, config.id);
+            continue;
+        }
+
+        if (config.weaponName.empty())
+            config.weaponName = "宣传武器";
+        std::replace(config.weaponName.begin(), config.weaponName.end(), '|', ' ');
+        _configs.emplace(config.groupId, std::move(config));
+        PromotionConfig const& stored = _configs.at(f[8].Get<uint32>());
+        if (stored.isDefault && !defaultSelected)
+        {
+            _defaultGroupId = stored.groupId;
+            defaultSelected = true;
+        }
+        else if (_defaultGroupId == 0)
+            _defaultGroupId = stored.groupId;
+    } while (r->NextRow());
+
+    for (auto& [groupId, config] : _configs)
+    {
+        uint32 maxEntry = config.weaponEntry + config.maxLevel - 1;
+        QueryResult attrResult = WorldDatabase.Query(
+            "SELECT `entry`,`stat_value1` FROM `item_template` "
+            "WHERE `entry` BETWEEN {} AND {} ORDER BY `entry`",
+            config.weaponEntry, maxEntry);
+
+        bool validCurve = attrResult != nullptr;
+        uint32 expectedEntry = config.weaponEntry;
+        config.levelAttrValues.clear();
+        config.levelAttrValues.reserve(config.maxLevel);
+        if (attrResult)
+        {
+            do
+            {
+                Field* fields = attrResult->Fetch();
+                uint32 entry = fields[0].Get<uint32>();
+                int256 attrValue = fields[1].Get<int256>();
+                if (entry != expectedEntry || attrValue <= 0)
+                {
+                    validCurve = false;
+                    break;
+                }
+                config.levelAttrValues.push_back(attrValue);
+                ++expectedEntry;
+            } while (attrResult->NextRow());
+        }
+
+        if (!validCurve || config.levelAttrValues.size() != config.maxLevel)
+        {
+            config.levelAttrValues.clear();
+            LOG_WARN("server.loading",
+                "[宣传奖励] 活动ID={} 奖励组={} 的逐级物品属性不完整,回退到初始值+线性增量",
+                config.id, groupId);
+        }
+    }
+
+    if (_configs.empty() || _defaultGroupId == 0)
+    {
+        LOG_WARN("server.loading", "[宣传奖励] 没有通过校验的活动配置,模块禁用");
+        return;
+    }
+
+    _enabled = true;
+    PromotionConfig const& defaultConfig = GetConfig();
+    LOG_INFO("server.loading", "[宣传奖励] 已加载 {} 个活动,默认活动={} 奖励组={} 武器={} 最大等级={}",
+        _configs.size(), defaultConfig.id, defaultConfig.groupId, defaultConfig.weaponName, defaultConfig.maxLevel);
 }
 
 void PromotionRewardMgr::LoadAllPlayers()
@@ -113,40 +221,55 @@ void PromotionRewardMgr::LoadAllPlayers()
     _players.clear();
 
     if (QueryResult r = CharacterDatabase.Query(
-        "SELECT `玩家GUID`,`宣传天数` FROM `_宣传奖励系统玩家`"))
+        "SELECT `奖励组`,`玩家GUID`,`宣传天数` FROM `_宣传奖励系统玩家`"))
     {
         do
         {
             Field* f = r->Fetch();
-            uint32 guid = f[0].Get<uint32>();
-            _players[guid].days = f[1].Get<uint32>();
+            uint32 groupId = f[0].Get<uint32>();
+            uint32 guid = f[1].Get<uint32>();
+            _players[BuildPlayerKey(guid, groupId)].days = f[2].Get<uint32>();
         } while (r->NextRow());
     }
 }
 
 PromotionPlayerData* PromotionRewardMgr::GetPlayerData(uint32 guid, bool createIfMissing)
 {
-    auto it = _players.find(guid);
+    return GetPlayerDataForGroup(guid, _defaultGroupId, createIfMissing);
+}
+
+PromotionPlayerData* PromotionRewardMgr::GetPlayerDataForGroup(uint32 guid, uint32 groupId, bool createIfMissing)
+{
+    if (guid == 0 || !GetConfigForGroup(groupId))
+        return nullptr;
+
+    uint64 key = BuildPlayerKey(guid, groupId);
+    auto it = _players.find(key);
     if (it != _players.end())
         return &it->second;
 
     if (!createIfMissing)
         return nullptr;
 
-    return &_players[guid];
+    return &_players[key];
 }
 
 void PromotionRewardMgr::SavePlayerData(uint32 guid)
 {
-    auto it = _players.find(guid);
+    SavePlayerDataForGroup(guid, _defaultGroupId);
+}
+
+void PromotionRewardMgr::SavePlayerDataForGroup(uint32 guid, uint32 groupId)
+{
+    auto it = _players.find(BuildPlayerKey(guid, groupId));
     if (it == _players.end())
         return;
 
     CharacterDatabase.Execute(
-        "INSERT INTO `_宣传奖励系统玩家` (`玩家GUID`,`宣传天数`) "
-        "VALUES ({},{}) "
+        "INSERT INTO `_宣传奖励系统玩家` (`奖励组`,`玩家GUID`,`宣传天数`) "
+        "VALUES ({},{},{}) "
         "ON DUPLICATE KEY UPDATE `宣传天数`=VALUES(`宣传天数`)",
-        guid, it->second.days);
+        groupId, guid, it->second.days);
 }
 
 bool PromotionRewardMgr::BeginItemCapture(Player* player, uint64 operationId)
@@ -271,17 +394,18 @@ bool PromotionRewardMgr::IssueCodes(uint32 targetGuid, std::string const& target
                                     uint32 count, std::vector<std::string>& outCodes, std::string& errMsg)
 {
     outCodes.clear();
+    PromotionConfig const& config = GetConfig();
 
-    if (!_cfg.enabled)            { errMsg = "宣传奖励系统已禁用"; return false; }
+    if (!_enabled || !config.enabled) { errMsg = "宣传奖励系统已禁用"; return false; }
     if (targetGuid == 0)          { errMsg = "无效的玩家GUID";    return false; }
     if (count == 0 || count > 100){ errMsg = "数量必须在 1-100";  return false; }
-    if (_cfg.rewardId == 0)
+    if (config.rewardId == 0)
     {
         errMsg = "对接奖励ID 未配置,请先在 world.`_宣传奖励系统` 设置 对接奖励ID(关联 _模板_奖励)";
         return false;
     }
 
-    PromotionPlayerData* d = GetPlayerData(targetGuid, true);
+    PromotionPlayerData* d = GetPlayerDataForGroup(targetGuid, config.groupId, true);
     uint32 currentDays = d ? d->days : 0;
 
     outCodes.reserve(count);
@@ -300,15 +424,15 @@ bool PromotionRewardMgr::IssueCodes(uint32 targetGuid, std::string const& target
             "INSERT INTO `_奖励_兑换码` "
             "(`注释`,`兑换码`,`组`,`需求`,`奖励`,`兑换次数`,`领取公告`) "
             "VALUES ('{}','{}',{},{},{},1,{})",
-            remark, code, _cfg.groupId, _cfg.requireId, _cfg.rewardId, _cfg.announceType);
+            remark, code, config.groupId, config.requireId, config.rewardId, config.announceType);
 
         outCodes.push_back(std::move(code));
 
-        if (_cfg.debugLog)
+        if (_debugLog)
             LOG_INFO("module.promotion", "[宣传奖励] 通用CDK {} 已生成,兑换时按角色宣传天数升级", outCodes.back());
     }
 
-    if (_cfg.debugLog)
+    if (_debugLog)
         LOG_INFO("module.promotion", "[宣传奖励] 为 {} 生成 {} 张通用CDK,当前宣传天数仍为 {}", targetName, count, currentDays);
 
     return true;
@@ -316,57 +440,109 @@ bool PromotionRewardMgr::IssueCodes(uint32 targetGuid, std::string const& target
 
 int256 PromotionRewardMgr::CalcTotalAttr(uint32 days) const
 {
-    uint32 level = GetWeaponLevelForDays(days);
+    return CalcTotalAttr(days, _defaultGroupId);
+}
+
+int256 PromotionRewardMgr::CalcTotalAttr(uint32 days, uint32 groupId) const
+{
+    PromotionConfig const* config = GetConfigForGroup(groupId);
+    if (!config)
+        return 0;
+
+    uint32 level = GetWeaponLevelForDays(days, groupId);
     if (level == 0)
         return 0;
-    return _cfg.baseAttrValue + (static_cast<int256>(level - 1) * _cfg.perDayAttrValue);
+    if (config->levelAttrValues.size() >= level)
+        return config->levelAttrValues[level - 1];
+    return config->baseAttrValue + (static_cast<int256>(level - 1) * config->perDayAttrValue);
 }
 
 uint32 PromotionRewardMgr::GetWeaponLevelForDays(uint32 days) const
 {
+    return GetWeaponLevelForDays(days, _defaultGroupId);
+}
+
+uint32 PromotionRewardMgr::GetWeaponLevelForDays(uint32 days, uint32 groupId) const
+{
+    PromotionConfig const* config = GetConfigForGroup(groupId);
+    if (!config)
+        return 0;
     if (days == 0)
         return 0;
-    if (days > PROMO_WEAPON_MAX_LEVEL)
-        return PROMO_WEAPON_MAX_LEVEL;
+    if (days > config->maxLevel)
+        return config->maxLevel;
     return days;
 }
 
 uint32 PromotionRewardMgr::GetWeaponEntryForLevel(uint32 level) const
 {
+    return GetWeaponEntryForLevel(level, _defaultGroupId);
+}
+
+uint32 PromotionRewardMgr::GetWeaponEntryForLevel(uint32 level, uint32 groupId) const
+{
+    PromotionConfig const* config = GetConfigForGroup(groupId);
+    if (!config)
+        return 0;
     if (level == 0)
         return 0;
-    if (level > PROMO_WEAPON_MAX_LEVEL)
-        level = PROMO_WEAPON_MAX_LEVEL;
-    return PROMO_WEAPON_ENTRY_BASE + level;
+    if (level > config->maxLevel)
+        level = config->maxLevel;
+    return config->weaponEntry + level - 1;
 }
 
 uint32 PromotionRewardMgr::GetNextWeaponEntry(uint32 days) const
 {
-    uint32 nextLevel = days >= PROMO_WEAPON_MAX_LEVEL ? PROMO_WEAPON_MAX_LEVEL : days + 1;
-    return GetWeaponEntryForLevel(nextLevel);
+    return GetNextWeaponEntry(days, _defaultGroupId);
+}
+
+uint32 PromotionRewardMgr::GetNextWeaponEntry(uint32 days, uint32 groupId) const
+{
+    PromotionConfig const* config = GetConfigForGroup(groupId);
+    if (!config)
+        return 0;
+    uint32 nextLevel = days >= config->maxLevel ? config->maxLevel : days + 1;
+    return GetWeaponEntryForLevel(nextLevel, groupId);
 }
 
 bool PromotionRewardMgr::IsPromotionWeaponEntry(uint32 entry) const
 {
-    if (entry >= PROMO_WEAPON_MIN_ENTRY && entry <= PROMO_WEAPON_MAX_ENTRY)
-        return true;
-    return _cfg.weaponEntry != 0 && entry == _cfg.weaponEntry;
+    for (auto const& [groupId, config] : _configs)
+        if (IsPromotionWeaponEntry(entry, groupId))
+            return true;
+    return false;
+}
+
+bool PromotionRewardMgr::IsPromotionWeaponEntry(uint32 entry, uint32 groupId) const
+{
+    PromotionConfig const* config = GetConfigForGroup(groupId);
+    if (!config)
+        return false;
+    uint32 maxEntry = config->weaponEntry + config->maxLevel - 1;
+    return entry >= config->weaponEntry && entry <= maxEntry;
 }
 
 bool PromotionRewardMgr::IsPromotionCodeGroup(uint32 groupId) const
 {
-    return groupId != 0 && groupId == _cfg.groupId;
+    return groupId != 0 && GetConfigForGroup(groupId) != nullptr;
 }
 
 bool PromotionRewardMgr::IsWeaponHeld(Player* player) const
 {
+    return IsWeaponHeld(player, _defaultGroupId);
+}
+
+bool PromotionRewardMgr::IsWeaponHeld(Player* player, uint32 groupId) const
+{
     if (!player)
         return false;
 
-    if (_cfg.weaponEntry != 0 && player->HasItemCount(_cfg.weaponEntry, 1, true))
-        return true;
+    PromotionConfig const* config = GetConfigForGroup(groupId);
+    if (!config)
+        return false;
 
-    for (uint32 entry = PROMO_WEAPON_MIN_ENTRY; entry <= PROMO_WEAPON_MAX_ENTRY; ++entry)
+    uint32 maxEntry = config->weaponEntry + config->maxLevel - 1;
+    for (uint32 entry = config->weaponEntry; entry <= maxEntry; ++entry)
     {
         if (player->HasItemCount(entry, 1, true))
             return true;
@@ -375,9 +551,13 @@ bool PromotionRewardMgr::IsWeaponHeld(Player* player) const
     return false;
 }
 
-bool PromotionRewardMgr::HasPromotionWeaponInBags(Player* player) const
+bool PromotionRewardMgr::HasPromotionWeaponInBags(Player* player, uint32 groupId) const
 {
     if (!player)
+        return false;
+
+    PromotionConfig const* config = GetConfigForGroup(groupId);
+    if (!config)
         return false;
 
     uint32 equippedCount = 0;
@@ -385,18 +565,24 @@ bool PromotionRewardMgr::HasPromotionWeaponInBags(Player* player) const
     for (uint8 slot : slots)
     {
         Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
-        if (item && IsPromotionWeaponEntry(item->GetEntry()))
+        if (item && IsPromotionWeaponEntry(item->GetEntry(), groupId))
             equippedCount += item->GetCount();
     }
 
     uint32 totalCount = 0;
-    for (uint32 entry = PROMO_WEAPON_MIN_ENTRY; entry <= PROMO_WEAPON_MAX_ENTRY; ++entry)
+    uint32 maxEntry = config->weaponEntry + config->maxLevel - 1;
+    for (uint32 entry = config->weaponEntry; entry <= maxEntry; ++entry)
         totalCount += player->GetItemCount(entry, false);
 
     return totalCount > equippedCount;
 }
 
 bool PromotionRewardMgr::IsPromotionWeaponEquipped(Player* player) const
+{
+    return IsPromotionWeaponEquipped(player, _defaultGroupId);
+}
+
+bool PromotionRewardMgr::IsPromotionWeaponEquipped(Player* player, uint32 groupId) const
 {
     if (!player)
         return false;
@@ -408,43 +594,44 @@ bool PromotionRewardMgr::IsPromotionWeaponEquipped(Player* player) const
         if (!item)
             continue;
 
-        uint32 entry = item->GetEntry();
-        if (entry >= PROMO_WEAPON_MIN_ENTRY && entry <= PROMO_WEAPON_MAX_ENTRY)
+        if (IsPromotionWeaponEntry(item->GetEntry(), groupId))
             return true;
     }
 
     return false;
 }
 
-bool PromotionRewardMgr::RedeemPromotionCode(Player* player, uint32& outRewardId)
+bool PromotionRewardMgr::RedeemPromotionCode(Player* player, uint32 groupId, uint32& outRewardId)
 {
-    outRewardId = _cfg.rewardId;
+    PromotionConfig const* config = GetConfigForGroup(groupId);
+    outRewardId = config ? config->rewardId : 0;
 
-    if (!_cfg.enabled || !player)
+    if (!_enabled || !config || !player)
         return false;
 
     uint32 guid = player->GetGUID().GetCounter();
-    PromotionPlayerData* d = GetPlayerData(guid, true);
+    PromotionPlayerData* d = GetPlayerDataForGroup(guid, groupId, true);
     if (!d)
         return false;
 
-    if (d->days >= PROMO_WEAPON_MAX_LEVEL)
+    if (d->days >= config->maxLevel)
     {
-        ChatHandler(player->GetSession()).PSendSysMessage("|cffff5555[宣传奖励]|r 宣传神器已达到最高等级,本次CDK未消耗。");
+        ChatHandler(player->GetSession()).PSendSysMessage(
+            "|cffff5555[宣传奖励]|r {}已达到最高等级{},本次CDK未消耗。", config->weaponName, config->maxLevel);
         return false;
     }
 
     uint32 newLevel = d->days + 1;
-    uint32 newEntry = GetWeaponEntryForLevel(newLevel);
-    outRewardId = _cfg.rewardId + newLevel - 1;
+    uint32 newEntry = GetWeaponEntryForLevel(newLevel, groupId);
+    outRewardId = config->rewardId + newLevel - 1;
 
     if (!sObjectMgr->GetItemTemplate(newEntry))
     {
-        ChatHandler(player->GetSession()).PSendSysMessage("|cffff5555[宣传奖励]|r 宣传神器物品模板不存在: {}", newEntry);
+        ChatHandler(player->GetSession()).PSendSysMessage("|cffff5555[宣传奖励]|r {}物品模板不存在: {}", config->weaponName, newEntry);
         return false;
     }
 
-    bool hasPromotionWeaponInBags = HasPromotionWeaponInBags(player);
+    bool hasPromotionWeaponInBags = HasPromotionWeaponInBags(player, groupId);
     if (!hasPromotionWeaponInBags)
     {
         ItemPosCountVec dest;
@@ -458,7 +645,8 @@ bool PromotionRewardMgr::RedeemPromotionCode(Player* player, uint32& outRewardId
     }
 
     uint32 removedCount = 0;
-    for (uint32 entry = PROMO_WEAPON_MIN_ENTRY; entry <= PROMO_WEAPON_MAX_ENTRY; ++entry)
+    uint32 maxEntry = config->weaponEntry + config->maxLevel - 1;
+    for (uint32 entry = config->weaponEntry; entry <= maxEntry; ++entry)
     {
         uint32 itemCount = player->GetItemCount(entry, true);
         if (itemCount == 0)
@@ -480,25 +668,28 @@ bool PromotionRewardMgr::RedeemPromotionCode(Player* player, uint32& outRewardId
     Item* newItem = player->StoreNewItem(dest, newEntry, true, Item::GenerateItemRandomPropertyId(newEntry));
     if (!newItem)
     {
-        ChatHandler(player->GetSession()).PSendSysMessage("|cffff5555[宣传奖励]|r 发放宣传神器失败,请联系管理员。");
+        ChatHandler(player->GetSession()).PSendSysMessage("|cffff5555[宣传奖励]|r 发放{}失败,请联系管理员。", config->weaponName);
         return false;
     }
 
     player->SendNewItem(newItem, 1, true, false);
 
     d->days = newLevel;
-    SavePlayerData(guid);
+    SavePlayerDataForGroup(guid, groupId);
 
     ChatHandler(player->GetSession()).PSendSysMessage(
-        "|cff00ff00[宣传奖励]|r 宣传天数 +1,已{}宣传神器{},获得 宣传神器{}。",
+        "|cff00ff00[宣传奖励]|r 宣传次数 +1,已{}{}{},获得 {}{}。",
         removedCount > 0 ? "回收旧武器并升级为" : "发放",
+        config->weaponName,
         newLevel,
+        config->weaponName,
         newLevel);
 
     SendInfoToClient(player);
 
-    if (_cfg.debugLog)
-        LOG_INFO("module.promotion", "[宣传奖励] 玩家 {} 使用宣传CDK升级到 {} 级,物品={}", player->GetName(), newLevel, newEntry);
+    if (_debugLog)
+        LOG_INFO("module.promotion", "[宣传奖励] 玩家 {} 使用组 {} 宣传CDK升级到 {} 级,物品={}",
+            player->GetName(), groupId, newLevel, newEntry);
 
     return true;
 }
@@ -641,7 +832,7 @@ void PromotionReward_PlayerScript::OnPlayerChat(Player* player, uint32 type, uin
 // 客户端 UI 通信 (Addon Message)
 //   prefix: PROMOREWARD
 //   Client → Server:  REQ_INFO | REDEEM:<CDK>
-//   Server → Client:  INFO:days|attr|weapon|base|perDay|claimed|nextWeapon|level|nextLevel|nextAttr|minDmg|maxDmg|nextMinDmg|nextMaxDmg
+//   Server → Client:  INFO:days|attr|weapon|base|perDay|claimed|nextWeapon|level|nextLevel|nextAttr|minDmg|maxDmg|nextMinDmg|nextMaxDmg|maxLevel|firstWeapon|weaponName|maxAttr
 //                     OPEN
 //                     REDEEM_OK:CDK | REDEEM_FAIL:CDK:reason
 // ============================================================
@@ -666,28 +857,38 @@ void PromotionRewardMgr::SendInfoToClient(Player* player)
     if (!player)
         return;
 
+    PromotionConfig const& config = GetConfig();
+    if (!config.enabled)
+        return;
+
     uint32 days = 0;
-    if (PromotionPlayerData* d = GetPlayerData(player->GetGUID().GetCounter()))
+    if (PromotionPlayerData* d = GetPlayerDataForGroup(player->GetGUID().GetCounter(), config.groupId))
         days = d->days;
 
-    int256 attr  = CalcTotalAttr(days);
-    bool  hold   = IsWeaponHeld(player);
-    uint32 currentLevel = GetWeaponLevelForDays(days);
-    uint32 nextLevel = days >= PROMO_WEAPON_MAX_LEVEL ? PROMO_WEAPON_MAX_LEVEL : days + 1;
-    uint32 currentWeapon = GetWeaponEntryForLevel(currentLevel);
-    uint32 nextWeapon = GetNextWeaponEntry(days);
-    int256 currentMinDmg = currentLevel == 0 ? 0 : CalcTotalAttr(currentLevel);
-    int256 currentMaxDmg = currentLevel == 0 ? 0 : currentMinDmg + _cfg.perDayAttrValue;
-    int256 nextAttr = CalcTotalAttr(nextLevel);
+    int256 attr  = CalcTotalAttr(days, config.groupId);
+    bool  hold   = IsWeaponHeld(player, config.groupId);
+    uint32 currentLevel = GetWeaponLevelForDays(days, config.groupId);
+    uint32 nextLevel = days >= config.maxLevel ? config.maxLevel : days + 1;
+    uint32 currentWeapon = GetWeaponEntryForLevel(currentLevel, config.groupId);
+    uint32 nextWeapon = GetNextWeaponEntry(days, config.groupId);
+    int256 currentMinDmg = currentLevel == 0 ? 0 : CalcTotalAttr(currentLevel, config.groupId);
+    int256 currentMaxDmg = currentLevel == 0 ? 0 :
+        (!config.levelAttrValues.empty()
+            ? CalcTotalAttr(std::min(currentLevel + 1, config.maxLevel), config.groupId)
+            : currentMinDmg + config.perDayAttrValue);
+    int256 nextAttr = CalcTotalAttr(nextLevel, config.groupId);
     int256 nextMinDmg = nextAttr;
-    int256 nextMaxDmg = nextAttr + _cfg.perDayAttrValue;
+    int256 nextMaxDmg = !config.levelAttrValues.empty()
+        ? CalcTotalAttr(std::min(nextLevel + 1, config.maxLevel), config.groupId)
+        : nextAttr + config.perDayAttrValue;
+    int256 maxAttr = CalcTotalAttr(config.maxLevel, config.groupId);
 
     std::ostringstream o;
     o << "INFO:" << days
       << '|' << Acore::ToString(attr)
       << '|' << currentWeapon
-      << '|' << Acore::ToString(_cfg.baseAttrValue)
-      << '|' << Acore::ToString(_cfg.perDayAttrValue)
+      << '|' << Acore::ToString(config.baseAttrValue)
+      << '|' << Acore::ToString(config.perDayAttrValue)
       << '|' << (hold ? 1 : 0)
       << '|' << nextWeapon
       << '|' << currentLevel
@@ -696,7 +897,11 @@ void PromotionRewardMgr::SendInfoToClient(Player* player)
       << '|' << Acore::ToString(currentMinDmg)
       << '|' << Acore::ToString(currentMaxDmg)
       << '|' << Acore::ToString(nextMinDmg)
-      << '|' << Acore::ToString(nextMaxDmg);
+      << '|' << Acore::ToString(nextMaxDmg)
+      << '|' << config.maxLevel
+      << '|' << config.weaponEntry
+      << '|' << config.weaponName
+      << '|' << Acore::ToString(maxAttr);
     SendAddonMsg(player, o.str());
 }
 
